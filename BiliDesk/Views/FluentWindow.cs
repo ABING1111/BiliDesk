@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using BiliDesk.Helpers;
 
 namespace BiliDesk.Views;
@@ -118,25 +119,38 @@ public class FluentWindow : Window
         if (!IsLoaded) return;
         if (WindowState == WindowState.Minimized) return;
         if (SuppressStateTransition) return;
-        if (Content is not FrameworkElement root) return;
+        if (Content is not FrameworkElement) return;
 
-        double fromScale;
-        if (WindowState == WindowState.Maximized)
+        // ★★ 必须等这次状态变化引发的**真实窗口尺寸**落到布局上再动手(2026-10-02 定位):
+        //   `StateChanged` 是在窗口真正被 resize **之前**发的 —— 此刻即使 `UpdateLayout()`, 拿到的
+        //   还是**旧客户区**尺寸, 于是卡片墙按旧宽度算出的"目标卡宽"与现状相同 ⇒ 下面的"收敛可视区"
+        //   一个孩子都收敛不动(探针在 CardWallPanel 里埋点实测 `收敛=0`), 之后渐进的 PumpStep 才把
+        //   **整墙含视野上方**按 16 张一批地收敛(150 张要 10 批、约 600ms), 而卡片高度随宽度变 ⇒
+        //   可见区被一批批顶走 —— 这就是"滚一屏后最大化/还原, 卡片抽动很明显"的根。
+        //   放到 Background 优先级(= 这批消息处理完、resize 与布局/渲染已经跑过)再播, 目标值才是新的。
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
         {
-            // 从"还原尺寸 ÷ 工作区"的等比缩小量出发 —— 动画看起来就像窗口从原来的尺寸长满整屏。
-            // 来源必须是 RestoreBounds / 工作区, 不能读当前尺寸: 此刻布局还没重算,
-            // 读出来要么是旧值、要么已经变成最大化尺寸(比例 ≈1, 动画等于没有)。
-            var before = RestoreBounds;
-            var work = GetWorkArea();
-            if (before.Width < 80 || before.Height < 80 || work.Width < 80 || work.Height < 80) return;
-            fromScale = Math.Clamp(Math.Min(before.Width / work.Width, before.Height / work.Height), 0.75, 0.99);
-        }
-        else
-        {
-            fromScale = 1.02;   // 还原: 轻微收缩回落
-        }
+            if (!IsLoaded || SuppressStateTransition) return;
+            if (WindowState == WindowState.Minimized) return;
+            if (Content is not FrameworkElement root) return;
 
-        PlayStateTransition(root, fromScale);
+            double fromScale;
+            if (WindowState == WindowState.Maximized)
+            {
+                // 从"还原尺寸 ÷ 工作区"的等比缩小量出发 —— 动画看起来就像窗口从原来的尺寸长满整屏。
+                // 来源必须是 RestoreBounds / 工作区, 不能读当前尺寸(现在已是最大化尺寸, 比例 ≈1)。
+                var before = RestoreBounds;
+                var work = GetWorkArea();
+                if (before.Width < 80 || before.Height < 80 || work.Width < 80 || work.Height < 80) return;
+                fromScale = Math.Clamp(Math.Min(before.Width / work.Width, before.Height / work.Height), 0.75, 0.99);
+            }
+            else
+            {
+                fromScale = 1.02;   // 还原: 轻微收缩回落
+            }
+
+            PlayStateTransition(root, fromScale);
+        }));
     }
 
     private void PlayStateTransition(FrameworkElement root, double fromScale)

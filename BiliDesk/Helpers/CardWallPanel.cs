@@ -88,40 +88,89 @@ public class CardWallPanel : Panel
     // ------------------------------------------------------------ 状态过渡协作(见 _held 的说明)
 
     /// <summary>
-    /// 最大化/还原动画开始前调用: 把**可视区**(滚动视野 ±40px)的孩子一次性切到目标宽度,
-    /// 然后挂起渐进泵。可视区收敛的重测(≈30 张 × 0.8ms)由调用方随后的一次 UpdateLayout
-    /// 一次付清 —— 动画期间树不再变化。
+    /// 最大化/还原动画开始前调用: 把**从整墙顶部一直到视野下沿**的孩子一次性切到目标尺寸,
+    /// 然后挂起渐进泵。这批重测由本方法末尾那次 UpdateLayout 一次付清 —— 动画期间树不再变化。
+    ///
+    /// ★★ 为什么视野**上方**的卡片也必须一起收敛(2026-10-02, 用户报的"卡片抽动很明显"):
+    ///   卡片高度是跟着宽度算的(封面高 = 卡宽 × 9/16), 所以变宽 = 变高 ⇒ 上方每一行的行高都变
+    ///   ⇒ **它们下面的一切(包括用户正看着的这一屏)整体纵向位移**。只收敛"可视带"时, 上方那些
+    ///   卡片要等动画结束后才按 16 张一批慢慢收敛, 可见区就被一批一批顶走; 更糟的是收敛期间整墙
+    ///   处在**半宽半窄**的中间态, 折行位置跟着变, 版式churn 能到上千像素(探针实测内容高
+    ///   6946↔8731), 逐批补偿也追不上。
+    ///   探针 `%TEMP%\bd-probe-cardtwitch`(滚一屏后最大化/还原 3 轮)实测: 只收敛可视带时,
+    ///   用户正看着的那张卡在屏幕上按 30px 一跳、光"动画之后"就跳 11 次累计 592px。
+    ///
+    /// ★ 一次性收敛之后, 可见区**只经历一次**版式变化, 再配上末尾的滚动锚定, 连这一次都不会动;
+    ///   而且之后渐进泵只碰"视野下方"的孩子 —— 顺序流式折行里, 后面的孩子**不可能**影响前面行的
+    ///   位置与折行结果, 所以可见区从此不可能再动(这是可证的, 不是"应该没问题")。
+    ///
+    /// ★ 代价与"视野上方的卡片数"成正比(每张约 0.8ms): 滚一屏约几十张(几十毫秒), 滚得越深越贵 ——
+    ///   但这是一次性付清, 且发生在动画第一帧之前; 视野下方的仍交给渐进泵(看不见, 分帧付)。
     /// </summary>
     public void ConvergeVisibleThenHold()
     {
         _pumpQueued = false;    // 撤掉已排队的渐进帧, 防止它和这次收敛交错
         _held = true;
 
+        // ★★ 先把目标尺寸按**当前**宽度算出来: Wall 的 SizeChanged 要等布局走完才发, 不强制这一下
+        //   这里读到的还是旧窗口算出来的旧目标 ⇒ 下面一个孩子都不会被收敛(探针实测 收敛=0)。
+        CardWall.RefreshNow(this);
+
         var targetW = TargetWidth;
         var targetCover = TargetCover;
         if (double.IsNaN(targetW) || targetW <= 0) return;
 
-        // 可视带只算一次; 上下各放 40px 余量, 盖住半截露出的卡片
         var sv = VisualTreeUtil.FindAncestor<ScrollViewer>(this);
-        double top = 0, bottom = double.MaxValue;
-        if (sv != null)
-        {
-            top = sv.VerticalOffset - 40;
-            bottom = sv.VerticalOffset + Math.Max(1, sv.ViewportHeight) + 40;
-        }
 
-        int n = InternalChildren.Count;
-        for (int i = 0; i < n; i++)
+        // 收敛"整墙顶部 → 视野下沿"。★ 要迭代: 收敛本身会改变上方行高, 把原本在视野下方一点的
+        // 卡片顶进视野(探针实测残留 565px 位移就是这么来的), 所以每趟收敛后重新量一次下沿。
+        // 最多 3 趟: 每趟只处理"还没到目标尺寸"的孩子, 收敛完就 break。
+        //
+        // ★★ 这里**不做**滚动锚定(2026-10-02 实测后移除): 一次性收敛把版式变化全部挡在动画第一帧
+        //   之前 —— 这一整段(收敛+布局+挂 BitmapCache+起动画)在同一个 dispatcher 回调里跑完,
+        //   中间状态根本没被渲染过, 所以"内容位移"用户看不见。反过来说, 锚定会把滚动偏移一点点
+        //   改掉(探针 8 轮实测偏移 700→818→506→…→0, 也就是来回切几次后视图自己爬到顶部), 得不偿失。
+        for (var pass = 0; pass < 3; pass++)
         {
-            var child = InternalChildren[i];
-            double y = i < _arrangeY.Count ? _arrangeY[i] : double.MaxValue;
-            if (y < top || y > bottom) continue;    // 视野外: 交给动画结束后的渐进
+            var bottom = sv == null
+                ? double.MaxValue
+                : sv.VerticalOffset + Math.Max(1, sv.ViewportHeight) + 40;
+            var changed = 0;
+            var n = InternalChildren.Count;
+            for (var i = 0; i < n; i++)
+            {
+                var child = InternalChildren[i];
+                if (CardWall.GetItemWidth(child) == targetW &&
+                    CardWall.GetCoverHeight(child) == targetCover) continue;   // 已收敛
 
-            EnsureLocalOverride(child);
-            child.SetValue(CardWall.ItemWidthProperty, targetW);
-            child.SetValue(CardWall.CoverHeightProperty, targetCover);
+                var y = i < _arrangeY.Count ? _arrangeY[i] : double.MaxValue;
+                if (y > bottom) continue;    // 视野下方: 不影响可见区, 交给动画结束后的渐进
+
+                EnsureLocalOverride(child);
+                child.SetValue(CardWall.ItemWidthProperty, targetW);
+                child.SetValue(CardWall.CoverHeightProperty, targetCover);
+                changed++;
+            }
+            if (changed == 0) break;         // 没有新卡片落进视野 → 收敛完备
+
+            InvalidateMeasure();
+            UpdateLayout();                  // 付清这一趟的布局, 才能量到新下沿
         }
-        InvalidateMeasure();
+    }
+
+    /// <summary>
+    /// 锚点 = 视野顶部**下方第一行**的第一个孩子(第一个 Y ≥ 滚动偏移的)。
+    ///
+    /// 为什么不取"视野顶部所在那一行"(最后一个 Y ≤ 偏移的孩子): 那一行被压在视野上沿、
+    /// 只露一截, 而它自己的高度在收敛时也会变 —— 钉住它的**上沿**会让它下面的整屏跟着它
+    /// 的高度变化一起位移(探针实测残留 758px)。改钉它下面那一行的上沿, 那一行与它下面的
+    /// 所有内容(也就是用户真正在看的部分)就都不动了; 只有上沿那一截卡片自己在原地改尺寸。
+    /// </summary>
+    private int AnchorIndex(double offset)
+    {
+        for (var i = 0; i < _arrangeY.Count; i++)
+            if (_arrangeY[i] >= offset) return i;
+        return _arrangeY.Count > 0 ? _arrangeY.Count - 1 : -1;
     }
 
     /// <summary>动画结束后调用: 放开渐进泵, 剩余(视野外)的孩子继续分帧收敛。</summary>
@@ -258,16 +307,22 @@ public class CardWallPanel : Panel
         }
         if (pending == null) return;   // 全部收敛, 链路自然终止
 
+        // ScrollViewer 只找一次: 排序要用它的可视带
+        var sv = VisualTreeUtil.FindAncestor<ScrollViewer>(this);
+
         if (pending.Count > BatchSize)
         {
             // 可视带只算一次(别放进比较器 —— 那是 O(N log N) 次可视树遍历)
-            var sv = VisualTreeUtil.FindAncestor<ScrollViewer>(this);
             double top = sv?.VerticalOffset ?? 0;
             double bottom = top + Math.Max(1, sv?.ViewportHeight ?? double.MaxValue);
             pending.Sort((a, b) => OrderByVisibleFirst(a, b, top, bottom));
             pending.RemoveRange(BatchSize, pending.Count - BatchSize);
         }
 
+        // 这里**不做**滚动锚定: 视野上方＋可见区已经在 ConvergeVisibleThenHold 里一次性收敛过,
+        // 剩下这些待收敛的孩子全在视野下方 —— 顺序流式折行里后面的孩子不可能改变前面行的位置,
+        // 所以可见区不会再动。(2026-10-02 试过"每批按锚点补偏移", 实测反而更糟: 中间态折行churn
+        //  使锚点每批换人, 可见内容被越推越远; 详见 ConvergeVisibleThenHold 的说明。)
         foreach (var i in pending)
         {
             var child = InternalChildren[i];
