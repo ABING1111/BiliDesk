@@ -861,32 +861,6 @@ public static class UrlUtil
         if (url.StartsWith("http://")) return "https://" + url[7..];
         return url;
     }
-
-    /// <summary>
-    /// 取**原图**地址: 砍掉 bilibili 的图片处理后缀(形如 `@480w_1e_1c.webp`)。
-    ///
-    /// 为什么需要: 接口下发的 cover/pic 常常自带这个后缀 —— 列表里当缩略图加载正合适, 但
-    /// "查看封面"要看的是原图, 带着后缀请求回来的永远只有那张缩略图, 放大就是糊的。
-    ///
-    /// 只砍文件名那一段里的 `@`: 后缀一定贴在最后一段路径后面, 而 query(?…) 以及 host 里
-    /// 可能出现的 `@` 必须原样保留, 所以先按 `?` 切开再在最后一段里找。
-    /// </summary>
-    public static string ToOriginal(string? url)
-    {
-        var u = Normalize(url);
-        if (u.Length == 0) return "";
-
-        var q = u.IndexOf('?');
-        var head = q < 0 ? u : u[..q];
-        var tail = q < 0 ? "" : u[q..];
-
-        // ★ 只有"文件名后面"的 @ 才是处理后缀。`.../bfs/@abc.jpg` 这种路径段本身以 @ 开头,
-        //   后面一个字符都没有 —— 那是文件名不是后缀, 砍了就等于把图片地址砍没了(探针实测)。
-        var slash = head.LastIndexOf('/');
-        var at = slash >= 0 ? head.IndexOf('@', slash + 1) : -1;
-        if (at <= slash + 1) return u;
-        return head[..at] + tail;
-    }
 }
 
 /// <summary>会话(登录 Cookie)</summary>
