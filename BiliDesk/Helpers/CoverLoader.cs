@@ -304,6 +304,66 @@ public static class Cover
     public static string? GetSource(DependencyObject d) => (string?)d.GetValue(SourceProperty);
     public static void SetSource(DependencyObject d, string? value) => d.SetValue(SourceProperty, value);
 
+    /// <summary>
+    /// 图片适配方式(2026-10-02 新增, 按用户要求)。
+    ///
+    /// Fill(默认) = `UniformToFill` 裁切铺满 —— 卡片墙/头像要的是"格子被填满"的观感,
+    ///   代价是非本比例的图会被裁掉(竖屏 9:16 封面在 16:9 的格子里只露中间约 31%)。
+    /// Contain = `Uniform` 完整显示 —— 整张图都在, 两侧(或上下)留给背景。
+    ///   视频卡片用 Contain + 下面的模糊铺底, 于是竖屏封面也能一眼看全, 而墙面依旧齐整。
+    ///
+    /// ★ 默认值必须是 Fill: `Cover.Source` 在**十几个地方**用着(头像、收藏夹封面…),
+    ///   全局改成 Contain 会让头像两侧留白(探针里专门有一条反证断言盯着这件事)。
+    /// </summary>
+    public enum CoverFit
+    {
+        Fill,
+        Contain
+    }
+
+    public static readonly DependencyProperty FitProperty = DependencyProperty.RegisterAttached(
+        "Fit", typeof(CoverFit), typeof(Cover), new PropertyMetadata(CoverFit.Fill));
+
+    public static CoverFit GetFit(DependencyObject d) => (CoverFit)d.GetValue(FitProperty);
+    public static void SetFit(DependencyObject d, CoverFit value) => d.SetValue(FitProperty, value);
+
+    /// <summary>
+    /// Contain 下仍允许的裁切比例(3%)。
+    ///
+    /// ★ 为什么需要: 卡片格子是 `卡宽 × 9/16` 再取整 —— 236 宽的格子高 132.75→132, 实际比例
+    ///   1.788, 而真 16:9 封面是 1.778, 只差 0.6%。严格 Uniform 会让这张封面缩到 234.7 宽,
+    ///   左右各留一条 0.6px 的模糊缝, 看着就像"封面莫名小了一圈"(探针实测新旧渲染差 3.6%)。
+    ///   这种量级的裁切肉眼根本看不见, 照旧铺满最干净; 差得多的(竖屏 9:16 要裁掉 68%)才完整显示。
+    /// </summary>
+    public const double CropTolerance = 0.03;
+
+    /// <summary>
+    /// 纯函数(探针可断言): 按 UniformToFill 铺满时会被裁掉的比例 ≤ <see cref="CropTolerance"/> 吗?
+    /// 图比格子宽 ⇒ 裁宽度; 图比格子窄 ⇒ 裁高度。
+    /// </summary>
+    public static bool IsNearlySameAspect(double boxW, double boxH, int pxW, int pxH)
+    {
+        if (boxW <= 0 || boxH <= 0 || pxW <= 0 || pxH <= 0) return false;
+        var box = boxW / boxH;
+        var img = (double)pxW / pxH;
+        var crop = 1.0 - Math.Min(box / img, img / box);
+        return crop <= CropTolerance;
+    }
+
+    /// <summary>
+    /// 模糊铺底的伙伴元素(只给视频卡片用): 拿到**同一张位图**按 `UniformToFill` 铺满整格,
+    /// 模糊效果写在 XAML 里的 `BlurEffect` 上。
+    ///
+    /// ★ 共用同一个 `BitmapImage` 实例 ⇒ **不额外解码、不多占一份内存**;
+    ///   而且它和主图在同一个 `ApplyDecoded` 里一起贴上去 ⇒
+    ///   "过渡动画期间不动树"那道闸门(`Cover.SuspendVisualUpdates`)对两层是一起生效的。
+    /// </summary>
+    public static readonly DependencyProperty BackdropProperty = DependencyProperty.RegisterAttached(
+        "Backdrop", typeof(Border), typeof(Cover), new PropertyMetadata(null));
+
+    public static Border? GetBackdrop(DependencyObject d) => (Border?)d.GetValue(BackdropProperty);
+    public static void SetBackdrop(DependencyObject d, Border? value) => d.SetValue(BackdropProperty, value);
+
     /// <summary>最近一次实际解码出的像素宽(应用成功后记录), 供"变宽了就重解码"判断。</summary>
     private static readonly DependencyProperty DecodedPixelWidthProperty =
         DependencyProperty.RegisterAttached("DecodedPixelWidth", typeof(int), typeof(Cover),
@@ -400,7 +460,13 @@ public static class Cover
 
             var brush = new ImageBrush(img)
             {
-                Stretch = Stretch.UniformToFill,
+                // Contain(视频卡片) = 完整显示, 剩下的交给模糊铺底; 其余(默认 Fill) = 裁切铺满。
+                // ★ "几乎同比例"的图仍然铺满, 免得留一条看不见的模糊缝(见 CropTolerance)。
+                Stretch = GetFit(border) == CoverFit.Contain &&
+                          !IsNearlySameAspect(border.ActualWidth, border.ActualHeight,
+                                              img.PixelWidth, img.PixelHeight)
+                    ? Stretch.Uniform
+                    : Stretch.UniformToFill,
                 AlignmentX = AlignmentX.Center,
                 AlignmentY = AlignmentY.Center
             };
@@ -408,6 +474,22 @@ public static class Cover
             // ★ Fant(高质量重采样): 默认 Linear 在"解码宽 > 显示宽"的缩小场景下明显偏软。
             border.SetValue(RenderOptions.BitmapScalingModeProperty, BitmapScalingMode.Fant);
             border.Background = brush;
+
+            // 模糊铺底: 同一张位图铺满整格(不额外解码)。缩放模式用 Linear 就够 —— 它反正要被糊掉,
+            // 高质量重采样在这里是纯浪费。
+            var backdrop = GetBackdrop(border);
+            if (backdrop != null)
+            {
+                var fill = new ImageBrush(img)
+                {
+                    Stretch = Stretch.UniformToFill,
+                    AlignmentX = AlignmentX.Center,
+                    AlignmentY = AlignmentY.Center
+                };
+                fill.Freeze();
+                backdrop.SetValue(RenderOptions.BitmapScalingModeProperty, BitmapScalingMode.Linear);
+                backdrop.Background = fill;
+            }
             // 图片加载成功后隐藏占位符(如头像里的人形图标), 否则会一直叠在图片上
             if (border.Child != null) border.Child.Visibility = Visibility.Collapsed;
             border.SetValue(DecodedPixelWidthProperty, img.PixelWidth);
@@ -416,18 +498,31 @@ public static class Cover
             //   再播一次 0→1 的淡入 = 封面先整块消失再浮出来; 最大化那一下视口内几十张同时重解码,
             //   几十张一起闪, 用户看到的就是"抽动"(2026-10-02 定位)。已经有图就静默换掉 ——
             //   底下换的是更清晰的位图, 画面不该有任何跳变。
+            //   模糊铺底跟着主图一起淡入/静默换, 不然两层会一先一后地"跳"出来。
             if (ShouldPlayFadeIn(prev))
             {
                 border.Opacity = 1.0;
                 border.BeginAnimation(UIElement.OpacityProperty,
                     new System.Windows.Media.Animation.DoubleAnimation(0, 1,
                         TimeSpan.FromMilliseconds(240)));
+                if (backdrop != null)
+                {
+                    backdrop.Opacity = 1.0;
+                    backdrop.BeginAnimation(UIElement.OpacityProperty,
+                        new System.Windows.Media.Animation.DoubleAnimation(0, 1,
+                            TimeSpan.FromMilliseconds(240)));
+                }
             }
             else
             {
                 // 清掉可能残留的淡入动画, 保证不透明度稳定在 1
                 border.BeginAnimation(UIElement.OpacityProperty, null);
                 border.Opacity = 1.0;
+                if (backdrop != null)
+                {
+                    backdrop.BeginAnimation(UIElement.OpacityProperty, null);
+                    backdrop.Opacity = 1.0;
+                }
             }
 
             // 解码期间卡片又变宽了(渐进重排/最大化): 立刻补一轮, 别等下一次 SizeChanged。

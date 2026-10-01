@@ -159,10 +159,31 @@
                 Background="{DynamicResource PlaceholderBrush}"
                 Cursor="Hand" MouseLeftButtonUp="OnClick">
             <Grid>
+                <!-- ===== 模糊铺底(2026-10-02 按用户要求新增) =====
+                     卡片格子是固定 16:9, 而封面不一定 —— 竖屏(9:16)封面若按老规矩裁切铺满,
+                     只能看到中间约 31%, 就是用户报的"封面被裁切显示不全"。
+                     现在主图改 `Cover.Fit="Contain"`(整张都在), 两侧的空档由这一层**同一张封面**
+                     的模糊版铺满: 墙面依旧齐整, 也不会露出两坨生硬的底色块。
+                     ★ 位图与主图共用同一份(Cover.Backdrop 指向下面那个 CoverBox), **不额外解码**。
+                     ★ 半径 28 + 放大 1.12: 高斯核在元素边缘采样不足会留下一圈发白的软边,
+                       放大一点让那圈软边落到裁剪区外面去。缩放模式用 Linear(见 CoverLoader),
+                       反正要糊, 高质量重采样是纯浪费。 -->
+                <Border x:Name="CoverBackdrop" Opacity="0.9" IsHitTestVisible="False" CornerRadius="8">
+                    <Border.Effect>
+                        <BlurEffect Radius="28" KernelType="Gaussian" RenderingBias="Performance" />
+                    </Border.Effect>
+                    <Border.RenderTransform>
+                        <ScaleTransform ScaleX="1.12" ScaleY="1.12" />
+                    </Border.RenderTransform>
+                </Border>
+
                 <!-- 封面图: **圆角必须写在它自己身上**。外层的 CoverCard 虽然也有 CornerRadius,
                      但 Border 的圆角只裁它自己的背景/边框, **不裁子元素** —— 图走的是 Cover 附加属性
                      设在 Background 上, 子元素不圆角就会把四个角顶成直角(用户实测反馈)。 -->
-                <Border x:Name="CoverBox" CornerRadius="8" behaviors:Cover.Source="{Binding Cover}" />
+                <Border x:Name="CoverBox" CornerRadius="8"
+                        behaviors:Cover.Source="{Binding Cover}"
+                        behaviors:Cover.Fit="Contain"
+                        behaviors:Cover.Backdrop="{Binding ElementName=CoverBackdrop}" />
 
                 <!-- 左下: 播放量 + 弹幕数(参考 B 站网页版卡片)。悬停放大封面时角标淡出,
                      免得压在放大的画面上。弹幕数拿不到(空串)就整段藏起来。 -->
