@@ -110,11 +110,23 @@ public partial class ImagePreviewWindow : FluentWindow
     /// 的适配比例约 0.07, 被 clamp 抬回 0.1 后渲染尺寸(1152x864)仍比窗口大 ——
     /// 用户看到的就是"只有中心一小块", 即真机反馈的"封面显示不全"。
     /// 初始适配的目标就是"完整可见", 多小都合法。
+    ///
+    /// ★★ 可用区必须取**图片区自己的实际尺寸**, 不能再用"窗口尺寸 − 40 / − 100"这种估算:
+    ///   实测(探针 `%TEMP%\bd-probe-coverfit`, 真窗口真布局)标题栏+底部工具条一共吃掉 107px,
+    ///   按减 100 算出来的高度预算(600)比图片区真实高度(593)**多 7px** ⇒ 竖向封面(1080×1920)
+    ///   与超大长图都会被 `ClipToBounds` 在上下各切掉一点 —— 就是"封面被裁切显示不全"。
+    ///   少留 1px 余量: 渲染尺寸按设备像素取整, 正好等高时仍可能切掉最后一行。
     /// </summary>
     private void FitToWindow(BitmapSource img)
     {
-        var availW = Math.Max(100, ActualWidth > 0 ? ActualWidth - 40 : 900);
-        var availH = Math.Max(100, ActualHeight > 0 ? ActualHeight - 100 : 600);
+        var area = VisualTreeHelper.GetParent(PreviewImage) as FrameworkElement;
+        var availW = area != null && area.ActualWidth > 1
+            ? area.ActualWidth - 1
+            : Math.Max(100, (ActualWidth > 0 ? ActualWidth : 940) - 40);
+        var availH = area != null && area.ActualHeight > 1
+            ? area.ActualHeight - 1
+            : Math.Max(100, (ActualHeight > 0 ? ActualHeight : 700) - 100);
+
         var sx = availW / img.PixelWidth;
         var sy = availH / img.PixelHeight;
         var s = Math.Min(1.0, Math.Min(sx, sy));
