@@ -31,7 +31,8 @@ dotnet publish (Join-Path $Root "BiliDesk\BiliDesk.csproj") -c Release -r win-x6
 if ($LASTEXITCODE -ne 0) { throw "安装器载荷发布失败" }
 
 Write-Host "== 3/3 打包便携版 =="
-$zip = Join-Path $Out "BiliDesk-$Version-便携版.zip"
+# 文件名用纯 ASCII: GitHub 会把非 ASCII 的资产名截掉(1.2.0 的 zip 在下载页显示成 "BiliDesk-1.2.0-.zip")
+$zip = Join-Path $Out "BiliDesk-$Version-portable.zip"
 if (Test-Path $zip) { Remove-Item $zip }
 Compress-Archive -Path (Join-Path $PortableDir "*") -DestinationPath $zip
 
