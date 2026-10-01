@@ -222,8 +222,19 @@ public partial class VideoCard : UserControl
 
     private VideoItem? Current => DataContext as VideoItem;
 
-    // "查看封面大图"(OnViewCover)已按用户要求整体移除(2026-09-26);
-    // MediaActions.ShowImage 仍被头像/私信图片预览使用, ImagePreviewWindow 保留。
+    /// <summary>
+    /// 查看封面原图(右键菜单第一项, 2026-10-02 按用户要求加回)。
+    ///
+    /// ★ 一律传 UrlUtil.ToOriginal: 接口给的 cover 常带 `@480w_1e_1c.webp` 这类处理后缀,
+    ///   直接用它只能看到列表里那张缩略图, 放大全是马赛克。走统一的 MediaActions.ShowImage,
+    ///   于是预览窗、缓存复用、异常 Toast 与头像/评论图完全一致。
+    /// </summary>
+    private void OnViewCover(object sender, RoutedEventArgs e)
+    {
+        var v = Current;
+        if (v == null) return;
+        MediaActions.ShowImage(UrlUtil.ToOriginal(v.Cover), v.Title, Window.GetWindow(this));
+    }
 
     private async void OnDownloadCover(object sender, RoutedEventArgs e)
     {
