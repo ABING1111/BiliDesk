@@ -1,0 +1,109 @@
+<UserControl x:Class="BiliDesk.Views.Controls.WindowButtons"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework">
+    <!--
+        最小化 / 最大化(还原) / 关闭 三个自绘按钮。
+
+        为什么要有它: 窗口改用 WindowStyle=None + WindowChrome 之后系统标题栏就没了,
+        系统的三个按钮也跟着消失 —— 必须自己画一套, 否则用户只能靠 Alt+F4 关窗口。
+
+        三个容易踩的点:
+          1. 标题栏区域里的元素默认**不接收鼠标**(那块被当成拖动条), 所以每个按钮都要显式写
+             WindowChrome.IsHitTestVisibleInChrome="True" —— 漏了就是"点了没反应";
+          2. 关闭键平时与 min/max 观感一致(透明底), **悬停才变粉底白字**(2026-09-24 用户要求,
+             推翻了之前"常驻粉底"的方案): 底色触发器写在模板里, 字色触发器写在 CapGlyphClose
+             的 Style.Triggers 里 —— 字形是调用方内容, 模板触发器够不着它, 只能在它自己的
+             样式上对"祖先 Button 的 IsMouseOver"做 DataTrigger(样式触发器能压过同级的
+             样式 setter, 这正是我们要的优先级);
+          3. 图标色不能靠继承: 全局隐式 TextBlock 样式会压过继承来的前景色(项目里那个老坑),
+             所以每个字形都显式给 Foreground。
+    -->
+    <StackPanel Orientation="Horizontal">
+        <StackPanel.Resources>
+            <!-- 最小化/最大化共用模板: 悬停上 HoverBrush, 按下压透明度 -->
+            <Style x:Key="CapBtn" TargetType="Button">
+                <Setter Property="Width" Value="46" />
+                <Setter Property="Height" Value="32" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bd" Background="Transparent">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="Background"
+                                            Value="{Binding HoverBrush, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="Bd" Property="Opacity" Value="0.7" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- 关闭键专用模板: 平时透明底(与 min/max 一致), 悬停才上品牌粉, 按下加深 -->
+            <Style x:Key="CapBtnClose" TargetType="Button" BasedOn="{StaticResource CapBtn}">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bd" Background="Transparent" CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="Background" Value="#FB7299" />
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="Bd" Property="Background" Value="#E4638A" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="CapGlyph" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                <!-- 标题栏按钮的字号就是 10: 这几个码位(E921/E922/E923/E8BB)本来就是
+                     为"撑满 em 框"设计的, 10 号对应约 10px 墨迹, 正是 Windows 的观感 -->
+                <Setter Property="FontSize" Value="10" />
+                <Setter Property="Foreground"
+                        Value="{Binding IconBrush, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+            </Style>
+
+            <Style x:Key="CapGlyphClose" TargetType="TextBlock" BasedOn="{StaticResource CapGlyph}">
+                <!-- 平时跟 min/max 一样用主题字色; 鼠标悬停到关闭键上时变白(配粉底)。
+                     触发器只能写在这里: 字形是调用方塞进 Button 的内容, 模板触发器摸不到它。 -->
+                <Setter Property="Foreground"
+                        Value="{Binding IconBrush, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}}"
+                                 Value="True">
+                        <Setter Property="Foreground" Value="White" />
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </StackPanel.Resources>
+
+        <Button x:Name="BtnMin" Style="{StaticResource CapBtn}" Click="OnMinClick" ToolTip="最小化">
+            <TextBlock Text="&#xE921;" Style="{StaticResource CapGlyph}" />
+        </Button>
+        <Button x:Name="BtnMax" Style="{StaticResource CapBtn}" Click="OnMaxClick" ToolTip="最大化">
+            <TextBlock x:Name="MaxGlyph" Text="&#xE922;" Style="{StaticResource CapGlyph}" />
+        </Button>
+        <Button x:Name="BtnClose" Style="{StaticResource CapBtnClose}"
+                Click="OnCloseClick" ToolTip="关闭">
+            <TextBlock Text="&#xE8BB;" Style="{StaticResource CapGlyphClose}" />
+        </Button>
+    </StackPanel>
+</UserControl>

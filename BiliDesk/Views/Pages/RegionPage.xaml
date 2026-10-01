@@ -1,0 +1,62 @@
+<UserControl x:Class="BiliDesk.Views.Pages.RegionPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             Background="{DynamicResource AppBackgroundBrush}"
+             Unloaded="OnUnloaded">
+    <!--
+        分区页(2026-09-26): 点左上角 logo 的分区面板里的一项, 就切到这里。
+        结构与首页一致 —— 大标题 + VideoCard 卡片墙; 数据是 ranking/v2 的分区榜(一份, 无翻页)。
+    -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 标题行: 分区名 + 一句说明(和首页"首页 + 问候语"同一个位置关系) -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="36,20,36,0">
+            <TextBlock Text="{Binding RegionName}" Style="{StaticResource PageTitleStyle}" />
+            <TextBlock Text="分区排行榜" Margin="14,0,0,6" VerticalAlignment="Bottom"
+                       Style="{StaticResource MetaTextStyle}" />
+        </StackPanel>
+
+        <Grid Grid.Row="1" Margin="36,14,36,0">
+            <!-- 加载中 -->
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding Loading, Converter={StaticResource BoolToVis}}">
+                <controls:LoadingRing Width="20" Height="20" />
+                <TextBlock Text="正在加载…" Margin="8,0,0,0" VerticalAlignment="Center"
+                           Style="{StaticResource MetaTextStyle}" />
+            </StackPanel>
+
+            <!-- 失败 -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding Error, Converter={StaticResource StrToVis}}">
+                <TextBlock Text="{Binding Error}" Style="{StaticResource MetaTextStyle}"
+                           HorizontalAlignment="Center" TextWrapping="Wrap" MaxWidth="420"
+                           TextAlignment="Center" />
+                <Button Content="重试" Style="{StaticResource SubtleButtonStyle}" Margin="0,12,0,0"
+                        HorizontalAlignment="Center" Command="{Binding RetryCommand}" />
+            </StackPanel>
+
+            <!-- 卡片墙: 容器由 DeferredFill 分帧挂载(和首页同一套, 否则 90 张卡片一次布局会卡) -->
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          Visibility="{Binding HasItems, Converter={StaticResource BoolToVis}}">
+                <ItemsControl x:Name="CardList" Margin="0,4,0,0">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <helpers:CardWallPanel helpers:CardWall.Enable="True" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <controls:VideoCard />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>

@@ -1,0 +1,294 @@
+<UserControl x:Class="BiliDesk.Views.Pages.MessagesPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             xmlns:behaviors="clr-namespace:BiliDesk.Helpers"
+             Background="{DynamicResource AppBackgroundBrush}">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 返回 + 标题 + 刷新。
+             这一页不在左侧导航栏上(入口在首页右上角工具列), 所以必须自带一个明确的返回入口。 -->
+        <!--
+                    右上角的窗口按钮(最小化/最大化/关闭)浮在内容区之上、占 y=4~36。
+                    头部因此撑到 62 高: 标题贴顶(和左侧 logo 同一水平线), 右侧操作按钮
+                    贴底 —— 它们的顶边落在 44, 正好让开窗口按钮, 谁也不压谁。
+                -->
+        <Grid Grid.Row="0" Margin="36,20,36,0" MinHeight="62">
+            <!-- VerticalAlignment="Top" 不能省: 头部这一行被 MinHeight=62 撑高, 若让它拉伸,
+                 标题(默认向上/居中)与"私信"小字(贴底)会被拉开 30 多像素, 看着就是错位。
+                 撑到 62 只为了让右侧按钮让开窗口按钮(见上面那段说明), 内容本身该贴顶。 -->
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
+                <Button Style="{StaticResource SubtleButtonStyle}" Click="OnBackClick"
+                        Padding="10,6" FontSize="13" VerticalAlignment="Center" Margin="0,0,14,0"
+                        ToolTip="返回首页">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE80F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="13" VerticalAlignment="Center" />
+                        <TextBlock Text="返回" Margin="6,0,0,0" FontSize="13" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <TextBlock Text="&#xE8BD;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="20" VerticalAlignment="Center"
+                           Foreground="{DynamicResource AccentTextBrush}" />
+                <TextBlock Text="B 站消息" Style="{StaticResource PageTitleStyle}" Margin="10,0,0,0" />
+                <TextBlock Text="私信" VerticalAlignment="Bottom" Margin="8,0,0,6"
+                           Foreground="{DynamicResource TextTertiaryBrush}" FontSize="14" />
+            </StackPanel>
+            <Button HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Style="{StaticResource IconButtonStyle}"
+                    Command="{Binding RefreshCommand}" ToolTip="刷新">
+                <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+            </Button>
+        </Grid>
+
+        <Grid Grid.Row="1" Margin="0,16,0,0">
+            <!-- 未登录 / 整页错误 -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460"
+                        Visibility="{Binding Error, Converter={StaticResource StrToVis}}">
+                <TextBlock Text="&#xE8BD;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="40" Foreground="{DynamicResource TextTertiaryBrush}"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding Error}" Margin="0,14,0,0" FontSize="13" TextWrapping="Wrap"
+                           TextAlignment="Center" HorizontalAlignment="Center"
+                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                        HorizontalAlignment="Center" Margin="0,16,0,0" Padding="24,7"
+                        Command="{Binding RefreshCommand}"
+                        Visibility="{Binding Loading, Converter={StaticResource InvBoolToVis}}" />
+            </StackPanel>
+
+            <!-- 主体: 左会话列表 / 右私信内容 -->
+            <Grid Visibility="{Binding Error, Converter={StaticResource InvStrToVis}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="248" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <!-- ===== 左: 会话列表 ===== -->
+                <Border Grid.Column="0" Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,1,0">
+                    <Grid>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Visibility="{Binding Loading, Converter={StaticResource BoolToVis}}">
+                            <controls:LoadingRing Width="26" Height="26" HorizontalAlignment="Center" />
+                            <TextBlock Text="正在加载会话…" Style="{StaticResource MetaTextStyle}"
+                                       Margin="0,10,0,0" HorizontalAlignment="Center" />
+                        </StackPanel>
+
+                        <ListBox x:Name="SessionList" ItemsSource="{Binding Sessions}"
+                                 SelectedItem="{Binding Current, Mode=TwoWay}"
+                                 Background="Transparent" BorderThickness="0"
+                                 Margin="8,10,8,10"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnSessionSelectionChanged">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <!--
+                                        这里**不能**写 Focusable="False"（曾经写过，就是"点左侧会话没反应"的根因）：
+                                        ListBoxItem 被设为不可获取焦点后，WPF 的鼠标点击不再改变选中项 ——
+                                        点击在到达 ListBoxItem 之前就被拦掉了，SelectionChanged 永远不触发，
+                                        于是绑在它上面的加载逻辑一次也跑不到。界面上看着"点了没反应"。
+                                        想干掉焦点虚线框用 FocusVisualStyle=null 就够了，它不影响选中。
+                                    -->
+                                    <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="Margin" Value="0" />
+                                    <!-- 兜底：点击的显式入口，不依赖 ListBox 自身的选中逻辑 -->
+                                    <EventSetter Event="PreviewMouseLeftButtonDown" Handler="OnSessionRowPressed" />
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="Bd" Background="Transparent"
+                                                        CornerRadius="8" Padding="8,7">
+                                                    <ContentPresenter />
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="Bd" Property="Background"
+                                                                Value="{DynamicResource ControlFillHoverBrush}" />
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="Bd" Property="Background"
+                                                                Value="{DynamicResource AccentSoftFillBrush}" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- 头像 + 未读角标 -->
+                                        <Grid Grid.Column="0" Width="40" Height="40">
+                                            <Border CornerRadius="20" ClipToBounds="True"
+                                                    Background="{DynamicResource AccentSoftFillBrush}"
+                                                    behaviors:Cover.Source="{Binding Face}">
+                                                <TextBlock Text="&#xE77B;"
+                                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                           FontSize="16"
+                                                           Foreground="{DynamicResource AccentTextBrush}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                    MinWidth="16" Height="16" CornerRadius="8" Padding="4,0"
+                                                    Background="{DynamicResource AccentBrush}"
+                                                    Visibility="{Binding HasUnread, Converter={StaticResource BoolToVis}}">
+                                                <TextBlock Text="{Binding UnreadCount}" FontSize="10"
+                                                           Foreground="{DynamicResource TextOnAccentBrush}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                        </Grid>
+
+                                        <!-- 昵称 + 摘要 -->
+                                        <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding DisplayName}" FontSize="13"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding Preview}" FontSize="11"
+                                                       Margin="0,3,0,0"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+
+                                        <TextBlock Grid.Column="2" Text="{Binding TimeText}"
+                                                   Style="{StaticResource MetaTextStyle}" FontSize="10"
+                                                   VerticalAlignment="Top" Margin="0,4,0,0" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </Border>
+
+                <!-- ===== 右: 私信内容 ===== -->
+                <Grid Grid.Column="1">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- 会话标题 -->
+                    <Border Grid.Row="0" Padding="20,12" BorderBrush="{DynamicResource DividerBrush}"
+                            BorderThickness="0,0,0,1">
+                        <TextBlock Text="{Binding CurrentTitle}" FontSize="14" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   Visibility="{Binding HasCurrent, Converter={StaticResource BoolToVis}}" />
+                    </Border>
+
+                    <!-- 消息列表 -->
+                    <Grid Grid.Row="1">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Visibility="{Binding ThreadLoading, Converter={StaticResource BoolToVis}}">
+                            <controls:LoadingRing Width="26" Height="26" HorizontalAlignment="Center" />
+                            <TextBlock Text="正在加载私信…" Style="{StaticResource MetaTextStyle}"
+                                       Margin="0,10,0,0" HorizontalAlignment="Center" />
+                        </StackPanel>
+
+                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Text="{Binding ThreadError}" FontSize="12" MaxWidth="380"
+                                   TextWrapping="Wrap" TextAlignment="Center"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   Visibility="{Binding ThreadError, Converter={StaticResource StrToVis}}" />
+
+                        <ScrollViewer x:Name="MsgScroll" VerticalScrollBarVisibility="Auto"
+                                      Padding="20,14,20,14">
+                            <ItemsControl ItemsSource="{Binding Messages}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <!-- 自己的消息靠右且用强调色气泡, 对方的靠左用卡片色 -->
+                                        <StackPanel Margin="0,0,0,10">
+                                            <Border x:Name="Bubble" CornerRadius="10" Padding="12,8"
+                                                    MaxWidth="420" HorizontalAlignment="Left"
+                                                    ToolTip="{Binding TimeText}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background"
+                                                                Value="{DynamicResource CardBackgroundBrush}" />
+                                                        <Setter Property="BorderBrush"
+                                                                Value="{DynamicResource CardBorderBrush}" />
+                                                        <Setter Property="BorderThickness" Value="1" />
+                                                        <Setter Property="HorizontalAlignment" Value="Left" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsMine}" Value="True">
+                                                                <Setter Property="HorizontalAlignment" Value="Right" />
+                                                                <Setter Property="Background"
+                                                                        Value="{DynamicResource AccentBrush}" />
+                                                                <Setter Property="BorderThickness" Value="0" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <StackPanel>
+                                                    <!-- 图片消息: 用 Cover.ImageSource 异步加载,
+                                                         直接绑 Image.Source 会让 WPF 同步下载解码, 卡 UI -->
+                                                    <Image MaxWidth="260" MaxHeight="260" Stretch="Uniform"
+                                                           Visibility="{Binding IsImage, Converter={StaticResource BoolToVis}}"
+                                                           behaviors:Cover.ImageSource="{Binding ImageUrl}"
+                                                           MouseLeftButtonUp="OnMessageImageClick" Cursor="Hand" />
+                                                    <!-- 文字消息 -->
+                                                    <TextBox Text="{Binding Text, Mode=OneWay}"
+                                                             IsReadOnly="True" TextWrapping="Wrap"
+                                                             FontSize="12.5" Padding="0"
+                                                             Background="Transparent" BorderThickness="0"
+                                                             HorizontalAlignment="Stretch" Cursor="IBeam"
+                                                             Visibility="{Binding IsText, Converter={StaticResource BoolToVis}}">
+                                                        <TextBox.Style>
+                                                            <Style TargetType="TextBox">
+                                                                <Setter Property="Foreground"
+                                                                        Value="{DynamicResource TextPrimaryBrush}" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsMine}" Value="True">
+                                                                        <Setter Property="Foreground"
+                                                                                Value="{DynamicResource TextOnAccentBrush}" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBox.Style>
+                                                    </TextBox>
+                                                </StackPanel>
+                                            </Border>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Grid>
+
+                    <!-- 输入区 -->
+                    <Border Grid.Row="2" Padding="16,12" BorderBrush="{DynamicResource DividerBrush}"
+                            BorderThickness="0,1,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="DraftBox" Grid.Column="0"
+                                     Style="{StaticResource FluentTextBoxStyle}"
+                                     Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
+                                     KeyDown="OnDraftKeyDown" MaxLength="500"
+                                     IsEnabled="{Binding HasCurrent}" />
+                            <Button Grid.Column="1" Content="发送" Margin="10,0,0,0"
+                                    Style="{StaticResource AccentButtonStyle}" Padding="22,8"
+                                    Command="{Binding SendCommand}"
+                                    IsEnabled="{Binding CanSend}" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

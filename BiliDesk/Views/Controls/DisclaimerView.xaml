@@ -1,0 +1,45 @@
+<UserControl x:Class="BiliDesk.Views.Controls.DisclaimerView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers">
+    <!--
+        免责声明的正文渲染。做成分离的 UserControl 是因为它有两处用处:
+        首次启动的同意弹窗, 以及设置页「关于」里的随时查看 —— 同一份文本两处渲染,
+        抄成两份迟早会不一致(而这是要给人"同意"的法律文本, 更不能对不上)。
+        正文逐字来自 helpers:DisclaimerText, 这里只按行级标记决定字号/颜色。
+    -->
+    <ItemsControl ItemsSource="{x:Static helpers:DisclaimerText.Lines}">
+        <ItemsControl.ItemTemplate>
+            <DataTemplate>
+                <TextBlock Text="{Binding Text}" TextWrapping="Wrap">
+                    <TextBlock.Style>
+                        <!-- 显式设 Style 会跳过 App 级那个隐式 TextBlock 样式, 字体改由窗口继承 -->
+                        <Style TargetType="TextBlock">
+                            <Setter Property="FontSize" Value="13" />
+                            <Setter Property="LineHeight" Value="21" />
+                            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+                            <Setter Property="Margin" Value="0,0,0,9" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Level}" Value="0">
+                                    <Setter Property="FontSize" Value="20" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                    <Setter Property="Margin" Value="0,0,0,14" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Level}" Value="1">
+                                    <Setter Property="FontSize" Value="14" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                    <Setter Property="Margin" Value="0,16,0,7" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Level}" Value="3">
+                                    <Setter Property="Margin" Value="12,0,0,4" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </DataTemplate>
+        </ItemsControl.ItemTemplate>
+    </ItemsControl>
+</UserControl>

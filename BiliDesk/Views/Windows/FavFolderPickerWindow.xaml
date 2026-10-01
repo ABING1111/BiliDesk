@@ -1,0 +1,53 @@
+<views:FluentWindow x:Class="BiliDesk.Views.FavFolderPickerWindow"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:BiliDesk.Views"
+             Title="收藏到收藏夹" Width="360" Height="450"
+             ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <Grid Background="{DynamicResource AppBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 头部: 标题 + 视频名(副标题截断, 别让长标题把窗口撑变形) -->
+        <StackPanel Grid.Row="0" Margin="22,20,22,10">
+            <TextBlock Text="收藏到收藏夹" FontSize="17" FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextPrimaryBrush}" />
+            <TextBlock x:Name="SubtitleText" Style="{StaticResource MetaTextStyle}"
+                       Margin="0,5,0,0" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+
+        <!-- 收藏夹勾选列表 -->
+        <ScrollViewer Grid.Row="1" Margin="12,0" VerticalScrollBarVisibility="Auto">
+            <ItemsControl x:Name="FolderList">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <!-- Transparent 背景让整行参与命中, 点击行内空白也能切换勾选 -->
+                        <Border Background="Transparent" Padding="8,4">
+                            <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                                      HorizontalContentAlignment="Stretch">
+                                <StackPanel Margin="2,4">
+                                    <TextBlock Text="{Binding Folder.Title}" FontSize="13.5"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    <TextBlock Text="{Binding MetaText}"
+                                               Style="{StaticResource MetaTextStyle}" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </CheckBox>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <!-- 底部按钮 -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="22,10,22,18">
+            <Button Content="取消" Style="{StaticResource SubtleButtonStyle}"
+                    Padding="20,7" Click="OnCancelClick" />
+            <Button Content="确定" Style="{StaticResource AccentButtonStyle}"
+                    Padding="20,7" Margin="10,0,0,0" Click="OnConfirmClick" />
+        </StackPanel>
+    </Grid>
+</views:FluentWindow>

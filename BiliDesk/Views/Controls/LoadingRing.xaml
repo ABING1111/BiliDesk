@@ -1,0 +1,27 @@
+<UserControl x:Class="BiliDesk.Views.Controls.LoadingRing"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Width="24" Height="24" IsHitTestVisible="False">
+    <Grid>
+        <Ellipse Stroke="{DynamicResource ControlFillPressedBrush}" StrokeThickness="2.5" />
+        <Ellipse x:Name="Arc" Stroke="{DynamicResource AccentBrush}" StrokeThickness="2.5"
+                 StrokeDashArray="42 70" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                 RenderTransformOrigin="0.5,0.5">
+            <Ellipse.RenderTransform>
+                <RotateTransform x:Name="Rot" Angle="0" />
+            </Ellipse.RenderTransform>
+        </Ellipse>
+    </Grid>
+    <UserControl.Triggers>
+        <EventTrigger RoutedEvent="Loaded">
+            <BeginStoryboard>
+                <Storyboard>
+                    <DoubleAnimation Storyboard.TargetName="Rot"
+                                     Storyboard.TargetProperty="Angle"
+                                     From="0" To="360" Duration="0:0:1"
+                                     RepeatBehavior="Forever" />
+                </Storyboard>
+            </BeginStoryboard>
+        </EventTrigger>
+    </UserControl.Triggers>
+</UserControl>

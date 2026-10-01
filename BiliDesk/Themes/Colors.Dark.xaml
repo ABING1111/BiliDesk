@@ -1,0 +1,67 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ============ 深色主题色板 (Windows 11 Fluent Dark) ============ -->
+
+    <SolidColorBrush x:Key="WindowSolidLightBrush" Color="#F3F3F3" />
+    <SolidColorBrush x:Key="WindowSolidDarkBrush" Color="#202020" />
+
+    <SolidColorBrush x:Key="AppBackgroundBrush" Color="#B3202020" />
+    <SolidColorBrush x:Key="SideBarBackgroundBrush" Color="#A6202020" />
+
+    <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2E2E2E" />
+    <SolidColorBrush x:Key="CardBorderBrush" Color="#14FFFFFF" />
+    <!-- 悬停时的描边(深色主题往亮的一档走) -->
+    <SolidColorBrush x:Key="DividerBrush" Color="#14FFFFFF" />
+
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F4F4F4" />
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#B0B0B0" />
+    <SolidColorBrush x:Key="TextTertiaryBrush" Color="#8C8C8C" />
+    <!-- TextOnAccent* 见 Colors.Light.xaml 中的说明: 由 ThemeService.ApplyAccent() 动态注入 -->
+
+    <SolidColorBrush x:Key="ControlFillDefaultBrush" Color="#0FFFFFFF" />
+    <SolidColorBrush x:Key="ControlFillHoverBrush" Color="#16FFFFFF" />
+    <SolidColorBrush x:Key="ControlFillPressedBrush" Color="#22FFFFFF" />
+    <SolidColorBrush x:Key="NavItemHoverBrush" Color="#10FFFFFF" />
+
+    <!-- 不透明版的浮动按钮填充, 说明见 Colors.Light.xaml(按页面背景 #202020 合成)。 -->
+    <SolidColorBrush x:Key="FloatingFillBrush" Color="#2D2D2D" />
+    <SolidColorBrush x:Key="FloatingFillHoverBrush" Color="#333333" />
+    <SolidColorBrush x:Key="FloatingFillPressedBrush" Color="#3E3E3E" />
+
+    <SolidColorBrush x:Key="InputBackgroundBrush" Color="#8C323232" />
+    <SolidColorBrush x:Key="InputBorderBrush" Color="#26FFFFFF" />
+
+    <SolidColorBrush x:Key="DurationBadgeBackgroundBrush" Color="#CC000000" />
+    <SolidColorBrush x:Key="ToastBackgroundBrush" Color="#F02C2C2C" />
+    <SolidColorBrush x:Key="ToastBorderBrush" Color="#33FFFFFF" />
+    <SolidColorBrush x:Key="InfoBarBackgroundBrush" Color="#D92E2E2E" />
+    <SolidColorBrush x:Key="PlaceholderBrush" Color="#14FFFFFF" />
+
+    <!-- 热搜徽章(新 / 热 / 独家)。语义色, 与主题无关 —— 与 Colors.Light.xaml 保持同一组值。 -->
+    <SolidColorBrush x:Key="HotBadgeNewBrush" Color="#ED8F1A" />
+    <SolidColorBrush x:Key="HotBadgeHotBrush" Color="#E5484D" />
+    <SolidColorBrush x:Key="HotBadgeExclusiveBrush" Color="#E1519A" />
+
+    <!-- 浮出层(右键菜单等): 必须接近不透明, 否则菜单叠在视频/图片上会透出底下的内容 -->
+    <SolidColorBrush x:Key="FlyoutBackgroundBrush" Color="#F52A2A2A" />
+    <SolidColorBrush x:Key="FlyoutBorderBrush" Color="#1FFFFFFF" />
+    <SolidColorBrush x:Key="FlyoutItemHoverBrush" Color="#1FFFFFFF" />
+
+    <!-- 滚动条: 平时半透明, 悬停/拖动时加深, 不抢视线又找得到 -->
+    <SolidColorBrush x:Key="ScrollThumbBrush" Color="#33FFFFFF" />
+    <SolidColorBrush x:Key="ScrollThumbHoverBrush" Color="#73FFFFFF" />
+
+    <!-- 危险操作(删除 / 清空)。两套主题用同一组值: 深红色饱和度足够,
+         在浅底和深底上都读得出来。红底上的文字固定白色(对比度 5.4:1)。 -->
+    <SolidColorBrush x:Key="DangerBrush" Color="#C42B1C" />
+    <SolidColorBrush x:Key="DangerHoverBrush" Color="#D93A2B" />
+    <SolidColorBrush x:Key="DangerPressedBrush" Color="#A31F12" />
+    <!-- 深色主题下红色当**文字色**用要提亮, 否则 #C42B1C 压在 #202020 上偏暗 -->
+    <SolidColorBrush x:Key="DangerTextBrush" Color="#FF7B6E" />
+    <SolidColorBrush x:Key="TextOnDangerBrush" Color="#FFFFFF" />
+
+    <!-- 说明: 强调色(Accent*)一律由 ThemeService 注入品牌粉, 见 App.xaml 里的兜底定义。
+         这里不放任何固定的强调色, 否则会和品牌色打架。 -->
+
+</ResourceDictionary>

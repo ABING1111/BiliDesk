@@ -1,0 +1,17 @@
+# .NET / Visual Studio
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.userosscache
+
+# 发布产物(便携版 zip / 安装器载荷都在这里, 不进仓库)
+发布包/
+
+# WorkBuddy 会话数据(个人笔记, 不开源)
+.workbuddy/
+
+# 运行期临时文件
+*.log
+*.tmp

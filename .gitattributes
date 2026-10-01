@@ -1,0 +1,23 @@
+# 统一行尾策略: 仓库内一律存 LF, 检出到工作区也用 LF。
+#
+# 为什么要显式写死(2026-10-01):
+#   本机 git 的**全局**配置是 core.autocrlf=true, 而本仓库索引里本来就全是 LF。
+#   两边不一致时, git 只要"碰"一下文件(检出 / 合并 / 切分支), 就会按全局设置把它转成 CRLF;
+#   于是 `git diff` 满屏都是"改了这一行"而内容其实一模一样 —— 版本控制就此失去可信度,
+#   也就只能退回"每次改之前先拷一份快照"。
+#   显式声明 eol=lf 之后, 行尾由本文件说了算, 不再取决于每台机器的全局设置。
+* text=auto eol=lf
+
+# ---- 二进制: 禁止行尾转换, 也别让 git 试图对它们做文本 diff ----
+# (text=auto 已能自动识别, 这里显式列出是双保险: 识别错了的后果是二进制被"清洗")
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.dll binary
+*.lib binary
+*.exp binary
+*.jar binary
+*.zip binary
+*.pdb binary

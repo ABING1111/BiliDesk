@@ -1,0 +1,309 @@
+<UserControl x:Class="BiliDesk.Views.Pages.MinePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             Background="{DynamicResource AppBackgroundBrush}">
+    <!--
+        「我的」页(2026-09-26 新增, 版式对齐 B 站网页版 space 首页):
+        资料头(头像/昵称/等级/硬币/经验) → 动态/关注/粉丝 → 快捷入口 → 我的收藏夹卡片。
+        快捷入口现有四个: 离线缓存 / 观看记录 / 我的收藏 / 稍后再看(2026-09-28 加)。
+        我的订阅暂不做(用户拍板), 参考图里那个位置空着。
+    -->
+    <Grid helpers:Responsive.Enable="True">
+
+        <!-- 响应式: 窄档收内边距 + 快捷入口从 4 列改 2 列(每项能分到两倍宽度, 拇指也更好点)。
+             ★ 内边距走上面的 VisualState(Thickness 可插值, 平滑过渡);
+               列数**不能用 VisualState 动画** —— 见 UniformGrid 上那条绑定里的说明。
+             档位来自主窗口, 见 Helpers/Responsive.cs。 -->
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="WidthStates">
+                <VisualStateGroup.Transitions>
+                    <VisualTransition GeneratedDuration="0:0:0.18">
+                        <VisualTransition.GeneratedEasingFunction>
+                            <CubicEase EasingMode="EaseOut" />
+                        </VisualTransition.GeneratedEasingFunction>
+                    </VisualTransition>
+                </VisualStateGroup.Transitions>
+
+                <VisualState x:Name="Wide" />
+                <VisualState x:Name="Medium" />
+
+                <VisualState x:Name="Compact">
+                    <Storyboard>
+                        <ThicknessAnimation Storyboard.TargetName="PageHeader"
+                                            Storyboard.TargetProperty="Margin"
+                                            To="20,20,20,0" Duration="0" />
+                        <ThicknessAnimation Storyboard.TargetName="PageBody"
+                                            Storyboard.TargetProperty="Margin"
+                                            To="20,6,20,28" Duration="0" />
+                    </Storyboard>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 标题行(头部撑到 62: 右上角窗口按钮占 y=4~36, 与其它页面同一套规则) -->
+        <Grid x:Name="PageHeader" Grid.Row="0" Margin="36,20,36,0" MinHeight="62">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
+                <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="20" VerticalAlignment="Center"
+                           Foreground="{DynamicResource AccentTextBrush}" />
+                <TextBlock Text="我的" Style="{StaticResource PageTitleStyle}" Margin="10,0,0,0" />
+            </StackPanel>
+        </Grid>
+
+        <!-- ============ 未登录 ============ -->
+        <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Visibility="{Binding IsLoggedIn, Converter={StaticResource InvBoolToVis}}">
+            <Border Width="72" Height="72" CornerRadius="36"
+                    Background="{DynamicResource AccentSoftFillBrush}">
+                <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="34" Foreground="{DynamicResource AccentTextBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <TextBlock Text="登录后查看你的收藏、历史与硬币经验"
+                       FontSize="14" Margin="0,18,0,0" HorizontalAlignment="Center"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+            <Button Content="去登录" Style="{StaticResource AccentButtonStyle}"
+                    Padding="28,8" Margin="0,18,0,0" HorizontalAlignment="Center"
+                    Command="{Binding LoginCommand}" />
+        </StackPanel>
+
+        <!-- ============ 已登录 ============ -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                      Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}}">
+            <StackPanel x:Name="PageBody" Margin="36,6,36,28">
+
+                <!-- == 资料头 == -->
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <Border x:Name="AvatarBox" Width="64" Height="64" CornerRadius="32"
+                            Background="{DynamicResource AccentSoftFillBrush}"
+                            helpers:Cover.Source="{Binding Face}">
+                        <!-- 兜底人形: Cover.Source 把头像画在 Border 的 Background 上, 子元素会叠在图上,
+                             所以 Face 有 URL 就把图标藏掉(和侧栏头像当年的处理一致) -->
+                        <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="26" Foreground="{DynamicResource AccentTextBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Visibility="{Binding Face, Converter={StaticResource InvStrToVis}}" />
+                    </Border>
+                    <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Name}" FontSize="20" FontWeight="SemiBold"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <!-- 等级徽章: 空串(Lv0)时整块隐藏 -->
+                            <Border CornerRadius="4" Padding="5,1.5" Margin="8,0,0,0"
+                                    VerticalAlignment="Center"
+                                    Background="{DynamicResource AccentSoftFillBrush}"
+                                    Visibility="{Binding LevelText, Converter={StaticResource StrToVis}}">
+                                <TextBlock Text="{Binding LevelText}" FontSize="10.5" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource AccentTextBrush}" />
+                            </Border>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <TextBlock Text="硬币" FontSize="12"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                            <TextBlock Text="{Binding CoinsText}" FontSize="12" Margin="4,0,0,0"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <!-- 经验: 没拿到(ExpText 为空)时整段隐藏 -->
+                            <StackPanel Orientation="Horizontal" Margin="18,0,0,0"
+                                        Visibility="{Binding ExpText, Converter={StaticResource StrToVis}}">
+                                <TextBlock Text="经验" FontSize="12"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                                <TextBlock Text="{Binding ExpText}" FontSize="12" Margin="4,0,0,0"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <!-- 经验进度条: 120px 轨道, 实心段宽度由 VM 算好(ExpBarWidth) -->
+                        <Grid Width="120" Height="3" Margin="0,6,0,0" HorizontalAlignment="Left"
+                              Visibility="{Binding ExpText, Converter={StaticResource StrToVis}}">
+                            <Border CornerRadius="1.5" Background="{DynamicResource DividerBrush}" />
+                            <Border CornerRadius="1.5" HorizontalAlignment="Left"
+                                    Background="{DynamicResource AccentBrush}"
+                                    Width="{Binding ExpBarWidth}" />
+                        </Grid>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- == 动态 / 关注 / 粉丝(三等分, 数字在上、标签在下) == -->
+                <UniformGrid Columns="3" Margin="0,28,0,0">
+                    <StackPanel HorizontalAlignment="Center">
+                        <TextBlock Text="{Binding DynamicText}" FontSize="18" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBlock Text="动态" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </StackPanel>
+                    <StackPanel HorizontalAlignment="Center">
+                        <TextBlock Text="{Binding FollowingText}" FontSize="18" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBlock Text="关注" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </StackPanel>
+                    <StackPanel HorizontalAlignment="Center">
+                        <TextBlock Text="{Binding FollowerText}" FontSize="18" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBlock Text="粉丝" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </StackPanel>
+                </UniformGrid>
+
+                <!-- == 快捷入口(四个: 离线缓存 / 观看记录 / 我的收藏 / 稍后再看)。
+                     悬浮时整块垫一层灰色预选底(ControlFillHoverBrush); 底块必须自带
+                     Transparent 背景, 没有背景 = 不参与命中测试 -->
+                <!-- ★ 列数只能用**绑定**驱动, 不能放进 VisualState 做动画。
+                     曾经的写法是 `ObjectAnimationUsingKeyFrames + DiscreteObjectKeyFrame Value="2"`,
+                     结果一拖窗口到窄档整个应用就弹错误框:
+                     DiscreteObjectKeyFrame.Value 的声明类型是 object, XAML 字面量 2 被解析成**字符串 "2"**,
+                     动画算出 string, 而 Columns 带 ValidateValueCallback ⇒
+                     AnimationException「应用于"Columns"属性的动画计算"2"的当前值，而该值不是此属性的有效值」。
+                     绑定走正常的类型转换, 没有这个问题; 代价是这一条重排是瞬时的(列数本来就插不了值)。 -->
+                <UniformGrid x:Name="QuickGrid" Margin="0,26,0,0"
+                             Columns="{Binding (helpers:Responsive.Class),
+                                       RelativeSource={RelativeSource Self},
+                                       Converter={StaticResource ClassToValue},
+                                       ConverterParameter='Compact=2|4'}">
+                    <UniformGrid.Resources>
+                        <Style x:Key="QuickEntry" TargetType="Border">
+                            <Setter Property="Width" Value="112" />
+                            <Setter Property="Height" Value="66" />
+                            <Setter Property="CornerRadius" Value="10" />
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="Cursor" Value="Hand" />
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="{DynamicResource ControlFillHoverBrush}" />
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </UniformGrid.Resources>
+                    <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenCacheClick"
+                            ToolTip="打开离线缓存">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="20" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <TextBlock Text="离线缓存" FontSize="12" Margin="0,6,0,0" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenHistoryClick"
+                            ToolTip="打开观看记录">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="&#xE81C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="20" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <TextBlock Text="观看记录" FontSize="12" Margin="0,6,0,0" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenFavoritesClick"
+                            ToolTip="打开我的收藏">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="&#xE735;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="20" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <TextBlock Text="我的收藏" FontSize="12" Margin="0,6,0,0" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+                    <!-- 稍后再看(2026-09-28 新增) -->
+                    <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenWatchLaterClick"
+                            ToolTip="打开稍后再看">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="&#xE7C1;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="20" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <TextBlock Text="稍后再看" FontSize="12" Margin="0,6,0,0" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+                </UniformGrid>
+
+                <!-- == 分隔线 + 我的收藏 == -->
+                <Border Height="1" Margin="0,24,0,0"
+                        Background="{DynamicResource DividerBrush}" />
+
+                <Grid Margin="0,20,0,0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="我的收藏" FontSize="15" FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBlock Text="{Binding FavCountText}" FontSize="15" FontWeight="SemiBold"
+                                   Margin="8,0,0,0" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   Visibility="{Binding FavCountText, Converter={StaticResource StrToVis}}" />
+                        <!-- 进收藏页看全部 -->
+                        <Button Style="{StaticResource BareIconButtonStyle}" Margin="4,0,0,0"
+                                Click="OnOpenFavoritesClick" ToolTip="打开收藏页"
+                                VerticalAlignment="Center">
+                            <TextBlock Text="&#xE76C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="12" />
+                        </Button>
+                    </StackPanel>
+                    <Button Style="{StaticResource IconButtonStyle}" HorizontalAlignment="Right"
+                            VerticalAlignment="Center" Click="OnRefreshFoldersClick" ToolTip="刷新收藏夹">
+                        <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="15" />
+                    </Button>
+                </Grid>
+
+                <!-- 收藏夹卡片(横向, 装不下时滚动) -->
+                <StackPanel HorizontalAlignment="Center" Margin="0,26,0,0"
+                            Visibility="{Binding FolderLoading, Converter={StaticResource BoolToVis}}">
+                    <controls:LoadingRing Width="26" Height="26" HorizontalAlignment="Center" />
+                </StackPanel>
+
+                <TextBlock Text="{Binding FolderError}" FontSize="13" Margin="0,18,0,0"
+                           HorizontalAlignment="Center"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           Visibility="{Binding FolderError, Converter={StaticResource StrToVis}}" />
+
+                <!-- 收藏夹卡片: 和视频页同一套 WrapPanel 自动换行(2026-09-26 用户要求,
+                     之前横向单行最右边那夹会被窗口右缘裁掉一截) -->
+                <ItemsControl ItemsSource="{Binding Folders}" Margin="0,16,0,0"
+                              Visibility="{Binding FolderError, Converter={StaticResource InvStrToVis}}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- 一个收藏夹卡片: 封面 168x104 + 标题 + "共N条视频 · 私密"。
+                                 封面圆角必须写在装图的那层 Border 自己身上
+                                 (外层 Border 的 CornerRadius 裁不到子元素);
+                                 右/下留 14/16 间距, WrapPanel 换行时行距就靠下边距 -->
+                            <StackPanel Width="168" Margin="0,0,14,16" Cursor="Hand"
+                                        MouseLeftButtonUp="OnFolderClick"
+                                        Background="Transparent">
+                                <Border x:Name="FolderCover" Width="168" Height="104"
+                                        CornerRadius="8"
+                                        Background="{DynamicResource CardBackgroundBrush}"
+                                        helpers:Cover.Source="{Binding Cover}">
+                                    <!-- 注意: 不能放兜底图标 —— Cover.Source 把图画在 Border 的
+                                         Background 上, 子元素永远叠在它上面; 拉图失败时
+                                         CardBackgroundBrush 底色本身就是兜底 -->
+                                </Border>
+                                <TextBlock Text="{Binding Title}" FontSize="13" Margin="2,8,0,0"
+                                           TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock FontSize="11" Margin="2,3,0,0"
+                                           Foreground="{DynamicResource TextTertiaryBrush}">
+                                    <Run Text="共" /><Run Text="{Binding MediaCount, Mode=OneWay}" /><Run Text="条视频 · " /><Run Text="{Binding PrivacyText, Mode=OneWay}" />
+                                </TextBlock>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

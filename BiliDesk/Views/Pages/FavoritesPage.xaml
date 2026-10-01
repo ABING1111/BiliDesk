@@ -1,0 +1,179 @@
+<UserControl x:Class="BiliDesk.Views.Pages.FavoritesPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             Background="{DynamicResource AppBackgroundBrush}">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 标题 + 当前收藏夹 / 编辑操作条 + 刷新 -->
+        <!--
+                    右上角的窗口按钮(最小化/最大化/关闭)浮在内容区之上、占 y=4~36。
+                    头部因此撑到 62 高: 标题贴顶(和左侧 logo 同一水平线), 右侧操作按钮
+                    贴底 —— 它们的顶边落在 44, 正好让开窗口按钮, 谁也不压谁。
+                -->
+        <Grid Grid.Row="0" Margin="36,20,36,0" MinHeight="62">
+            <!-- [ 普通模式 ] 标题 + 条数 -->
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Top"
+                        Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
+                <TextBlock Text="&#xE735;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="20" VerticalAlignment="Center"
+                           Foreground="{DynamicResource AccentTextBrush}" />
+                <TextBlock Text="收藏" Style="{StaticResource PageTitleStyle}" Margin="10,0,0,0" />
+                <TextBlock Text="{Binding CountText}" VerticalAlignment="Bottom" Margin="6,0,0,6"
+                           Foreground="{DynamicResource TextTertiaryBrush}" FontSize="14" />
+            </StackPanel>
+
+            <!-- [ 编辑模式 ] 标题 + 已选计数 + 进度 -->
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Top"
+                        Visibility="{Binding IsEditMode, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="编辑收藏" Style="{StaticResource PageTitleStyle}" />
+                <TextBlock Text="{Binding CurrentFolderTitle, StringFormat=· {0}}"
+                           VerticalAlignment="Bottom" Margin="10,0,0,6"
+                           Foreground="{DynamicResource TextSecondaryBrush}" FontSize="13"
+                           TextTrimming="CharacterEllipsis" MaxWidth="240" />
+                <TextBlock Text="{Binding SelectedText}" VerticalAlignment="Bottom" Margin="10,0,0,6"
+                           Foreground="{DynamicResource TextSecondaryBrush}" FontSize="13" />
+                <TextBlock Text="{Binding BusyText}" VerticalAlignment="Bottom" Margin="10,0,0,6"
+                           FontSize="12" Foreground="{DynamicResource DangerTextBrush}"
+                           Visibility="{Binding BusyText, Converter={StaticResource StrToVis}}" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                        VerticalAlignment="Bottom"
+                        Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
+                <Button Content="编辑" Style="{StaticResource SubtleButtonStyle}"
+                        Padding="14,6" FontSize="13" Margin="0,0,8,0"
+                        Command="{Binding ToggleEditCommand}"
+                        ToolTip="批量移出收藏" />
+                <!-- 返回「我的」页(2026-09-26): 历史/收藏/缓存的入口都在「我的」页, 统一给一条回去的路 -->
+                <Button Style="{StaticResource IconButtonStyle}" Margin="0,0,8,0"
+                        Click="OnBackToMineClick" ToolTip="返回「我的」">
+                    <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                </Button>
+                <Button Style="{StaticResource IconButtonStyle}"
+                        Command="{Binding ReloadCommand}" ToolTip="刷新">
+                    <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                </Button>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                        VerticalAlignment="Bottom"
+                        Visibility="{Binding IsEditMode, Converter={StaticResource BoolToVis}}">
+                <Button Content="{Binding SelectAllText}" Style="{StaticResource SubtleButtonStyle}"
+                        Padding="12,6" FontSize="13"
+                        Command="{Binding SelectAllCommand}" />
+                <Button Content="移出所选" Style="{StaticResource DangerButtonStyle}"
+                        Padding="14,7" FontSize="13" Margin="8,0,0,0"
+                        Command="{Binding RemoveSelectedCommand}"
+                        IsEnabled="{Binding CanOperate}" />
+                <Button Content="清空收藏夹" Style="{StaticResource SubtleButtonStyle}"
+                        Padding="12,7" FontSize="13" Margin="8,0,0,0"
+                        Foreground="{DynamicResource DangerTextBrush}"
+                        Command="{Binding ClearFolderCommand}"
+                        IsEnabled="{Binding CanOperate}"
+                        ToolTip="把当前收藏夹里的全部内容移出" />
+                <Button Style="{StaticResource IconButtonStyle}" Margin="8,0,0,0"
+                        Command="{Binding ToggleEditCommand}" ToolTip="退出编辑">
+                    <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- 收藏夹选择条(登录后才有内容)。
+             用 RadioButton + GroupName 而不是 Button: 单选中状态由控件自己维护,
+             选中样式能直接写在样式触发器里, 不必在代码后置里手动遍历改 FontWeight。 -->
+        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Disabled" Margin="36,14,36,10"
+                      Visibility="{Binding Folders.Count, Converter={StaticResource CountToVis}}">
+            <ItemsControl ItemsSource="{Binding Folders}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <!-- CommandParameter 传数据项本身(FavFolder);
+                             选中态由 RadioButton + GroupName 自己维护, 不需要代码后置插手。
+                             ★ IsCurrent 是"程序切夹"的同步通道: OneWay 绑定 + ToggleButton 的
+                             SetCurrentValue 特性让用户点击也不会扯断这条绑定 -->
+                        <RadioButton GroupName="FavFolderChip" Style="{StaticResource ChipTabStyle}"
+                                     Content="{Binding DisplayText}"
+                                     IsChecked="{Binding IsCurrent, Mode=OneWay}"
+                                     Command="{Binding DataContext.SelectFolderCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                     CommandParameter="{Binding}"
+                                     Margin="0,0,8,0" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <!-- 内容 -->
+        <Grid Grid.Row="2">
+
+            <!-- 加载中 -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding Loading, Converter={StaticResource BoolToVis}}">
+                <controls:LoadingRing Width="30" Height="30" HorizontalAlignment="Center" />
+                <TextBlock Text="正在同步云端收藏夹…" Style="{StaticResource MetaTextStyle}"
+                           Margin="0,12,0,0" HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- 错误 / 空状态 -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="480"
+                        Visibility="{Binding Error, Converter={StaticResource StrToVis}}">
+                <TextBlock Text="&#xE735;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="40" Foreground="{DynamicResource TextTertiaryBrush}"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding Error}" Foreground="{DynamicResource TextSecondaryBrush}"
+                           FontSize="13" HorizontalAlignment="Center" TextWrapping="Wrap"
+                           TextAlignment="Center" Margin="0,14,0,0" />
+                <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                        HorizontalAlignment="Center" Margin="0,16,0,0" Padding="24,7"
+                        Command="{Binding ReloadCommand}"
+                        Visibility="{Binding Loading, Converter={StaticResource InvBoolToVis}}" />
+            </StackPanel>
+
+            <!-- 视频网格 -->
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="36,4,36,24"
+                          ScrollChanged="OnListScrollChanged"
+                          Visibility="{Binding Error, Converter={StaticResource InvStrToVis}}">
+                <StackPanel>
+                    <ItemsControl ItemsSource="{Binding Items}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <helpers:CardWallPanel helpers:CardWall.Enable="True" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- 右键"移出收藏"通过 ExtraMenuItems 合并进卡片自带的右键菜单,
+                                 而不是套一层带 ContextMenu 的 Grid —— 后者会被卡片自己的菜单顶掉。
+                                 Selectable 在编辑模式下打开: 卡片左上角出现选中圆标, 且点击变成勾选。 -->
+                            <controls:VideoCard
+                                Selectable="{Binding DataContext.IsEditMode, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                ExtraMenuItems="{Binding DataContext.CardMenuItems, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                        </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- 底部状态 -->
+                    <StackPanel Margin="0,12,0,24" HorizontalAlignment="Center">
+                        <StackPanel Orientation="Horizontal"
+                                    Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
+                            <controls:LoadingRing Width="18" Height="18" />
+                            <TextBlock Text="加载中…" Margin="8,0,0,0"
+                                       VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>

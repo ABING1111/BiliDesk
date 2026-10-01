@@ -1,0 +1,231 @@
+<UserControl x:Class="BiliDesk.Views.Pages.SearchPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             Background="{DynamicResource AppBackgroundBrush}"
+             PreviewMouseDown="OnPagePreviewMouseDown">
+    <Grid>
+        <!-- 结果区。顶部空出的 76 = 16(上边距) + 48(收起态搜索框高) + 12(间隙) ——
+             搜索框是**浮在上面**的(见文件末尾那块, 不参与这层布局), 所以展开时它直接盖住结果区顶部,
+             结果列表不会被挤得抖一下(与首页那张卡一个思路)。 -->
+        <Grid Margin="0,76,0,0">
+            <!-- 初始空状态 -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding IsIdle, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="44" Foreground="{DynamicResource TextTertiaryBrush}"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="输入关键词, 搜索你想看的视频" Margin="0,14,0,0"
+                           Foreground="{DynamicResource TextSecondaryBrush}" FontSize="13" />
+            </StackPanel>
+
+            <!-- 搜索中 -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding Searching, Converter={StaticResource BoolToVis}}">
+                <controls:LoadingRing HorizontalAlignment="Center" />
+                <TextBlock Text="正在搜索…" Style="{StaticResource MetaTextStyle}"
+                           Margin="0,10,0,0" HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <Grid x:Name="ResultArea">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- 错误 / 风控提示 -->
+                <Border Grid.Row="0" Margin="20,0,20,8" Padding="14,10" CornerRadius="8"
+                        Background="{DynamicResource InfoBarBackgroundBrush}"
+                        BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"
+                        Visibility="{Binding Error, Converter={StaticResource StrToVis}}">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE7BA;" Foreground="{DynamicResource AccentTextBrush}"
+                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="14" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding Error}" Margin="10,0,0,0" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
+                                    Margin="14,0,0,0" Padding="10,4"
+                                    Command="{Binding RetryCommand}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="24,8,0,0"
+                                    Visibility="{Binding Blocked, Converter={StaticResource BoolToVis}}">
+                            <Button Content="改用网页版搜索" Style="{StaticResource AccentButtonStyle}"
+                                    Padding="14,6" Command="{Binding OpenWebSearchCommand}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <ItemsControl ItemsSource="{Binding Results}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <helpers:CardWallPanel helpers:CardWall.Enable="True" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <controls:VideoCard />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!-- 加载更多 -->
+                        <StackPanel Margin="0,4,0,28" HorizontalAlignment="Center"
+                                    Visibility="{Binding HasMore, Converter={StaticResource BoolToVis}}">
+                            <Button Content="加载更多" Style="{StaticResource SubtleButtonStyle}"
+                                    Command="{Binding LoadMoreCommand}" />
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+
+        <!-- ===== 搜索卡 =====
+             2026-09-26 用户要求: "搜索页的搜索改成主页那种样式, 但固定在正上方中间位置,
+             不会平移, 但有展开动画"。于是它和首页那张卡是**同一套视觉与同一套展开动作**, 差别只有两点:
+
+               ① 位置固定 —— HorizontalAlignment=Center + 上边距 16, 收起态就在正上方中间。
+                  **所以没有任何位移补偿**: 宽度 440→520 时布局自己会把它继续摆在正中
+                  (首页那张卡要从右上角"飞"过来, 才需要算平移量、才有关键帧那一堆推导)。
+               ② 触发方式 —— 这里是**聚焦输入框**才展开(用户定), 首页是点一下那条灰框。
+
+             展开后露出的内容只有「搜索历史」(用户定): 页面原先那条独立的搜索历史条已经挪进来了,
+             所以整页只剩这一个搜索入口的样子, 不再有一排散在外面的词条。
+
+             结构上和首页一致 —— 外面这层 Border 只负责动画/布局(自己不画底色), 里面是两个分开的方框:
+               ① 搜索框(自带圆角底 + 聚焦粉色光晕); ② 内容框(白底细描边, 与搜索框隔开 10px)。 -->
+        <Border x:Name="SearchCard" Panel.ZIndex="31"
+                HorizontalAlignment="Center" VerticalAlignment="Top"
+                Margin="0,16,0,0" Width="440" Height="48"
+                GotKeyboardFocus="OnCardGotKeyboardFocus"
+                LostKeyboardFocus="OnCardLostKeyboardFocus"
+                PreviewKeyDown="OnCardPreviewKeyDown">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <!-- 输入行高度 = 收起态高度, 于是收起时下面那行正好是 0 高(内容被挤没, 不用另外藏) -->
+                    <RowDefinition Height="48" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- ===== ① 搜索框 ===== -->
+                <Grid Grid.Row="0">
+                    <!-- 聚焦提示 = 一圈粉色描边(2026-09-26 用户要求"去除光晕、增加粉色描边", 与首页一致)。
+                         描边放在独立的 SearchInputRing 上, 不遮文字, 聚焦淡入、失焦淡出。 -->
+                    <Border x:Name="SearchBoxBg" CornerRadius="10"
+                            Background="{DynamicResource ControlFillDefaultBrush}" />
+                    <Border x:Name="SearchInputRing" CornerRadius="10" IsHitTestVisible="False"
+                            Opacity="0" Background="Transparent"
+                            BorderBrush="{DynamicResource AccentBrush}" BorderThickness="2" />
+
+                    <Grid Margin="10,0">
+                        <!-- 清除按钮。
+                             图标用 E711(Cancel) 而不是 E8BB: 在 Fluent Icons 里 E8BB 是"ChromeClose",
+                             它是**撑满整个 em 框、且左上对齐**的粗体大叉 —— 放进 26px 的小圆钮里会顶满
+                             边框、明显偏粗偏大。同一族的小叉: E711(E894 是它的大号版)、E10A。 -->
+                        <TextBox x:Name="SearchBox"
+                                 Background="Transparent" BorderThickness="0"
+                                 Foreground="{DynamicResource TextPrimaryBrush}"
+                                 CaretBrush="{DynamicResource TextPrimaryBrush}"
+                                 SelectionBrush="{DynamicResource AccentBrush}"
+                                 FontSize="14" Padding="10,0,72,0"
+                                 VerticalContentAlignment="Center"
+                                 FocusVisualStyle="{x:Null}"
+                                 Text="{Binding Keyword, UpdateSourceTrigger=PropertyChanged}"
+                                 KeyDown="OnKeyDown" TextChanged="OnTextChanged" />
+
+                        <Button x:Name="BtnClear" Content="&#xE711;"
+                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                FontSize="13" Style="{StaticResource BareIconButtonStyle}"
+                                Width="26" Height="26" HorizontalAlignment="Right"
+                                Margin="0,0,34,0" VerticalAlignment="Center"
+                                Foreground="{DynamicResource TextSecondaryBrush}"
+                                Visibility="{Binding Keyword, Converter={StaticResource StrToVis}}"
+                                Click="OnClear" ToolTip="清空" />
+
+                        <!-- 放大镜: 点它就是"用当前词搜一次"。用无底版本 —— 参考图里它就是一枚裸图标,
+                             旁边那圈浅灰方块反而像多长了个按钮。与首页搜索框完全一致(独立的强调色
+                             「搜索」按钮已按"主页那种样式"去掉: 输入框回车、点这枚放大镜都能搜)。 -->
+                        <Button x:Name="BtnSearchGo" Content="&#xE721;"
+                                Style="{StaticResource BareIconButtonStyle}"
+                                Width="30" Height="30" FontSize="15"
+                                HorizontalAlignment="Right" Margin="0,0,4,0"
+                                Foreground="{DynamicResource TextSecondaryBrush}"
+                                ToolTip="搜索" Click="OnSearchGoClick" />
+                    </Grid>
+                </Grid>
+
+                <!-- ===== ② 内容框(与搜索框分开的另一个方框, 隔开 10px) ===== -->
+                <!-- 默认 Hidden 而不是 Auto: 展开动画期间高度在变, Auto 会中途闪一下滚动条。
+                     动画结束由代码切回 Auto(那时内容已按最终高度排好, 需要才出现)。 -->
+                <Border x:Name="SearchContentBox" Grid.Row="1" Margin="0,10,0,0" Opacity="0"
+                        CornerRadius="10"
+                        Background="{DynamicResource FlyoutBackgroundBrush}"
+                        BorderBrush="{DynamicResource FlyoutBorderBrush}" BorderThickness="1">
+                    <ScrollViewer x:Name="SearchCardScroll" Margin="0,0,4,0"
+                                  VerticalScrollBarVisibility="Hidden"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="20,14,20,16">
+                            <Grid>
+                                <TextBlock Text="搜索历史" FontSize="13" FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <!-- 文字色写进显式 TextBlock 的局部值: 全局隐式 TextBlock 样式带
+                                     Foreground setter, 优先级高于 Button 透传下来的前景色,
+                                     直接写 Content="清空" 会拿到主文字色而不是这里想要的次级色。 -->
+                                <Button x:Name="BtnClearHistory"
+                                        Style="{StaticResource SubtleButtonStyle}"
+                                        HorizontalAlignment="Right" VerticalAlignment="Center"
+                                        Padding="8,3" Command="{Binding ClearHistoryCommand}"
+                                        ToolTip="清空搜索历史">
+                                    <TextBlock Text="清空" FontSize="11"
+                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                </Button>
+                            </Grid>
+
+                            <!-- 词条: 用与首页搜索卡同款的 TagChipStyle(常态浅底 + 悬停加深一档),
+                                 右侧那个 ✕ 保持无底图标按钮 —— 原来是 SubtleButtonStyle + 一块矩形灰底,
+                                 一排看过去像一排小按钮(用户 2026-09-26 要求去掉)。 -->
+                            <ItemsControl ItemsSource="{Binding History}" Margin="0,10,0,0">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,6,6">
+                                            <Button Content="{Binding}" MaxWidth="240"
+                                                    Style="{StaticResource TagChipStyle}"
+                                                    Command="{Binding DataContext.UseHistoryCommand,
+                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                    CommandParameter="{Binding}"
+                                                    Click="OnHistoryChipClick"
+                                                    ToolTip="{Binding}" />
+                                            <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                    FontSize="13" Style="{StaticResource BareIconButtonStyle}"
+                                                    Width="24" Height="24" Margin="2,0,0,0"
+                                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                                    ToolTip="从历史里删掉这条"
+                                                    Command="{Binding DataContext.RemoveHistoryCommand,
+                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                    CommandParameter="{Binding}" />
+                                            <!-- 图标选型 + 字号都有讲究(两处都踩过):
+                                                 1) E8BB 是撑满 em 框的粗体大叉(ChromeClose), 小钮里会顶满边框,
+                                                    统一换成同族的小叉 E711;
+                                                 2) 字号不要低于 12 —— 曾经写成 FontSize=9, 实测整个字形只剩
+                                                    17 个像素的墨迹, 看上去就是"按钮里一片空白"。 -->
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

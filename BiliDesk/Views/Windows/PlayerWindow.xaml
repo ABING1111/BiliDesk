@@ -1,0 +1,1097 @@
+﻿<views:FluentWindow x:Class="BiliDesk.Views.PlayerWindow"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:BiliDesk.Views"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             xmlns:behaviors="clr-namespace:BiliDesk.Helpers"
+             xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+             xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
+             Title="BiliDesk 播放器" Width="1280" Height="760"
+             MinWidth="1100" MinHeight="600" WindowStartupLocation="CenterScreen"
+             WindowStyle="None" ResizeMode="CanResize" UseLayoutRounding="True">
+    <!--
+        顶栏(标题 + 全屏; 2026-09-26 左上角"返回主界面"按钮已按用户要求删除,
+        Esc 键仍可关播放器), 系统标题栏去掉了, 所以最右边补上最小化/最大化/关闭三个自绘按钮。
+        WindowChrome 的 CaptionHeight 就是顶栏的高度(44): 这块既能拖动窗口、双击最大化,
+        又参与布局; 里面的控件都要标 IsHitTestVisibleInChrome="True" 才点得到。
+    -->
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="44" ResizeBorderThickness="6"
+                            CornerRadius="0" GlassFrameThickness="0,0,0,1"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+    <views:FluentWindow.Resources>
+        <!-- ============ 三连 / 评论图标(B 站官方 SVG 的路径数据) ============
+             WPF 不认 SVG, 所以把 svg 里 <path d="..."> 的数据原样搬进来当几何资源。
+
+             三个源文件的共同点(改的时候别丢):
+               - viewBox 都是 1024x1024, fill="currentColor" —— 也就是**纯填充图形**,
+                 上色要用 Path 的 Fill(不能用 Stroke), 颜色由调用方给;
+               - 图形里带"挖空"(币是实心圆挖出 ¥, 赞是拇指+小方块两个子路径),
+                 填充规则按源文件的 nonzero 写死, 别改成 EvenOdd;
+               - svg 里 <g transform="translate(x, y)"> 的纵向微调必须保留, 否则图标
+                 在文字旁边会高/低一点(这是原作者用来对齐基线的)。
+            缩放统一交给调用方 Path 的 Stretch=Uniform: 三个图标的墨迹都占设计框约 86%,
+            比例接近, 所以按墨迹适配后彼此的相对大小与设计稿一致。 -->
+        <PathGeometry x:Key="LikeIconGeometry" FillRule="Nonzero"
+                      Figures="M323 877V326H327L481 137Q506 112 541 110Q576 108 603 131Q617 145 625 163Q633 181 631 202L625 326H860Q882 326 901.5 335.5Q921 345 935 363Q947 380 950 401Q953 422 948 441L848 769Q835 816 799 845Q763 874 713 877ZM266 877H186Q156 879 130 865Q104 851 89 824Q74 797 73 769V438Q73 407 88 381.5Q103 356 130 342Q144 335 158 331.5Q172 328 186 326H266Z">
+            <PathGeometry.Transform>
+                <TranslateTransform X="-0.06" Y="18.46" />
+            </PathGeometry.Transform>
+        </PathGeometry>
+
+        <PathGeometry x:Key="CoinIconGeometry" FillRule="Nonzero"
+                      Figures="M545 317H664Q680 317 690 307.5Q700 298 700 284Q700 270 690 261Q680 252 664 252H354Q339 252 329 261Q319 270 319 284Q319 298 329 307.5Q339 317 354 317H479V377Q395 383 340.5 440.5Q286 498 283 582V626Q284 639 293 648.5Q302 658 316 658Q330 658 339 649Q348 640 349 626V582Q350 526 386.5 486.5Q423 447 479 442V747Q480 761 489 770Q498 779 512 779Q526 779 535 770Q544 761 545 747V442Q601 447 637.5 486.5Q674 526 675 582V626Q675 640 684.5 649Q694 658 708 658Q722 658 731 649Q740 640 740 626V582Q738 498 683.5 440.5Q629 383 544 377V317ZM512 951Q326 946 202 822Q78 698 73 512Q78 326 202 202Q326 78 512 73Q698 78 822 202Q946 326 951 512Q946 698 822 822Q698 946 512 951Z" />
+
+        <PathGeometry x:Key="FavoriteIconGeometry" FillRule="Nonzero"
+                      Figures="M735 297Q703 292 678 273Q653 254 640 225L568 74Q549 37 511.5 37Q474 37 452 74L384 225Q369 254 344.5 273Q320 292 289 297L127 322Q88 330 76.5 364Q65 398 92 429L214 555Q236 576 244.5 605Q253 634 249 665L221 840Q216 882 246.5 903Q277 924 315 906L452 831Q481 814 513.5 814Q546 814 575 831L713 906Q750 924 779.5 903Q809 882 807 840L775 665Q771 634 779.5 605Q788 576 810 555L932 429Q959 398 947.5 364Q936 330 897 322Z">
+            <PathGeometry.Transform>
+                <TranslateTransform X="0" Y="36.35" />
+            </PathGeometry.Transform>
+        </PathGeometry>
+
+        <!-- 播放器滑条(进度/音量): 细轨道 + 白色圆点, 深底更清晰 -->
+        <Style x:Key="PlayerSlider" TargetType="Slider">
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="IsMoveToPointEnabled" Value="True" />
+            <!-- 不吃键盘焦点, 保证空格键始终控制播放/暂停 -->
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid MinHeight="18" Background="Transparent">
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static Slider.DecreaseLarge}" Focusable="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Grid Background="Transparent" Height="18">
+                                                    <Border Height="3" CornerRadius="1.5"
+                                                            Background="#F2FFFFFF" VerticalAlignment="Center" />
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static Slider.IncreaseLarge}" Focusable="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Grid Background="Transparent" Height="18">
+                                                    <Border Height="3" CornerRadius="1.5"
+                                                            Background="#4DFFFFFF" VerticalAlignment="Center" />
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Focusable="False">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Grid Background="Transparent">
+                                                    <Ellipse Width="11" Height="11" Fill="White"
+                                                            Margin="-2,0" />
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 播放器圆形图标按钮 -->
+        <Style x:Key="PlayerRoundBtn" TargetType="Button">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="16">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#26FFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#40FFFFFF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 播放器文字按钮(清晰度/倍速等): 半透明底衬, 与任意视频画面区分开 -->
+        <Style x:Key="PlayerTextBtn" TargetType="Button">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="#F2FFFFFF" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="#40000000" CornerRadius="5"
+                                BorderBrush="#22FFFFFF" BorderThickness="1"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#5C000000" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#66000000" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+            <!-- 评论里的等级徽章(LV6) 与 UP 标。
+                 底色跟品牌走、不随主题变(与窗口关闭键的粉底白字同理), 所以色值写死。
+                 注意边框里的 TextBlock **必须显式写 Foreground** —— 全局隐式 TextBlock 样式
+                 会压过继承下去的前景色(踩过的坑, 见 MEMORY)。 -->
+            <Style x:Key="LevelBadgeStyle" TargetType="Border">
+                <Setter Property="Background" Value="#5B8FF9" />
+                <Setter Property="CornerRadius" Value="3" />
+                <Setter Property="Padding" Value="4,0,4,1" />
+                <Setter Property="Margin" Value="5,0,0,0" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+            </Style>
+            <Style x:Key="UpBadgeStyle" TargetType="Border">
+                <Setter Property="Background" Value="#FB7299" />
+                <Setter Property="CornerRadius" Value="3" />
+                <Setter Property="Padding" Value="4,0,4,1" />
+                <Setter Property="Margin" Value="4,0,0,0" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+            </Style>
+
+            <!-- 评论操作行(赞 / 踩 / 回复)。
+                 卡片、详情页根评论、详情页回复三处共用一份 —— 同款按钮抄三遍的话,
+                 改一次颜色要改三处, 漏一处就是"有的地方颜色不对"这种难查的怪 bug。
+                 踩 = 同一个拇指路径上下翻转(ScaleY=-1); 踩不显示数量, 接口不给 dislike 总数。 -->
+            <DataTemplate x:Key="CommentActionBarTemplate">
+                <StackPanel Orientation="Horizontal">
+                    <Button Style="{StaticResource CommentActionButtonStyle}"
+                            Click="OnCommentLikeClick"
+                            IsEnabled="{Binding CanLike}"
+                            ToolTip="点赞 / 取消点赞">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{StaticResource LikeIconGeometry}" Width="12" Height="12"
+                                  Stretch="Uniform" VerticalAlignment="Center">
+                                <Path.Style>
+                                    <Style TargetType="Path">
+                                        <Setter Property="Fill" Value="{DynamicResource TextTertiaryBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsLiked}" Value="True">
+                                                <Setter Property="Fill" Value="{DynamicResource AccentTextBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                            <TextBlock Text="{Binding LikeText}" FontSize="11" Margin="4,0,0,0"
+                                       VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsLiked}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource CommentActionButtonStyle}" Margin="4,0,0,0"
+                            Click="OnCommentDislikeClick" IsEnabled="{Binding CanLike}"
+                            ToolTip="点踩 / 取消点踩">
+                        <Path Data="{StaticResource LikeIconGeometry}" Width="12" Height="12"
+                              Stretch="Uniform" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                            <Path.RenderTransform>
+                                <ScaleTransform ScaleY="-1" />
+                            </Path.RenderTransform>
+                            <Path.Style>
+                                <Style TargetType="Path">
+                                    <Setter Property="Fill" Value="{DynamicResource TextTertiaryBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsDisliked}" Value="True">
+                                            <Setter Property="Fill" Value="{DynamicResource AccentTextBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Path.Style>
+                        </Path>
+                    </Button>
+                    <Button Style="{StaticResource CommentActionButtonStyle}" Margin="4,0,0,0"
+                            Click="OnCommentReplyClick" ToolTip="回复这条评论">
+                        <TextBlock Text="&#xE90A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </Button>
+                </StackPanel>
+            </DataTemplate>
+
+            <DataTemplate x:Key="CommentCardTemplate">
+            <Border Background="{DynamicResource CardBackgroundBrush}"
+            BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+            CornerRadius="6" Padding="10,8" Margin="0,0,0,6">
+            <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <!-- 真实头像: 圆形裁切靠 CornerRadius + Cover 附加属性,
+                 加载失败时里面的占位人形图标仍然可见 -->
+            <Border Grid.Column="0" Width="26" Height="26" CornerRadius="13"
+                    VerticalAlignment="Top"
+                    Background="{DynamicResource AccentSoftFillBrush}"
+                    ClipToBounds="True"
+                    Cursor="Hand" ToolTip="进入 TA 的主页"
+                    MouseLeftButtonUp="OnCommentAvatarClick"
+                    behaviors:Cover.Source="{Binding UserFace}">
+                <TextBlock Text="&#xE77B;"
+                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="12"
+                           Foreground="{DynamicResource AccentTextBrush}"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+            </Border>
+            <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding UserName}"
+                               FontWeight="SemiBold" FontSize="12" />
+                    <!-- 等级徽章 + UP 标 -->
+                    <Border Style="{StaticResource LevelBadgeStyle}"
+                            Visibility="{Binding HasLevel, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="{Binding LevelText}" FontSize="9" Foreground="White" />
+                    </Border>
+                    <Border Style="{StaticResource UpBadgeStyle}"
+                            Visibility="{Binding IsUp, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="UP" FontSize="9" FontWeight="SemiBold" Foreground="White" />
+                    </Border>
+                    <TextBlock Text="{Binding RcTime}"
+                               Style="{StaticResource MetaTextStyle}"
+                               Margin="8,1,0,0" FontSize="11" />
+                    <!-- IP 属地: 接口给的 Location 已经自带 "IP属地：" 前缀,
+                         没有就整块不显示(用户可以在 B 站设置里关掉展示 / 未登录时接口不下发)。
+                         用比时间更淡的颜色, 别和昵称/时间抢视线。 -->
+                    <TextBlock Text="{Binding Location}"
+                               FontSize="11" Margin="8,1,0,0"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               Visibility="{Binding HasLocation, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
+                <!-- 评论内容: 走 CommentText, 把 [表情] 内联成图片。
+                     换成它之后就不能再拖选复制了(TextBlock 没有选中能力),
+                     所以控件自带右键菜单"复制评论文字"补回来。 -->
+                <controls:CommentText Comment="{Binding}"
+                                     FontSize="12" Margin="0,3,0,0"
+                                     Foreground="{DynamicResource TextPrimaryBrush}" />
+                <!-- 评论操作行(赞 / 踩 / 回复): 统一走 CommentActionBarTemplate, 别在这里另写一份 -->
+                <ContentControl Content="{Binding}" HorizontalAlignment="Left" Margin="0,3,0,0"
+                                ContentTemplate="{StaticResource CommentActionBarTemplate}" />
+
+                <!-- ===== 楼中楼预览方框 =====
+                     整框可点 → 进"详情"页看这条评论的全部回复(唯一的楼中楼入口)。
+                     框内**列出全部回复**(用户要求"自动展开所有评论", 不再截前 3 条);
+                     每条是"用户名 [UP]：正文"的一行混排(前缀由 CommentText 内联, 见 ReplyPrefix)。 -->
+                <Border Margin="0,6,0,0" Padding="8,6" CornerRadius="6"
+                        Background="{DynamicResource ControlFillDefaultBrush}"
+                        BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1"
+                        Cursor="Hand"
+                        MouseLeftButtonUp="OnReplyBoxClick"
+                        ToolTip="查看这条评论的全部回复"
+                        Visibility="{Binding HasReplies, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <ItemsControl ItemsSource="{Binding Replies}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <controls:CommentText Comment="{Binding}"
+                                                          Prefix="{Binding ReplyPrefix}"
+                                                          PrefixForeground="{DynamicResource TextTertiaryBrush}"
+                                                          FontSize="11.5" Margin="0,0,0,3"
+                                                          Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <!-- 底部提示行: 明确"这里能点", 顺便给出真实回复总数 -->
+                        <TextBlock Text="{Binding ReplyBoxText}" FontSize="11" Margin="0,1,0,0"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource AccentTextBrush}" />
+                    </StackPanel>
+                </Border>
+        </StackPanel>
+    </Grid>
+</Border>
+            </DataTemplate>
+
+</views:FluentWindow.Resources>
+    <!-- 根底色: 常规状态跟主题走; 全屏时 ApplyFullscreenLayout 会把它切成纯黑
+         (窗口自身 Background 在这层网格底下, 被它盖住 —— 只切窗口那一层是不够的,
+         浅色主题下这里就是用户看到的"全屏全白") -->
+    <Grid x:Name="RootGrid" Background="{DynamicResource AppBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition x:Name="TopRow" Height="44" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 顶栏(2026-09-26 用户要求): 左上角的"返回主界面"按钮已删, 现在只有 标题 + 全屏。
+             Esc 键关播放器的键盘路径不受影响(走 HandleBackRequest 那一套)。
+             浅底 + 细分隔线, 与主窗口的观感统一。 -->
+        <Border x:Name="TopBar" Grid.Row="0" Background="{DynamicResource AppBackgroundBrush}"
+                BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1">
+            <Grid Margin="16,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="TitleText" Grid.Column="0" FontSize="13" FontWeight="SemiBold"
+                           Margin="0,0,14,0" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" Text="播放器" />
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- 全屏 (F) -->
+                    <Button Style="{StaticResource IconButtonStyle}" Width="34" Height="34"
+                            ToolTip="全屏 (F)" Click="OnFullscreenClick"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <TextBlock Text="&#xE92D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="14" />
+                    </Button>
+
+                    <!-- 最小化 / 最大化 / 关闭。
+                         顶栏底色跟着主题走(浅色主题是浅底), 所以这里用控件的默认色 ——
+                         IconBrush 取 TextPrimaryBrush、悬停取 ControlFillHoverBrush, 深浅都对得上。 -->
+                    <controls:WindowButtons Margin="8,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- 主区: 左右分割 -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="480" />
+                <ColumnDefinition x:Name="RightColumn" Width="400" />
+            </Grid.ColumnDefinitions>
+
+            <!-- ============ 左: 视频 + 弹幕 ============ -->
+            <!--
+                层级设计:
+                LibVLC 的 VideoView 是 HwndHost, 普通 WPF 元素无论 ZIndex 多高都会被视频
+                HWND 盖住(airspace 问题), 鼠标输入也会被 HWND 吞掉。
+                LibVLCSharp.WPF 的解决方案是把这些内容直接放在 VideoView 的 Content 里:
+                内容渲染在一个跟随 VideoView 位置/大小的透明浮动窗口中,
+                因此既能显示在视频之上, 又能接收鼠标。
+                  - 弹幕层 DanmakuCanvas (不可点击)
+                  - ControlBar 底部控件栏 (Slider/按钮正常 hit-test)
+                  - LoadingOverlay / FailOverlay 模态遮罩
+                  - 覆盖 Grid 本身承担单击/双击/长按手势
+            -->
+            <Grid Grid.Column="0" Background="Black">
+                <vlc:VideoView x:Name="VideoView">
+                    <!-- 注意: 鼠标事件要求背景不能完全透明, 用 #01000000 -->
+                    <!-- 滚轮用 PreviewMouseWheel 挂在视频区的根 Grid 上: 隧道事件从根往叶子最先
+                         经过这里, 不会被底部控制栏里的 Slider / 清晰度 Popup 里的 ListBox 先截走;
+                         也只挂视频区(右侧信息面板的滚轮仍然该滚它自己的列表)。 -->
+                    <Grid x:Name="VideoAreaRoot" Background="#01000000"
+                          PreviewMouseLeftButtonDown="OnVideoAreaMouseLeftDown"
+                          PreviewMouseLeftButtonUp="OnVideoAreaMouseLeftUp"
+                          PreviewMouseWheel="OnVideoAreaMouseWheel"
+                          MouseMove="OnVideoAreaMouseMove"
+                          MouseLeave="OnVideoAreaMouseLeave">
+                            <!-- 弹幕层 -->
+                            <Canvas x:Name="DanmakuCanvas" Background="Transparent" IsHitTestVisible="False"
+                                    HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                            <!-- 加载遮罩: 转圈 + 轮换颜文字 + 文案(颜文字由后台定时器驱动, 见 ShowLoading) -->
+                            <Border x:Name="LoadingOverlay" Background="Black"
+                                    Visibility="Collapsed">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <controls:LoadingRing Width="40" Height="40" HorizontalAlignment="Center" />
+                                    <TextBlock x:Name="LoadingKaomoji" Text="(´･ω･`)" FontSize="20"
+                                               Margin="0,18,0,0" HorizontalAlignment="Center"
+                                               Foreground="#FB7299" />
+                                    <TextBlock x:Name="LoadingText" Text="正在加载视频…" Margin="0,8,0,0"
+                                               Foreground="#999" FontSize="13" HorizontalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+                            <!-- 失败遮罩 -->
+                            <Border x:Name="FailOverlay" Background="Black" Visibility="Collapsed">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock Text="&#xE783;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontSize="34" Foreground="#666" HorizontalAlignment="Center" />
+                                    <TextBlock x:Name="FailText" Text="播放器初始化失败" Margin="0,12,0,0"
+                                               Foreground="#999" FontSize="13" />
+                                    <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                                            HorizontalAlignment="Center" Margin="0,16,0,0" Padding="24,7"
+                                            Click="OnRetryClick" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 播完遮罩。
+                                 为什么需要它: 播到结尾时 LibVLC 会拆掉视频输出, 那个 HWND 就变成
+                                 一块没有内容的空白面(浅色主题下看着就是"整块全白")。以前这里直接
+                                 Stop(), 于是短视频播完必然留一片白。现在不 Stop, 而是盖一层遮罩 ——
+                                 既挡住那块白, 又顺手给了个"重播"入口。 -->
+                            <Border x:Name="EndOverlay" Background="#CC000000" Visibility="Collapsed">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontSize="30" Foreground="#AAA" HorizontalAlignment="Center" />
+                                    <TextBlock x:Name="EndText" Text="已播完" Margin="0,12,0,0"
+                                               Foreground="#DDD" FontSize="13" HorizontalAlignment="Center" />
+                                    <Button Content="重播" Style="{StaticResource AccentButtonStyle}"
+                                            HorizontalAlignment="Center" Margin="0,16,0,0" Padding="24,7"
+                                            Click="OnReplayClick" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 音量提示(滚轮 / ↑↓ / 静音键调音量时短暂浮出)。
+                                 放在视频区左侧中线上, 不挡底部控制栏; IsHitTestVisible=False
+                                 保证它不吃掉视频区的手势与滚轮。 -->
+                            <Border x:Name="VolumeOsd" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Padding="15,10" CornerRadius="9"
+                                    Background="#B3000000" IsHitTestVisible="False"
+                                    Visibility="Collapsed" Opacity="0" Panel.ZIndex="98">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock x:Name="VolumeOsdIcon" Text="&#xE767;"
+                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontSize="16" Foreground="White" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="VolumeOsdText" Text="80%" Margin="9,0,0,0"
+                                               FontSize="14" Foreground="White" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 跳过赞助片段的提示(带「撤回」)。
+                                 ★ 必须放在**视频区的浮层里**(VideoAreaRoot), 不能放右侧信息栏 ——
+                                   全屏时 ApplyFullscreenLayout 会把 InfoPanel 整个折叠掉, 放那边等于
+                                   "全屏看视频时永远看不到提示"(2026-09-27 真机反馈: 跳过成功但没有提示)。
+                                   视频区浮层在窗口模式和全屏下都在, 且能压在视频 HWND 上。
+                                 视觉照搬音量提示那种"深色半透明胶囊 + 白字": 不依赖主题配色,
+                                 压在任何画面的视频上都看得清(亮底视频上也不会糊掉)。
+                                 ZIndex=97: 在控制栏(默认 0)之上、音量提示(98)之下 ——
+                                 切全屏那几百毫秒的黑幕必须能盖住它。 -->
+                            <Border x:Name="SkipNoticeBorder" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                    Margin="14,14,0,0" Padding="12,6" CornerRadius="8"
+                                    Background="#B3000000" Visibility="Collapsed" Opacity="0"
+                                    Panel.ZIndex="97">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="&#xE76C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontSize="12" Foreground="#F2FFFFFF" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="SkipNoticeText" Margin="8,0,0,0" FontSize="12"
+                                               Foreground="#F2FFFFFF" VerticalAlignment="Center" />
+                                    <!-- 撤回按钮复用控制栏那个 PlayerTextBtn: 它本来就是为"压在视频上"定的
+                                         (深色半透明底 + 白字 + 悬停加深), 换成主题里的浅色按钮样式反而会看不清。
+                                         ★ 文字必须写成显式 TextBlock —— 全局那个隐式 TextBlock 样式带
+                                         Foreground setter, 而 Style setter 优先级高于继承, 会**吃掉**
+                                         Button.Foreground。写成 Content="撤回" 的话文字会变成主题主文字色
+                                         (浅色主题下就是深灰), 压在深色胶囊上基本看不见。 -->
+                                    <Button x:Name="SkipUndoButton" Margin="12,0,0,0"
+                                            Style="{StaticResource PlayerTextBtn}" Click="OnSkipUndoClick">
+                                        <TextBlock Text="撤回" Foreground="#F2FFFFFF" />
+                                    </Button>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 播放控件栏(底部覆盖在视频上, 渐变底更沉浸) -->
+                            <Border x:Name="ControlBar" VerticalAlignment="Bottom"
+                                    BorderThickness="0" Padding="14,6,14,8">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                        <GradientStop Color="#00000000" Offset="0" />
+                                        <GradientStop Color="#66000000" Offset="0.45" />
+                                        <GradientStop Color="#D9000000" Offset="1" />
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <StackPanel>
+                                    <!-- 进度条(点击轨道任意位置可直接跳转)。
+                                         ★ 外面套一层 Grid 是为了压一层"片段色块": 它必须和进度条
+                                           严丝合缝地对齐, 放同一个格子里最省事(几何换算见 RenderSponsorMarks)。 -->
+                                    <Grid>
+                                        <Slider x:Name="ProgressSlider" Style="{StaticResource PlayerSlider}"
+                                                Minimum="0" Maximum="1000" Value="0"
+                                                Thumb.DragStarted="OnProgressDragStart"
+                                                Thumb.DragCompleted="OnProgressDragEnd"
+                                                ValueChanged="OnProgressValueChanged" />
+                                        <!-- 被标注的片段(sponsor 等)在这里画成色块。
+                                             · IsHitTestVisible=False —— 绝对不能挡住拖进度条 / 点击跳转;
+                                             · 必须排在 Slider **之后**才画在它上面(色块要压住那条白色轨道);
+                                             · ClipToBounds 防止算出来的宽度溢出到控制栏外面。
+                                             ★ 一个已知的小取舍: 色块压在滑块(那个 11px 圆点)上面, 所以
+                                               手动拖进度拖到片段内部时, 圆点中段会被色块盖住 5px —— 圆点
+                                               仍能看出轮廓。把色块放到 Slider 底下就完全避开, 但那样它会被
+                                               那条不透明的白轨道挡掉中间 3px, 只剩两道细边, 反而看不出是色块。 -->
+                                        <Canvas x:Name="SponsorMarks" IsHitTestVisible="False"
+                                                ClipToBounds="True" />
+                                    </Grid>
+                                    <!-- 操作行 -->
+                                    <Grid Margin="0,2,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- 播放/暂停 -->
+                                        <Button Grid.Column="0" x:Name="BtnPlay" Style="{StaticResource PlayerRoundBtn}"
+                                                Width="36" Height="36" Click="OnPlayPauseClick" ToolTip="播放/暂停 (空格)">
+                                            <Path Fill="White" Width="15" Height="15" Stretch="Uniform"
+                                                  Data="M 7,4 L 18,11 L 7,18 Z" />
+                                        </Button>
+                                        <TextBlock x:Name="TimeText" Grid.Column="1" Foreground="#E6FFFFFF" FontSize="12"
+                                                   VerticalAlignment="Center" Margin="10,0,0,0" Text="00:00 / 00:00" />
+
+                                        <!-- 音量 -->
+                                        <TextBlock x:Name="VolumeIcon" Grid.Column="3" Text="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                   Foreground="#E6FFFFFF" FontSize="14" VerticalAlignment="Center" Margin="10,0,6,0" />
+                                        <Slider Grid.Column="4" x:Name="VolumeSlider" Style="{StaticResource PlayerSlider}"
+                                                Minimum="0" Maximum="100" Value="80" Width="78"
+                                                ValueChanged="OnVolumeChanged" />
+
+                                        <!-- 倍速 -->
+                                        <Button Grid.Column="5" x:Name="SpeedBtn" Style="{StaticResource PlayerTextBtn}"
+                                                Margin="6,0,0,0" Click="OnSpeedClick" ToolTip="切换播放速度">
+                                            <TextBlock x:Name="SpeedText" Text="1.0x" Foreground="#F2FFFFFF" />
+                                        </Button>
+
+                                        <!-- 清晰度 -->
+                                        <Button Grid.Column="6" x:Name="BtnQuality" Style="{StaticResource PlayerTextBtn}"
+                                                Margin="4,0,0,0" Click="OnQualityClick" ToolTip="切换清晰度">
+                                            <TextBlock x:Name="QualityText" Text="1080P" Foreground="#F2FFFFFF" />
+                                        </Button>
+                                        <Popup x:Name="QualityPopup"
+                                               Placement="Top" StaysOpen="False" AllowsTransparency="True"
+                                               PopupAnimation="Fade">
+                                            <Border Background="#F0202226" CornerRadius="8" Padding="6"
+                                                    BorderBrush="#33FFFFFF" BorderThickness="1" MinWidth="110">
+                                                <ListBox x:Name="QualityList" Background="Transparent"
+                                                         BorderThickness="0" Foreground="White"
+                                                         SelectionChanged="OnQualitySelected">
+                                                    <ListBox.ItemContainerStyle>
+                                                        <Style TargetType="ListBoxItem">
+                                                            <!-- 绝不能设 Focusable=False: ListBoxItem 鼠标按下时
+                                                                 Focus() 失败会短路选中逻辑, SelectionChanged 永不触发
+                                                                 (之前"切换清晰度没反应"就是它)。去焦点框用 FocusVisualStyle -->
+                                                            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                                            <Setter Property="Padding" Value="10,6" />
+                                                            <Setter Property="Cursor" Value="Hand" />
+                                                            <Setter Property="ContentTemplate">
+                                                                <Setter.Value>
+                                                                    <DataTemplate>
+                                                                        <!-- 显式白字: 全局隐式 TextBlock 样式(主题色)会覆盖继承的前景色 -->
+                                                                        <TextBlock Text="{Binding}" Foreground="#F2FFFFFF" />
+                                                                    </DataTemplate>
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                            <Setter Property="Template">
+                                                                <Setter.Value>
+                                                                    <ControlTemplate TargetType="ListBoxItem">
+                                                                        <Border x:Name="Bd" Background="Transparent"
+                                                                                CornerRadius="5" Padding="{TemplateBinding Padding}">
+                                                                            <ContentPresenter VerticalAlignment="Center" />
+                                                                        </Border>
+                                                                        <ControlTemplate.Triggers>
+                                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                                <Setter TargetName="Bd" Property="Background" Value="#26FFFFFF" />
+                                                                            </Trigger>
+                                                                            <Trigger Property="IsSelected" Value="True">
+                                                                                <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF" />
+                                                                            </Trigger>
+                                                                        </ControlTemplate.Triggers>
+                                                                    </ControlTemplate>
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                        </Style>
+                                                    </ListBox.ItemContainerStyle>
+                                                </ListBox>
+                                            </Border>
+                                        </Popup>
+
+                                        <!-- 弹幕开关。以前只能按快捷键 D, 界面上没有入口 ——
+                                             看视频时想随手关掉刷屏弹幕是很常见的操作, 这里必须有个按钮。
+                                             文案用"弹幕开/关"而不是图标: 开关状态一眼可读, 不用猜图标含义。 -->
+                                        <Button Grid.Column="7" x:Name="BtnDanmaku" Style="{StaticResource PlayerTextBtn}"
+                                                Margin="4,0,0,0" Click="OnDanmakuToggleClick" ToolTip="开关弹幕 (D)">
+                                            <TextBlock x:Name="DanmakuBtnText" Text="弹幕开" Foreground="#F2FFFFFF" />
+                                        </Button>
+
+                                        <!-- 弹幕区域占比 -->
+                                        <Button Grid.Column="8" x:Name="BtnDanmakuArea" Style="{StaticResource PlayerTextBtn}"
+                                                Margin="4,0,0,0" Click="OnDanmakuAreaClick" ToolTip="弹幕显示区域占比">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE734;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                           FontSize="12" VerticalAlignment="Center" Foreground="#F2FFFFFF" />
+                                                <TextBlock x:Name="DanmakuAreaText" Text="25%" Margin="5,0,0,0"
+                                                           Foreground="#F2FFFFFF" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Popup x:Name="DanmakuAreaPopup"
+                                               Placement="Top" StaysOpen="False" AllowsTransparency="True"
+                                               PopupAnimation="Fade">
+                                            <Border Background="#F0202226" CornerRadius="8" Padding="12,10"
+                                                    BorderBrush="#33FFFFFF" BorderThickness="1" Width="190">
+                                                <StackPanel>
+                                                    <TextBlock Text="弹幕显示区域" Foreground="#E6FFFFFF" FontSize="12" />
+                                                    <Slider x:Name="DanmakuAreaSlider" Style="{StaticResource PlayerSlider}"
+                                                            Minimum="25" Maximum="100" Value="25"
+                                                            Margin="0,10,0,4" IsSnapToTickEnabled="True"
+                                                            TickFrequency="5" ValueChanged="OnDanmakuAreaChanged" />
+                                                    <TextBlock x:Name="DanmakuAreaValue" Text="25%"
+                                                               Foreground="#99FFFFFF" FontSize="11" HorizontalAlignment="Right" />
+                                                </StackPanel>
+                                            </Border>
+                                        </Popup>
+
+                                        <!-- 全屏(离线缓存已挪到右侧信息面板的操作栏, 2026-09-26) -->
+                                        <Button Grid.Column="9" x:Name="BtnFullscreen2" Style="{StaticResource PlayerRoundBtn}"
+                                                Width="36" Height="36" Click="OnFullscreenClick" ToolTip="全屏 (F)">
+                                            <TextBlock Text="&#xE92D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                       FontSize="14" Foreground="White" />
+                                        </Button>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                </vlc:VideoView>
+            </Grid>
+
+            <!-- ============ 右: 信息面板 ============ -->
+            <!-- x:Name 供全屏退出时做淡入用(400px 的一大块"啪"地出现很跳) -->
+            <Grid x:Name="InfoPanel" Grid.Column="1" Background="{DynamicResource AppBackgroundBrush}">
+                <Border BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1,0,0,0">
+                    <ScrollViewer x:Name="InfoScroll" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="20,18,20,24">
+                            <!-- 标题 + 数据 -->
+                            <TextBlock x:Name="VideoTitleText" FontSize="17" FontWeight="SemiBold"
+                                       TextWrapping="Wrap" Text="视频标题" LineHeight="24" />
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                <TextBlock x:Name="ViewCountText" Style="{StaticResource MetaTextStyle}" Text="--" />
+                                <TextBlock Text=" 播放" Style="{StaticResource MetaTextStyle}" />
+                                <TextBlock Text=" · " Style="{StaticResource MetaTextStyle}" Margin="6,0" />
+                                <TextBlock x:Name="DanmakuCountText" Style="{StaticResource MetaTextStyle}" Text="--" />
+                                <TextBlock Text=" 弹幕" Style="{StaticResource MetaTextStyle}" />
+                                <TextBlock Text=" · " Style="{StaticResource MetaTextStyle}" Margin="6,0" />
+                                <TextBlock x:Name="PubDateText" Style="{StaticResource MetaTextStyle}" Text="--" />
+                            </StackPanel>
+                            <!-- UP 主卡片 -->
+                            <Border Background="{DynamicResource CardBackgroundBrush}"
+                                    BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                                    CornerRadius="10" Padding="14,12" Margin="0,16,0,0">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border x:Name="UpAvatarBox" Grid.Column="0" Width="40" Height="40"
+                                            CornerRadius="20" Background="{DynamicResource AccentSoftFillBrush}"
+                                            Cursor="Hand" ToolTip="进入 UP 主主页"
+                                            MouseLeftButtonUp="OnUpAvatarClick">
+                                        <Border.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="查看头像大图" Click="OnViewUpAvatar">
+                                                    <MenuItem.Icon>
+                                                        <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                   FontSize="13" VerticalAlignment="Center" />
+                                                    </MenuItem.Icon>
+                                                </MenuItem>
+                                                <MenuItem Header="下载头像到本地" Click="OnDownloadUpAvatar">
+                                                    <MenuItem.Icon>
+                                                        <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                   FontSize="13" VerticalAlignment="Center" />
+                                                    </MenuItem.Icon>
+                                                </MenuItem>
+                                            </ContextMenu>
+                                        </Border.ContextMenu>
+                                        <TextBlock x:Name="UpAvatarFallback" Text="&#xE77B;"
+                                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="20"
+                                                   Foreground="{DynamicResource AccentTextBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock x:Name="UpNameText" FontSize="14" FontWeight="SemiBold" Text="UP 主"
+                                                   Cursor="Hand" ToolTip="进入 UP 主主页"
+                                                   MouseLeftButtonUp="OnUpAvatarClick" Background="Transparent" />
+                                        <TextBlock x:Name="UpDescText" Style="{StaticResource MetaTextStyle}" Text="" Margin="0,2,0,0"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <Button Grid.Column="2" x:Name="BtnFollow" Style="{StaticResource AccentButtonStyle}"
+                                            Click="OnFollowClick" Padding="12,5" VerticalAlignment="Center"
+                                            ToolTip="关注/取消关注">
+                                        <StackPanel Orientation="Horizontal">
+                                            <!-- 爱心图标(矢量, 不依赖字体)。
+                                                 Fill 用 DynamicResource 跟随强调色前景色, 不要写死 White:
+                                                 强调色偏浅时白心会糊在浅底上(和文字一样的坑) -->
+                                            <Path Width="12" Height="12" Stretch="Uniform"
+                                                  Fill="{DynamicResource TextOnAccentBrush}"
+                                                  Data="M 12,21 L 10.55,19.65 C 5.4,15.04 2,12.05 2,8.5 C 2,5.42 4.42,3 7.5,3 C 9.24,3 10.91,3.81 12,5.08 C 13.09,3.81 14.76,3 16.5,3 C 19.58,3 22,5.42 22,8.5 C 22,12.05 18.6,15.04 13.45,19.65 Z" />
+                                            <TextBlock x:Name="FollowLabel" Text="+ 关注" FontSize="12" Margin="5,0,0,0" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                            </Border>
+                            <!-- 操作栏(2026-09-26 二次改版): "图标 + 数量"一行(对齐 B 站网页版), 不再是 3x2 的胶囊按钮。
+                                 计数来自 view 接口的 stat; 分享 = 复制链接(图标用 Assets/share.png, 用户指定);
+                                 离线缓存从播放器右下角挪到这里(用户要求)。
+                                 第二行的"UP 主页/复制链接/网页版"三栏已删: UP 入口改成点 UP 头像/名字。 -->
+                            <StackPanel Margin="0,14,0,0">
+                                <StackPanel.Resources>
+                                    <Style x:Key="StatButtonStyle" TargetType="Button">
+                                        <Setter Property="Background" Value="Transparent" />
+                                        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+                                        <Setter Property="BorderThickness" Value="0" />
+                                        <!-- 左右内边距从 10 收到 9: 右侧信息栏只有 400px(去掉 20+20 外边距、
+                                             1px 分隔线、以及可能的纵向滚动条后约 345px), 而这一行现在有 6 个按钮
+                                             (点赞/投币/收藏/稍后再看/分享/缓存)。数字位数一多(如 "12.3万")
+                                             就会顶到边 —— 收 1px 只是小补贴, 真正的兜底是下面那层 WrapPanel。 -->
+                                        <Setter Property="Padding" Value="9,6" />
+                                        <Setter Property="Margin" Value="0,0,4,0" />
+                                        <Setter Property="Cursor" Value="Hand" />
+                                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                                            CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillHoverBrush}" />
+                                                        </Trigger>
+                                                        <Trigger Property="IsPressed" Value="True">
+                                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillPressedBrush}" />
+                                                        </Trigger>
+                                                        <Trigger Property="IsEnabled" Value="False">
+                                                            <Setter Property="Opacity" Value="0.45" />
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </StackPanel.Resources>
+
+                                <!-- WrapPanel 而不是 StackPanel: 右侧信息栏只有 400px, 而这一行是 6 个按钮 ——
+                                     数字位数一多("12.3万")就顶到边。横向 StackPanel 溢出的表现是
+                                     **最后一个按钮被裁掉**(不换行也不报错), 用户根本点不到;
+                                     换成 WrapPanel 最差也只是排到第二行, 永远看得见、点得到。 -->
+                                <WrapPanel>
+                                    <!-- 点赞: 点过 = 图标和数字一起变粉(UpdateActionCounts) -->
+                                    <Button x:Name="BtnLike" Style="{StaticResource StatButtonStyle}"
+                                            Click="OnLikeClick" ToolTip="点赞 (L)">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Path Data="{StaticResource LikeIconGeometry}"
+                                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                  Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="LikeLabel" Text="--" FontSize="13" Margin="6,0,0,0"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <!-- 投币 -->
+                                    <Button x:Name="BtnCoin" Style="{StaticResource StatButtonStyle}"
+                                            Click="OnCoinClick" ToolTip="投币 1 个">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Path Data="{StaticResource CoinIconGeometry}"
+                                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                  Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="CoinLabel" Text="--" FontSize="13" Margin="6,0,0,0"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <!-- 收藏 -->
+                                    <Button x:Name="BtnFavorite" Style="{StaticResource StatButtonStyle}"
+                                            Click="OnFavoriteClick" ToolTip="收藏到云端收藏夹">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Path Data="{StaticResource FavoriteIconGeometry}"
+                                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                  Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="FavLabel" Text="--" FontSize="13" Margin="6,0,0,0"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                        </StackPanel>
+                                    </Button>
+                                    <!-- 稍后再看(2026-09-28 新增): 点一下加入/移出 B 站账号的云端列表。
+                                         已在列表里时图标变强调色(状态由 RefreshWatchLaterStateAsync 查一次);
+                                         与「我的」页那个快捷入口、卡片右键菜单共用同一组接口。
+                                         做成纯图标是为了让这一行在 400px 的信息栏里放得下。 -->
+                                    <Button x:Name="BtnWatchLater" Style="{StaticResource StatButtonStyle}"
+                                            Click="OnWatchLaterClick" ToolTip="加入稍后再看">
+                                        <TextBlock Text="&#xE7C1;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                   FontSize="15" VerticalAlignment="Center"
+                                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                    </Button>
+                                    <!-- 分享(复制链接): 形状对齐用户给的 share-512x512(iOS 风格 方框+上箭头)。
+                                         第一版顶部留缺口, 15px 下缺口糊成一体像把锁(用户截图反馈)。
+                                         定版改"全闭合圆角框 + 箭头直接穿过上沿"(离屏渲染对比过缺口方案):
+                                         框加高留白(8~21)、圆角 2.5、描边 1.6, 箭头顶点抬到 2.2 与框顶拉开,
+                                         小尺寸下"方框 + 上箭头"一眼可读 -->
+                                    <Button x:Name="BtnShare" Style="{StaticResource StatButtonStyle}"
+                                            Click="OnCopyLinkClick" ToolTip="复制视频链接">
+                                        <Path Width="15" Height="17" Stretch="Uniform" VerticalAlignment="Center"
+                                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                              StrokeThickness="1.6" StrokeLineJoin="Round"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                              Data="M 7.5,8 H 16.5 A 2.5,2.5 0 0 1 19,10.5 V 18.5 A 2.5,2.5 0 0 1 16.5,21 H 7.5 A 2.5,2.5 0 0 1 5,18.5 V 10.5 A 2.5,2.5 0 0 1 7.5,8 M 12,2.2 V 14.5 M 8.2,6 L 12,2.2 L 15.8,6" />
+                                    </Button>
+                                    <!-- 离线缓存: 从播放器右下角挪进来(复用同一条下载链路) -->
+                                    <Button x:Name="BtnCache" Style="{StaticResource StatButtonStyle}"
+                                            Click="OnCacheClick" ToolTip="离线缓存当前视频">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                       FontSize="15" VerticalAlignment="Center"
+                                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                        </StackPanel>
+                                    </Button>
+                                </WrapPanel>
+                            </StackPanel>
+
+                            <!-- Tab 简介/评论 -->
+                            <Border Margin="0,18,0,0" BorderBrush="{DynamicResource DividerBrush}"
+                                    BorderThickness="0,1,0,0" Padding="0,10,0,0">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <RadioButton x:Name="TabIntro" Grid.Column="0" GroupName="ContentTab"
+                                                 Style="{StaticResource ContentTabStyle}" Content="简介"
+                                                 Checked="TabIntro_Checked" />
+                                    <RadioButton x:Name="TabComments" Grid.Column="1" GroupName="ContentTab"
+                                                 Style="{StaticResource ContentTabStyle}" Content="评论"
+                                                 Checked="TabComments_Checked" />
+                                    <!-- 返回评论列表: 进了"评论详情"才出现, 就摆在"评论详情"右边(用户指定)。
+                                         用按钮而不是文字链接 —— 这里是个"动作", 有底的按钮更好认、也更好点。 -->
+                                    <Button x:Name="BtnBackToComments" Grid.Column="2" Visibility="Collapsed"
+                                            Style="{StaticResource SubtleButtonStyle}"
+                                            Content="返回评论列表" FontSize="12"
+                                            Margin="10,0,0,0" Padding="10,4"
+                                            HorizontalAlignment="Left" VerticalAlignment="Center"
+                                            Click="OnCommentDetailBack"
+                                            ToolTip="回到评论列表" />
+                                </Grid>
+                            </Border>
+
+                            <Grid Margin="0,12,0,0" MinHeight="120">
+                                <StackPanel x:Name="IntroPanel">
+                                    <!-- 简介可自由选中复制: 只读文本框(无边框透明, 光标为文本) -->
+                                    <TextBox x:Name="DescText" TextWrapping="Wrap" IsReadOnly="True"
+                                             Background="Transparent" BorderThickness="0" Padding="0"
+                                             Foreground="{DynamicResource TextSecondaryBrush}"
+                                             FontSize="12" Cursor="IBeam" Text="加载中…" />
+                                </StackPanel>
+                                <StackPanel x:Name="CommentsPanel" Visibility="Collapsed">
+                                    <!-- ===== 发表评论 =====
+                                         放在列表上方(和 B 站网页版一致): 先能说话, 再看别人说什么。 -->
+                                    <!-- ===== 回复态提示条(整个评论区只有这一个输入框) =====
+                                         在列表页 = 发表评论(新楼层); 进详情页后自动切成"回复 @这层楼",
+                                         点某条回复的"回复"按钮则切成"回复 @那个人" —— 发布时带 root/parent。
+                                         这里的"取消"退回"发表评论"。 -->
+                                    <Border x:Name="CommentDetailReplyHint" Visibility="Collapsed"
+                                            Background="{DynamicResource AccentSoftFillBrush}"
+                                            CornerRadius="4" Padding="8,3" Margin="0,0,0,6">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Style="{StaticResource LinkButtonStyle}"
+                                                    Content="取消" FontSize="11" Padding="4,0"
+                                                    Click="OnCommentReplyCancel"
+                                                    ToolTip="取消回复, 改为发表评论" />
+                                            <TextBlock x:Name="CommentDetailReplyTarget" FontSize="11"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource AccentTextBrush}" />
+                                        </DockPanel>
+                                    </Border>
+                                    <Grid Margin="0,0,0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="CommentDraft" Grid.Column="0"
+                                                 Style="{StaticResource FluentTextBoxStyle}"
+                                                 Height="66" MaxLength="1000"
+                                                 TextWrapping="Wrap" AcceptsReturn="True"
+                                                 VerticalScrollBarVisibility="Auto"
+                                                 TextChanged="OnCommentDraftChanged"
+                                                 PreviewKeyDown="OnCommentDraftPreviewKeyDown" />
+                                        <Button x:Name="PostCommentButton" Grid.Column="1" Content="发表"
+                                                Margin="8,0,0,0" Padding="20,8"
+                                                VerticalAlignment="Bottom"
+                                                Style="{StaticResource AccentButtonStyle}"
+                                                Click="OnPostCommentClick"
+                                                ToolTip="发表评论 (Enter)" />
+                                    </Grid>
+                                    <TextBlock x:Name="CommentPostHint" Style="{StaticResource MetaTextStyle}"
+                                               Margin="0,0,0,10" TextWrapping="Wrap" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <controls:LoadingRing x:Name="CommentLoadingRing" Width="14" Height="14" Visibility="Collapsed" />
+                                        <TextBlock x:Name="CommentHint" Style="{StaticResource MetaTextStyle}"
+                                                   Text="加载评论中…" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <ItemsControl x:Name="CommentList"
+                                                  ItemTemplate="{StaticResource CommentCardTemplate}" />
+
+                                    <!-- ===== 评论详情(点"查看详情"进入) =====
+                                         楼主区在上方(头像 + 昵称 + 时间/属地 + 正文 + 点赞),
+                                         下方"全部回复"逐条带头像 —— 列表里的内联楼中楼不带头像,
+                                         头像只在详情页展示。数据直接用评论自身的 Replies
+                                         (含"展开更多", 与列表共用同一条加载逻辑), 不放大。 -->
+                                    <Grid x:Name="CommentDetailPanel" Visibility="Collapsed">
+                                        <!-- 标题与"返回评论列表"都挪到上方 tab 行了:
+                                             进入详情后那个 tab 显示"评论详情", 返回链接就在它右边(用户指定)。 -->
+                                        <!-- 直接放进外层右面板的滚动流里:
+                                             内层再套 ScrollViewer 在 StackPanel 里拿不到高度
+                                             约束(内容多高就多高), 表现为滚轮滚不动。 -->
+                                        <StackPanel x:Name="CommentDetailHost">
+
+                                                <!-- ② 焦点条目(楼主或被点开的回复): 头像在上方 -->
+                                                <ContentControl x:Name="CommentDetailCard">
+                                                    <ContentControl.ContentTemplate>
+                                                        <DataTemplate>
+                                                            <StackPanel>
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <Border Width="40" Height="40" CornerRadius="20"
+                                                                            Background="{DynamicResource AccentSoftFillBrush}"
+                                                                            ClipToBounds="True"
+                                                                            Cursor="Hand" ToolTip="进入 TA 的主页"
+                                                                            MouseLeftButtonUp="OnCommentAvatarClick"
+                                                                            behaviors:Cover.Source="{Binding UserFace}">
+                                                                        <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                                   FontSize="16" Foreground="{DynamicResource AccentTextBrush}"
+                                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                                    </Border>
+                                                                    <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                                                                        <StackPanel Orientation="Horizontal">
+                                                                            <TextBlock Text="{Binding UserName}" FontSize="13" FontWeight="SemiBold" />
+                                                                            <Border Style="{StaticResource LevelBadgeStyle}"
+                                                                                    Visibility="{Binding HasLevel, Converter={StaticResource BoolToVis}}">
+                                                                                <TextBlock Text="{Binding LevelText}" FontSize="9.5" Foreground="White" />
+                                                                            </Border>
+                                                                            <Border Style="{StaticResource UpBadgeStyle}"
+                                                                                    Visibility="{Binding IsUp, Converter={StaticResource BoolToVis}}">
+                                                                                <TextBlock Text="UP" FontSize="9.5" FontWeight="SemiBold" Foreground="White" />
+                                                                            </Border>
+                                                                        </StackPanel>
+                                                                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                                            <TextBlock Text="{Binding RcTime}" Style="{StaticResource MetaTextStyle}" FontSize="11" />
+                                                                            <TextBlock Text="{Binding Location}" FontSize="11" Margin="8,0,0,0"
+                                                                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                                                                       Visibility="{Binding HasLocation, Converter={StaticResource BoolToVis}}" />
+                                                                        </StackPanel>
+                                                                    </StackPanel>
+                                                                </StackPanel>
+                                                                <controls:CommentText Comment="{Binding}" FontSize="13.5" Margin="0,8,0,0"
+                                                                                      Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                                <ContentControl Content="{Binding}"
+                                                                                HorizontalAlignment="Left" Margin="0,6,0,0"
+                                                                                ContentTemplate="{StaticResource CommentActionBarTemplate}" />
+                                                            </StackPanel>
+                                                        </DataTemplate>
+                                                    </ContentControl.ContentTemplate>
+                                                </ContentControl>
+
+                                                <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,12" />
+                                                <!-- 相关回复共 N 条(与 B 站 App 详情页文案一致) -->
+                                                <TextBlock Text="{Binding ReplyCount, StringFormat=相关回复共 {0} 条}"
+                                                           FontSize="12" FontWeight="SemiBold" Margin="0,0,0,10"
+                                                           Visibility="{Binding HasReplies, Converter={StaticResource BoolToVis}}" />
+                                                <!-- 楼中楼回复: 每条带头像 + 等级/UP 标 + 赞踩回复 -->
+                                                <ItemsControl x:Name="DetailRepliesList" ItemsSource="{Binding Replies}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Grid Margin="0,0,0,14">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                    <ColumnDefinition Width="*" />
+                                                                </Grid.ColumnDefinitions>
+                                                                <Border Grid.Column="0" Width="28" Height="28" CornerRadius="14"
+                                                                        Background="{DynamicResource AccentSoftFillBrush}" ClipToBounds="True"
+                                                                        VerticalAlignment="Top"
+                                                                        Cursor="Hand" ToolTip="进入 TA 的主页"
+                                                                        MouseLeftButtonUp="OnCommentAvatarClick"
+                                                                        behaviors:Cover.Source="{Binding UserFace}">
+                                                                    <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                               FontSize="12" Foreground="{DynamicResource AccentTextBrush}"
+                                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                                </Border>
+                                                                <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                                                                    <StackPanel Orientation="Horizontal">
+                                                                        <TextBlock Text="{Binding UserName}" FontSize="12" FontWeight="SemiBold" />
+                                                                        <Border Style="{StaticResource LevelBadgeStyle}"
+                                                                                Visibility="{Binding HasLevel, Converter={StaticResource BoolToVis}}">
+                                                                            <TextBlock Text="{Binding LevelText}" FontSize="9" Foreground="White" />
+                                                                        </Border>
+                                                                        <Border Style="{StaticResource UpBadgeStyle}"
+                                                                                Visibility="{Binding IsUp, Converter={StaticResource BoolToVis}}">
+                                                                            <TextBlock Text="UP" FontSize="9" FontWeight="SemiBold" Foreground="White" />
+                                                                        </Border>
+                                                                        <TextBlock Text="{Binding RcTime}" Style="{StaticResource MetaTextStyle}"
+                                                                                   FontSize="10" Margin="8,1,0,0" />
+                                                                        <TextBlock Text="{Binding Location}" FontSize="10" Margin="8,1,0,0"
+                                                                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                                                                   Visibility="{Binding HasLocation, Converter={StaticResource BoolToVis}}" />
+                                                                    </StackPanel>
+                                                                    <controls:CommentText Comment="{Binding}" FontSize="12" Margin="0,3,0,0"
+                                                                                          Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                                                        <ContentControl Content="{Binding}"
+                                                                                        ContentTemplate="{StaticResource CommentActionBarTemplate}" />
+                                                                        <!-- 查看对话: 只在"回复楼中楼里某个人"的回复上出现, 点击定位到被回复的那条 -->
+                                                                        <Button Content="查看对话"
+                                                                                Style="{StaticResource LinkButtonStyle}"
+                                                                                FontSize="11" Margin="10,0,0,0" Padding="0"
+                                                                                VerticalAlignment="Center"
+                                                                                Click="OnViewConversationClick"
+                                                                                ToolTip="定位到被回复的那条评论"
+                                                                                Visibility="{Binding IsReplyToSomeone, Converter={StaticResource BoolToVis}}" />
+                                                                    </StackPanel>
+                                                                </StackPanel>
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <Button Content="{Binding ReplyMoreText}"
+                                                        Style="{StaticResource LinkButtonStyle}"
+                                                        FontSize="12" HorizontalAlignment="Left" Margin="0,4,0,0" Padding="0,2"
+                                                        Click="OnLoadMoreRepliesClick"
+                                                        Visibility="{Binding HasMoreReplies, Converter={StaticResource BoolToVis}}" />
+                                            </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+                <!-- 本地 Toast -->
+                <Border x:Name="LocalToastBorder" HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Margin="0,12,12,0" Padding="12,7" CornerRadius="6"
+                        Background="{DynamicResource InfoBarBackgroundBrush}"
+                        BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"
+                        Visibility="Collapsed" Opacity="0" IsHitTestVisible="False">
+                    <TextBlock x:Name="LocalToastText" FontSize="12"
+                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</views:FluentWindow>
