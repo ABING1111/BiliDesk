@@ -167,6 +167,14 @@ public class FluentWindow : Window
         //   顺序: ① 最大化引发的布局先付清(CardWall 的目标宽度落账);
         //         ② 可视区卡片一次性收敛(≈30 张的重测) + 再付一次布局 —— 之后树完全静止;
         //         ③ 此刻才挂 BitmapCache 栅格化 ⇒ 动画的每一帧都是纯纹理变换, 平滑。
+        //
+        // ★★ 还有一条**异步**的失效源必须一起掐掉(2026-10-02, 用户报的"界面抽动"根因):
+        //   封面重解码。卡片一变宽就触发"按新宽度重新解码", 解码完成回 UI 线程贴图的那一下
+        //   会落在动画中间 ⇒ 整窗纹理失效重栅格化 ⇒ 一抽一抽。
+        //   先**无条件开一次闸**(连点最大化时上一段动画的收尾可能被序号保护挡掉了, 不能让它欠着),
+        //   再关闸: 从现在到动画收尾, 封面一律只记账不上屏(见 Cover.SuspendVisualUpdates)。
+        Cover.ResumeVisualUpdates();
+        Cover.SuspendVisualUpdates();
         root.UpdateLayout();
         WalkCardWallPanels(root, p => p.ConvergeVisibleThenHold());
         root.UpdateLayout();
@@ -195,6 +203,9 @@ public class FluentWindow : Window
             // 先放开卡片墙的渐进(剩余都是视野外卡片), 再恢复矢量渲染
             WalkCardWallPanels(root, p => p.ReleaseHold());
             root.CacheMode = prevCache;   // ★ 恢复矢量渲染, 别让文字一直停在栅格纹理上
+            // ★ 最后开闸补图: 此刻 BitmapCache 已摘掉, 换封面不再让任何纹理失效
+            //   (见 Cover.SuspendVisualUpdates 的说明)
+            Cover.ResumeVisualUpdates();
         }
 
         sx.Completed += (_, _) => Cleanup();

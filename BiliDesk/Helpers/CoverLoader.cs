@@ -380,9 +380,18 @@ public static class Cover
         var img = await CoverLoader.LoadAsync(url, w);
         if (img == null) return;
 
-        await Application.Current.Dispatcher.InvokeAsync(() =>
+        await Application.Current.Dispatcher.InvokeAsync(
+            () => ApplyDecoded(border, url, img, w));
+    }
+
+    /// <summary>
+    /// 把解好的位图贴到卡片上(**必须在 UI 线程**)。闸门关着时只排队不上屏, 见 <see cref="_suspendDepth"/>。
+    /// </summary>
+    private static void ApplyDecoded(Border border, string url, BitmapImage img, int requestedWidth)
+    {
+        void Apply()
         {
-            if (GetSource(border) != url) return; // 源已变化, 放弃
+            if (GetSource(border) != url) return; // 排队期间这一格被回收/换了源
 
             // 乱序收尾防护: 更小的解码结果后到(宽了两次、两次重解码并发) —— 丢弃,
             // 已应用的那份更大; 若显示需求此时又超过它, SizeChanged 会再触发一轮。
@@ -401,24 +410,129 @@ public static class Cover
             border.Background = brush;
             // 图片加载成功后隐藏占位符(如头像里的人形图标), 否则会一直叠在图片上
             if (border.Child != null) border.Child.Visibility = Visibility.Collapsed;
-            border.Opacity = 1.0;
-            var fade = new System.Windows.Media.Animation.DoubleAnimation(0, 1,
-                TimeSpan.FromMilliseconds(240));
-            border.BeginAnimation(UIElement.OpacityProperty, fade);
-
             border.SetValue(DecodedPixelWidthProperty, img.PixelWidth);
+
+            // ★★ 只有"这一格第一次出图"才淡入。变宽触发的重解码时卡片上**已经有图**了,
+            //   再播一次 0→1 的淡入 = 封面先整块消失再浮出来; 最大化那一下视口内几十张同时重解码,
+            //   几十张一起闪, 用户看到的就是"抽动"(2026-10-02 定位)。已经有图就静默换掉 ——
+            //   底下换的是更清晰的位图, 画面不该有任何跳变。
+            if (ShouldPlayFadeIn(prev))
+            {
+                border.Opacity = 1.0;
+                border.BeginAnimation(UIElement.OpacityProperty,
+                    new System.Windows.Media.Animation.DoubleAnimation(0, 1,
+                        TimeSpan.FromMilliseconds(240)));
+            }
+            else
+            {
+                // 清掉可能残留的淡入动画, 保证不透明度稳定在 1
+                border.BeginAnimation(UIElement.OpacityProperty, null);
+                border.Opacity = 1.0;
+            }
 
             // 解码期间卡片又变宽了(渐进重排/最大化): 立刻补一轮, 别等下一次 SizeChanged。
             // ★ img.PixelWidth < w 说明**源图本身**比请求档位还小 —— 没有更多像素可取了,
             //   上面记录的 0 会让 SizeChanged 的重解码判断直接放行, 不会陷入无意义的循环。
-            if (img.PixelWidth >= w)
+            if (img.PixelWidth >= requestedWidth)
             {
                 var dpiNow = VisualTreeHelper.GetDpi(border).DpiScaleX;
                 if (dpiNow <= 0) dpiNow = 1.0;
                 if (NeedsRedecode(border.ActualWidth * dpiNow, img.PixelWidth))
                     _ = LoadAsync(border, url);
             }
-        });
+        }
+
+        if (_suspendDepth > 0) DeferredApplies.Add(Apply);
+        else Apply();
+    }
+
+    /// <summary>纯函数(探针可断言): 这一次上屏要不要播淡入 —— 只有"这一格还没有图"时才播。</summary>
+    public static bool ShouldPlayFadeIn(int previouslyDecodedWidth) => previouslyDecodedWidth <= 0;
+
+    // ------------------------------------------------------------ 状态过渡期间: 只记账不上屏
+
+    /// <summary>
+    /// 关闸深度(=0 表示开闸)。用深度而不是 bool: 连点最大化时新旧动画会重叠, 各关一次各开一次。
+    /// </summary>
+    private static int _suspendDepth;
+
+    /// <summary>关闸期间欠下的"贴图"动作, 开闸后按顺序补跑。</summary>
+    private static readonly List<Action> DeferredApplies = new();
+
+    /// <summary>
+    /// 关闸最长时间。过渡动画只有 200ms, 这里给 2s; 万一动画的 Completed 没回来
+    /// (时钟被丢弃/窗口异常关闭), 也必须自动开闸 —— 否则封面会永远不再上屏, 卡片全空。
+    /// </summary>
+    private static readonly TimeSpan SuspendGuardInterval = TimeSpan.FromSeconds(2);
+
+    private static System.Windows.Threading.DispatcherTimer? _suspendGuard;
+
+    /// <summary>
+    /// 关闸: 最大化/还原的过渡动画开始前调用。
+    ///
+    /// ★★ 为什么必须有它(2026-10-02, "界面抽动"的根因): 过渡动画期间窗口根元素挂着
+    ///   `BitmapCache`(整窗栅格化成**一张** GPU 纹理), 而**任何子树变化都会让这张纹理失效
+    ///   并重栅格化整个窗口**。卡片墙自己的宽度收敛已经被 `CardWallPanel._held` 冻住了, 但
+    ///   封面这条链是**异步**的: 卡片一变宽就触发"按新宽度重新解码"(见 NeedsRedecode),
+    ///   解码完成后再回到 UI 线程贴图 —— 这一下正好落在动画中间 ⇒ 动画每帧都在重栅格化整窗,
+    ///   观感就是"一抽一抽的"。之前那层模糊遮罩只是**盖住**症状(已按用户要求回退), 这里才治根:
+    ///   闸门关着时把"贴图"记在 <see cref="DeferredApplies"/> 里, 动画收尾(CacheMode 已摘掉)
+    ///   再一次性补上 —— 那时换图不再经过纹理, 谁也看不见。
+    /// </summary>
+    public static void SuspendVisualUpdates()
+    {
+        if (!OnUiThread()) { Application.Current?.Dispatcher.Invoke(SuspendVisualUpdates); return; }
+
+        _suspendDepth++;
+        if (_suspendGuard == null)
+        {
+            _suspendGuard = new System.Windows.Threading.DispatcherTimer(
+                System.Windows.Threading.DispatcherPriority.Background)
+            {
+                Interval = SuspendGuardInterval
+            };
+            _suspendGuard.Tick += (_, _) =>
+            {
+                _suspendGuard!.Stop();
+                if (_suspendDepth == 0) return;
+                // 自救: 动画收尾没回来也必须开闸(宁可画面闪一下, 也不能让封面永远不上屏)
+                _suspendDepth = 0;
+                FlushDeferred();
+            };
+        }
+        _suspendGuard.Stop();
+        _suspendGuard.Start();
+    }
+
+    /// <summary>开闸: 过渡动画收尾后调用; 把欠下的贴图一次性补跑。</summary>
+    public static void ResumeVisualUpdates()
+    {
+        if (!OnUiThread()) { Application.Current?.Dispatcher.Invoke(ResumeVisualUpdates); return; }
+
+        if (_suspendDepth > 0) _suspendDepth--;
+        if (_suspendDepth > 0) return;
+        _suspendGuard?.Stop();
+        FlushDeferred();
+    }
+
+    private static void FlushDeferred()
+    {
+        if (DeferredApplies.Count == 0) return;
+        // 先取快照再清空: 补跑过程中可能又排进新的(补跑会触发"再解码一轮"), 那些走正常路径
+        var pending = DeferredApplies.ToArray();
+        DeferredApplies.Clear();
+        foreach (var apply in pending)
+        {
+            try { apply(); }
+            catch (Exception ex) { App.ReportError(ex); }
+        }
+    }
+
+    private static bool OnUiThread()
+    {
+        var app = Application.Current;
+        if (app == null) return true;   // 探针/无 Application: 当作就在当前线程
+        return app.Dispatcher.CheckAccess();
     }
 
     // ------------------------------------------------------------ Image 版本
