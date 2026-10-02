@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -24,6 +25,20 @@ public partial class VideoCard : UserControl
     private TranslateTransform _trans = null!;
     private ScaleTransform _coverScale = null!;
     private bool _entered;
+
+    /// <summary>
+    /// 已经"亮过相"的视频条目。
+    ///
+    /// ★ 为什么需要它(2026-10-02 修"切 tab 卡片闪几下"): 入场动画(360ms 淡入+上浮)挂在
+    ///   <see cref="OnLoaded"/> 上, 而切 tab 会把**整墙卡片销毁再重建** —— 每个 VideoCard 实例
+    ///   都是新的, `_entered` 也会重置, 于是每次切 tab 一百多张卡同时重播一遍 360ms 入场动画,
+    ///   和封面的异步回填叠在一起, 就是用户报的"切 tab 闪几下"。
+    ///   但条目本身(VideoItem)在切 tab 时是**同一份对象**(ObservableCollection 没换)——
+    ///   用 ConditionalWeakTable 记"这条已经亮过相", 换 tab 回来就直接落位、不再重播。
+    ///   ★ ConditionalWeakTable 的键是弱引用: 刷新换了一批新 VideoItem 时, 旧条目被 GC、
+    ///   表项自动清掉, 新一批照常播入场动画(那才是真正的"新内容第一次亮相")。
+    /// </summary>
+    private static readonly ConditionalWeakTable<VideoItem, object?> _seenItems = new();
 
     /// <summary>
     /// 页面可以往卡片右键菜单里追加自己的菜单项(如收藏页的"移出收藏")。
@@ -139,12 +154,24 @@ public partial class VideoCard : UserControl
         CoverCard.RenderTransform = _coverScale;
         CoverCard.RenderTransformOrigin = new Point(0.5, 0.5);
 
+        // ★ 切 tab 重建的卡片**不播入场动画**(见 _seenItems 的说明): 直接落位。
+        if (DataContext is VideoItem item && _seenItems.TryGetValue(item, out _))
+        {
+            _trans.Y = 0;
+            Opacity = 1;
+            return;
+        }
+        if (DataContext is VideoItem item2) _seenItems.Add(item2, null);
+
+        // 入场: 只做一次**很快**的淡入(不再上浮)。原来 360ms 淡入 + 18px 上浮, 首屏/切 tab/进分区
+        // 一次生成几十上百张卡同时播, 合成器一帧要混合几十个动画层 —— 用户报的"闪几下 / 第一秒卡顿"
+        // 有一半来自这里。砍到 160ms 纯淡入: 观感仍是"柔和出现", 但动画负担降到原来的 1/4 以下
+        // (时长减半 + 去掉位移那条动画通道)。
         Opacity = 0;
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
         BeginAnimation(OpacityProperty,
-            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(360)) { EasingFunction = ease });
-        _trans.BeginAnimation(TranslateTransform.YProperty,
-            new DoubleAnimation(18, 0, TimeSpan.FromMilliseconds(360)) { EasingFunction = ease });
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160)) { EasingFunction = ease });
+        _trans.Y = 0;
     }
 
     private void OnMouseEnter(object sender, MouseEventArgs e) => AnimateCoverScale(1.04);

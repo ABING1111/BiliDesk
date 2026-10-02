@@ -349,7 +349,11 @@ public static class Cover
     private static void OnSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not Border border) return;
-        border.Opacity = 0.0;
+        // ★★ 这里**不再**无条件 `border.Opacity = 0`(2026-10-02 修"切 tab 封面闪几下"):
+        //   切 tab 时整墙卡片被销毁重建, 每次重建这个回调都会跑 —— 无条件清透明度会让每张封面
+        //   "先整块消失、等异步回调回来再出现", 和 VideoCard 的入场动画叠在一起, 就是用户看到的
+        //   "切 tab 闪几下"。清空改到**真正要下载**的那条路径里(见 LoadAsync 的 miss 分支):
+        //   命中内存缓存走快路径时**根本不碰 Opacity**, 封面稳稳地直接换上。
         border.SetValue(DecodedPixelWidthProperty, 0);
         var url = e.NewValue as string;
 
@@ -420,6 +424,9 @@ public static class Cover
             return;
         }
 
+        // 缓存 miss: 真正要下载/解码。这里**也不清透明度** —— 封面 Border 默认 Opacity=1 但还没
+        // 贴背景(透明), 于是外层 CoverCard 的 PlaceholderBrush 会透出来当占位符; 等图解好
+        // ApplyDecoded(fade:true) 再播 0→1 淡入盖上去。全程没有"先整块变黑再变回来"的闪。
         var img = await CoverLoader.LoadAsync(url, w);
         if (img == null) return;
 
