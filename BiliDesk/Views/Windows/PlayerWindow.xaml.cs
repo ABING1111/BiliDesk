@@ -665,6 +665,46 @@ public partial class PlayerWindow : FluentWindow
         // 「稍后再看」的点亮态属于"上一条视频", 一起清掉。放这里而不是 UpdateUiFromDetail:
         // 直播 / 本地离线缓存那两条路不走详情流程, 不清的话会挂着上一条视频的强调色。
         SetInWatchLater(false);
+        // 合集: 换片就要把"上一个合集的列表"整个丢掉, 否则普通视频那一瞬间会挂着旧合集的条目
+        // (点开面板那一帧还看得见)。★ 面板的**展开态**(_seasonOpen)不在这里清 —— 它登记在
+        // PersistentFields 里: 用户连着看几集是常态, 每换一集都把面板收起来很烦。
+        _currentSeasonEpisode = null;
+        _season = null;
+        _hasSeason = false;
+        // ★ 这里**不**清 _switchingSeasonEpisode: 它的复位点是 SwitchToSeasonEpisodeAsync 的
+        //   finally(与 _switchingQuality 同款)。本方法正是被那次换片调用的 —— 在这里清掉它,
+        //   整个 await LoadVideoAsync() 期间闸门就是开的, 连点两集照样能叠起来跑。
+        ClearSeasonUi(collapsePanel: false);
+        // 换片时**不关**面板(collapsePanel: false): 用户开着面板点下一集是常态, 关掉会在
+        // 整个加载过程里闪一下。列表内容已清空, 这里就地显示"加载中", 等 ApplySeason 灌数据。
+        // 真到了没有合集的新片, ApplySeason 会把面板整个收起来。
+        if (_seasonOpen)
+        {
+            if (SeasonHint != null) SeasonHint.Text = "正在获取合集…";
+            if (SeasonLoadingRing != null) SeasonLoadingRing.Visibility = Visibility.Visible;
+        }
+        UpdateSeasonButtonState();
+    }
+
+    /// <summary>
+    /// 把合集列表的内容清干净(入口按钮、标题、副标题、提示、加载圈、选中项)。
+    ///
+    /// 单独抽出来是因为它有多个调用点 —— 换片时、详情加载完发现没有合集时。
+    /// 两处各写一遍必然漏(尤其"底部加载圈没停"这种, 表现是加载完了圈还在转)。
+    /// </summary>
+    /// <param name="collapsePanel">
+    /// 是否**顺便把面板收起来**。换片时必须传 false: 用户开着面板点下一集是常态,
+    /// 换片期间把面板收掉会在整个加载过程里闪一下, 体验上像是"点一下面板没了"。
+    /// 只有在"确定这个视频没有合集"时才收面板。
+    /// </param>
+    private void ClearSeasonUi(bool collapsePanel)
+    {
+        if (collapsePanel && SeasonPanel != null) SeasonPanel.Visibility = Visibility.Collapsed;
+        if (SeasonTitleText != null) SeasonTitleText.Text = "";
+        if (SeasonMetaText != null) SeasonMetaText.Text = "";
+        if (SeasonHint != null) SeasonHint.Text = "";
+        if (SeasonLoadingRing != null) SeasonLoadingRing.Visibility = Visibility.Collapsed;
+        if (SeasonList != null) SeasonList.SelectedIndex = -1;
     }
 
     // ------------------------------------------------------------ 换片重置的自检
@@ -710,6 +750,11 @@ public partial class PlayerWindow : FluentWindow
         nameof(_switchingQuality), nameof(_fillingQualityMenu), nameof(_updatingSlider),
         nameof(_commentsLoaded), nameof(_postingComment), nameof(_longPressFired),
         nameof(_suppressSingleClick), nameof(_controlsHidden), nameof(_isFullscreen),
+        // 合集: 「这个视频有没有合集」属于"这一片"的属性, 换片必须重算。
+        // 不清的话换了普通视频入口还挂着, 点开是个空面板。
+        // (_currentSeasonEpisode / _season 是引用类型, 自检只审值类型与 string, 不在清单里;
+        //  但它们在 ResetForNewMedia 里同样被清了 —— 清单只负责"别漏", 不负责穷举。)
+        nameof(_hasSeason), nameof(_switchingSeasonEpisode),
     };
 
     /// <summary>
@@ -726,6 +771,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_laneHeight),         // 泳道高随字号走, 跟着设置走
         nameof(_teardownDone),       // 拆解只做一次
         nameof(_playerRegistered),   // 注册计数, 生命周期是窗口而非片源
+        nameof(_seasonOpen),         // 合集面板的展开态: 用户开着面板连看几集是常态, 换片收起它很烦
     };
 
     /// <summary>
@@ -844,6 +890,9 @@ public partial class PlayerWindow : FluentWindow
             _ownerMid = detail.OwnerMid;
             _ownerName = detail.Owner;
             UpdateUiFromDetail(detail);
+            // 合集数据在详情里就已经解析好了(见 ApiClient.GetVideoAsync), 这里零额外请求。
+            // 放在 UpdateUiFromDetail 之后: 它要用刚设好的 _currentCid/_aid 来定位"当前是第几集"。
+            ApplySeason(detail.Season);
 
             if (_currentCid <= 0)
             {
@@ -3606,6 +3655,222 @@ public partial class PlayerWindow : FluentWindow
         TabComments.Content = "评论";
         BtnBackToComments.Visibility = Visibility.Collapsed;
         CommentList.Visibility = Visibility.Visible;
+    }
+
+    // ------------------------------------------------------------ 视频合集
+
+    /// <summary>
+    /// 当前正在播的那一集(不在任何合集里时为 null)。
+    /// 用来给面板里的条目打"就是这条"的标, 也是判断"要不要为切集重置进度"的依据。
+    /// </summary>
+    private SeasonEpisode? _currentSeasonEpisode;
+
+    /// <summary>
+    /// 当前视频有没有合集(有才显示「合集」入口)。
+    /// 单独一个 bool 而不是判 <c>_currentSeasonEpisode != null</c>: 入口是否出现只取决于
+    /// "这个视频属于合集吗", 而 _currentSeasonEpisode 还可能因为定位不上(合集里有一条
+    /// bvid/cid/aid 都对不上的脏数据)而暂时为 null —— 那种情况下面板仍该能打开。
+    /// </summary>
+    private bool _hasSeason;
+
+    /// <summary>当前视频的合集(没有则 null)。面板的数据源, 也是"换片后要不要重灌列表"的依据</summary>
+    private SeasonInfo? _season;
+
+    /// <summary>
+    /// "正在为切集换片"的闸门。合集列表是 ListBox, 连点两集会连续触发两次 SelectionChanged ——
+    /// 不挡住就是两个 LoadVideoAsync 并发, 后回来的那个覆盖前一个, 表现是"点了 A 却播了 B"。
+    /// </summary>
+    private bool _switchingSeasonEpisode;
+
+    /// <summary>
+    /// 合集面板是否展开。
+    ///
+    /// ★ 登记在 <see cref="PersistentFields"/> 里(跨片保持): 用户开着面板连看几集是常态;
+    ///   每换一集都把面板收起来, 想接着点下一集还得再展开一次, 很烦。
+    ///   代价是换到普通视频时面板会空着 —— 那种情况由 ClearSeasonUi 把面板**整个收起**,
+    ///   不留一个空壳面板(见 LoadVideoAsync 里没有合集的分支)。
+    /// </summary>
+    private bool _seasonOpen;
+
+    /// <summary>点 tab 行右侧的「合集」: 开关面板(不请求接口 —— 数据在详情加载时就已经拿到了)</summary>
+    private void OnSeasonToggleClick(object sender, RoutedEventArgs e)
+    {
+        if (_closing || !_hasSeason || SeasonPanel == null) return;
+        if (_seasonOpen) CloseSeasonPanel();
+        else OpenSeasonPanel();
+    }
+
+    private void OnSeasonCloseClick(object sender, RoutedEventArgs e) => CloseSeasonPanel();
+
+    private void OpenSeasonPanel()
+    {
+        if (_closing || SeasonPanel == null) return;
+        _seasonOpen = true;
+        SeasonPanel.Visibility = Visibility.Visible;
+        UpdateSeasonButtonState();
+        ScrollSeasonToCurrent();
+    }
+
+    /// <summary>
+    /// 把合集列表滚到"正在播的那一集"。100 多集的合集里不滚, 用户得自己找半天。
+    ///
+    /// ★ 必须派发到 Loaded 优先级之后: 面板刚由 Collapsed 变 Visible 时布局还没跑完,
+    ///   此时 ScrollIntoView 会因为没有可视区域高度而无效(静默不滚, 不报错)。
+    /// </summary>
+    private void ScrollSeasonToCurrent()
+    {
+        if (SeasonList?.SelectedItem == null) return;
+        var target = SeasonList.SelectedItem;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (_closing || !_seasonOpen) return;
+            SeasonList?.ScrollIntoView(target);
+        }));
+    }
+
+    private void CloseSeasonPanel()
+    {
+        _seasonOpen = false;
+        if (SeasonPanel != null) SeasonPanel.Visibility = Visibility.Collapsed;
+        UpdateSeasonButtonState();
+    }
+
+    /// <summary>
+    /// 刷新「合集」按钮的可见性与高亮态。
+    /// 没有合集的视频**隐藏**按钮(而不是禁用): 右侧信息栏只有 400px, 一个常年灰着的按钮
+    /// 既占位又像是坏了; 官方在没有合集时也不给入口。
+    ///
+    /// ★ 按钮里的文字颜色由 XAML 里那个 TextBlock 显式绑 Button.Foreground 拿到 ——
+    ///   全局隐式 TextBlock 样式带 Foreground setter, 优先级高于继承, 光设 Button.Foreground
+    ///   是改不动里面那个 TextBlock 的。
+    /// </summary>
+    private void UpdateSeasonButtonState()
+    {
+        if (BtnSeason == null) return;
+        BtnSeason.Visibility = _hasSeason ? Visibility.Visible : Visibility.Collapsed;
+        BtnSeason.Foreground = _seasonOpen
+            ? (Brush)FindResource("AccentTextBrush")
+            : (Brush)FindResource("TextSecondaryBrush");
+    }
+
+    /// <summary>详情加载完之后灌合集数据</summary>
+    private void ApplySeason(SeasonInfo? season)
+    {
+        if (_closing) return;
+
+        if (season == null || season.Episodes.Count == 0)
+        {
+            // 没有合集: 入口隐藏、面板整个收起 —— 不留一个空壳面板(上一个视频的面板可能正开着)
+            _season = null;
+            _currentSeasonEpisode = null;
+            _hasSeason = false;
+            _seasonOpen = false;
+            ClearSeasonUi(collapsePanel: true);
+            UpdateSeasonButtonState();
+            return;
+        }
+
+        _season = season;
+        _hasSeason = true;
+        _currentSeasonEpisode = FindCurrentEpisode(season);
+
+        ClearSeasonUi(collapsePanel: false);
+        // 列表数据源 = 展平后的全部集。顺序即官方顺序(见 ApiClient.ParseSeason)
+        if (SeasonList != null)
+        {
+            SeasonList.ItemsSource = season.Episodes;
+            // 选中 = 高亮。★ 必须走 SelectedItem, 而不是"给每条算一个 IsPlaying 字段":
+            // 那些条目是普通 POCO, 没有 INPC, 改了字段界面不会刷新。
+            // 赋值会触发 OnSeasonEpisodeSelected —— 那一次的目标就是当前集, 会被自己短路掉。
+            SeasonList.SelectedItem = _currentSeasonEpisode;
+        }
+        SeasonTitleText.Text = season.Title;
+        // 副标题带上分组数(仅多分组时) —— 让用户知道面板是按分组排的
+        SeasonMetaText.Text = season.Sections.Count > 1
+            ? $"共 {season.Episodes.Count} 集 · {season.Sections.Count} 个分组"
+            : $"共 {season.Episodes.Count} 集";
+        // 定位不上当前集时给一句明确说明: 好过列表里一个高亮都没有, 用户会以为坏了
+        SeasonHint.Text = _currentSeasonEpisode == null ? "没能在合集里定位到当前这一集" : "";
+        SeasonLoadingRing.Visibility = Visibility.Collapsed;
+        UpdateSeasonButtonState();
+        // 面板本来开着(用户连看几集)就保持开着 —— 换片不该把面板收起来
+        if (_seasonOpen) SeasonPanel.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// 定位"当前播的是合集里的哪一集"。
+    /// 优先级: cid 精确匹配 &gt; bvid 匹配 &gt; aid 匹配。
+    ///
+    /// 先按 cid 是因为**同一个 bvid 可能有多个分 P**, 合集里存的是"这一集的默认分 P",
+    /// 用户从搜索等入口点进来的可能是它的第 2 个分 P —— 那时 bvid 相同但实际内容不同,
+    /// 用 cid 才能把"第几集"标对。取不到 cid 才退回 bvid, 再退回 aid。
+    /// </summary>
+    private SeasonEpisode? FindCurrentEpisode(SeasonInfo season)
+    {
+        if (_currentCid > 0)
+        {
+            var byCid = season.Episodes.FirstOrDefault(e => e.Cid == _currentCid);
+            if (byCid != null) return byCid;
+        }
+        if (!string.IsNullOrEmpty(_currentBvid))
+        {
+            var byBv = season.Episodes.FirstOrDefault(e => e.Bvid == _currentBvid);
+            if (byBv != null) return byBv;
+        }
+        if (_aid > 0)
+        {
+            var byAid = season.Episodes.FirstOrDefault(e => e.Aid == _aid);
+            if (byAid != null) return byAid;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 点了合集里的某一集 → **在本窗口**换片(不新开窗口)。
+    ///
+    /// ★ 这里刻意**不调 Svc.Player.PlayVideo**: 那条路会走 PlayerService 的"复用闸门",
+    ///   而闸门在窗口不可复用的场景下会**新建一个 PlayerWindow** —— 用户点下一集却弹出一个
+    ///   新窗口, 正是任务里明确禁止的。换片的动作直接落在本窗口上, 与「切换清晰度」同款:
+    ///   Stop 掉当前流 → ResetForNewMedia 清掉上一片的全部残留 → 重新走 LoadVideoAsync。
+    ///
+    /// ★ 不在这里手工挪 SelectedItem: ResetForNewMedia 会把列表清空, 换片完成后
+    ///   ApplySeason 会重新定位并设好选中项 —— 那才是唯一的高亮来源。手工补一次反而会在
+    ///   "换片失败"时留下一个高亮但没在播的条目。
+    /// </summary>
+    private void OnSeasonEpisodeSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (_closing || SeasonList == null) return;
+        if (SeasonList.SelectedItem is not SeasonEpisode ep) return;
+        // 选中的就是当前这一集: 不做任何换片动作。
+        // (ApplySeason 里给 SelectedItem 赋值也会走到这里, 必须能自己短路掉)
+        if (ep.Bvid == _currentBvid) return;
+        _ = SwitchToSeasonEpisodeAsync(ep);
+    }
+
+    private async Task SwitchToSeasonEpisodeAsync(SeasonEpisode ep)
+    {
+        if (_closing || string.IsNullOrEmpty(ep.Bvid)) return;
+        // 防连点: 上一次换片还没走完就再点一集, 会把两个 LoadVideoAsync 叠起来跑,
+        // 后一个的结果覆盖前一个 —— 表现是"点了 A 结果播了 B"。用换片闸门直接挡掉。
+        if (_switchingSeasonEpisode) return;
+        _switchingSeasonEpisode = true;
+        try
+        {
+            try { _mp.Stop(); } catch { }
+            _currentBvid = ep.Bvid;
+            // ★ 关键: 合集里的集是**在线稿件**, 不是本地文件/直播 —— 从离线缓存/直播那类入口
+            //   切过来时这两个标志还是 true, 不清掉新片会被当成"没有在线上下文",
+            //   弹幕 / 三连 / 历史 / 评论全都不会加载。
+            _isLocalPlayback = false;
+            _isLive = false;
+            _liveRoomId = 0;
+            ResetForNewMedia();
+            await LoadVideoAsync();
+        }
+        finally
+        {
+            _switchingSeasonEpisode = false;
+        }
     }
 
     // ------------------------------------------------------------ 头像跳转 / 踩 / 回复 / 详情页发表

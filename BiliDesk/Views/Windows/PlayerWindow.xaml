@@ -874,6 +874,13 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
+                                        <!-- 第 3 列给「合集」按钮: 它**不能**用 GroupName=ContentTab,
+                                             那是个动作按钮不是 tab(点了要把内容区换成合集列表, 而不是"选中某个 tab")。
+                                             也因此它必须有自己的列 —— 挤进 tab 组会把 简介/评论 这两个互斥的
+                                             tab 拆开, 用户就看不出"这两个是一组的"了。 -->
+                                        <ColumnDefinition Width="Auto" />
+                                        <!-- 第 4 列 `*`: "返回评论列表"仍占这一格靠左。它默认 Collapsed,
+                                             与「合集」按钮分开占列后, 两者同时出现时不会再叠在一起。 -->
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <RadioButton x:Name="TabIntro" Grid.Column="0" GroupName="ContentTab"
@@ -882,9 +889,24 @@
                                     <RadioButton x:Name="TabComments" Grid.Column="1" GroupName="ContentTab"
                                                  Style="{StaticResource ContentTabStyle}" Content="评论"
                                                  Checked="TabComments_Checked" />
+                                    <!-- 视频合集入口(2026-10-02 新增): 紧跟在 简介/评论 这个 tab 组右侧。
+                                         无合集的视频整个按钮**隐藏**(不是禁用) —— 右侧信息栏只有 400px,
+                                         一个常年灰着的按钮既占位又像是坏了, 而 B 站自己在没有合集时也不给入口。
+                                         文案用显式 TextBlock 并绑到按钮 Foreground: 全局那个隐式 TextBlock 样式
+                                         带 Foreground setter, 优先级高于继承, 直接写 Content="合集" 是改不动颜色的
+                                         (面板展开时要把它点亮成强调色)。 -->
+                                    <Button x:Name="BtnSeason" Grid.Column="2" Visibility="Collapsed"
+                                            Style="{StaticResource SubtleButtonStyle}"
+                                            FontSize="12" Margin="10,0,0,0" Padding="10,4"
+                                            HorizontalAlignment="Left" VerticalAlignment="Center"
+                                            Click="OnSeasonToggleClick"
+                                            ToolTip="查看/收起视频合集">
+                                        <TextBlock Text="合集" FontSize="12"
+                                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                    </Button>
                                     <!-- 返回评论列表: 进了"评论详情"才出现, 就摆在"评论详情"右边(用户指定)。
                                          用按钮而不是文字链接 —— 这里是个"动作", 有底的按钮更好认、也更好点。 -->
-                                    <Button x:Name="BtnBackToComments" Grid.Column="2" Visibility="Collapsed"
+                                    <Button x:Name="BtnBackToComments" Grid.Column="3" Visibility="Collapsed"
                                             Style="{StaticResource SubtleButtonStyle}"
                                             Content="返回评论列表" FontSize="12"
                                             Margin="10,0,0,0" Padding="10,4"
@@ -1084,6 +1106,188 @@
                         </StackPanel>
                     </ScrollViewer>
                 </Border>
+
+                <!-- ============ 合集面板(点 tab 行右侧的「合集」滑出, 2026-10-02 新增) ============
+                     ★ 为什么是"盖在信息栏上的浮层"而不是"信息栏里的第四个 tab":
+                       合集列表和简介/评论是**互斥**的内容, 走 tab 要动 GroupName=ContentTab 那套结构,
+                       还会让"合集"这一个动作入口获得一个自己的持久选中态(点了普通视频之后那个 tab
+                       还亮着, 但面板是空的); 浮层则天然"跟着当前视频走", 换片清空即可。
+                     ★ 用 Grid 而不是 Popup: Popup 是独立 HWND, 会盖在 VideoView 那个 airspace 之上,
+                       窗口缩放/全屏切换时两者位置容易错开; 这里只需要盖住右侧 400px, 同窗口内最稳。
+                     IsHitTestVisible 靠 Visibility 控制: 收起时整棵树既不渲染也不参与命中测试。 -->
+                <Grid x:Name="SeasonPanel" Visibility="Collapsed"
+                      Background="{DynamicResource AppBackgroundBrush}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- 头部: 合集标题 + 集数 + 关闭。左边留 1px 竖线, 与信息栏的分隔线对齐 -->
+                    <Border Grid.Row="0" BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1,0,0,0"
+                            Padding="20,18,14,12">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock x:Name="SeasonTitleText" FontSize="15" FontWeight="SemiBold"
+                                           TextWrapping="Wrap" Text="合集" LineHeight="21" />
+                                <TextBlock x:Name="SeasonMetaText" Style="{StaticResource MetaTextStyle}"
+                                           Margin="0,4,0,0" Text="" />
+                            </StackPanel>
+                            <!-- 关闭按钮: 用显式 Style(项目硬规定, Button 不许裸写),
+                                 图标字形必须写进显式 TextBlock —— 全局隐式 TextBlock 样式带 Foreground
+                                 setter, 会吃掉 Button.Foreground, 字形颜色就跟着主题跑偏了。 -->
+                            <Button x:Name="BtnSeasonClose" Grid.Column="1" VerticalAlignment="Top"
+                                    Style="{StaticResource SubtleButtonStyle}"
+                                    Width="30" Height="30" Padding="0" Margin="8,0,0,0"
+                                    Click="OnSeasonCloseClick" ToolTip="收起合集">
+                                <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="12"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                            </Button>
+                        </Grid>
+                    </Border>
+
+                    <!-- 列表: 展平数据 + IsSectionStart 画分组标题。
+                         用 ListBox 而不是 ItemsControl: 一是要**选中态高亮当前集**,
+                         二是选中项自带 BringIntoView(打开面板要滚到正在播的那一集)。 -->
+                    <ListBox x:Name="SeasonList" Grid.Row="1"
+                             Background="Transparent" BorderThickness="0"
+                             Padding="10,4,10,10"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             SelectionChanged="OnSeasonEpisodeSelected"
+                             behaviors:SmoothScroll.Enabled="True">
+                        <ListBox.Resources>
+                            <!-- 隐式样式会吃掉继承的前景色(全局隐式 TextBlock 样式带 Foreground setter),
+                                 所以模板里每一个 TextBlock 都显式给刷子。 -->
+                            <Style x:Key="SeasonTitleStyle" TargetType="TextBlock">
+                                <Setter Property="FontSize" Value="12.5" />
+                                <Setter Property="TextWrapping" Value="Wrap" />
+                                <Setter Property="MaxHeight" Value="34" />
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            </Style>
+                            <Style x:Key="SeasonSectionHeaderStyle" TargetType="TextBlock">
+                                <Setter Property="FontSize" Value="12" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+                            </Style>
+                        </ListBox.Resources>
+
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <!-- ★ 绝不设 Focusable=False: 鼠标按下时 Focus() 失败会短路选中逻辑,
+                                     SelectionChanged 永不触发(切换清晰度踩过同一个坑), 于是"点了没反应"。
+                                     去焦点框用 FocusVisualStyle。 -->
+                                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Margin" Value="0,0,0,2" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Cursor" Value="Hand" />
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="Bd" Background="Transparent"
+                                                    CornerRadius="7" Padding="7,6">
+                                                <ContentPresenter />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background"
+                                                            Value="{DynamicResource ControlFillHoverBrush}" />
+                                                </Trigger>
+                                                <!-- 当前正在播的那一集: 强调色浅底 + 描边, 与"评论详情"那种选中观感一致。
+                                                     没用左边那条竖条: 分组标题也在同一列里, 竖条会和它打架。 -->
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background"
+                                                            Value="{DynamicResource AccentSoftFillBrush}" />
+                                                    <Setter TargetName="Bd" Property="BorderBrush"
+                                                            Value="{DynamicResource AccentBorderFillBrush}" />
+                                                    <Setter TargetName="Bd" Property="BorderThickness" Value="1" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <!-- 分组标题: 只在 GroupsHeaderVisible 时出现。
+                                         ★ 为什么在条目模板内部画、而不是外层再套一层带 GroupStyle 的 CollectionView:
+                                           数据源里"分组"是**有序且可重复**的(section title 会重复出现),
+                                           套 GroupStyle 得先构造 CollectionView + 改数据源类型, 而这里
+                                           每条只需要知道自己是不是分组第一集 —— 一个 bool 就够, 少一层结构。 -->
+                                    <TextBlock x:Name="SectionHeader"
+                                               Style="{StaticResource SeasonSectionHeaderStyle}"
+                                               Text="{Binding SectionTitle}"
+                                               Margin="7,12,7,6"
+                                               Visibility="{Binding ShowSectionHeader, Converter={StaticResource BoolToVis}}" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <!-- 封面 16:9, 宽 74 => 高 42。Cover 附加属性按元素宽度解码, 小图省内存 -->
+                                        <Border Grid.Column="0" Width="74" Height="42" CornerRadius="5"
+                                                ClipToBounds="True"
+                                                Background="{DynamicResource PlaceholderBrush}"
+                                                behaviors:Cover.Source="{Binding Cover}" />
+                                        <!-- 集序号压在封面左上角: 与视频卡片上的时长角标同款做法 -->
+                                        <Border Grid.Column="0" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                Margin="3,3,0,0" CornerRadius="3" Padding="4,1"
+                                                Background="{DynamicResource DurationBadgeBackgroundBrush}">
+                                            <TextBlock Text="{Binding Index}" FontSize="10" Foreground="White" />
+                                        </Border>
+                                        <!-- 时长压在封面右下角 -->
+                                        <Border Grid.Column="0" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                Margin="0,0,3,2" CornerRadius="3" Padding="3,1"
+                                                Background="{DynamicResource DurationBadgeBackgroundBrush}"
+                                                Visibility="{Binding DurationText, Converter={StaticResource StrToVis}}">
+                                            <TextBlock Text="{Binding DurationText}" FontSize="10" Foreground="White" />
+                                        </Border>
+                                        <StackPanel Grid.Column="2" Margin="9,0,0,0" VerticalAlignment="Center">
+                                            <!-- 正在播的那一集由 ListBoxItem 的 IsSelected 触发器整行点亮
+                                                 (强调色浅底 + 描边), 标题不再单独变色 —— 条目是普通 POCO,
+                                                 没有变更通知, 单独给它一个 IsPlaying 字段是改不动的。 -->
+                                            <TextBlock x:Name="EpTitle" Text="{Binding Title}"
+                                                       Style="{StaticResource SeasonTitleStyle}"
+                                                       ToolTip="{Binding Title, Mode=OneWay}" />
+                                            <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                                <!-- 播放量; 拿不到就整段隐藏(不显示"▶ 0") -->
+                                                <TextBlock Text="{Binding ViewCountText}" FontSize="10.5"
+                                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                <TextBlock Text=" · " FontSize="10.5" Margin="1,0"
+                                                           Foreground="{DynamicResource TextTertiaryBrush}"
+                                                           Visibility="{Binding ViewCountText, Converter={StaticResource StrToVis}}" />
+                                                <TextBlock Text="{Binding PubDateShort}" FontSize="10.5"
+                                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- 底部: 加载中/错误提示。放在底部而不是顶部, 免得加载时列表区域高度跳一下 -->
+                    <Border Grid.Row="2" BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1,0,0,0"
+                            Padding="20,10,20,14">
+                        <StackPanel Orientation="Horizontal">
+                            <controls:LoadingRing x:Name="SeasonLoadingRing" Width="14" Height="14"
+                                                  Visibility="Collapsed" />
+                            <TextBlock x:Name="SeasonHint" Style="{StaticResource MetaTextStyle}"
+                                       Text="" Margin="6,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
                 <!-- 本地 Toast -->
                 <Border x:Name="LocalToastBorder" HorizontalAlignment="Right" VerticalAlignment="Top"
                         Margin="0,12,12,0" Padding="12,7" CornerRadius="6"

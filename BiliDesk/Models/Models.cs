@@ -157,6 +157,98 @@ public class VideoDetail
     public int DurationSec { get; set; }
     public string Duration => VideoItem.FormatSeconds(DurationSec);
 
+    /// <summary>
+    /// 该视频所属的合集(ugc_season); 不属于任何合集时为 null。
+    /// ★ 跟着 view 接口一起解析, 而不是让播放器再单独请求一次 —— 见 ApiClient.GetVideoAsync。
+    /// </summary>
+    public SeasonInfo? Season { get; set; }
+}
+
+/// <summary>
+/// 合集(ugc_season)里的一集。
+/// 字段挑的是"列表 UI 要用的那几个": 封面/标题/时长/播放量/发布日 + 换片必需的三件套。
+/// </summary>
+public sealed class SeasonEpisode
+{
+    /// <summary>稿件 avid。**必须 long** —— 新稿件 aid 已超过 int 上限(实测 117367564666453)</summary>
+    public long Aid { get; set; }
+    public string Bvid { get; set; } = "";
+    /// <summary>该集的默认分 P cid(episodes[].cid, 与 page.cid 一致)</summary>
+    public long Cid { get; set; }
+    public string Title { get; set; } = "";
+    public string Cover { get; set; } = "";
+    public int DurationSec { get; set; }
+    public long ViewCount { get; set; }
+    public long Pubdate { get; set; }
+
+    /// <summary>所属分组(SeasonSection.Id); 0 = 没分组信息</summary>
+    public long SectionId { get; set; }
+
+    /// <summary>
+    /// 该集在**整个合集**里的序号(1 起)。
+    /// 跨分组连续编号, 因为界面上"第 N 集"是用户对合集的整体认知 ——
+    /// 分组内重新从 1 数会让"第 3 集"在 10 个分组里各有一条, 定位不了。
+    /// </summary>
+    public int Index { get; set; }
+
+    /// <summary>
+    /// 这一集是不是**它所在分组的第一个**。用来决定要不要在它上面画分组标题 ——
+    /// WPF 的 ListBox 用展平数据源 + 这个标记, 比为分组再套一层 ItemsControl 简单得多。
+    /// </summary>
+    public bool IsSectionStart { get; set; }
+
+    /// <summary>分组标题(仅 IsSectionStart 时会被界面用到)</summary>
+    public string SectionTitle { get; set; } = "";
+
+    /// <summary>
+    /// 界面上要不要在这条**上面**画分组标题。= IsSectionStart 且整个合集确实有多个分组。
+    ///
+    /// 为什么不只判 IsSectionStart: 单分组的合集(如"正片"那一组有 148 集)官方也不显示分组名,
+    /// 多一行没信息量的标题反而让人以为还有别的分组。这个判断需要"整个合集的分组数",
+    /// 单条数据自己算不出来, 所以由灌数据的一方在绑定前统一写好(条目是普通 POCO, 没有变更通知,
+    /// 必须在赋给 ItemsSource **之前**定下来)。
+    /// </summary>
+    public bool ShowSectionHeader { get; set; }
+
+    public string DurationText => VideoItem.FormatSeconds(DurationSec);
+    public string ViewCountText => ViewCount > 0 ? VideoItem.FormatCount(ViewCount) : "";
+    public string IndexText => "第 " + Index + " 集";
+}
+
+/// <summary>合集里的一个分组(sections[])。官方单分组时该分组就是"正片"</summary>
+public sealed class SeasonSection
+{
+    public long Id { get; set; }
+    public string Title { get; set; } = "";
+    public List<SeasonEpisode> Episodes { get; set; } = new();
+}
+
+/// <summary>视频合集(ugc_season)</summary>
+public sealed class SeasonInfo
+{
+    /// <summary>合集 id。同时是 seasons_archives_list 的 season_id 参数</summary>
+    public long SeasonId { get; set; }
+    public string Title { get; set; } = "";
+    public string Cover { get; set; } = "";
+    /// <summary>UP 主 mid(合集归属人)</summary>
+    public long Mid { get; set; }
+    public string Intro { get; set; } = "";
+
+    /// <summary>
+    /// 服务端自报的总集数。**只用来做"是不是被截断了"的交叉校验** ——
+    /// 界面上一律以实际拿到的 Episodes.Count 为准(自报数偶尔与实际不符)。
+    /// </summary>
+    public int EpCount { get; set; }
+
+    /// <summary>分组。官方网页把它当"选集"的页签(如「马刀西游」/「全新故事小剧场」)</summary>
+    public List<SeasonSection> Sections { get; set; } = new();
+
+    /// <summary>
+    /// 全部集的**展平**视图, 顺序 = sections 依次拼接 = 官方 sort_reverse=false 的顺序
+    /// (实测 118 集合集逐 aid 完全一致, 见 ApiClient.GetSeasonAsync 的说明)。
+    /// 单位置取"当前播的是第几集"、也直接当列表数据源。
+    /// </summary>
+    public List<SeasonEpisode> Episodes { get; set; } = new();
 }
 
 /// <summary>
