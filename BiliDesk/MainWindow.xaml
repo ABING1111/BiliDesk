@@ -256,6 +256,48 @@
             <ContentControl x:Name="PageHost" Focusable="False" />
 
             <!--
+                ============ 切页过渡的"幕布" ============
+
+                切页的淡出/淡入动画**画在这一层上**, 而不是画在 PageHost 自己身上
+                (2026-10-03 重做, 用户要求"整页淡入淡出动画重做, 既保证有动画又要保证流畅")。
+
+                ★★ 实测结论先说(探针 `%TEMP%\bd-probe-navframes`, 真实窗口 + CompositionTarget.Rendering
+                   量合成帧间隔, 325 张卡的页面):
+                     · 子树静止时: 动画 PageHost.Opacity 与动画幕布**一样** —— 两者都是
+                       p50 ~7ms / p95 ~14ms / 掉帧 0。**"动画容器导致每帧重栅格化"在这台机器上量不出来**,
+                       所以别再把"幕布"写成卡顿的修复(旧注释是这么写的, 已按实测改正)。
+                     · 子树在变时(复刻 DeferredFill 每 16ms 加 24 张卡): 两者也都一样(~127ms 一次长帧),
+                       那次长帧是**卡片批量重排**的账, 与透明度动画无关。
+                   ⇒ 动画载体不是卡顿来源。选幕布的**真实理由**是下面两条。
+
+                ★ 理由一(有实测): 幕布盖住之后**才去建页面实例**。`PageOf` 首次要解析整棵 XAML,
+                  探针 Release 口径实测首页 **~360ms**(`bd-probe-navcost` 的 A 段)。旧写法把这句放在 ShowPage 最前面,
+                  于是那 360ms 卡在"点击 → 动画开始"之间, 用户看到的是**点了没反应**;
+                  现在它落在幕布已经全不透明的那段时间里, 用户看到的只是"一块背景色"。
+                  ★ 顺带的好处: 淡出期间用户改点别的导航项时, 这一拍会被代数闸取消 —— 页面**根本不会被建**。
+
+                ★ 理由二(结构性): 页面子树全程保持 `Opacity=1`, 不依赖"中间表面"的行为。
+                  这条在本机量不出差异, 但它把"整页半透明合成"这种最容易在别的机器/驱动上退化的
+                  画法整个绕开了 —— 观感不变, 风险更低。
+
+                ★ 为什么能严丝合缝地对上页面底色:
+                  本层的底色绑的是**窗口自己的 Background**(由 FluentWindow.ApplyChrome 按深浅
+                  主题设成不透明的 WindowSolid*Brush), 而各页面的 AppBackgroundBrush 是
+                  #B3 的半透明色、压在同一个窗口底色上合成出来的结果**正好等于那个纯色**
+                  (浅色 #B3F3F3F3 压 #F3F3F3 → #F3F3F3; 深色同理; 探针 B 段实测两套主题都相等)。
+                  所以它盖满时看上去就是"内容区空了", 不会露出一块颜色不同的板子。
+                  ★ 别改成 AppBackgroundBrush —— 那个是半透明的, 盖不住下面的新页面。
+
+                ★ 位置: 夹在 PageHost 与 EmbeddedHost 之间 ⇒ 压住页面, 但压不住内嵌页的返回头、
+                  Toast 和右上角窗口按钮(那三样在过渡期间照常可见可点)。
+
+                ★ 常驻 Collapsed + IsHitTestVisible=False: 不参与命中测试, 空闲时零开销。
+            -->
+            <Border x:Name="NavVeil"
+                    Background="{Binding Background, RelativeSource={RelativeSource AncestorType=Window}}"
+                    Opacity="0" Visibility="Collapsed" IsHitTestVisible="False" />
+
+            <!--
                 内嵌页宿主: UP 主主页这类"从当前页面点进去、又要能退回来"的页面走这里,
                 不再另开一个独立窗口 —— 独立窗口看起来像换了个程序, 关掉还容易顺手把主界面一起关掉。
                 它盖在 PageHost 之上, 自带一条"返回"头; 切换到任何导航页都会自动关掉它。
