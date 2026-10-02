@@ -112,6 +112,35 @@ public static class CoverLoader
         return task;
     }
 
+    /// <summary>
+    /// **同步**查一次内存缓存(不触发任何下载/解码)。
+    ///
+    /// 给"已经加载过、又被销毁重建"的元素用 —— 典型场景是首页切 tab: 摘掉 ItemsSource 会把
+    /// 卡片容器连同它的 ImageBrush 一起销毁, 但位图本身还在 MemCache 里。重新挂载时若命中,
+    /// 调用方应当**同步贴图、不闪不淡入**(见 Cover.LoadAsync 的快路径), 而不是走完整异步路径
+    /// 再来一次 240ms 淡入 —— 否则用户看到的就是"每次切 tab 封面都重新加载一遍"。
+    /// </summary>
+    public static bool TryGetCached(string? url, int decodeWidth, out BitmapImage? img)
+    {
+        url = Normalize(url);
+        if (url.Length == 0) { img = null; return false; }
+
+        var w = Quantize(decodeWidth);
+        var cacheKey = w > 0 ? $"{url}|w{w}" : url;
+
+        lock (Lock)
+        {
+            if (MemCache.TryGetValue(cacheKey, out var hit))
+            {
+                hit.LastUse = ++_clock;
+                img = hit.Image;
+                return true;
+            }
+        }
+        img = null;
+        return false;
+    }
+
     private static async Task<BitmapImage?> LoadCoreAsync(string url, string cacheKey, int decodeWidth)
     {
         try
@@ -377,17 +406,31 @@ public static class Cover
         var w = border.ActualWidth > 0
             ? (int)Math.Min(1280, Math.Max(160, border.ActualWidth * dpi * 1.25))
             : 480;
+
+        // ★★ 快路径(2026-10-02, 用户报"切 tab 每次都重新加载封面"): 位图已经在内存缓存里,
+        //   直接同步贴上、**不闪不淡入**。原来这里无条件走完整异步路径 + 240ms 淡入 ——
+        //   即便 CoverLoader.LoadAsync 命中缓存是零等待, ApplyDecoded 里那句
+        //   `ShouldPlayFadeIn(prev<=0)` 还是会因为"这是新容器、prev 被重置成 0"而重新播一遍
+        //   0→1 淡入, 于是每次切 tab 几百张封面一起闪一遍, 观感就是"封面重新加载了"。
+        //   命中缓存说明这格之前见过、不是真正的首次加载, 不该再淡入。
+        if (CoverLoader.TryGetCached(url, w, out var cached) && cached != null)
+        {
+            await Application.Current.Dispatcher.InvokeAsync(
+                () => ApplyDecoded(border, url, cached, w, fade: false));
+            return;
+        }
+
         var img = await CoverLoader.LoadAsync(url, w);
         if (img == null) return;
 
         await Application.Current.Dispatcher.InvokeAsync(
-            () => ApplyDecoded(border, url, img, w));
+            () => ApplyDecoded(border, url, img, w, fade: true));
     }
 
     /// <summary>
     /// 把解好的位图贴到卡片上(**必须在 UI 线程**)。
     /// </summary>
-    private static void ApplyDecoded(Border border, string url, BitmapImage img, int requestedWidth)
+    private static void ApplyDecoded(Border border, string url, BitmapImage img, int requestedWidth, bool fade)
     {
         void Apply()
         {
@@ -412,11 +455,12 @@ public static class Cover
             if (border.Child != null) border.Child.Visibility = Visibility.Collapsed;
             border.SetValue(DecodedPixelWidthProperty, img.PixelWidth);
 
-            // ★★ 只有"这一格第一次出图"才淡入。变宽触发的重解码时卡片上**已经有图**了,
-            //   再播一次 0→1 的淡入 = 封面先整块消失再浮出来; 最大化那一下视口内几十张同时重解码,
-            //   几十张一起闪, 用户看到的就是"抽动"(2026-10-01 定位)。已经有图就静默换掉 ——
+            // ★★ 只有"这一格第一次出图"才淡入(且调用方明确要 fade)。变宽触发的重解码、以及
+            //   切 tab 重建容器后的缓存命中, 卡片上**都已经有/刚有过图**, 再播一次 0→1 的淡入
+            //   = 封面先整块消失再浮出来; 最大化那一下视口内几十张同时重解码, 几十张一起闪,
+            //   用户看到的就是"抽动"(2026-10-01 定位)。已经有图就静默换掉 ——
             //   底下换的是更清晰的位图, 画面不该有任何跳变。
-            if (ShouldPlayFadeIn(prev))
+            if (fade && ShouldPlayFadeIn(prev))
             {
                 border.Opacity = 1.0;
                 border.BeginAnimation(UIElement.OpacityProperty,

@@ -217,15 +217,11 @@
             </StackPanel>
 
             <!-- 卡片墙(与首页同构: ScrollViewer → StackPanel → ItemsControl + WrapPanel + CardWall)
-                 ★ 滚轮手感**单独调快**: 默认是 180px/280ms, 历史页一屏放得下更多卡片、内容更长,
-                   用户反馈"滑动手感偏慢"。这里 270px/160ms —— 一格跨过一整行卡片, 且松手后
-                   几乎立刻停住(时长越短越跟手; 280ms 会让内容在松手后自己再飘一小段, 连滚时
-                   几段动画叠在一起就更显拖沓)。首页保持默认值不动。 -->
+                 ★ 滚轮手感与首页一致(2026-10-02 用户要求): 之前这里挂了 SmoothScroll(270px/160ms 的
+                   缓动滚轮), 历史页手感与首页**不一致** —— 首页是引擎原生滚轮(一格一格、即停),
+                   历史页却是缓动+连滚加速。现在删掉, 历史页滚轮回到引擎默认, 与首页完全同款。 -->
             <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto"
                           Margin="0,0,0,0"
-                          behaviors:SmoothScroll.Enabled="True"
-                          behaviors:SmoothScroll.Step="270"
-                          behaviors:SmoothScroll.DurationMs="160"
                           ScrollChanged="OnScrollChanged">
                 <!-- 底部 250px = 右下角浮动工具列的高度, 留在滚动内容之外, 滚到底时最后一行能整行露出来 -->
                 <StackPanel Margin="0,0,0,250">
