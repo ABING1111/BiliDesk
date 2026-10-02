@@ -1114,9 +1114,16 @@
                        还亮着, 但面板是空的); 浮层则天然"跟着当前视频走", 换片清空即可。
                      ★ 用 Grid 而不是 Popup: Popup 是独立 HWND, 会盖在 VideoView 那个 airspace 之上,
                        窗口缩放/全屏切换时两者位置容易错开; 这里只需要盖住右侧 400px, 同窗口内最稳。
-                     IsHitTestVisible 靠 Visibility 控制: 收起时整棵树既不渲染也不参与命中测试。 -->
+                     IsHitTestVisible 靠 Visibility 控制: 收起时整棵树既不渲染也不参与命中测试。
+                     ★★★ 底色必须用**不透明**的 FloatingFillBrush, 不能用 AppBackgroundBrush
+                       (2026-10-02 修): AppBackgroundBrush 是**半透明**的(#B3F3F3F3 / #B3202020,
+                       70% 不透明), 而这是个**盖在简介文字上的浮层** —— 底下那层简介/UP 主卡片
+                       会整片透上来, 与合集列表的标题叠在一起变成一团糊字(用户截图报的正是这个)。
+                       页面级底色可以半透明(它底下是云母/窗口底色, 透出来是想要的质感),
+                       但**浮层不行**, 浮层底下是内容。FloatingFillBrush 那组就是为这种场合准备的
+                       (见 Colors.Light.xaml 里 FloatingFill* 的注释)。 -->
                 <Grid x:Name="SeasonPanel" Visibility="Collapsed"
-                      Background="{DynamicResource AppBackgroundBrush}">
+                      Background="{DynamicResource FloatingFillBrush}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />

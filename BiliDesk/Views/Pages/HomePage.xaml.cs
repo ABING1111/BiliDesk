@@ -82,6 +82,46 @@ public partial class HomePage : UserControl
         RefreshThemeIcon();
     }
 
+    // ------------------------------------------------------------ 加大的窗口拖动区
+
+    /// <summary>
+    /// 首页顶部那层"空闲拖动区"的按下处理: 长按左键拖动窗口、双击最大化/还原。
+    ///
+    /// ★ 为什么自己实现而不用 WindowChrome 的 CaptionHeight:
+    ///   那是**窗口级**设置, 调大以后每个页面顶部都会变成标题栏 —— 而搜索页/历史页顶部
+    ///   正好是输入框, 被吃掉上沿就点不动了(项目笔记里记着这条)。首页顶部是真空的,
+    ///   所以只在首页补这一层。
+    ///
+    /// ★ 为什么 DragMove 要 try/catch: `Window.DragMove()` 内部走的是 Win32 的模态拖动循环,
+    ///   它在"鼠标已经松开"或"拖动被系统打断(比如别的窗口抢了捕获)"时会抛
+    ///   InvalidOperationException。这不是异常路径, 是正常竞态 —— 双击的第二下、
+    ///   快速点一下就松开, 都很容易踩到。吞掉即可, 用户感知不到。
+    ///
+    /// ★ 双击判定: WPF 的 MouseButtonEventArgs.ClickCount 由系统按
+    ///   `GetDoubleClickTime()` 与双击距离阈值算好, 直接用, 不要自己数时间戳。
+    /// </summary>
+    private void OnDragAreaMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var win = Window.GetWindow(this);
+        if (win == null) return;
+
+        if (e.ClickCount == 2)
+        {
+            // 双击 = 最大化 / 还原(与系统标题栏、以及右上角那个按钮同一套语义)
+            win.WindowState = win.WindowState == WindowState.Maximized
+                ? WindowState.Normal
+                : WindowState.Maximized;
+            e.Handled = true;
+            return;
+        }
+
+        // 单击拖动。★ 必须判左键按下状态: 双击的第一下也会走到这里,
+        //   若不判就会先 DragMove 把窗口拖走一小段, 双击的位置跟着漂。
+        if (e.LeftButton != MouseButtonState.Pressed) return;
+        try { win.DragMove(); }
+        catch (InvalidOperationException) { /* 鼠标已松开/拖动被打断, 正常竞态 */ }
+    }
+
     // ------------------------------------------------------------ 屏蔽
 
     /// <summary>
@@ -343,7 +383,23 @@ public partial class HomePage : UserControl
         if (list == null) return;
         // 摘 ItemsSource 前先停掉它的分帧填充: 否则还在排队的补帧会往一个已摘除的列表里灌数据
         if (_fill != null && ReferenceEquals(_fill.List, list)) { _fill.Dispose(); _fill = null; }
-        list.ItemsSource = null;
+
+        // ★★ 拆容器不放在点击这一拍(2026-10-02, 用户报"切 tab 卡顿")。
+        //
+        //   `ItemsSource = null` 会同步拆掉这面墙的全部卡片容器 —— 热门/排行榜一次几十上百张,
+        //   每一张都要从可视树断开 + 失效测量, 实测(离屏探针 `%TEMP%\bd-probe-tabjank`)
+        //   这一拍同步耗时能到 ~30ms, 压在点击那一下就是"卡一帧"。
+        //   把拆解放到 ContextIdle(比 DeferredFill 的 Background 还低): 让"新 tab 的补帧先跑、
+        //   新内容先上屏", 拆旧墙这件纯内存的活留到真正空闲时再做。
+        //
+        //   ★ 必须有 ReferenceEquals 守卫: 用户快速连点时, 这个 tab 可能在拆解放到空闲之前
+        //   又被 AttachTab 重新挂上了新的代理视图 —— 那时再 null 会把新视图也拆掉。
+        //   记下"当时挂的是哪一份", 轮到执行时发现已经不是它了就跳过。
+        var detached = list.ItemsSource;
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
+        {
+            if (ReferenceEquals(list.ItemsSource, detached)) list.ItemsSource = null;
+        }));
     }
 
     /// <summary>正在进行的分帧填充(同一时刻只有当前 tab 的列表挂着数据, 所以只有一个)</summary>

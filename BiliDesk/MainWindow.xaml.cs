@@ -249,11 +249,20 @@ public partial class MainWindow : FluentWindow
     /// 与 NavigateToSearch 同一套路 —— 不新开窗口, 走导航栏那套切页。
     /// 返回 Task 而不是 async void: 调用方(分区面板点击)不关心结果, 但异常必须能顺着
     /// Task 走, 而不是变成进程级未处理异常。
+    ///
+    /// ★★ 顺序必须是"**先切页, 再拉数据**"(2026-10-02 修, 用户报"第一次进分区页卡一秒才加载"):
+    ///   原来的写法是 `await page.OpenAsync(...)` 之后才 `_vm.Navigate(PageKey.Region)` ——
+    ///   于是整个网络请求(首次进某分区实测 ~1s)期间, 界面**还停在首页**、分区页压根没上屏,
+    ///   用户看到的就是"点了没反应 / 卡了一秒", 然后页面突然跳出来。而分区页上那个
+    ///   「正在加载…」转圈绑的是 `RegionViewModel.Loading`, 页面不上屏它永远没机会显示。
+    ///   切开之后: 切页是同步的(立即上屏, 转圈开始转), 数据在后台填。
+    ///   ★ 注意别把 await 挪回来"顺手"等待 —— 那样等于把上面这个 bug 再写一遍。
     /// </summary>
     public async Task NavigateToRegion(string name, int tid)
     {
-        if (PageOf(PageKey.Region) is RegionPage page) await page.OpenAsync(name, tid);
+        // 先去分区页(同步上屏) —— 转圈立刻可见, 不再有"点了卡一秒"的空白期
         _vm.Navigate(PageKey.Region);
+        if (PageOf(PageKey.Region) is RegionPage page) await page.OpenAsync(name, tid);
 
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
         Activate();

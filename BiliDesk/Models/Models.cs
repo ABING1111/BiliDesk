@@ -80,19 +80,22 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
     /// 发布日期的短格式(卡片文字区右侧): 同年显示 "9-1", 跨年带年份。
     /// Pubdate 没解析到(部分接口)时为空, 由界面隐藏。
     /// </summary>
-    public string PubDateShort
+    public string PubDateShort => FormatPubDateShort(Pubdate);
+
+    /// <summary>
+    /// 发布日期的短格式。**抽成静态的给别处复用** —— 合集列表也要显示同一个格式,
+    /// 各写一份必然漂移(改了一处另一处忘)。见 SeasonEpisode.PubDateShort。
+    /// </summary>
+    public static string FormatPubDateShort(long pubdate)
     {
-        get
+        if (pubdate <= 0) return "";
+        try
         {
-            if (Pubdate <= 0) return "";
-            try
-            {
-                var t = DateTimeOffset.FromUnixTimeSeconds(Pubdate).LocalDateTime;
-                var now = DateTime.Now;
-                return t.Year == now.Year ? $"{t.Month}-{t.Day}" : $"{t.Year}-{t.Month}-{t.Day}";
-            }
-            catch { return ""; }
+            var t = DateTimeOffset.FromUnixTimeSeconds(pubdate).LocalDateTime;
+            var now = DateTime.Now;
+            return t.Year == now.Year ? $"{t.Month}-{t.Day}" : $"{t.Year}-{t.Month}-{t.Day}";
         }
+        catch { return ""; }
     }
 
     public static string FormatCount(long n)
@@ -212,6 +215,14 @@ public sealed class SeasonEpisode
 
     public string DurationText => VideoItem.FormatSeconds(DurationSec);
     public string ViewCountText => ViewCount > 0 ? VideoItem.FormatCount(ViewCount) : "";
+
+    /// <summary>
+    /// 发布日期的短格式(合集条目第二行右侧)。
+    /// ★ 复用 <see cref="VideoItem.FormatPubDateShort"/> —— 这条以前**漏了**:
+    ///   XAML 里绑着 `{Binding PubDateShort}` 而模型没有这个属性, WPF 对绑定到不存在的属性
+    ///   是**静默空白、编译零警告**(项目笔记里记过这个坑), 表现就是每一条的日期都是空的。
+    /// </summary>
+    public string PubDateShort => VideoItem.FormatPubDateShort(Pubdate);
     public string IndexText => "第 " + Index + " 集";
 }
 

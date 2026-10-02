@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
              Background="{DynamicResource AppBackgroundBrush}">
     <UserControl.Resources>
         <!-- 热搜一行: 序号 + 名称 + 徽章。
@@ -122,6 +123,25 @@
                            VerticalAlignment="Center" />
             </StackPanel>
         </StackPanel>
+
+        <!-- ===== 加大的窗口拖动区(2026-10-02 用户要求"首页上方空闲区域变大一些") =====
+             ★ 为什么在这里加、而不是把 WindowChrome 的 CaptionHeight 从 20 调大:
+               CaptionHeight 是**窗口级**的, 调大后**每个页面**的顶部都会变成标题栏。
+               而别的页面顶部不是空的 —— 搜索页/历史页顶部就是输入框, 被拖动区吃掉上沿之后
+               点进去没反应(项目笔记里明确记着这条, 20 这个值就是为此定的)。
+               首页顶部这块是**真的空**的, 所以只在首页加一层透明的拖动区。
+
+             ★ 这层为什么能安全盖在标题上: 它是 Panel.ZIndex=5 的透明层, 而
+               搜索卡是 ZIndex=31、右下角工具列是 ZIndex=10 —— 都比它高,
+               所以搜索框/主题按钮/标签页的点击**照常**落到它们自己身上(标题和问候语都是
+               TextBlock, 本来就不可点, 盖住没有损失)。
+
+             ★ 拖动与双击自己实现(见 HomePage.xaml.cs 的 OnDragAreaMouseLeftButtonDown):
+               窗口顶部 20px 仍由 WindowChrome 的 CaptionHeight 负责(原生拖动 + 原生双击最大化),
+               而**20px 以下这一整块**由这层接管 —— 两者拼起来, 顶部可拖动区从 20px 变成约 58px。 -->
+        <Border x:Name="TopDragArea" Grid.Row="0" Panel.ZIndex="5"
+                Background="Transparent"
+                MouseLeftButtonDown="OnDragAreaMouseLeftButtonDown" />
 
         <!-- 分段标签 + 选中下划线。
              选中态是"字变强调色 + 下方一根短横线", 线由页面在切换时用动画滑到新标签下面
