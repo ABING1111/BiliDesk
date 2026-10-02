@@ -107,6 +107,39 @@ public partial class SearchPage : UserControl
 
     private void OnTextChanged(object sender, TextChangedEventArgs e) => Vm?.OnKeywordChanged();
 
+    // ------------------------------------------------------------ 滚动到底自动加载
+
+    /// <summary>离底部还剩这么多像素就算"到底了", 提前把下一页拉回来(与首页 TriggerAutoLoad 同值)</summary>
+    private const double AutoLoadThreshold = 240;
+
+    /// <summary>
+    /// 连续自动填充的次数。与首页同款的一道闸: 内容不足一屏时"补了还是短"会立刻再来一次,
+    /// 没有它就会一直往下拉(用户看到的是"页面自己在不停加载")。
+    /// </summary>
+    private int _autoFillCount;
+
+    /// <summary>
+    /// 结果区滚到接近底部(或内容不足一屏)就自动翻下一页 —— 与首页/稍后再看页同一套写法。
+    ///
+    /// 用 async void + await 是**故意的**: _autoFillCount 计数跨 await 必须还有效, 否则
+    /// 几次请求同时在飞, 闸门等于没有(首页那边也是这么写的, 见 HomePage.TriggerAutoLoad)。
+    /// </summary>
+    private async void OnResultScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (Vm is not { HasMore: true } vm) return;
+        if (vm.LoadingMore || vm.Searching || vm.Blocked) return;
+        if (_autoFillCount > 5) return;
+        if (sender is not ScrollViewer sv) return;
+
+        var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
+        var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;
+        if (distanceToBottom > AutoLoadThreshold && !contentShort) return;
+
+        _autoFillCount++;
+        try { await vm.LoadMoreAsync(); }
+        finally { _autoFillCount--; }
+    }
+
     /// <summary>
     /// 点在卡片外面 → 收起卡片。
     ///

@@ -1672,9 +1672,16 @@ public class ApiClient
                     foreach (var e in list.EnumerateArray()) result.Items.Add(ParseSearchItem(e));
                     var numResults = data.Value.TryGetProperty("numResults", out var nr) &&
                                      nr.ValueKind == JsonValueKind.Number ? nr.GetInt32() : 0;
-                    result.HasMore = numResults > page * result.Items.Count || numResults == 0 && result.Items.Count > 0;
+                    // ★ 一页固定 20 条(下面 TotalPages 也是按 20 算的), 所以"下一页还有没有"必须拿
+                    //   **页大小**去比, 不能拿**本页条数**去比 —— 本页不满 20 条时按本页条数乘会把
+                    //   偏移算小(明明到底了还说有); 本页 0 条时更是退化成"永远有下一页",
+                    //   于是「加载更多」永远不消失、每点一次都去要一个越界页(2026-10-01 修)。
+                    const int SearchPageSize = 20;
+                    result.HasMore = result.Items.Count > 0 &&
+                                     (numResults <= 0 ? result.Items.Count >= SearchPageSize
+                                                      : page * SearchPageSize < numResults);
                     if (page == 1 && numResults > 0)
-                        result.TotalPages = Math.Max(1, (numResults + 19) / 20);
+                        result.TotalPages = Math.Max(1, (numResults + SearchPageSize - 1) / SearchPageSize);
                     if (result.Items.Count == 0) result.Error = "没有找到相关视频";
                     result.Ok = true;
                     return result;
@@ -1722,19 +1729,31 @@ public class ApiClient
         return result;
     }
 
+    /// <summary>
+    /// 搜索结果里的一条视频。
+    ///
+    /// ★★ 搜索接口**没有 owner 对象**: UP 主的 mid 是**顶层字段 mid**(昵称是顶层 author),
+    ///   稿件 id 是顶层 aid。别的接口(热门/排行/推荐/历史)走的是 owner.mid, 所以这里要是照抄
+    ///   那一套就会漏掉 OwnerMid —— 后果是卡片下面的 UP 主名点不开, 只弹"没拿到 UP 主的 UID"
+    ///   (2026-10-01 用户报的"搜索页 up 主点不开")。改字段名之前先看一眼真实响应。
+    /// </summary>
     private static VideoItem ParseSearchItem(JsonElement e)
     {
         var item = new VideoItem
         {
             Bvid = GetStr(e, "bvid"),
+            Aid = GetLong(e, "aid"),
             Title = GetStr(e, "title").StripHtml(),
             Cover = UrlUtil.Normalize(GetStr(e, "pic")),
             Author = GetStr(e, "author"),
+            OwnerMid = GetLong(e, "mid"),
             Duration = GetStr(e, "duration"),
             ViewCount = GetLong(e, "play"),
             DanmakuCount = GetLong(e, "video_review"),
             Pubdate = GetLong(e, "pubdate")
         };
+        // 兜底: 少数情况下 mid 缺失/为 0, 别再让"点 UP 主名"落空
+        if (item.OwnerMid <= 0) item.OwnerMid = GetLong(e, "uid");
         return item;
     }
 

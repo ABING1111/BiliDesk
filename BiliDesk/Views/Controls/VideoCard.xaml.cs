@@ -204,18 +204,28 @@ public partial class VideoCard : UserControl
     /// 点封面下方的 UP 主名 → 进 TA 的个人主页。
     /// 走的是和"播放器里点 UP 主头像 / 评论头像"完全相同的一条路(NavigationDispatcher):
     /// 在主窗口内容区盖一层带返回按钮的主页, 不另开独立窗口。
+    ///
+    /// ★ 列表没给 OwnerMid 时**先补查一次视频详情**(与 OnAddWatchLater 同款), 而不是直接弹提示:
+    ///   提示等于"这条路走不通", 而详情接口几乎总能给出 owner.mid, 用户点一下就进去了。
     /// </summary>
-    private void OnAuthorClick(object sender, MouseButtonEventArgs e)
+    private async void OnAuthorClick(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
         if (DataContext is not VideoItem v) return;
-        if (v.OwnerMid <= 0)
+
+        var mid = v.OwnerMid;
+        if (mid <= 0 && !string.IsNullOrEmpty(v.Bvid))
         {
-            // 少数接口不给 owner.mid(例如动态里的部分转发), 给个明确反馈而不是毫无反应
+            var (_, _, vd) = await Svc.Api.GetVideoAsync(v.Bvid);
+            mid = vd?.OwnerMid ?? 0;
+        }
+        if (mid <= 0)
+        {
+            // 连详情都拿不到(例如动态里的部分转发), 给个明确反馈而不是毫无反应
             Svc.Toast.Show("没拿到 UP 主的 UID, 打不开主页");
             return;
         }
-        new NavigationDispatcher(Window.GetWindow(this)).OpenUserSpace(v.OwnerMid.ToString());
+        new NavigationDispatcher(Window.GetWindow(this)).OpenUserSpace(mid.ToString());
     }
 
     // ------------------------------------------------------------ 右键菜单

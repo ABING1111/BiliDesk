@@ -314,17 +314,20 @@ public class HomeViewModel : ObservableObject
     private bool _recommendLoading;
 
     /// <summary>
-    /// 按 Bvid 去重追加。原来是外层遍历 + 内层线性查找的 O(n²) 写法,
-    /// 推荐流滚动几十页后每追加一批都要全表扫描, 这里改成 HashSet 的 O(n)。
+    /// 按 Bvid 去重追加(实现搬到了 <see cref="VideoList.AppendDistinct"/> —— 搜索结果那边也要用;
+    /// 原来是外层遍历 + 内层线性查找的 O(n²) 写法, 推荐流滚动几十页后每追加一批都要全表扫描)。
     /// </summary>
     private static void AppendDistinct(ObservableCollection<VideoItem> target, IEnumerable<VideoItem> items)
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var v in target) seen.Add(v.Bvid);
-        foreach (var v in items)
-            if (!string.IsNullOrEmpty(v.Bvid) && seen.Add(v.Bvid)) target.Add(v);
-    }
+        => VideoList.AppendDistinct(target, items);
 
+    /// <summary>
+    /// 拉取推荐流。
+    ///
+    /// ★ <paramref name="reset"/> 必须一路传到 ApiClient(见 GetRecommendAsync 的同名参数):
+    ///   App 端接口是靠 idx 游标翻页的, "刷新"要**清游标从头开始**, "加载更多"要**带着游标往下走**。
+    ///   以前这里只把 reset 用在"清不清本地列表"上, 接口侧永远从头拉 —— 于是「加载更多」
+    ///   反复拿到同一小段内容, 看起来就是"越翻越不准"。
+    /// </summary>
     private async Task LoadRecommendAsync(bool reset = false)
     {
         if (_recommendLoading) return; // 已有推荐请求在跑, 直接复用它的结果
