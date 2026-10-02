@@ -328,10 +328,12 @@ public partial class PlayerWindow : FluentWindow
         Svc.Toast.Shown += OnToast;
         Svc.Session.Changed += UpdateButtonState;
 
-        // 关掉这个窗口的 DWM 过渡动画: 全屏切换自己有一层遮黑过渡, 再叠一层系统的
-        // "窗口慢慢放大"动画就是"按了之后要等一下"的那种拖沓(见 DwmInterop.DisableWindowTransitions)。
-        // 必须等句柄建好 —— SourceInitialized 是能拿到 HWND 的最早时机。
-        SourceInitialized += (_, _) => DwmInterop.DisableWindowTransitions(this);
+        // 这里**不再**关掉这个窗口的 DWM 过渡动画。
+        // ★★★ 2026-10-02 按用户要求"全屏动画改用 Windows 系统自带的": 以前为了让"秒切"干净,
+        //   在 SourceInitialized 里调 DwmInterop.DisableWindowTransitions 把系统那段窗口缩放动画
+        //   关掉了 —— 那正是"全屏没有动画、硬切一下"的原因。现在反过来, 让 DWM 自己播这段过渡。
+        //   ★ 别再把 DisableWindowTransitions 调回来: 它一开, 系统动画就被掐掉, 全屏又变成硬切。
+        //   (主窗口的最大化/还原同理 —— 见 FluentWindow.OnStateChanged。)
 
         // 清晰度/弹幕区域弹层的定位目标**必须代码直连**: XAML 的 ElementName 绑定在
         // VideoView 的 ForegroundWindow 浮层里解析失败(内容被移进另一个可视树后名字
@@ -2982,19 +2984,21 @@ public partial class PlayerWindow : FluentWindow
     // ------------------------------------------------------------ 全屏
 
     /// <summary>
-    /// 全屏切换。**完全同步, 没有任何过渡动画** —— 按下的那一刻就到位。
+    /// 全屏切换。**几何变化本身依然是同步的**(按下的那一刻就把布局与窗口状态改完),
+    /// 但"看得见的动画"这件事**交给 Windows/DWM 自己播** —— 见下。
     ///
-    /// ★ 这里原来是一套四段过渡(渐暗压黑 60ms → 改布局 → 持黑 150ms → 揭幕 130ms,
-    ///   合计 340ms), 用来盖住 LibVLC 重新协商 vout 尺寸时的空窗。代价是"按了全屏要等
-    ///   三分之一秒画面才回来", 用户判定为拖沓, 已整体删除(2026-09-30)。
+    /// ★★★ 2026-10-02 按用户要求"把软件全屏动画改成 Windows 系统自带的动画, 不再自己绘制":
+    ///   两条一起来的改动(缺一条都还是"自己画的"):
+    ///     ① **不再关掉系统动画** —— 原来在 SourceInitialized 里调
+    ///        `DwmInterop.DisableWindowTransitions`(DWMWA_TRANSITIONS_FORCEDISABLED),
+    ///        把 DWM 那段窗口缩放过渡掐掉了, 所以全屏是"硬切"。该调用与其 API 已整体删除。
+    ///     ② 自绘的那套过渡早已不在: 四段(渐暗压黑 60ms → 改布局 → 持黑 150ms → 揭幕 130ms,
+    ///        合计 340ms, 2026-09-30 删)与 FluentWindow 的整窗 Scale+淡入(2026-10-02 删)
+    ///        都不存在了。现在这个窗口一切换就是"改布局 + 最大化", 剩下的动效由 DWM 负责。
     ///
-    /// 之所以可以直接改布局、不再需要遮黑护航, 两条依据:
-    ///   ① 窗口底色在改布局**之前**就已经置黑(见 ApplyFullscreenLayout 的第一步),
-    ///      而视频区那层 Grid 本身也是黑底 —— 尺寸重排期间任何露出来的区域都只会是黑色,
-    ///      不会有"浅色主题下露白"的问题;
-    ///   ② 别人加进来的两层过渡也都不在了: FluentWindow 那段"内容 Scale + 淡入"的最大化动画
-    ///      2026-09-30 已整体删除(太贵), DWM 的窗口缩放动画在 SourceInitialized 里关掉
-    ///      (见 DwmInterop.DisableWindowTransitions)。
+    /// ★ 那层**全屏黑幕(见 ArmFullscreenCover)必须保留** —— 它挡的是 LibVLC 重新协商 vout
+    ///   时的白底空窗, 不是动画: 交给系统播之后窗口尺寸照样在变, 空窗照样出现,
+    ///   去掉它浅色主题下就会重新闪白(2026-10-01 修过的老问题)。
     ///
     /// 窗口现在**始终**是 WindowStyle=None + WindowChrome 的自绘标题栏, 所以全屏不再靠
     /// 切换 WindowStyle 实现(之前那套 `None + Maximized` 会让自绘标题栏和系统框打架),
@@ -3024,10 +3028,6 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void ApplyFullscreenLayout(bool on)
     {
-        // 播放器的全屏不要 FluentWindow 那层"内容淡入"(那是给主窗口最大化用的观感):
-        // 画面本身就要瞬间变化, 叠一层淡入纯属干扰。
-        // ★ 只在这一段需要它; 方法里不抛异常, 所以不必再包 try/finally。
-        SuppressStateTransition = true;
         if (on)
         {
             // ★ 第一步必须是它: 底色先黑, 后面收缩/放大暴露出来的区域才不会是主题色。
@@ -3090,13 +3090,6 @@ public partial class PlayerWindow : FluentWindow
                 InfoPanel.Opacity = 1;
             }
         }
-
-        // 全屏几何已经改完; 之后用户自己拖动/还原窗口时按普通窗口走(不必一直屏蔽)。
-        // ★ 推迟一个 dispatcher turn 再放开(2026-10-01): WindowState 的 setter 触发的
-        //   OnStateChanged 可能被推迟到下一趟布局, 那样这里刚设回 false, 动画照样播出来
-        //   —— 表现为整窗 Scale+淡入 200ms, 期间窗口底色会透出来。放到下一趟就稳了。
-        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(
-            () => { if (!_closing) SuppressStateTransition = false; }));
     }
 
     /// <summary>
@@ -3114,8 +3107,11 @@ public partial class PlayerWindow : FluentWindow
     ///   任意时刻都有已解出的帧; 远端 DASH 长视频要 flush/重协商 vout, 空窗明显得多。
     ///   这与 2026-10-01 那条日志记的判别式完全一致。
     ///
-    /// 这不是"过渡动画": 不淡入、不用 _fsShadeTimer(那个已被删除且别复活),
-    /// 只是切换期间多压一层不透明黑, 首个新帧到达即撤掉。
+    /// ★ 这不是"过渡动画": 不淡入、不用 _fsShadeTimer(那个已被删除且别复活),
+    ///   只是切换期间多压一层不透明黑, 首个新帧到达即撤掉。
+    ///   ★★ 2026-10-02 用户要求"全屏动画改用 Windows 自带的"之后**它仍然必须留着**:
+    ///   它挡的是 LibVLC vout 重协商时的**白底空窗**, 与"动画由谁播"完全无关 ——
+    ///   改成系统动画后窗口尺寸变化依旧发生, 空窗依旧存在, 去掉它浅色主题就会闪白。
     /// </summary>
     private void ArmFullscreenCover()
     {

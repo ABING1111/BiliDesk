@@ -3,7 +3,6 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
 
@@ -35,6 +34,12 @@ public class FluentWindow : Window
             DwmInterop.SetRoundCorners(this);
             // 不启用 Mica: 半透明 AppBackgroundBrush + Mica 透色 = 偏暗且不一致
             DwmInterop.DisableMica(this);
+            // ★★★ 把 WS_CAPTION 补回来, 否则 DWM **不会播**最小化/最大化/还原的窗口过渡动画。
+            //   本工程所有窗口都是 WindowStyle=None 的自绘标题栏, 这个样式位被摘掉了 ——
+            //   这正是"最小化没动画、全屏硬切"的真根因(与本类那层已删的自绘动画无关)。
+            //   实测数据见 DwmInterop.RestoreCaptionForDwmAnimation 的说明。
+            //   ★ 时机必须在这里(句柄刚建好、还没 Show): 放到 Show 之后会被当成运行时改样式。
+            DwmInterop.RestoreCaptionForDwmAnimation(this);
         }
         catch
         {
@@ -89,150 +94,55 @@ public class FluentWindow : Window
         base.OnClosed(e);
     }
 
-    // ------------------------------------------------------------ 最大化 / 还原的过渡
+    // ------------------------------------------------------------ 最大化 / 还原
 
     /// <summary>
-    /// 最大化/还原时给内容补一段过渡动画。
+    /// 最大化/还原的动画**完全交给 Windows 自己播**(DWM 的窗口过渡)。
     ///
-    /// ★★ 为什么敢把 Scale 加回来(2026-10-01, 第三版): 第一版逐帧改整棵树的 ScaleTransform,
-    ///   **每一帧都要把整棵内容树重新栅格化**, 首页几百张卡片的页面扛不住 ⇒ "全屏化很卡"。
-    ///   现在动画期间给根元素挂 **`BitmapCache`**: 把整棵树栅格化成**一张 GPU 纹理**,
-    ///   之后每帧的缩放只是变换这张纹理 —— 成本从"每帧重绘整窗"降到"每帧一次纹理变换",
-    ///   动画结束立刻摘掉, 恢复矢量渲染(文字保持清晰)。
+    /// ★★★ 2026-10-02 按用户要求"不再自己绘制动画", 这里以前那套 WPF 自绘过渡
+    ///   (整窗 Scale + 淡入 + 动画期间挂 `BitmapCache` 把整棵树栅格化成一张 GPU 纹理,
+    ///   200ms, 见旧探针 `bd-probe-{twitch,cardtwitch}`)已**整体删除**。
+    ///   同一批删除的还有它专用的一整套配套机制 —— 它们只服务于那层自绘动画:
+    ///     · `SuppressStateTransition`(播放器全屏用来关掉它的开关);
+    ///     · `CardWallPanel.ConvergeVisibleThenHold` / `ReleaseHold`(动画期间冻结卡片树的"保持"开关);
+    ///     · `Cover.SuspendVisualUpdates` / `ResumeVisualUpdates`(动画期间封面只记账不上屏的闸门);
+    ///     · `DwmInterop.DisableWindowTransitions`(播放器原来把**系统**动画关掉, 好让"秒切"干净)。
+    ///   **别复活其中任何一个**: 只要还有一处自绘动画/纹理, 就会与系统动画叠成"两段动画"(观感是拖沓或抽动)。
     ///
-    /// ★ 仍然要能关掉: 播放器切全屏是"画面本身要瞬间变化"的场景, 叠这层动画纯属干扰 ——
-    ///   它用 <see cref="SuppressStateTransition"/> 关掉。
+    /// ★ 注意:`DwmInterop.DisableWindowTransitions` 的删除方向与上面相反 —— 播放器全屏以前是
+    ///   "秒切"(主动关掉系统动画), 现在正是要靠系统动画, 所以那里已改为**不再关**。
+    ///
+    /// ★ 唯一保留的动作是"把卡片墙按新宽度**一次性收敛**"(见 <see cref="CardWallPanel.ConvergeForResize"/>):
+    ///   那不是动画, 是布局结算 —— 系统动画期间卡片若还按 16 张一批渐进重排, 就会在缩放动画里
+    ///   一批批顶走可见区(历史上"抽动"的根)。先收敛好, 系统动画的每一帧才是静止的内容。
     /// </summary>
-    protected bool SuppressStateTransition { get; set; }
-
-    /// <summary>状态过渡时长。要明显是个动画, 但不能长到让人等。</summary>
-    private const int StateAnimMs = 200;
-
-    /// <summary>连点保护: 递增序号。收尾回调对不上号, 说明新一轮动画已接管, 不得拆它的现场。</summary>
-    private int _stateAnimSeq;
-
     protected override void OnStateChanged(EventArgs e)
     {
         base.OnStateChanged(e);
 
-        // 启动阶段(IsLoaded 之前)不播; 最小化不播(窗口本来就不可见)
+        // 启动阶段(IsLoaded 之前)不处理; 最小化不处理(窗口本来就不可见)
         if (!IsLoaded) return;
         if (WindowState == WindowState.Minimized) return;
-        if (SuppressStateTransition) return;
         if (Content is not FrameworkElement) return;
 
         // ★★ 必须等这次状态变化引发的**真实窗口尺寸**落到布局上再动手(2026-10-01 定位):
         //   `StateChanged` 是在窗口真正被 resize **之前**发的 —— 此刻即使 `UpdateLayout()`, 拿到的
-        //   还是**旧客户区**尺寸, 于是卡片墙按旧宽度算出的"目标卡宽"与现状相同 ⇒ 下面的"收敛可视区"
-        //   一个孩子都收敛不动(探针在 CardWallPanel 里埋点实测 `收敛=0`), 之后渐进的 PumpStep 才把
-        //   **整墙含视野上方**按 16 张一批地收敛(150 张要 10 批、约 600ms), 而卡片高度随宽度变 ⇒
-        //   可见区被一批批顶走 —— 这就是"滚一屏后最大化/还原, 卡片抽动很明显"的根。
-        //   放到 Background 优先级(= 这批消息处理完、resize 与布局/渲染已经跑过)再播, 目标值才是新的。
+        //   还是**旧客户区**尺寸, 于是卡片墙按旧宽度算出的"目标卡宽"与现状相同 ⇒ 收敛一个孩子都动不了
+        //   (探针实测 `收敛=0`), 之后渐进的 PumpStep 才把**整墙含视野上方**按 16 张一批地收敛
+        //   (150 张要 10 批、约 600ms), 而卡片高度随宽度变 ⇒ 可见区被一批批顶走。
+        //   放到 Background 优先级(= 这批消息处理完、resize 与布局/渲染已经跑过)再收敛, 目标值才是新的。
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
         {
-            if (!IsLoaded || SuppressStateTransition) return;
+            if (!IsLoaded) return;
             if (WindowState == WindowState.Minimized) return;
             if (Content is not FrameworkElement root) return;
 
-            double fromScale;
-            if (WindowState == WindowState.Maximized)
-            {
-                // 从"还原尺寸 ÷ 工作区"的等比缩小量出发 —— 动画看起来就像窗口从原来的尺寸长满整屏。
-                // 来源必须是 RestoreBounds / 工作区, 不能读当前尺寸(现在已是最大化尺寸, 比例 ≈1)。
-                var before = RestoreBounds;
-                var work = GetWorkArea();
-                if (before.Width < 80 || before.Height < 80 || work.Width < 80 || work.Height < 80) return;
-                fromScale = Math.Clamp(Math.Min(before.Width / work.Width, before.Height / work.Height), 0.75, 0.99);
-            }
-            else
-            {
-                fromScale = 1.02;   // 还原: 轻微收缩回落
-            }
-
-            PlayStateTransition(root, fromScale);
+            WalkCardWallPanels(root, p => p.ConvergeForResize());
         }));
     }
 
-    private void PlayStateTransition(FrameworkElement root, double fromScale)
-    {
-        var scale = root.RenderTransform as ScaleTransform;
-        if (scale == null)
-        {
-            // 框架有时会在首次布局时往根上放一个**恒等**的 MatrixTransform(实测矩阵全是单位值),
-            // 覆盖它是安全的; 但如果根上挂的是"有实际作用"的变换, 就不能覆盖 ——
-            // 那等于把别人的变换弄丢, 宁可这次不播。
-            var existing = root.RenderTransform;
-            if (existing != null && !existing.Value.IsIdentity) return;
-
-            scale = new ScaleTransform(1, 1);
-            root.RenderTransform = scale;
-        }
-        else
-        {
-            // 手快连点最大化 / 还原时, 上一段动画还挂着 —— 先摘掉, 否则起止值会互相打架
-            scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
-            scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
-        }
-        // 用 RenderTransformOrigin 而不是 CenterX/CenterY: 它是**比例**, 窗口尺寸怎么变都自动居中
-        root.RenderTransformOrigin = new Point(0.5, 0.5);
-
-        // ★★ 卡片墙必须在动画前"静止"(见 CardWallPanel._held 的说明): 渐进切宽的每一批
-        //   都会让 BitmapCache 的整窗纹理失效重栅格化, 动画过程就一抽一抽的。
-        //   顺序: ① 最大化引发的布局先付清(CardWall 的目标宽度落账);
-        //         ② 可视区卡片一次性收敛(≈30 张的重测) + 再付一次布局 —— 之后树完全静止;
-        //         ③ 此刻才挂 BitmapCache 栅格化 ⇒ 动画的每一帧都是纯纹理变换, 平滑。
-        //
-        // ★★ 还有一条**异步**的失效源必须一起掐掉(2026-10-01, 用户报的"界面抽动"根因):
-        //   封面重解码。卡片一变宽就触发"按新宽度重新解码", 解码完成回 UI 线程贴图的那一下
-        //   会落在动画中间 ⇒ 整窗纹理失效重栅格化 ⇒ 一抽一抽。
-        //   先**无条件开一次闸**(连点最大化时上一段动画的收尾可能被序号保护挡掉了, 不能让它欠着),
-        //   再关闸: 从现在到动画收尾, 封面一律只记账不上屏(见 Cover.SuspendVisualUpdates)。
-        Cover.ResumeVisualUpdates();
-        Cover.SuspendVisualUpdates();
-        root.UpdateLayout();
-        WalkCardWallPanels(root, p => p.ConvergeVisibleThenHold());
-        root.UpdateLayout();
-
-        var prevCache = root.CacheMode;
-        root.CacheMode = new BitmapCache();
-
-        var seq = ++_stateAnimSeq;
-        var dur = TimeSpan.FromMilliseconds(StateAnimMs);
-        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-
-        var sx = new DoubleAnimation(fromScale, 1, dur) { EasingFunction = ease };
-        var sy = new DoubleAnimation(fromScale, 1, dur) { EasingFunction = ease };
-        var fade = new DoubleAnimation(root.Opacity < 1 ? root.Opacity : 0.8, 1, dur) { EasingFunction = ease };
-
-        void Cleanup()
-        {
-            // 三个动画同时到达, 第一个到的负责收尾; 序号对不上 = 新一轮已接管, 别拆它的现场
-            if (seq != _stateAnimSeq) return;
-
-            scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
-            scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
-            scale.ScaleX = 1;
-            scale.ScaleY = 1;
-            root.BeginAnimation(OpacityProperty, null);
-            // 先放开卡片墙的渐进(剩余都是视野外卡片), 再恢复矢量渲染
-            WalkCardWallPanels(root, p => p.ReleaseHold());
-            root.CacheMode = prevCache;   // ★ 恢复矢量渲染, 别让文字一直停在栅格纹理上
-            // ★ 最后开闸补图: 此刻 BitmapCache 已摘掉, 换封面不再让任何纹理失效
-            //   (见 Cover.SuspendVisualUpdates 的说明)
-            Cover.ResumeVisualUpdates();
-        }
-
-        sx.Completed += (_, _) => Cleanup();
-        sy.Completed += (_, _) => Cleanup();
-        fade.Completed += (_, _) => Cleanup();
-
-        root.BeginAnimation(OpacityProperty, fade);
-        scale.BeginAnimation(ScaleTransform.ScaleXProperty, sx);
-        scale.BeginAnimation(ScaleTransform.ScaleYProperty, sy);
-    }
-
     /// <summary>
-    /// 遍历可视树里的卡片墙面板(首页那种零虚拟化墙), 供状态过渡做"收敛可视区/放开渐进"协作。
+    /// 遍历可视树里的卡片墙面板(首页那种零虚拟化墙), 供状态变化做"一次性收敛"协作。
     /// 只有挂了卡片墙的页面有实例 —— 设置页/"我的"页走这里等于空操作。
     /// </summary>
     private static void WalkCardWallPanels(DependencyObject d, Action<CardWallPanel> visit)
@@ -240,33 +150,6 @@ public class FluentWindow : Window
         if (d is CardWallPanel panel) visit(panel);
         int n = VisualTreeHelper.GetChildrenCount(d);
         for (int i = 0; i < n; i++) WalkCardWallPanels(VisualTreeHelper.GetChild(d, i), visit);
-    }
-
-    /// <summary>
-    /// 当前窗口所在显示器的工作区, 换算成 WPF 的 DIP 单位(窗口实际用的坐标系)。
-    /// 状态动画要用它算"还原尺寸 → 整屏"的比例; SystemParameters.WorkArea 只认主屏。
-    /// </summary>
-    private Size GetWorkArea()
-    {
-        try
-        {
-            var hwnd = new WindowInteropHelper(this).Handle;
-            var monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
-            var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
-            if (monitor != IntPtr.Zero && GetMonitorInfo(monitor, ref info))
-            {
-                var dpi = VisualTreeHelper.GetDpi(this);
-                return new Size(
-                    (info.Work.Right - info.Work.Left) / dpi.DpiScaleX,
-                    (info.Work.Bottom - info.Work.Top) / dpi.DpiScaleY);
-            }
-        }
-        catch
-        {
-            // 落到下面的兜底
-        }
-        var area = SystemParameters.WorkArea;
-        return new Size(area.Width, area.Height);
     }
 
     // ------------------------------------------------------------ 拖动缩放: 让重活先让路

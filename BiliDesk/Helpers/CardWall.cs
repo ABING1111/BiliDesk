@@ -104,7 +104,7 @@ public static class CardWall
     /// 立刻按**当前**宽度重算一次目标尺寸。
     ///
     /// ★★ 为什么需要它(2026-10-01, 用户报的"卡片抽动很明显"的根): 正常重算挂在墙的 SizeChanged 上,
-    ///   而 WPF 的 SizeChanged 是**布局走完之后**才发的 —— `FluentWindow.PlayStateTransition` 里那次
+    ///   而 WPF 的 SizeChanged 是**布局走完之后**才发的 —— `FluentWindow.OnStateChanged` 里那次
     ///   UpdateLayout 之后, 本类的目标值还是**按旧窗口宽度**算出来的旧值。于是"按目标收敛可视区"
     ///   一个孩子都没有可收敛的(探针实测 `收敛=0`), 随后渐进的 PumpStep 才把**整墙含视野上方**
     ///   按 16 张一批收敛(150 张要 10 批、600ms), 而卡片高度随宽度变 ⇒ 可见区被一批批顶走。

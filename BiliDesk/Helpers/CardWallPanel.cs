@@ -48,19 +48,6 @@ public class CardWallPanel : Panel
 
     private bool _pumpQueued;
 
-    /// <summary>
-    /// 状态过渡(最大化/还原动画)期间的"静止"开关, 由 <see cref="FluentWindow"/> 调
-    /// <see cref="ConvergeVisibleThenHold"/> / <see cref="ReleaseHold"/> 控制。
-    ///
-    /// ★★ 为什么必须配合动画: 最大化动画给窗口根元素挂 BitmapCache(整窗栅格化成一张
-    /// GPU 纹理), 而**任何子树内容变化都会让这张纹理失效重栅格化** —— 渐进切宽的每一批
-    /// (16 张卡)正好都在动画的 200ms 里发生, 于是动画每帧都在重栅格化整窗,
-    /// 用户看到的就是"放大过程抽动"(推荐页滑下去再最大化最明显; 设置页没有卡片墙所以正常)。
-    /// 解法 = 动画前把**可视区**一次性收敛(树在动画期间完全静止 ⇒ 纹理不失效 ⇒ 平滑),
-    /// 动画结束后放开, 剩下的都是视野外的卡片, 怎么切都看不见。
-    /// </summary>
-    private bool _held;
-
     /// <summary>上次 Arrange 时每个孩子的 Y 坐标(与 InternalChildren 对齐), 供"可见区优先"排序。</summary>
     private readonly List<double> _arrangeY = new();
 
@@ -89,11 +76,6 @@ public class CardWallPanel : Panel
     /// </summary>
     private void OnWallResized()
     {
-        // 状态过渡动画期间树必须静止(见 _held 的说明): 改任何一个孩子的尺寸都会让整窗
-        // BitmapCache 纹理失效、每帧重栅格化 —— 那正是"最大化时一抽一抽"的来源。
-        // (过渡前的收敛由 ConvergeVisibleThenHold 一次做完, 动画期间这里什么都不该动。)
-        if (_held) return;
-
         // 补偿要等这次重排落地之后再算 —— 此刻 _arrangeY 还是"翻过一行"的旧版式。
         // 派到 Loaded 优先级 = 排在本次布局之后、渲染之前(渲染在 Render, 优先级更高)。
         QueueReanchor();
@@ -106,8 +88,8 @@ public class CardWallPanel : Panel
         //   ★ 判据必须用 CardWall 的**目标卡宽 × 列数**, 不能用孩子实际的宽度: 泵跑到一半
         //     的墙是半新半旧的, 拿它算会误判(见 CardWall.GetColumns 的说明)。
         //
-        //   ★ 状态过渡(最大化/还原)那条路走不到这里: 它的收敛由 ConvergeVisibleThenHold
-        //     在动画第一帧之前一次性做完(且带 _held, 上面那行就挡掉了), 那时不需要靠这一手省时间。
+        //   ★ 最大化/还原那条路走不到这里: 它的收敛由 ConvergeForResize 在状态变化后一次性做完,
+        //     不需要靠这一手省时间。(2026-10-02 前这里还带一个 _held 开关挡在中间, 已随自绘动画删除。)
         if (WrapStillFits(ActualWidth)) return;
 
         // 折行坏了: 目标按**当前**宽度立刻重算(拖动期间也照算, 不走 120ms 合流),
@@ -143,7 +125,7 @@ public class CardWallPanel : Panel
 
     /// <summary>把指定 Y 区间内的孩子切到目标尺寸, 返回切了几个。目标由调用方保证已经算过。</summary>
     /// <param name="fromTop">
-    /// true = 区间从**墙顶**开始(状态过渡用, 见 ConvergeVisibleThenHold);
+    /// true = 区间从**墙顶**开始(最大化/还原收敛用, 见 ConvergeForResize);
     /// false = 只处理"视口上下各 <see cref="BandSlack"/>"这一带(墙宽变化用, 见 OnWallResized)。
     /// </param>
     private int ConvergeBand(bool fromTop = false)
@@ -207,31 +189,34 @@ public class CardWallPanel : Panel
     private double TargetWidth => CardWall.GetItemWidth(this);
     private double TargetCover => CardWall.GetCoverHeight(this);
 
-    // ------------------------------------------------------------ 状态过渡协作(见 _held 的说明)
+    // ------------------------------------------------------------ 状态变化(最大化/还原)时的收敛
 
     /// <summary>
-    /// 最大化/还原动画开始前调用: 把**从墙顶到视野下沿**的孩子一次性切到目标尺寸, 然后挂起渐进泵 ——
-    /// 动画期间可见区所在的子树完全静止, BitmapCache 的整窗纹理不失效 ⇒ 动画平滑。
+    /// 窗口最大化/还原后调用: 把**从墙顶到视野下沿**的孩子一次性切到目标尺寸。
     ///
-    /// ★★ 为什么收敛段要一直管到墙顶(2026-10-01 又验证了一遍): 卡片高度是跟着宽度算的
+    /// ★★ 为什么收敛段要一直管到墙顶(2026-10-01 验证): 卡片高度是跟着宽度算的
     ///   (封面高 = 卡宽 × 9/16), 视野**上方**每一行的高度都会随宽度变化 ⇒ 它们下面的一切
-    ///   (包括用户正看着的这一屏)整体纵向位移。这些卡片要是留到动画之后才由渐进泵分帧收敛,
+    ///   (包括用户正看着的这一屏)整体纵向位移。这些卡片要是留到之后才由渐进泵分帧收敛,
     ///   可见区就会被一批一批顶走 —— 滚动锚定能抵掉大部分, 但锚点在这段里会重挑, 抵不干净:
-    ///   实测"只收敛可见带"那一版, 验收探针从 PASS 变 FAIL(动画后仍有 194px 位移)。
+    ///   实测"只收敛可见带"那一版, 验收探针从 PASS 变 FAIL(仍有 194px 位移)。
     ///
     /// ★ 迭代最多 3 趟: 收敛本身会改变行高, 把原本在段外一点的卡片挪进来, 所以每趟收敛后
     ///   重新量一次边界。段内每趟只处理"还没到目标尺寸"的孩子, 没有新的就 break。
+    ///
+    /// ★ 2026-10-02: 这里**不再挂"保持"开关**(旧 `_held` / `ReleaseHold` 已随自绘动画删除)。
+    ///   原因: 那个开关存在的唯一理由是"动画期间不许子树变化, 否则整窗 BitmapCache 纹理失效
+    ///   重栅格化"。动画现在由 Windows 自己播, 我们不挂任何纹理, 于是也没有"必须让树静止"的约束;
+    ///   收敛完照常让渐进泵接着处理视野外的卡片即可。
     /// </summary>
-    public void ConvergeVisibleThenHold()
+    public void ConvergeForResize()
     {
         _pumpQueued = false;    // 撤掉已排队的渐进帧, 防止它和这次收敛交错
-        _held = true;
 
         // ★★ 先把目标尺寸按**当前**宽度算出来: Wall 的 SizeChanged 要等布局走完才发, 不强制这一下
         //   这里读到的还是旧窗口算出来的旧目标 ⇒ 下面一个孩子都不会被收敛(探针实测 收敛=0)。
         CardWall.RefreshNow(this);
 
-        if (double.IsNaN(TargetWidth) || TargetWidth <= 0) return;
+        if (double.IsNaN(TargetWidth) || TargetWidth <= 0) { QueuePump(); return; }
 
         // 收敛这一整段(含末尾那次布局)在同一个 dispatcher 回调里跑完, 中间态不会被渲染;
         // 所以只补一次滚动偏移就够。开头先调一次 = 保证锚点已经挑好(不变量成立时是空操作)。
@@ -241,8 +226,8 @@ public class CardWallPanel : Panel
         // 重新量一次边界。收敛范围内每趟只处理"还没到目标尺寸"的孩子, 没有新的就 break。
         //
         // ★ `fromTop: true` = 从**墙顶**一直收敛到视野下沿(而不是只收敛可见带)。
-        //   2026-10-01 试过缩到"只可见带"(想把动画前的同步耗时降下来), 结果验收探针
-        //   `bd-probe-cardtwitch` 从 PASS 变 FAIL: 动画**之后**仍有 194px 位移。
+        //   2026-10-01 试过缩到"只可见带"(想把收敛的同步耗时降下来), 结果验收探针
+        //   `bd-probe-cardtwitch` 从 PASS 变 FAIL: 之后仍有 194px 位移。
         //   原因是视野上方那些卡片随后由渐进泵分帧收敛, 每一批都在改上方行高 ⇒ 把可见区
         //   一批批顶走; 滚动锚定能抵掉大部分, 但锚点在这段里会重挑, 抵不干净。
         //   结论: 这条路的正确性依赖"一次性收敛整段", 别再为省那点同步耗时缩范围。
@@ -254,6 +239,8 @@ public class CardWallPanel : Panel
         }
 
         Reanchor();
+        // 收敛完接着把视野外剩下的卡片分帧处理完(以前由 ReleaseHold 在动画收尾时踢这一脚)
+        QueuePump();
     }
 
     /// <summary>
@@ -460,22 +447,6 @@ public class CardWallPanel : Panel
         RememberOffset(before);
     }
 
-    /// <summary>动画结束后调用: 放开渐进泵, 剩余(视野外)的孩子继续分帧收敛。</summary>
-    public void ReleaseHold()
-    {
-        if (!_held) return;
-        _held = false;
-
-        // ★ 过渡收尾时**丢掉锚点**(2026-10-01): 过渡期间版式整体换过一轮, 锚点记的那个
-        //   "这张卡该贴在屏幕哪个 Y"是**过渡中途**读到的(收敛跑了好几趟、每趟都在改行高),
-        //   拿它继续钉就等于按一个中间态去拽偏移 —— 验收探针实测会让动画**之后**还位移 48px。
-        //   丢掉之后, 下面这次渐进收敛只碰视野下方的卡片(过渡已把墙顶到视野下沿全部收敛),
-        //   它们不可能影响可见区, 所以不需要补偏移; 真要有人滚了滚动条, 下一次 Reanchor 会
-        //   按当时的真实位置重新挑一个。
-        ForgetAnchor();
-        QueuePump();
-    }
-
     // ------------------------------------------------------------ 测量 / 排列
 
     protected override Size MeasureOverride(Size availableSize)
@@ -582,7 +553,6 @@ public class CardWallPanel : Panel
     private void PumpStep()
     {
         _pumpQueued = false;
-        if (_held) return;   // 状态过渡动画期间树必须静止(见 _held 的说明), 放开后由 ReleaseHold 重新排队
 
         var targetW = TargetWidth;
         var targetCover = TargetCover;

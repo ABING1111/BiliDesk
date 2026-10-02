@@ -385,7 +385,7 @@ public static class Cover
     }
 
     /// <summary>
-    /// 把解好的位图贴到卡片上(**必须在 UI 线程**)。闸门关着时只排队不上屏, 见 <see cref="_suspendDepth"/>。
+    /// 把解好的位图贴到卡片上(**必须在 UI 线程**)。
     /// </summary>
     private static void ApplyDecoded(Border border, string url, BitmapImage img, int requestedWidth)
     {
@@ -442,98 +442,22 @@ public static class Cover
             }
         }
 
-        if (_suspendDepth > 0) DeferredApplies.Add(Apply);
-        else Apply();
+        Apply();
     }
 
     /// <summary>纯函数(探针可断言): 这一次上屏要不要播淡入 —— 只有"这一格还没有图"时才播。</summary>
     public static bool ShouldPlayFadeIn(int previouslyDecodedWidth) => previouslyDecodedWidth <= 0;
 
-    // ------------------------------------------------------------ 状态过渡期间: 只记账不上屏
-
-    /// <summary>
-    /// 关闸深度(=0 表示开闸)。用深度而不是 bool: 连点最大化时新旧动画会重叠, 各关一次各开一次。
-    /// </summary>
-    private static int _suspendDepth;
-
-    /// <summary>关闸期间欠下的"贴图"动作, 开闸后按顺序补跑。</summary>
-    private static readonly List<Action> DeferredApplies = new();
-
-    /// <summary>
-    /// 关闸最长时间。过渡动画只有 200ms, 这里给 2s; 万一动画的 Completed 没回来
-    /// (时钟被丢弃/窗口异常关闭), 也必须自动开闸 —— 否则封面会永远不再上屏, 卡片全空。
-    /// </summary>
-    private static readonly TimeSpan SuspendGuardInterval = TimeSpan.FromSeconds(2);
-
-    private static System.Windows.Threading.DispatcherTimer? _suspendGuard;
-
-    /// <summary>
-    /// 关闸: 最大化/还原的过渡动画开始前调用。
-    ///
-    /// ★★ 为什么必须有它(2026-10-01, "界面抽动"的根因): 过渡动画期间窗口根元素挂着
-    ///   `BitmapCache`(整窗栅格化成**一张** GPU 纹理), 而**任何子树变化都会让这张纹理失效
-    ///   并重栅格化整个窗口**。卡片墙自己的宽度收敛已经被 `CardWallPanel._held` 冻住了, 但
-    ///   封面这条链是**异步**的: 卡片一变宽就触发"按新宽度重新解码"(见 NeedsRedecode),
-    ///   解码完成后再回到 UI 线程贴图 —— 这一下正好落在动画中间 ⇒ 动画每帧都在重栅格化整窗,
-    ///   观感就是"一抽一抽的"。之前那层模糊遮罩只是**盖住**症状(已按用户要求回退), 这里才治根:
-    ///   闸门关着时把"贴图"记在 <see cref="DeferredApplies"/> 里, 动画收尾(CacheMode 已摘掉)
-    ///   再一次性补上 —— 那时换图不再经过纹理, 谁也看不见。
-    /// </summary>
-    public static void SuspendVisualUpdates()
-    {
-        if (!OnUiThread()) { Application.Current?.Dispatcher.Invoke(SuspendVisualUpdates); return; }
-
-        _suspendDepth++;
-        if (_suspendGuard == null)
-        {
-            _suspendGuard = new System.Windows.Threading.DispatcherTimer(
-                System.Windows.Threading.DispatcherPriority.Background)
-            {
-                Interval = SuspendGuardInterval
-            };
-            _suspendGuard.Tick += (_, _) =>
-            {
-                _suspendGuard!.Stop();
-                if (_suspendDepth == 0) return;
-                // 自救: 动画收尾没回来也必须开闸(宁可画面闪一下, 也不能让封面永远不上屏)
-                _suspendDepth = 0;
-                FlushDeferred();
-            };
-        }
-        _suspendGuard.Stop();
-        _suspendGuard.Start();
-    }
-
-    /// <summary>开闸: 过渡动画收尾后调用; 把欠下的贴图一次性补跑。</summary>
-    public static void ResumeVisualUpdates()
-    {
-        if (!OnUiThread()) { Application.Current?.Dispatcher.Invoke(ResumeVisualUpdates); return; }
-
-        if (_suspendDepth > 0) _suspendDepth--;
-        if (_suspendDepth > 0) return;
-        _suspendGuard?.Stop();
-        FlushDeferred();
-    }
-
-    private static void FlushDeferred()
-    {
-        if (DeferredApplies.Count == 0) return;
-        // 先取快照再清空: 补跑过程中可能又排进新的(补跑会触发"再解码一轮"), 那些走正常路径
-        var pending = DeferredApplies.ToArray();
-        DeferredApplies.Clear();
-        foreach (var apply in pending)
-        {
-            try { apply(); }
-            catch (Exception ex) { App.ReportError(ex); }
-        }
-    }
-
-    private static bool OnUiThread()
-    {
-        var app = Application.Current;
-        if (app == null) return true;   // 探针/无 Application: 当作就在当前线程
-        return app.Dispatcher.CheckAccess();
-    }
+    // ★★★ 这里原来有一套"状态过渡期间封面只记账不上屏"的闸门
+    //   (SuspendVisualUpdates / ResumeVisualUpdates / _suspendDepth / DeferredApplies /
+    //    _suspendGuard, 2s 自救超时), 2026-10-02 **整体删除**。
+    //
+    // 删除原因: 它存在的唯一理由是保护最大化/还原那层**自绘**动画 —— 动画期间窗口根元素挂着
+    //   BitmapCache(把整棵树栅格化成一张 GPU 纹理), 而异步解码回来贴图那一下会让纹理失效、
+    //   整个窗口重栅格化 ⇒ 用户看到的"一抽一抽"。现在动画交给 Windows/DWM 播, 我们**不挂任何
+    //   纹理**, 也就没有"贴图必须让路"的约束, 封面解码完直接上屏即可。
+    //   ★ 别因为它"看起来只是个优化"就删了又留一半: 那套闸门一旦只留 Suspend 不留 Resume,
+    //     封面会永远不上屏(卡片全空)。既然自绘动画已不存在, 就一并不留。
 
     // ------------------------------------------------------------ Image 版本
 
