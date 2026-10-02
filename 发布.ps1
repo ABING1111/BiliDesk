@@ -6,11 +6,11 @@
 #      .NET 8 桌面运行时由安装器检测、缺失时引导下载(见 installer.iss 的 [Code])。
 #
 # 用法(在仓库根目录):
-#   powershell -ExecutionPolicy Bypass -File 发布.ps1 [-Version 1.2.0]
+#   powershell -ExecutionPolicy Bypass -File 发布.ps1 [-Version 1.2.1]
 #
 # 注意: 这里的默认版本号要跟 App.AppVersion / csproj 的 <Version> / installer.iss 的
 # MyAppVersion 一起改 —— 它只决定 zip 的文件名, 不参与程序内部显示。
-param([string]$Version = "1.2.0")
+param([string]$Version = "1.2.1")
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
