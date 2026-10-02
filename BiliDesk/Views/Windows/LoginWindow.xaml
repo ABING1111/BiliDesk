@@ -16,7 +16,9 @@
         <StackPanel Grid.Row="0" Margin="30,26,30,18">
             <Border Width="46" Height="46" CornerRadius="13" HorizontalAlignment="Left">
                 <Border.Background>
-                    <!-- 品牌粉渐变, 与全局强调色一致(原来是蓝色, 会显得像另一个产品) -->
+                    <!-- 品牌粉渐变。★ 这里的粉**不跟主题色走**: 这是 B 站品牌标识(B 字 logo),
+                         不是"强调色"。产品标识换了色就不再是那个品牌了 —— 和 UP 标/等级徽章同理。
+                         (原来是蓝色, 会显得像另一个产品, 所以固定成品牌粉。) -->
                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                         <GradientStop Color="#FB7299" Offset="0" />
                         <GradientStop Color="#FC9DB6" Offset="1" />

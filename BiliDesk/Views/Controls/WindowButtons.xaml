@@ -51,7 +51,12 @@
                 </Setter>
             </Style>
 
-            <!-- 关闭键专用模板: 平时透明底(与 min/max 一致), 悬停才上品牌粉, 按下加深 -->
+            <!-- 关闭键专用模板: 平时透明底(与 min/max 一致), 悬停才上主题色, 按下加深。
+                 ★ 底色走 DynamicResource 而不是写死品牌粉: 用户能把主题色改成任意颜色,
+                   写死的话关闭键会一直是粉的, 和整个界面脱节。
+                   用 DynamicResource 而不是 StaticResource 是必须的 —— 换主题色时
+                   ThemeService 只替换 Application.Resources 里的笔刷对象, 不重建模板;
+                   StaticResource 在模板解析那一刻就把旧笔刷焊死了。 -->
             <Style x:Key="CapBtnClose" TargetType="Button" BasedOn="{StaticResource CapBtn}">
                 <Setter Property="Template">
                     <Setter.Value>
@@ -61,10 +66,12 @@
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="Bd" Property="Background" Value="#FB7299" />
+                                    <Setter TargetName="Bd" Property="Background"
+                                            Value="{DynamicResource AccentBrush}" />
                                 </Trigger>
                                 <Trigger Property="IsPressed" Value="True">
-                                    <Setter TargetName="Bd" Property="Background" Value="#E4638A" />
+                                    <Setter TargetName="Bd" Property="Background"
+                                            Value="{DynamicResource AccentPressedBrush}" />
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -82,14 +89,16 @@
             </Style>
 
             <Style x:Key="CapGlyphClose" TargetType="TextBlock" BasedOn="{StaticResource CapGlyph}">
-                <!-- 平时跟 min/max 一样用主题字色; 鼠标悬停到关闭键上时变白(配粉底)。
+                <!-- 平时跟 min/max 一样用主题字色; 鼠标悬停到关闭键上时换成"主题色底上的字色"。
+                     用 TextOnAccentBrush 而不是写死 White: 主题色是可以被用户调成亮黄/浅绿的,
+                     那种底上白叉会直接消失(见 ThemeService.OnAccentFor, 它按亮度挑黑或白)。
                      触发器只能写在这里: 字形是调用方塞进 Button 的内容, 模板触发器摸不到它。 -->
                 <Setter Property="Foreground"
                         Value="{Binding IconBrush, RelativeSource={RelativeSource AncestorType=UserControl}}" />
                 <Style.Triggers>
                     <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}}"
                                  Value="True">
-                        <Setter Property="Foreground" Value="White" />
+                        <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
                     </DataTrigger>
                 </Style.Triggers>
             </Style>

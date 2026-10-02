@@ -1,4 +1,4 @@
-﻿<views:FluentWindow x:Class="BiliDesk.Views.PlayerWindow"
+<views:FluentWindow x:Class="BiliDesk.Views.PlayerWindow"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:BiliDesk.Views"
@@ -157,7 +157,9 @@
         </Style>
 
             <!-- 评论里的等级徽章(LV6) 与 UP 标。
-                 底色跟品牌走、不随主题变(与窗口关闭键的粉底白字同理), 所以色值写死。
+                 ★ 这两个是**身份标**, 不是主题强调色, 所以色值写死、不跟主题色变 ——
+                   和导航选中项/按钮那种"交互反馈色"是两回事: 用户把主题色调成绿色,
+                   UP 标跟着变绿只会让人认不出那是"UP主"的意思。等级蓝同理(B 站官方就是蓝)。
                  注意边框里的 TextBlock **必须显式写 Foreground** —— 全局隐式 TextBlock 样式
                  会压过继承下去的前景色(踩过的坑, 见 MEMORY)。 -->
             <Style x:Key="LevelBadgeStyle" TargetType="Border">
@@ -420,7 +422,7 @@
                                     <controls:LoadingRing Width="40" Height="40" HorizontalAlignment="Center" />
                                     <TextBlock x:Name="LoadingKaomoji" Text="(´･ω･`)" FontSize="20"
                                                Margin="0,18,0,0" HorizontalAlignment="Center"
-                                               Foreground="#FB7299" />
+                                               Foreground="{DynamicResource AccentTextBrush}" />
                                     <TextBlock x:Name="LoadingText" Text="正在加载视频…" Margin="0,8,0,0"
                                                Foreground="#999" FontSize="13" HorizontalAlignment="Center" />
                                 </StackPanel>
