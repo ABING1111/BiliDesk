@@ -47,7 +47,7 @@ public static class UpdateChecker
         $"https://github.com/{RepoOwner}/{RepoName}/releases/latest";
 
     // ★ 这里曾经有一个"微云高速下载"镜像按钮(WeiYunShareUrl / WeiYunSharePwd 两个常量)。
-    //   2026-10-02 用户要求**下载全部走 GitHub**, 两个常量与那个按钮一起删掉了。
+    //   2026-10-01 用户要求**下载全部走 GitHub**, 两个常量与那个按钮一起删掉了。
     //   别再按"国内下载慢"的直觉加回来: 镜像链接要人工维护, 忘了换新版就是给用户一个旧包;
     //   国内访问 Releases 页/附件本来也只需要浏览器能开 GitHub。
 
