@@ -687,7 +687,7 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 把合集列表的内容清干净(入口按钮、标题、副标题、提示、加载圈、选中项)。
+    /// 把合集列表的内容清干净(入口按钮、标题、副标题、提示、加载圈、选中项、**条目本身**)。
     ///
     /// 单独抽出来是因为它有多个调用点 —— 换片时、详情加载完发现没有合集时。
     /// 两处各写一遍必然漏(尤其"底部加载圈没停"这种, 表现是加载完了圈还在转)。
@@ -704,7 +704,19 @@ public partial class PlayerWindow : FluentWindow
         if (SeasonMetaText != null) SeasonMetaText.Text = "";
         if (SeasonHint != null) SeasonHint.Text = "";
         if (SeasonLoadingRing != null) SeasonLoadingRing.Visibility = Visibility.Collapsed;
-        if (SeasonList != null) SeasonList.SelectedIndex = -1;
+        // ★★ 必须把 ItemsSource 也清掉, 不能只清 SelectedIndex(2026-10-02 探针实测出来的):
+        //   换片时不关面板(见上面 collapsePanel 的说明), 于是从"点了下一集"到
+        //   LoadVideoAsync 真正灌回新数据之间有几秒的窗口期 —— 那段时间面板是**开着**的。
+        //   只清选中项的话, 列表里挂着的是**上一个合集**的条目, 而底部还写着"正在获取合集…",
+        //   自相矛盾。更糟的是此时点一条旧条目会走到 OnSeasonEpisodeSelected:
+        //   它的判据是 ep.Bvid != _currentBvid, 而 _currentBvid 已经是新视频了 ⇒ 恒真
+        //   ⇒ 会拿旧合集的条目去换片, 播出一个跟用户点的东西无关的视频。
+        //   (ApplySeason 保证重新灌数据, 所以这里清成 null 是安全的。)
+        if (SeasonList != null)
+        {
+            SeasonList.ItemsSource = null;
+            SeasonList.SelectedIndex = -1;
+        }
     }
 
     // ------------------------------------------------------------ 换片重置的自检
