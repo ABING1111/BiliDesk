@@ -871,6 +871,18 @@ public class Session
     public string? DedeUserID { get; set; }
     public string? DedeUserIDCkMd5 { get; set; }
     public string? Buvid3 { get; set; }
+
+    /// <summary>
+    /// 设备指纹的第二半(buvid4)。
+    ///
+    /// ★ 必须持久化, 不能只放内存。推荐系统靠 (buvid3 + buvid4) 这一对认"这是同一台设备",
+    ///   而 `x/frontend/finger/spi` **每次调用都发一对全新的** —— 实测: 即使把已有的
+    ///   buvid3/buvid4 带上去, 它照样回吐两个新的, 不做 round-trip。所以只要不在本地存下来,
+    ///   每次启动都会变成一台"从未见过的设备", 推荐模型每次都要从零冷启动,
+    ///   表现就是"推的东西东一榔头西一棒槌"。
+    /// 老配置没有这个字段 → 反序列化保持 null → 下次启动补上并落盘。
+    /// </summary>
+    public string? Buvid4 { get; set; }
 }
 
 /// <summary>应用设置</summary>

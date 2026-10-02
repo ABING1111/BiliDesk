@@ -198,28 +198,60 @@ public class ApiClient
 
     // ---------------------------------------------------------------- 设备指纹
 
-    /// <summary>获取设备指纹 Cookie(buvid3/buvid4, 降低风控 -352 触发概率的关键)</summary>
+    /// <summary>
+    /// 获取设备指纹 Cookie(buvid3/buvid4, 降低风控 -352 触发概率的关键)。
+    ///
+    /// ★★ 这里有一个**直接影响推荐准确度**的要点: 优先复用已有那一对, 别每次都要新的。
+    ///
+    /// 为什么: 推荐系统靠 (buvid3 + buvid4) 认"这是同一台设备"。而
+    /// `x/frontend/finger/spi` **每次调用都发一对全新的** —— 实测把已有的 buvid3/buvid4
+    /// 带上再去调它, 它照样回吐两个新的, 完全不做 round-trip。所以每次启动都换一对,
+    /// 等于每次开机都变成一台"从未见过的设备": 推荐模型每次从零冷启动,
+    /// 用户看到的就是"推的东西东一榔头西一棒槌"。
+    ///
+    /// 现在的顺序: 内存 → 本地已存(session.json) → 两边都没有才真去请求 spi,
+    /// 并把拿到的那一对**落盘**(见 SessionManager.SetBuvid4)。
+    /// 于是正常使用下, 一台设备的身份是稳定的。
+    /// </summary>
     public async Task EnsureBuvidAsync()
     {
-        if ((!string.IsNullOrEmpty(_buvid3) || !string.IsNullOrEmpty(SessionManager.Instance.Current.Buvid3))
-            && !string.IsNullOrEmpty(_buvid4))
-        {
-            _buvid3 ??= SessionManager.Instance.Current.Buvid3;
-            return;
-        }
+        // 内存里这一对齐全, 直接用
+        if (!string.IsNullOrEmpty(_buvid3) && !string.IsNullOrEmpty(_buvid4)) return;
+
+        // 不全就先把本地存的补进来(buvid3 / buvid4 都可能只缺一个)
+        var sess = SessionManager.Instance.Current;
+        _buvid3 ??= sess.Buvid3;
+        _buvid4 ??= sess.Buvid4;
+
+        // 补齐后完整了 —— 不需要再打网络请求
+        if (!string.IsNullOrEmpty(_buvid3) && !string.IsNullOrEmpty(_buvid4)) return;
+
         try
         {
             var (code, _, data) = await GetJsonAsync(
                 "https://api.bilibili.com/x/frontend/finger/spi", null);
             if (code == 0 && data != null)
             {
-                if (data.Value.TryGetProperty("b_3", out var b3) && b3.ValueKind == JsonValueKind.String)
+                // ★ 只补**缺的那一半**, 已有的绝不覆盖。
+                //   spi 一次给两个, 但已有的那个往往比它给的这个更"旧"、更被服务端认过 ——
+                //   假如本地只缺 buvid4(老版本升上来的用户就是这样), 无条件把 b_3 也收下,
+                //   就会出现"内存用新 buvid3、磁盘留旧 buvid3"的分叉:
+                //   下次启动读回来的是旧 buvid3 + 新 buvid4, 等于又换了一次设备身份。
+                if (string.IsNullOrEmpty(_buvid3) &&
+                    data.Value.TryGetProperty("b_3", out var b3) &&
+                    b3.ValueKind == JsonValueKind.String)
                 {
                     _buvid3 = b3.GetString();
                     if (!string.IsNullOrEmpty(_buvid3)) SessionManager.Instance.SetBuvid3(_buvid3);
                 }
-                if (data.Value.TryGetProperty("b_4", out var b4) && b4.ValueKind == JsonValueKind.String)
+                if (string.IsNullOrEmpty(_buvid4) &&
+                    data.Value.TryGetProperty("b_4", out var b4) &&
+                    b4.ValueKind == JsonValueKind.String)
+                {
                     _buvid4 = b4.GetString();
+                    // ★ 必须落盘: 不存的话下次启动又变成一台新设备(见上面那段说明)
+                    if (!string.IsNullOrEmpty(_buvid4)) SessionManager.Instance.SetBuvid4(_buvid4);
+                }
             }
         }
         catch
@@ -275,22 +307,36 @@ public class ApiClient
     ///   · App  -> app.bilibili.com/x/v2/feed/index     (B 站官方 App 首页推荐流)
     ///   · Web  -> wbi/index/top/feed/rcmd              (浏览器网页版「为你推荐」)
     ///
-    /// 两条路都保留"失败时自动重试一次(刷新设备指纹/WBI 密钥), 仍未成功则降级返回热门",
+    /// 两条路都保留"失败时自动重试一次(刷新 WBI 密钥), 仍未成功则降级返回热门",
     /// 保证首页任何时候都不会是空列表。
+    ///
+    /// <paramref name="reset"/> = true 表示"下拉刷新"语义: App 端会把游标清掉, 从推荐池
+    /// 最前面重新开始(见 _appFeedIdx)。点「加载更多」必须传 false, 否则每次都从头拉同一段。
     /// </summary>
-    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRecommendAsync()
+    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRecommendAsync(bool reset = false)
     {
         try
         {
+            // 刷新: 清游标 + pull=true(从推荐池最前面取最新的一批); 加载更多: 带游标往下翻。
+            // 两者必须**配套**设置, 只有 pull 与 idx 的组合正确时窗口才会前进(见 _appFeedPull)。
+            _appFeedPull = reset;
+            if (reset) _appFeedIdx = 0;
             await EnsureBuvidAsync();
             var useApp = Svc.Settings.RecommendSource == RecommendSource.App;
             var (ok, err, items) = await GetRecommendCoreAsync(useApp);
             if (!ok || items == null || items.Count == 0)
             {
-                // 重试一次: 刷新设备指纹和 WBI 密钥(启动早期首次请求可能拿到空 cookie 被风控)
-                _buvid3 = null;
-                _buvid4 = null;
+                // 重试一次。
+                // ★ 这里**故意不**清 _buvid3/_buvid4: 设备指纹是推荐系统认人的凭据,
+                //   前面那版清掉它们等于"失败一次就换一台新设备重来", 会让推荐模型重新冷启动
+                //   —— 与"让推荐更准"正相反。真正需要刷新的是 WBI 密钥(会过期)。
                 _wbiKeys = null;
+                if (useApp)
+                {
+                    // App 端失败多半是游标过期(隔太久服务端已经不认那一页) -> 退回刷新语义重来一次
+                    _appFeedPull = true;
+                    _appFeedIdx = 0;
+                }
                 await EnsureBuvidAsync();
                 (ok, err, items) = await GetRecommendCoreAsync(useApp);
             }
@@ -366,11 +412,46 @@ public class ApiClient
     }
 
     /// <summary>
+    /// App 端推荐流的翻页游标(上一批末条的 `idx`)。
+    ///
+    /// ★★ 这是"App 端算法不够准"的核心修复点。原实现认为这个接口"每次返回全新一批、没有页码",
+    /// 于是「加载更多」就是**再请求一次同一个接口**。实测证明那是错的:
+    ///
+    ///   不带 idx 连拉 5 次 -> 各批首条 idx = 1790903549, 1790903549, 1790903549, 1790903550, 1790903550
+    ///   带 idx 接力 5 次   -> 各批首条 idx = 1790903550, 1790903540, 1790903530, 1790903520, 1790903510
+    ///
+    /// 也就是说: **不带游标时服务端的窗口几乎不往前挪** —— 它每次都在推荐池里差不多同一个位置
+    /// 附近取 10 条给我们, 我们看到的自然是"同一小片区域里反复横跳"的内容, 越翻越像随机。
+    /// 带上 idx 才是真的顺着推荐排序往下走(每批严格前进 10, idx 是严格递减的)。
+    ///
+    /// idx 是"位置", 不是"内容 id": 把**最新一批**的末条 idx 带回去就能接着下一段;
+    /// 拿一个过期的 idx 会退回去重取那一段。所以刷新(reset)时要清零, 从池子最前面重新开始。
+    /// </summary>
+    private long _appFeedIdx;
+
+    /// <summary>
+    /// 本次请求是不是"下拉刷新"语义(App 里 pull=true)。
+    ///
+    /// ★ `pull` 与 `idx` 是**成对**使用的, 实测四种组合只有一种能让窗口前进:
+    ///
+    ///     pull=false, 无 idx   首 idx 1790903849 x3     窗口不动   ← 原实现
+    ///     pull=false, 带 idx   1790903839 → 3829 → 3819  推进 20   ← 加载更多用这个
+    ///     pull=true,  无 idx   1790903862 x3             窗口不动, 但**起点更高**
+    ///     pull=true,  带 idx   1790903850 → 3851 → 3852  窗口不动
+    ///
+    /// 所以: 刷新用 pull=true 且不带 idx(从推荐池**最前面**取, 拿到的更新),
+    /// 加载更多用 pull=false 且带 idx(顺着往下翻)。两个都不带 idx 时窗口都不动,
+    /// 区别只在起点高低 —— 这正是"下拉刷新该给我最新的"那件事。
+    /// </summary>
+    private bool _appFeedPull;
+
+    /// <summary>
     /// B 站官方 App 首页推荐流(app.bilibili.com/x/v2/feed/index)。
     ///
-    /// ★ 与网页端那套完全不是一个模型, 三个必须知道的差异:
-    ///   1. **每次请求返回"全新的一批"**(实测连续两次调用 10 条零重合), 也就是 App 里
-    ///      "下拉刷新换一批"的语义 —— 所以没有页码参数, 想换内容就再请求一次。
+    /// ★ 与网页端那套完全不是一个模型, 必须知道的差异:
+    ///   1. **靠 `idx` 游标翻页**(见 _appFeedIdx): 把上一批最小的 idx 带回去才拿得到"下一段";
+    ///      不带游标时服务端窗口几乎不动(实测每批只挪 0.4), 这是原先"越翻越不准"的根因。
+    ///      `pull` 要和 idx 配套(见 _appFeedPull)。
     ///   2. **只给 avid 不给 bvid**(items[].param / player_args.aid), bvid 由
     ///      UrlParser.AvToBv 本地换算, 省掉"每条一次 view 接口"的开销。
     ///   3. 播放量/弹幕数给的是**已格式化好的文本**("149.1万"), 只能反解回近似数值 ——
@@ -403,11 +484,15 @@ public class ApiClient
                 ["https_url_req"] = "0",
                 ["inline_danmu"] = "2",
                 ["inline_sound"] = "1",
-                ["pull"] = "false",
                 ["interest_id"] = "0",
-                // 0 = 已登录, 1 = 未登录(接口自己的约定, 传错会拿到未登录那份通用流)
+                // 刷新 = pull=true(从池子最前面取); 加载更多 = pull=false(配合 idx 往下翻)
+                ["pull"] = _appFeedPull ? "true" : "false",
+                // 0 = 已登录, 1 = 未登录(接口自己的约定)。
+                // 实测两种取值的返回内容确实不同(30 条里只重合 1 条), 说明它真的在切模型分支。
                 ["login_event"] = loggedIn ? "0" : "1"
             };
+            // 翻页游标: 只有"接着往下翻"时才带, 刷新时是 0(不带)
+            if (_appFeedIdx > 0) ps["idx"] = _appFeedIdx.ToString();
             AppSign(ps);
 
             var (code, msg, data) = await GetJsonAsync(
@@ -416,14 +501,28 @@ public class ApiClient
                 return (false, msg ?? $"请求失败 (code {code})", null);
 
             var items = new List<VideoItem>();
+            var minIdx = long.MaxValue;
             if (data.Value.TryGetProperty("items", out var arr) && arr.ValueKind == JsonValueKind.Array)
             {
                 foreach (var e in arr.EnumerateArray())
                 {
+                    // ★ 游标要取**最小**的那个 idx(= 这一批读到推荐池最深处的位置), 而不是最大的。
+                    //   idx 在一批里是从大到小排的; 服务端的语义是"给我 idx 小于这个值的内容",
+                    //   所以带回去的必须是**最深**的那个, 下一批才真的往下走 10 条。
+                    //   (实测: 记录最大 idx 时, 每批只前进 1, 等于反复重读同一小段;
+                    //    记录最小 idx 时, 每批稳定前进 10。)
+                    //   注意要遍历**全部**条目: 直播/横幅这些非 av 项同样占着流里的位置,
+                    //   跳过它们会让游标偏浅, 下一批又从那段中间重来。
+                    if (e.TryGetProperty("idx", out var ix) && ix.TryGetInt64(out var iv) &&
+                        iv > 0 && iv < minIdx)
+                        minIdx = iv;
+
                     var item = ParseAppFeedItem(e);
                     if (item != null) items.Add(item);
                 }
             }
+            // 记下"这一段读到哪了"。取不到 idx(接口改版)时保持不变, 退回旧的"每次新一批"语义。
+            if (minIdx != long.MaxValue) _appFeedIdx = minIdx;
             return (true, null, items);
         }
         catch (Exception ex)

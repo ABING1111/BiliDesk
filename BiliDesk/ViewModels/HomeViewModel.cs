@@ -336,7 +336,7 @@ public class HomeViewModel : ObservableObject
         Error = "";
         try
         {
-            var (ok, err, items) = await Svc.Api.GetRecommendAsync();
+            var (ok, err, items) = await Svc.Api.GetRecommendAsync(reset);
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 Loading = false;
@@ -401,16 +401,37 @@ public class HomeViewModel : ObservableObject
             }
             else if (IsRecommendTab)
             {
-                var (ok, err, items) = await Svc.Api.GetRecommendAsync();
-                await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                // ★ 这里**必须**传 reset: false —— 加载更多是"带着游标继续往下翻",
+                //   传 true 会清掉游标从头再来, 表现就是"点了加载更多却出现刚看过的内容"。
+                //
+                // ★★ 还要和 LoadRecommendAsync 抢**同一个**在途哨兵: `Svc.Api` 是单例, 而翻页游标
+                //   (`_appFeedIdx`) 与 pull 标志都挂在它身上 —— 两条路并发跑就会互相覆盖:
+                //   刷新那条把 `_appFeedIdx` 归零、加载更多那条又按旧游标把结果追加回去,
+                //   而且"谁后完成谁写游标", 下一次翻页可能跳回去重取一段。
+                //   只靠 `LoadingMore`/`Loading` 挡不住这种交叠(它们分属两条路, 互不知情)。
+                if (_recommendLoading)
                 {
                     LoadingMore = false;
-                    if (items != null && items.Count > 0)
+                    return;
+                }
+                _recommendLoading = true;
+                try
+                {
+                    var (ok, err, items) = await Svc.Api.GetRecommendAsync(false);
+                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
                     {
-                        AppendDistinct(RecommendItems, items);
-                        OnPropertyChanged(nameof(RecommendCount));
-                    }
-                });
+                        LoadingMore = false;
+                        if (items != null && items.Count > 0)
+                        {
+                            AppendDistinct(RecommendItems, items);
+                            OnPropertyChanged(nameof(RecommendCount));
+                        }
+                    });
+                }
+                finally
+                {
+                    _recommendLoading = false;
+                }
             }
         }
         catch (Exception ex)
