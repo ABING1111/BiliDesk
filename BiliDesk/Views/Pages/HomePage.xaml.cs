@@ -43,9 +43,9 @@ public partial class HomePage : UserControl
             RefreshThemeIcon();
             RefreshFilterButton();
             AttachFilterViews();
-            // 首次进入 / 从其它页面回来: 把非当前 tab 的列表容器摘掉(它们握着几百张
-            // 已解码的封面位图), 内存治理的另一半在 ShowTab / MemoryTrim。
-            EnsureAttachedTab();
+            // 构造函数里 RecommendTab.IsChecked=true 触发 ShowTab 时 DataContext 还没赋, EnsureFill
+            // 早退了 —— 这里(DataContext 已就绪)补上当前 tab 的分帧填充器, 让首次推荐流也走分帧。
+            if (CurrentTabFromVm() is { } cur) EnsureFill(cur);
             // 本页可能停在下滑位置被切走再切回来: 「回到顶部」的显隐要按当前偏移重算一次
             UpdateBackToTop(ScrollOf(CurrentTabFromVm() ?? HomeTabKind.Recommend));
             // DataContext 是外面赋进来的, 构造函数里还拿不到 VM, 所以订阅放在这里
@@ -241,15 +241,28 @@ public partial class HomePage : UserControl
         if (DataContext is HomeViewModel vm) _ = vm.SwitchToLiveAsync();
     }
 
-    // ------------------------------------------------------------ 非当前 tab 的容器释放(内存治理)
+    // ------------------------------------------------------------ 四个 tab 的列表(常驻, 不再摘挂)
 
     private enum HomeTabKind { Recommend, Popular, Ranking, Live }
 
-    /// <summary>当前实际挂载着列表的 tab(只有一个; 其余的 ItemsSource 都被摘掉)</summary>
-    private HomeTabKind? _attachedTab;
-
-    /// <summary>被摘下时各 tab 的滚动位置, 挂回去时恢复 —— 摘挂不能牺牲"切回来还在原地"的体验</summary>
-    private readonly Dictionary<HomeTabKind, double> _savedOffsets = new();
+    /// <summary>
+    /// 每个 tab 一个 DeferredFill, **建一次、永驻**。
+    ///
+    /// ★★★ 这是 2026-10-02 针对"切 tab 卡顿 / 从侧栏切回首页卡顿 / 切 tab 闪几下"的重构:
+    ///   旧实现是"同一时刻只有一个 tab 挂着列表, 切 tab = 摘掉旧的 + 分帧重建新的"。
+    ///   但四个列表都是**零虚拟化**的 ItemsControl + CardWallPanel —— 摘挂一次就等于
+    ///   把几十上百张 VideoCard 容器整个销毁再重建, 每张卡还要重新触发 Cover 绑定 / 入场动画。
+    ///   这套"省内存"的摘挂在三次用户反馈(卡顿/闪)面前是**负资产**: 它省下的内存(几十 MB 封面位图)
+    ///   远不如它造成的每次切换都要重建整墙的观感代价。
+    ///
+    ///   新做法: 四个列表**常驻**, 切 tab 只靠 XAML 里 `Visibility="{Binding IsXxxTab}"` 切换显隐,
+    ///   `ShowTab` 不再碰 ItemsSource。DeferredFill 只负责"数据第一次到位时分帧填充"(避免同步生成
+    ///   95 张卡), 填完就停在原地, 切走切回来都不会再重建。
+    ///   ★ 内存代价: 四个 tab 的卡片墙都活着, 封面位图常驻。CoverLoader 的 32MB LRU 缓存兜住一部分,
+    ///     但四墙全点一遍后的常驻内存会比"摘挂版"高。这是**刻意**取舍 —— 用户三次报卡顿, 流畅优先。
+    ///     若以后内存吃紧, 再考虑"离开首页页时才释放非当前 tab"这种页面级治理, 别在 tab 切换里做。
+    /// </summary>
+    private readonly Dictionary<HomeTabKind, DeferredFill> _fills = new();
 
     private ItemsControl? ListOf(HomeTabKind t) => t switch
     {
@@ -275,29 +288,44 @@ public partial class HomePage : UserControl
         _ => vm.LiveItems,
     };
 
+    /// <summary>每批补多少张卡片: 首屏一批(约 4~5 列 × 5 行), 之后每帧一批。</summary>
+    private const int FillChunkSize = 24;
+
     /// <summary>
-    /// 切换 tab 时只保留当前 tab 的列表容器, 摘掉其它三个的 ItemsSource。
-    ///
-    /// 为什么: 四个 tab 的 ScrollViewer 常驻同一棵可视树, 切走只是 Collapsed ——
-    /// 里面的几百张卡片(以及它们握着的已解码封面位图)被 UI 钉住永不释放,
-    /// 这是"点过热门/排行榜/直播后内存 +100MB 且切回推荐也不回落"的直接原因。
-    /// 摘掉 ItemsSource 后容器与位图引用一起变成垃圾; CoverLoader 的 32MB 缓存
-    /// 会兜住"切回来"时的大部分封面, 重挂载是毫秒级的。
+    /// 切换 tab: **只切显隐 + 摆下划线**, 不重建列表(见 _fills 的说明)。
+    /// 列表的显隐由 `Visibility="{Binding IsXxxTab}"` 在 VM 的 SetTab 里驱动, 这里不需要也不该碰。
     /// </summary>
     private void ShowTab(HomeTabKind tab)
     {
-        if (_attachedTab == tab) return;
-        if (_attachedTab is { } old) DetachTab(old);
-        // 先记新 tab 再挂载: AttachTab 里的滚动位置恢复要拿它做判断
-        _attachedTab = tab;
-        AttachTab(tab);
+        EnsureFill(tab);
         // 切 tab 后「回到顶部」要跟着新列表的滚动位置走(那个 tab 可能本来就停在顶部)
         UpdateBackToTop(ScrollOf(tab));
-        // 刚释放了一批卡片容器与封面位图: 安排一次延迟合并的回收,
-        // 让任务管理器里的数字真的落下来(否则引用已是垃圾但 GC 不跑就永远占着)。
-        MemoryTrim.RequestTrim();
         // 分段标签的下划线跟着选中项走
         MoveTabIndicator(tab);
+    }
+
+    /// <summary>
+    /// 保证某个 tab 的列表已经挂上分帧填充器。**每个 tab 只建一次**, 之后永远复用 ——
+    /// 这就是"切 tab 不重建"的关键(旧版在 ShowTab 里每次都 Attach/Detach)。
+    /// </summary>
+    private void EnsureFill(HomeTabKind tab)
+    {
+        if (_fills.ContainsKey(tab)) return;
+        if (DataContext is not HomeViewModel vm) return;
+        var list = ListOf(tab);
+        if (list == null) return;
+        var src = ItemsOf(tab, vm);
+        if (src == null) return;
+
+        // 分帧挂载: 首批在下一帧(Background 优先级, 点击的布局/渲染先走), 其余按帧补。
+        // 为什么必须这样: 四个列表都是 ItemsControl + WrapPanel(外层还有自己的 ScrollViewer),
+        // **没有任何虚拟化** —— ItemsSource 一挂, 几十上百张 VideoCard 容器在一次布局里同步生成,
+        // 表现就是"点热门/排行榜/直播入口卡一下"。把生成时机接管成分帧。
+        // 注意 XAML 里四份 ItemsSource 是初始绑定好的: 折叠状态的 ItemsControl 没被测量过,
+        // 容器其实还没生成, 所以这里把绑定替换成代理视图没有浪费。
+        var fill = new DeferredFill(list, src, FillChunkSize);
+        _fills[tab] = fill;
+        fill.Start();
     }
 
     // ------------------------------------------------------------ 分段标签的选中下划线
@@ -352,19 +380,7 @@ public partial class HomePage : UserControl
             });
     }
 
-    /// <summary>页面从可视树回来时调用: 保证"当前 tab"确实挂载着(其它的保持摘除)</summary>
-    private void EnsureAttachedTab()
-    {
-        var current = CurrentTabFromVm();
-        if (current == null) return;
-        if (_attachedTab == current) return;
-        // 页面切走再切回来: _attachedTab 记录的还是离开时的 tab, 但四个列表的 ItemsSource
-        // 都还在(XAML 初始绑定) —— 此时只需要把"非当前"的三个摘掉, 当前的别动(避免闪烁)。
-        foreach (HomeTabKind t in Enum.GetValues<HomeTabKind>())
-            if (t != current && ListOf(t)?.ItemsSource != null) DetachTab(t);
-        _attachedTab = current;
-    }
-
+    /// <summary>当前 VM 认为选中的 tab(显隐由它驱动, 这里只做"读"用途)</summary>
     private HomeTabKind? CurrentTabFromVm()
     {
         if (DataContext is not HomeViewModel vm) return null;
@@ -373,76 +389,6 @@ public partial class HomePage : UserControl
         if (vm.IsLiveTab) return HomeTabKind.Live;
         if (vm.IsRecommendTab) return HomeTabKind.Recommend;
         return null;
-    }
-
-    private void DetachTab(HomeTabKind tab)
-    {
-        // 先记滚动位置: 挂回去时恢复, 否则"切回来回到顶部"是可感知的体验倒退
-        if (ScrollOf(tab) is { } sv) _savedOffsets[tab] = sv.VerticalOffset;
-        var list = ListOf(tab);
-        if (list == null) return;
-        // 摘 ItemsSource 前先停掉它的分帧填充: 否则还在排队的补帧会往一个已摘除的列表里灌数据
-        if (_fill != null && ReferenceEquals(_fill.List, list)) { _fill.Dispose(); _fill = null; }
-
-        // ★★ 拆容器不放在点击这一拍(2026-10-02, 用户报"切 tab 卡顿")。
-        //
-        //   `ItemsSource = null` 会同步拆掉这面墙的全部卡片容器 —— 热门/排行榜一次几十上百张,
-        //   每一张都要从可视树断开 + 失效测量, 实测(离屏探针 `%TEMP%\bd-probe-tabjank`)
-        //   这一拍同步耗时能到 ~30ms, 压在点击那一下就是"卡一帧"。
-        //   把拆解放到 ContextIdle(比 DeferredFill 的 Background 还低): 让"新 tab 的补帧先跑、
-        //   新内容先上屏", 拆旧墙这件纯内存的活留到真正空闲时再做。
-        //
-        //   ★ 必须有 ReferenceEquals 守卫: 用户快速连点时, 这个 tab 可能在拆解放到空闲之前
-        //   又被 AttachTab 重新挂上了新的代理视图 —— 那时再 null 会把新视图也拆掉。
-        //   记下"当时挂的是哪一份", 轮到执行时发现已经不是它了就跳过。
-        var detached = list.ItemsSource;
-        _ = Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
-        {
-            if (ReferenceEquals(list.ItemsSource, detached)) list.ItemsSource = null;
-        }));
-    }
-
-    /// <summary>正在进行的分帧填充(同一时刻只有当前 tab 的列表挂着数据, 所以只有一个)</summary>
-    private DeferredFill? _fill;
-
-    /// <summary>每批补多少张卡片: 首屏一批(约 4~5 列 × 5 行), 之后每帧一批。</summary>
-    private const int FillChunkSize = 24;
-
-    private void AttachTab(HomeTabKind tab)
-    {
-        if (DataContext is not HomeViewModel vm) return;
-        var list = ListOf(tab);
-        if (list == null) return;
-        var src = ItemsOf(tab, vm);
-        if (src == null) return;
-
-        // 统一走"分帧挂载": 首批在下一帧(Background 优先级, 点击的布局/渲染先走), 其余按帧补。
-        // 为什么必须这样: 四个列表都是 ItemsControl + WrapPanel(外层还有自己的 ScrollViewer),
-        // **没有任何虚拟化** —— ItemsSource 一挂, 几百张 VideoCard 容器在一次布局里同步生成,
-        // 表现就是"点热门/排行榜/直播入口卡一下"。
-        // 注意 XAML 里四份 ItemsSource 是初始绑定好的: 折叠状态的 ItemsControl 没被测量过,
-        // 容器其实还没生成, 所以这里把绑定替换成代理视图没有浪费, 生成时机反而被我们接管了。
-        _fill?.Dispose();
-        _fill = new DeferredFill(list, src, FillChunkSize);
-        _fill.Progress += (_, _) => TryRestoreScroll(tab);
-        _fill.Start();
-        TryRestoreScroll(tab);   // 首批挂完若已覆盖保存的偏移, 当场恢复, 不用等补帧
-    }
-
-    /// <summary>
-    /// 补帧过程中逐步尝试恢复滚动位置。
-    /// 不能只在挂载时恢复一次: 首批之后 ScrollableHeight 还很小, 深一点的偏移会被判成"越界"跳过。
-    /// 也不能每帧都无条件恢复: 用户可能已经在滚了 —— 恢复过一次就从待恢复表里移除。
-    /// </summary>
-    private void TryRestoreScroll(HomeTabKind tab)
-    {
-        if (_attachedTab != tab) return;
-        if (!_savedOffsets.TryGetValue(tab, out var offset) || offset <= 0) return;
-        if (ScrollOf(tab) is { } sv && offset <= sv.ScrollableHeight)
-        {
-            sv.ScrollToVerticalOffset(offset);
-            _savedOffsets.Remove(tab);
-        }
     }
 
     /// <summary>
@@ -459,7 +405,6 @@ public partial class HomePage : UserControl
         await Vm.RefreshAsync();
         var tab = CurrentTabFromVm() ?? HomeTabKind.Recommend;
         ScrollOf(tab)?.ScrollToTop();
-        _savedOffsets.Remove(tab);
     }
 
     /// <summary>工具栏刷新键 + 错误条里的「重试」都走这一条</summary>
@@ -472,7 +417,8 @@ public partial class HomePage : UserControl
         if (vm.LoadingMore || vm.Loading) return;
         // 分帧填充进行中: 每补一批 ScrollableHeight 都在长, 这时判"内容不够一屏"是错的,
         // 会带着空列表去拉下一页; 等填充完(补帧引发的 ScrollChanged 会再来)再判。
-        if (_fill is { IsActive: true }) return;
+        // ★ 四个 tab 各有各的 fill, 这里要判"当前 tab 那个"还在不在补帧(不是某个全局的)。
+        if (CurrentTabFromVm() is { } tab && _fills.TryGetValue(tab, out var f) && f.IsActive) return;
 
         var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
         var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;

@@ -3,8 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
              xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
-             Background="{DynamicResource AppBackgroundBrush}"
-             Unloaded="OnUnloaded">
+             Background="{DynamicResource AppBackgroundBrush}">
     <!--
         分区页(2026-09-26): 点左上角 logo 的分区面板里的一项, 就切到这里。
         结构与首页一致 —— 大标题 + VideoCard 卡片墙; 数据是 ranking/v2 的分区榜(一份, 无翻页)。
