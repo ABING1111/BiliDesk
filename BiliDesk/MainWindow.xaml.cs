@@ -19,7 +19,22 @@ namespace BiliDesk;
 public partial class MainWindow : FluentWindow
 {
     private readonly MainViewModel _vm = App.MainVm;
+
+    /// <summary>
+    /// 已建好的页面实例(切换时保留状态)。
+    ///
+    /// ★ **用到才建**(2026-10-01): 以前构造窗口时把 11 个页面全 `new` 一遍, 实测这一笔要
+    ///   **三百多毫秒**(首页单独就占 276ms —— 它 XAML 最重), 全部压在启动那一下、而用户
+    ///   首屏只会看到首页。改成 `PageOf(key)` 惰性建: 启动只付首页那一笔, 其余摊到"用户真的
+    ///   点进那个页面"的时刻。
+    ///
+    /// 安全前提(都成立才敢这么改):
+    ///   · 每个页面都在自己的 `Loaded` 里拉数据, 构造时**不**发请求 ⇒ 晚建不会漏加载;
+    ///   · 每个页面本来就是"实例长期缓存、状态保留" ⇒ 晚建不改变语义, 只是把"什么时候建"推后;
+    ///   · `_pages` 只在本类里读写(见 PageOf), 没有别处遍历它。
+    /// </summary>
     private readonly Dictionary<PageKey, FrameworkElement> _pages = new();
+
     private DispatcherTimer? _toastTimer;
 
     public MainWindow()
@@ -27,28 +42,8 @@ public partial class MainWindow : FluentWindow
         InitializeComponent();
         DataContext = _vm;
 
-        // 启动页: 从设置里读(默认首页)。
-        // 赋值放在订阅 PageChanged **之前** —— 否则窗口还没显示就先跑一遍"切页动画",
-        // 而且那次切换会把下面 OnLoaded 的 `animate: false` 顶掉。
-        // 导航栏的 RadioButton 绑的就是 Current, 所以高亮也会正确停在启动项上。
-        _vm.Current = MainViewModel.ParseStartupPage(Svc.Settings.StartupPage);
-
-        // 页面实例(缓存在内存中, 切换时保留状态)
-        _pages[PageKey.Home] = new HomePage { DataContext = new HomeViewModel() }; // WPF 原生首页(推荐/热门/排行榜)
-        _pages[PageKey.Follow] = new FollowPage { DataContext = new FollowViewModel() };
-        _pages[PageKey.Search] = new SearchPage { DataContext = new SearchViewModel() };
-        _pages[PageKey.History] = new HistoryPage { DataContext = new HistoryViewModel() };
-        _pages[PageKey.Favorites] = new FavoritesPage { DataContext = new FavoritesViewModel() };
-        _pages[PageKey.Settings] = new SettingsPage { DataContext = new SettingsViewModel() };
-        // 我的页(2026-09-26 新增): 个人资料 + 快捷入口 + 收藏夹卡片
-        _pages[PageKey.Mine] = new MinePage { DataContext = new MineViewModel() };
-        // 这两个页面不在左侧导航栏上: 消息入口在首页右上角工具列, 离线缓存入口在「我的」页
-        _pages[PageKey.Cache] = new CachePage { DataContext = new CacheViewModel() };
-        _pages[PageKey.Messages] = new MessagesPage { DataContext = new MessagesViewModel() };
-        // 分区页(也不在导航栏上): 入口是左上角 logo 的分区面板
-        _pages[PageKey.Region] = new RegionPage { DataContext = new RegionViewModel() };
-        // 稍后再看(也不在导航栏上): 入口是「我的」页的快捷入口
-        _pages[PageKey.WatchLater] = new WatchLaterPage { DataContext = new WatchLaterViewModel() };
+        // DataContext 在构造时就赋好了, 导航栏的 RadioButton 绑的就是 Current,
+        // 所以高亮会停在启动项上(启动固定进首页)。
 
         _vm.PageChanged += OnPageChanged;
         Svc.Toast.Shown += ShowToast;
@@ -61,6 +56,39 @@ public partial class MainWindow : FluentWindow
         PartitionCol2.ItemsSource = PartitionCatalog.Columns[2];
 
         Loaded += OnLoaded;
+    }
+
+    /// <summary>
+    /// 取某个页面的实例, 没有就现建一个并缓存(见 _pages 的说明)。
+    ///
+    /// 页面的 DataContext 必须跟着实例一起建: 各页 VM 的构造里会订阅服务(搜索历史变更、
+    /// 推荐算法变更…), 那些是"页面活着就一直听着"的, 分开建会让订阅时机变得难以推理。
+    /// </summary>
+    private FrameworkElement PageOf(PageKey key)
+    {
+        if (_pages.TryGetValue(key, out var cached)) return cached;
+
+        FrameworkElement page = key switch
+        {
+            PageKey.Home => new HomePage { DataContext = new HomeViewModel() },
+            PageKey.Follow => new FollowPage { DataContext = new FollowViewModel() },
+            PageKey.Search => new SearchPage { DataContext = new SearchViewModel() },
+            PageKey.History => new HistoryPage { DataContext = new HistoryViewModel() },
+            PageKey.Favorites => new FavoritesPage { DataContext = new FavoritesViewModel() },
+            PageKey.Settings => new SettingsPage { DataContext = new SettingsViewModel() },
+            // 我的页(2026-09-26 新增): 个人资料 + 快捷入口 + 收藏夹卡片
+            PageKey.Mine => new MinePage { DataContext = new MineViewModel() },
+            // 这两个页面不在左侧导航栏上: 消息入口在首页右上角工具列, 离线缓存入口在「我的」页
+            PageKey.Cache => new CachePage { DataContext = new CacheViewModel() },
+            PageKey.Messages => new MessagesPage { DataContext = new MessagesViewModel() },
+            // 分区页(也不在导航栏上): 入口是左上角 logo 的分区面板
+            PageKey.Region => new RegionPage { DataContext = new RegionViewModel() },
+            // 稍后再看(也不在导航栏上): 入口是「我的」页的快捷入口
+            _ => new WatchLaterPage { DataContext = new WatchLaterViewModel() }
+        };
+
+        _pages[key] = page;
+        return page;
     }
 
     /// <summary>
@@ -204,7 +232,7 @@ public partial class MainWindow : FluentWindow
     {
         if (string.IsNullOrWhiteSpace(keyword)) return;
 
-        if (_pages[PageKey.Search] is SearchPage page && page.DataContext is SearchViewModel vm)
+        if (PageOf(PageKey.Search) is SearchPage page && page.DataContext is SearchViewModel vm)
         {
             // setter 会把"搜索历史条"收起来, SearchAsync 会把它记进搜索历史
             vm.Keyword = keyword.Trim();
@@ -225,7 +253,7 @@ public partial class MainWindow : FluentWindow
     /// </summary>
     public async Task NavigateToRegion(string name, int tid)
     {
-        if (_pages[PageKey.Region] is RegionPage page) await page.OpenAsync(name, tid);
+        if (PageOf(PageKey.Region) is RegionPage page) await page.OpenAsync(name, tid);
         _vm.Navigate(PageKey.Region);
 
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
@@ -235,7 +263,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>切换页面(带淡出 + 上浮入场动画)</summary>
     private void ShowPage(PageKey key, bool animate)
     {
-        var page = _pages[key];
+        var page = PageOf(key);
         if (ReferenceEquals(PageHost.Content, page)) return;
 
         if (!animate)
@@ -289,7 +317,7 @@ public partial class MainWindow : FluentWindow
     public void OpenFavFolder(FavFolder folder)
     {
         if (folder == null) return;
-        if (_pages[PageKey.Favorites] is FavoritesPage page && page.DataContext is FavoritesViewModel vm)
+        if (PageOf(PageKey.Favorites) is FavoritesPage page && page.DataContext is FavoritesViewModel vm)
         {
             if (vm.Folders.Count > 0)
             {
