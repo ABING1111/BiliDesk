@@ -49,6 +49,51 @@ public class SearchViewModel : ObservableObject
     public string Error { get => _error; private set => SetProperty(ref _error, value); }
     public int ResultCount => Results.Count;
 
+    // ---------------- 搜索类别(视频 / 直播间) ----------------
+
+    private ContentKind _kind = ContentKind.Video;
+
+    /// <summary>
+    /// 当前搜的是视频还是直播间。切换时**重新搜一次**(带着同一个关键词) ——
+    /// 两类内容来自完全不同的接口, 不重搜就只能看到上一类的残留结果。
+    /// </summary>
+    public ContentKind Kind
+    {
+        get => _kind;
+        set
+        {
+            if (!SetProperty(ref _kind, value)) return;
+            OnPropertyChanged(nameof(IsVideoKind));
+            OnPropertyChanged(nameof(IsLiveKind));
+            OnPropertyChanged(nameof(IdleHint));
+            // 换类别 = 换一套结果: 清空旧结果并重搜(没搜过关键词就只是清一下)
+            _generation++;          // 让在途请求的结果作废, 免得旧类别的响应灌进新列表
+            Results.Clear();
+            OnPropertyChanged(nameof(ResultCount));
+            Error = "";
+            Blocked = false;
+            HasMore = false;
+            if (_lastKeyword != null) _ = SearchAsync();
+            else OnPropertyChanged(nameof(IsIdle));
+        }
+    }
+
+    /// <summary>XAML 里两个 RadioButton 的绑定(IsChecked 只支持 bool, 所以给两个派生属性)</summary>
+    public bool IsVideoKind
+    {
+        get => _kind == ContentKind.Video;
+        set { if (value) Kind = ContentKind.Video; }
+    }
+
+    public bool IsLiveKind
+    {
+        get => _kind == ContentKind.Live;
+        set { if (value) Kind = ContentKind.Live; }
+    }
+
+    /// <summary>空状态提示语跟着类别走 —— "搜索你想看的视频"在直播类别下就说不通了</summary>
+    public string IdleHint => _kind == ContentKind.Live ? "输入关键词, 搜索你想看的直播间" : "输入关键词, 搜索你想看的视频";
+
     /// <summary>是否为初始空状态(未搜索过)</summary>
     public bool IsIdle => !Searching && _lastKeyword == null && Results.Count == 0;
 
@@ -63,6 +108,15 @@ public class SearchViewModel : ObservableObject
     /// </summary>
     public bool ShowHistoryStrip
         => _keyword.Trim().Length == 0 && Svc.SearchHistory.Items.Count > 0;
+
+    /// <summary>
+    /// 内容框里有没有搜索历史可显示(决定"搜索历史"那一段是否露出来)。
+    ///
+    /// ★ 2026-10-03 加: 内容框里现在还有"视频 / 直播间"类别标签, 所以**不能**再靠
+    ///   "历史为空就不展开卡片"来省这块地方 —— 历史为空时应当只藏掉历史那一段,
+    ///   类别标签照常露出来。见 SearchPage.OpenCard 的说明。
+    /// </summary>
+    public bool HasHistory => Svc.SearchHistory.Items.Count > 0;
 
     public ICommand UseHistoryCommand { get; }
     public ICommand RemoveHistoryCommand { get; }
@@ -80,7 +134,10 @@ public class SearchViewModel : ObservableObject
         RetryCommand = new AsyncRelayCommand(SearchAsync);
         OpenWebSearchCommand = new RelayCommand(() =>
             Svc.Navigate?.OpenWebViewWindow(
-                "https://search.bilibili.com/all?keyword=" + Uri.EscapeDataString(_lastKeyword ?? ""),
+                // 网页版的搜索类型也分视频/直播, 跟着当前类别走才对得上
+                (_kind == ContentKind.Live
+                    ? "https://search.bilibili.com/live?keyword="
+                    : "https://search.bilibili.com/all?keyword=") + Uri.EscapeDataString(_lastKeyword ?? ""),
                 "搜索 - 网页版"));
 
         // 点历史标签 = 填回关键词再搜一次
@@ -93,7 +150,11 @@ public class SearchViewModel : ObservableObject
         RemoveHistoryCommand = new RelayCommand(p => { if (p is string kw) Svc.SearchHistory.Remove(kw); });
         ClearHistoryCommand = new RelayCommand(() => Svc.SearchHistory.Clear());
         // 增删/清空历史都会改变"要不要显示这一条", 也可能让历史变空
-        Svc.SearchHistory.Changed += () => OnPropertyChanged(nameof(ShowHistoryStrip));
+        Svc.SearchHistory.Changed += () =>
+        {
+            OnPropertyChanged(nameof(ShowHistoryStrip));
+            OnPropertyChanged(nameof(HasHistory));
+        };
     }
 
     /// <summary>关键字变化时刷新搜索按钮可用性</summary>
@@ -123,7 +184,7 @@ public class SearchViewModel : ObservableObject
 
         try
         {
-            var data = await Svc.Api.SearchAsync(kw, _page);
+            var data = await Svc.Api.SearchAsync(kw, _page, _kind);
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 if (gen != _generation) return;   // 已经有更新的一次搜索接管了, 这份结果作废
@@ -163,7 +224,7 @@ public class SearchViewModel : ObservableObject
         LoadingMore = true;
         try
         {
-            var data = await Svc.Api.SearchAsync(_lastKeyword, next);
+            var data = await Svc.Api.SearchAsync(_lastKeyword, next, _kind);
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 if (gen != _generation) return;   // 翻页途中又搜了一次 → 这一页属于上一次搜索, 丢掉

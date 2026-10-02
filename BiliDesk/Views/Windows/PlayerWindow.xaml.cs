@@ -3752,17 +3752,17 @@ public partial class PlayerWindow : FluentWindow
     /// 没有合集的视频**隐藏**按钮(而不是禁用): 右侧信息栏只有 400px, 一个常年灰着的按钮
     /// 既占位又像是坏了; 官方在没有合集时也不给入口。
     ///
-    /// ★ 按钮里的文字颜色由 XAML 里那个 TextBlock 显式绑 Button.Foreground 拿到 ——
-    ///   全局隐式 TextBlock 样式带 Foreground setter, 优先级高于继承, 光设 Button.Foreground
-    ///   是改不动里面那个 TextBlock 的。
+    /// ★ 2026-10-03 起高亮改由 `Tag="on"/"off"` 驱动(样式里的 DataTrigger), 不再直接写
+    ///   `Foreground`: 与 简介/评论 统一风格后, 点亮要连带那根 2px 下划线一起 ——
+    ///   只设 Foreground 的话下划线不会亮, 看着像个半吊子的选中态。
+    ///   文字颜色仍由 XAML 里那个 TextBlock 绑 Button.Foreground 拿到(全局隐式 TextBlock
+    ///   样式带 Foreground setter, 优先级高于继承, 光设 Button.Foreground 是改不动它的)。
     /// </summary>
     private void UpdateSeasonButtonState()
     {
         if (BtnSeason == null) return;
         BtnSeason.Visibility = _hasSeason ? Visibility.Visible : Visibility.Collapsed;
-        BtnSeason.Foreground = _seasonOpen
-            ? (Brush)FindResource("AccentTextBrush")
-            : (Brush)FindResource("TextSecondaryBrush");
+        BtnSeason.Tag = _seasonOpen ? "on" : "off";
     }
 
     /// <summary>详情加载完之后灌合集数据</summary>

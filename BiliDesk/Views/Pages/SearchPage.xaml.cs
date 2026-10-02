@@ -221,12 +221,16 @@ public partial class SearchPage : UserControl
     /// 展开: 宽度 440→520、高度 48→卡片高, 露出下面的内容框。
     ///
     /// 卡片是居中的, 所以**只需要动尺寸** —— 布局每帧都会把它重新摆在正中, 宽度长开是
-    /// 左右对称的。没有历史可看时直接不展开: 长出一个空框比老实收着更难看。
+    /// 左右对称的。没有位移补偿。
+    ///
+    /// ★ 2026-10-03: **去掉了"没有搜索历史就不展开"这道闸**。内容框里现在除了搜索历史,
+    ///   还有"视频 / 直播间"这排类别标签(用户新增需求) —— 若还按老规矩"没历史就不展开",
+    ///   全新用户(历史为空)就永远点不到类别标签, 那个功能等于不存在。
+    ///   搜索历史为空时由 XAML 把那一段整个藏掉, 内容框里只剩类别标签, 高度也会跟着缩。
     /// </summary>
     private void OpenCard()
     {
         if (_open || _closing) return;
-        if (Svc.SearchHistory.Items.Count == 0) return;
         if (ActualWidth <= 0) return;
 
         _open = true;
@@ -337,9 +341,9 @@ public partial class SearchPage : UserControl
     /// </summary>
     private double ComputeOpenHeight()
     {
-        // 历史被清空了: 没有内容可露, 卡片就停在收起态那一档(内容框那行是 0 高, 自然看不见)
-        if (Svc.SearchHistory.Items.Count == 0) return SearchBoxH;
-
+        // ★ 2026-10-03: 这里**不再**因"历史为空"而返回收起态高度 —— 内容框里还有
+        //   "视频 / 直播间"那排类别标签(见 OpenCard 的说明), 历史为空时那一整段由 XAML 藏掉,
+        //   剩下的类别标签仍然要露出来。高度直接按实际内容量算(下面 ExtentHeight 就是它)。
         var needRemeasure = Math.Abs(SearchCard.Width - SearchCardW) > 0.5;
         if (needRemeasure)
         {

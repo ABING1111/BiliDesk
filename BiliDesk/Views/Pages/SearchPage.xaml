@@ -16,7 +16,7 @@
                 <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                            FontSize="44" Foreground="{DynamicResource TextTertiaryBrush}"
                            HorizontalAlignment="Center" />
-                <TextBlock Text="输入关键词, 搜索你想看的视频" Margin="0,14,0,0"
+                <TextBlock Text="{Binding IdleHint}" Margin="0,14,0,0"
                            Foreground="{DynamicResource TextSecondaryBrush}" FontSize="13" />
             </StackPanel>
 
@@ -172,7 +172,26 @@
                                   VerticalScrollBarVisibility="Hidden"
                                   HorizontalScrollBarVisibility="Disabled">
                         <StackPanel Margin="20,14,20,16">
-                            <Grid>
+                            <!-- ===== 搜索类别(视频 / 直播间) =====
+                                 2026-10-03 用户要求"搜索界面添加 tag, 可以选择搜索直播间还是视频"。
+                                 两类内容来自**完全不同的接口**(search_type=video / live_room),
+                                 所以切换时必须重搜一次 —— 由 VM 的 Kind setter 负责(见 SearchViewModel)。
+
+                                 ★ 用 PillTabStyle(与首页 推荐/热门/排行榜 同一套胶囊标签): 这里本来就是
+                                   "在两类之间选一个", 与首页那排分段标签是同一个语义, 复用同一套视觉最省心。
+                                 ★ GroupName 必须给: 同组 RadioButton 才有互斥。 -->
+                            <StackPanel Orientation="Horizontal">
+                                <RadioButton GroupName="SearchKind" Style="{StaticResource PillTabStyle}"
+                                             Content="视频" IsChecked="{Binding IsVideoKind, Mode=TwoWay}" />
+                                <RadioButton GroupName="SearchKind" Style="{StaticResource PillTabStyle}"
+                                             Content="直播间" Margin="6,0,0,0"
+                                             IsChecked="{Binding IsLiveKind, Mode=TwoWay}" />
+                            </StackPanel>
+
+                            <!-- 搜索历史那一段(标题 + 词条)。整体随 HasHistory 显隐:
+                                 历史为空时只藏这一段, 上面的类别标签照常露出来。 -->
+                            <StackPanel Visibility="{Binding HasHistory, Converter={StaticResource BoolToVis}}">
+                            <Grid Margin="0,14,0,0">
                                 <TextBlock Text="搜索历史" FontSize="13" FontWeight="SemiBold"
                                            VerticalAlignment="Center"
                                            Foreground="{DynamicResource TextPrimaryBrush}" />
@@ -225,6 +244,7 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
                 </Border>

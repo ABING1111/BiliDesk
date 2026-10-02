@@ -1988,17 +1988,28 @@ public class ApiClient
         }
     }
 
-    /// <summary>搜索(带风控 voucher 降级)</summary>
-    public async Task<SearchData> SearchAsync(string keyword, int page)
+    /// <summary>
+    /// 搜索(带风控 voucher 降级)。
+    ///
+    /// ★ 2026-10-03 起支持两类内容: <paramref name="kind"/> 决定 `search_type` 与解析方式。
+    ///   · <see cref="ContentKind.Video"/>    → `search_type=video`, 走 <see cref="ParseSearchItem"/>
+    ///   · <see cref="ContentKind.Live"/>     → `search_type=live_room`, 走 <see cref="ParseLiveSearchItem"/>
+    ///   两者的**分页字段都是同一套**(numResults / pagesize=40), 但直播每页给 40 条而视频给 20 条,
+    ///   所以"还有没有下一页"的页大小必须跟着 kind 走(见下面 SearchPageSize)。
+    /// </summary>
+    public async Task<SearchData> SearchAsync(string keyword, int page, ContentKind kind = ContentKind.Video)
     {
         var result = new SearchData();
+        var searchType = kind == ContentKind.Live ? "live_room" : "video";
+        // 视频每页 20 条、直播每页 40 条(实测)。这个数只用来推"下一页还有没有", 不参与请求参数。
+        var pageSize = kind == ContentKind.Live ? 40 : 20;
         try
         {
             await EnsureBuvidAsync();
 
             var ps = new Dictionary<string, string>
             {
-                ["search_type"] = "video",
+                ["search_type"] = searchType,
                 ["keyword"] = keyword,
                 ["page"] = page.ToString()
             };
@@ -2010,20 +2021,20 @@ public class ApiClient
             {
                 if (data.Value.TryGetProperty("result", out var list))
                 {
-                    foreach (var e in list.EnumerateArray()) result.Items.Add(ParseSearchItem(e));
+                    AppendSearchItems(result, list, kind);
                     var numResults = data.Value.TryGetProperty("numResults", out var nr) &&
                                      nr.ValueKind == JsonValueKind.Number ? nr.GetInt32() : 0;
-                    // ★ 一页固定 20 条(下面 TotalPages 也是按 20 算的), 所以"下一页还有没有"必须拿
-                    //   **页大小**去比, 不能拿**本页条数**去比 —— 本页不满 20 条时按本页条数乘会把
+                    // ★ 一页的条数是**固定的**(视频 20 / 直播 40), 所以"下一页还有没有"必须拿
+                    //   **页大小**去比, 不能拿**本页条数**去比 —— 本页不满时按本页条数乘会把
                     //   偏移算小(明明到底了还说有); 本页 0 条时更是退化成"永远有下一页",
                     //   于是「加载更多」永远不消失、每点一次都去要一个越界页(2026-10-01 修)。
-                    const int SearchPageSize = 20;
                     result.HasMore = result.Items.Count > 0 &&
-                                     (numResults <= 0 ? result.Items.Count >= SearchPageSize
-                                                      : page * SearchPageSize < numResults);
+                                     (numResults <= 0 ? result.Items.Count >= pageSize
+                                                      : page * pageSize < numResults);
                     if (page == 1 && numResults > 0)
-                        result.TotalPages = Math.Max(1, (numResults + SearchPageSize - 1) / SearchPageSize);
-                    if (result.Items.Count == 0) result.Error = "没有找到相关视频";
+                        result.TotalPages = Math.Max(1, (numResults + pageSize - 1) / pageSize);
+                    if (result.Items.Count == 0)
+                        result.Error = kind == ContentKind.Live ? "没有找到相关直播间" : "没有找到相关视频";
                     result.Ok = true;
                     return result;
                 }
@@ -2040,10 +2051,11 @@ public class ApiClient
                             "https://api.bilibili.com/x/web-interface/wbi/search/type", ps2, sign: true);
                         if (c2 == 0 && d2 != null && d2.Value.TryGetProperty("result", out var list2))
                         {
-                            foreach (var e in list2.EnumerateArray()) result.Items.Add(ParseSearchItem(e));
+                            AppendSearchItems(result, list2, kind);
                             result.Ok = true;
-                            result.HasMore = list2.GetArrayLength() >= 20;
-                            if (result.Items.Count == 0) result.Error = "没有找到相关视频";
+                            result.HasMore = list2.GetArrayLength() >= pageSize;
+                            if (result.Items.Count == 0)
+                                result.Error = kind == ContentKind.Live ? "没有找到相关直播间" : "没有找到相关视频";
                             return result;
                         }
                     }
@@ -2068,6 +2080,45 @@ public class ApiClient
             result.Error = ex.Message;
         }
         return result;
+    }
+
+    /// <summary>把一段 result 数组按 kind 解析进结果集(视频/直播两套字段)</summary>
+    private static void AppendSearchItems(SearchData result, JsonElement list, ContentKind kind)
+    {
+        foreach (var e in list.EnumerateArray())
+        {
+            var item = kind == ContentKind.Live ? ParseLiveSearchItem(e) : ParseSearchItem(e);
+            if (item != null) result.Items.Add(item);
+        }
+    }
+
+    /// <summary>
+    /// 搜索结果里的一条**直播间**。
+    ///
+    /// 与视频那条(ParseSearchItem)的差别是整片字段都不同, 实测(search_type=live_room):
+    ///   roomid(直播间号) / uid(主播 mid) / uname(主播名) / title / cover / online(人气) / live_status。
+    /// ★ 三个易错点:
+    ///   ① 房间号字段是 **roomid**(没有下划线), 不是 room_id —— 后者是另一个接口(live 列表)的叫法;
+    ///   ② 主播 mid 是 **uid**, 不是 mid(视频那条才是 mid) —— 抄错会让卡片下面的 UP 主名点不开;
+    ///   ③ cover 可能带 `//` 前缀(实测就是), 必须过 UrlUtil.Normalize 补 https。
+    /// </summary>
+    private static VideoItem? ParseLiveSearchItem(JsonElement e)
+    {
+        var roomId = GetLong(e, "roomid");
+        if (roomId <= 0) roomId = GetLong(e, "room_id");
+        if (roomId <= 0) return null;   // 没有房间号就不是直播间, 直接丢掉(卡片也播不了)
+
+        return new VideoItem
+        {
+            RoomId = roomId,
+            Title = GetStr(e, "title").StripHtml(),
+            Cover = UrlUtil.Normalize(GetStr(e, "cover")),
+            Author = GetStr(e, "uname"),
+            OwnerMid = GetLong(e, "uid"),
+            // 直播间没有时长, 复用卡片那个时长位显示"直播中"(与首页直播 tab 同一约定)
+            Duration = "直播中",
+            ViewCount = Math.Max(0, GetLong(e, "online")),
+        };
     }
 
     /// <summary>
@@ -3259,6 +3310,123 @@ public class ApiClient
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
             ? v.GetInt64() : 0;
 
+    /// <summary>
+    /// 获取登录用户的**直播**观看历史。
+    ///
+    /// ★★★ 接口选型(2026-10-03 实测定的, 别换回 /x/v2/history):
+    ///   旧的那条 `/x/v2/history` **只给视频稿件**, 直播条目它根本不返回; 而且 `type=live`
+    ///   作为参数传过去会直接 -400(实测)。
+    ///   真正管用的是**新游标接口** `/x/web-interface/history/cursor`, 它自带一个 `tab` 数组:
+    ///       [{type:"archive",name:"视频"}, {type:"live",name:"直播"}, {type:"article",name:"专栏"}]
+    ///   —— 这正是官方历史页那三个标签, 说明官方自己就是靠 `type` 分流的。传 `type=live`
+    ///   返回的就是真实直播记录(实测拿到 kid=22603245 / uri=https://live.bilibili.com/22603245)。
+    ///   ★ 参数名必须是 **type**。`business=live` / `tab=live` / `business_type=live` 都会被忽略、
+    ///     静默返回视频记录(实测), 那种"看起来成功但内容不对"的错最难查。
+    ///
+    /// 分页: 游标式 —— 用上一页返回的 `cursor.view_at` 与 `cursor.max` 当下一页的
+    /// `view_at` / `max`。这里对外仍保持"页码"形状(pn), 内部用保存下来的游标推进,
+    /// 免得把游标状态泄漏给页面/VM。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetLiveHistoryAsync(int pn = 1)
+    {
+        try
+        {
+            if (!SessionManager.Instance.HasLogin) return (false, "直播历史需要登录", null);
+            await EnsureBuvidAsync();
+
+            var ps = new Dictionary<string, string>
+            {
+                ["type"] = "live",
+                ["ps"] = "20"
+            };
+            // 第 1 页不带游标; 之后用上一次拿到的游标(见 _liveCursor)
+            if (pn > 1 && _liveCursorViewAt > 0)
+            {
+                ps["view_at"] = _liveCursorViewAt.ToString();
+                ps["max"] = _liveCursorMax.ToString();
+            }
+
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/web-interface/history/cursor", ps,
+                referer: "https://www.bilibili.com/account/history");
+            if (code != 0 || data == null)
+                return (false, msg ?? $"请求失败 (code {code})", null);
+
+            var items = new List<VideoItem>();
+            if (data.Value.TryGetProperty("list", out var list) && list.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var h in list.EnumerateArray())
+                {
+                    if (h.ValueKind != JsonValueKind.Object) continue;
+
+                    // 直播记录的"房间号"有两个来源, 都试一遍:
+                    //   · 顶层 kid —— 实测就是房间号(22603245);
+                    //   · history.oid —— 同为房间号, 顶层缺失时兜底。
+                    var roomId = GetLong(h, "kid");
+                    if (roomId <= 0 && h.TryGetProperty("history", out var hist))
+                        roomId = GetLong(hist, "oid");
+                    if (roomId <= 0) continue;
+
+                    var cover = GetStr(h, "cover");
+                    if (cover.Length == 0 && h.TryGetProperty("covers", out var covers) &&
+                        covers.ValueKind == JsonValueKind.Array && covers.GetArrayLength() > 0)
+                        cover = covers[0].GetString() ?? "";
+
+                    // 主播名 / mid: 顶层 author_name / author_mid(与视频那条同一组字段名)
+                    var author = GetStr(h, "author_name");
+                    var ownerMid = GetLong(h, "author_mid");
+                    if (h.TryGetProperty("owner", out var owner))
+                    {
+                        if (author.Length == 0) author = GetStr(owner, "name");
+                        if (ownerMid <= 0) ownerMid = GetLong(owner, "mid");
+                    }
+
+                    items.Add(new VideoItem
+                    {
+                        RoomId = roomId,
+                        Title = GetStr(h, "title").StripHtml(),
+                        Cover = UrlUtil.Normalize(cover),
+                        Author = author,
+                        OwnerMid = ownerMid,
+                        // 时长位显示开播状态: live_status 1=直播中, 0=未开播(接口还给 badge 文案)
+                        Duration = GetInt(h, "live_status") == 1 ? "直播中" : "未开播",
+                        ViewCount = 0,   // 历史接口不给人气, 留 0 让卡片隐藏那个胶囊
+                        Pubdate = GetLong(h, "view_at"),
+                    });
+                }
+            }
+
+            // 记下游标供下一页用。到底时 cursor 会归零(max/view_at 都是 0), 下次自然空手而归。
+            if (data.Value.TryGetProperty("cursor", out var cur))
+            {
+                _liveCursorViewAt = GetLong(cur, "view_at");
+                _liveCursorMax = GetLong(cur, "max");
+            }
+            else
+            {
+                _liveCursorViewAt = 0;
+                _liveCursorMax = 0;
+            }
+
+            return (true, null, items);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null);
+        }
+    }
+
+    /// <summary>直播历史的游标(接口是游标式, 不是页码式)。由 <see cref="GetLiveHistoryAsync"/> 维护。</summary>
+    private long _liveCursorViewAt;
+    private long _liveCursorMax;
+
+    /// <summary>重置直播历史游标(重新从头拉之前调, 否则第 2 页会接着上次的位置)</summary>
+    public void ResetLiveHistoryCursor()
+    {
+        _liveCursorViewAt = 0;
+        _liveCursorMax = 0;
+    }
+
     /// <summary>获取登录用户的云端观看历史(x/v2/history, 分页)。
     /// 返回 (ok, err, items): items 为 VideoItem 列表, IsSelected 可复用</summary>
     public async Task<(bool ok, string? err, List<VideoItem>? items)> GetCloudHistoryAsync(int pn = 1, int ps = 30)
@@ -3334,17 +3502,21 @@ public class ApiClient
     /// 删除**单条**云端观看历史。
     /// 接口: /x/v2/history/delete (POST)。
     ///
-    /// 参数 `kid` 不是裸 avid, 而是 `{业务类型}_{目标id}` —— 视频必须是 `archive_{avid}`。
-    /// 这里只删视频(本应用的列表里也只有视频), 直播/专栏/番剧那几种前缀用不到。
+    /// 参数 `kid` 不是裸 id, 而是 `{业务类型}_{目标id}`:
+    ///   · 视频 → `archive_{avid}`(稿件 avid, 不是 bvid)
+    ///   · 直播 → `live_{房间号}`
+    /// ★ 前缀写错不会报错, 而是**静默不生效**(接口对未知 kid 也回 code=0, 实测),
+    ///   所以视频和直播必须各传对(2026-10-03 加直播历史时踩到这条)。
     /// </summary>
-    public async Task<(bool ok, string? err)> DeleteHistoryAsync(long aid)
+    public async Task<(bool ok, string? err)> DeleteHistoryAsync(long aid, ContentKind kind = ContentKind.Video)
     {
-        if (aid <= 0) return (false, "缺少视频 avid");
+        var prefix = kind == ContentKind.Live ? "live" : "archive";
+        if (aid <= 0) return (false, kind == ContentKind.Live ? "缺少直播间号" : "缺少视频 avid");
         if (!SessionManager.Instance.HasLogin) return (false, "云端历史需要登录");
 
         return await PostFormAsync(
             "https://api.bilibili.com/x/v2/history/delete",
-            new Dictionary<string, string> { ["kid"] = $"archive_{aid}" },
+            new Dictionary<string, string> { ["kid"] = $"{prefix}_{aid}" },
             referer: "https://www.bilibili.com/account/history");
     }
 

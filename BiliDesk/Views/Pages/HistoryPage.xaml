@@ -30,8 +30,10 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- ===== 标题行(与首页同一套外边距/字号) ===== -->
-        <Grid Grid.Row="0" Margin="36,20,36,0" MinHeight="62">
+        <!-- ===== 标题行(与首页同一套外边距/字号) =====
+             ★ MinHeight 从 62 提到 96(2026-10-03): 这一格里现在有两行 —— 大标题(约 40px)
+               和它下面的类别标签(约 34px)。62 装不下, 标签会叠到标题上。 -->
+        <Grid Grid.Row="0" Margin="36,20,36,0" MinHeight="96">
             <!-- [ 普通模式 ] 标题 + 条数 -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Top"
                         Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
@@ -39,6 +41,22 @@
                 <TextBlock Text="{Binding TotalCount, StringFormat=' ({0})'}"
                            VerticalAlignment="Bottom" Margin="6,0,0,6"
                            Foreground="{DynamicResource TextTertiaryBrush}" FontSize="14" />
+            </StackPanel>
+
+            <!-- ===== 类别标签: 视频 / 直播间(2026-10-03 新增) =====
+                 用户要求"直播间浏览历史合并进观看记录, 同时也在顶部添加一个 tag,
+                 可选择直播间和视频历史观看记录"。
+                 ★ 放在标题**正下方**而不是标题右边: 标题是 28 号大字, 把标签贴着它排会显得很挤,
+                   而且窗口窄时还会被条数挤下去。下面另起一行最稳, 也和首页"标题 + 标签行"的层次一致。
+                 ★ 用 PillTabStyle(与首页 推荐/热门/排行榜 同一套胶囊标签) —— 同一个语义(选一个类别),
+                   复用同一套视觉。GroupName 必须给, 否则两个都能同时选中。 -->
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom"
+                        Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
+                <RadioButton GroupName="HistoryKind" Style="{StaticResource PillTabStyle}"
+                             Content="视频" IsChecked="{Binding IsVideoKind, Mode=TwoWay}" />
+                <RadioButton GroupName="HistoryKind" Style="{StaticResource PillTabStyle}"
+                             Content="直播间" Margin="6,0,0,0"
+                             IsChecked="{Binding IsLiveKind, Mode=TwoWay}" />
             </StackPanel>
 
             <!-- [ 编辑模式 ] 标题 + 已选计数 + 进度 -->
@@ -198,8 +216,7 @@
                 <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
                         HorizontalAlignment="Center" Margin="0,16,0,0" Padding="24,7"
                         Command="{Binding ReloadCommand}"
-                        Visibility="{Binding Loading, Converter={StaticResource InvBoolToVis}}" />
-            </StackPanel>
+                        Visibility="{Binding Loading, Converter={StaticResource InvBoolToVis}}" />            </StackPanel>
 
             <!-- 搜索没有匹配项。和上面对"云端本来就没记录"(Error)区分开:
                  一个该提示"换个词试试", 另一个该提示"登录/同步"。 -->

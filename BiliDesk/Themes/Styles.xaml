@@ -669,6 +669,65 @@
             </Setter.Value>
         </Setter>
     </Style>
+    <!--
+        播放器 Tab 行的**动作按钮**版(「合集」用)。
+
+        ★ 2026-10-03 用户要求"合并(合集)按钮与简介/评论区的按钮统一风格, 并且就在他们的右边,
+          不要隔那么远": 原来它用的是 SubtleButtonStyle(一块灰色圆角底), 和旁边两个纯文字 tab
+          完全是两种语言, 且外层还多一层 Padding 10,4 把文字又往里推 —— 看着离 简介/评论 很远。
+
+        这里把 ContentTabStyle 的**全部视觉参数照抄一份**(字号 15 / Padding 4,6 / 悬停变主文字色),
+        唯一差别是它是个**动作**不是 tab, 所以没有 GroupName/互斥, 选中态由 Tag 驱动。
+
+        ★ 为什么用 Tag 而不是再造一个附加属性: Tag 是现成的 object 槽, 代码里
+          `BtnSeason.Tag = _seasonOpen ? "on" : "off";` 一行就能驱动下面的 DataTrigger。
+        ★★ Tag 的值刻意用**字符串 "on"/"off"** 而不是 bool: DataTrigger 的 Value 是 object,
+          绑到 Tag(object) 时两边都是字符串, 比较是明确的。
+        ★★★ 绑定必须写 `RelativeSource Self`(2026-10-03 探针 `%TEMP%\bd-probe-trigger` 实测):
+          在这个 ControlTemplate 的触发器里, 下面几种写法的实测结果是 ——
+             · `{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}` → **不生效**
+               (Tag 从 off 改到 on, Foreground 与下划线都纹丝不动);
+             · `{Binding Tag}`(不写 RelativeSource, 走 DataContext)         → **不生效**;
+             · `{Binding Tag, RelativeSource={RelativeSource Self}}`          → **生效** ✓。
+           所以别把它"简化"成 TemplatedParent 或不写 RelativeSource —— 那会静默失效,
+           表现就是"合集面板打开了, 但按钮没点亮", 很难往触发器上想。
+    -->
+    <Style x:Key="ContentActionTabStyle" TargetType="Button">
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="Padding" Value="4,6" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid Background="Transparent">
+                        <ContentPresenter x:Name="Cp"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                          Margin="{TemplateBinding Padding}"
+                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                        <!-- 与 ContentTabStyle 同款的 2px 下划线, 由 Tag="on" 点亮 -->
+                        <Border x:Name="Underline" Height="2" VerticalAlignment="Bottom"
+                                Background="Transparent" Margin="0,0,0,-1" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                        </Trigger>
+                        <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="on">
+                            <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                            <Setter TargetName="Underline" Property="Background"
+                                    Value="{DynamicResource AccentBrush}" />
+                        </DataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ============ 胶囊式标签(Pill tabs) ============
          首页「推荐 / 热门 / 排行榜」以及收藏页的收藏夹标签都用它。
 

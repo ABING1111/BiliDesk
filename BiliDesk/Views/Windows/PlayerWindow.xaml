@@ -889,19 +889,23 @@
                                     <RadioButton x:Name="TabComments" Grid.Column="1" GroupName="ContentTab"
                                                  Style="{StaticResource ContentTabStyle}" Content="评论"
                                                  Checked="TabComments_Checked" />
-                                    <!-- 视频合集入口(2026-10-02 新增): 紧跟在 简介/评论 这个 tab 组右侧。
+                                    <!-- 视频合集入口(2026-10-02 新增; 2026-10-03 改成与 简介/评论 统一风格):
                                          无合集的视频整个按钮**隐藏**(不是禁用) —— 右侧信息栏只有 400px,
                                          一个常年灰着的按钮既占位又像是坏了, 而 B 站自己在没有合集时也不给入口。
+                                         ★ 用 ContentActionTabStyle: 与旁边两个 tab 完全同款的字号(15)/内边距(4,6)/
+                                           悬停色, 并带同款下划线(展开时点亮) —— 见 Styles.xaml 里该样式的说明。
+                                           ★ 2026-10-03 用户要求"与简介评论区的按钮统一风格, 并且就在他们的右边,
+                                             不要隔那么远": 原来用 SubtleButtonStyle + 额外 Margin/Padding,
+                                             视觉上是另一套语言、还被推远了 10px。现在那两笔已去掉。
                                          文案用显式 TextBlock 并绑到按钮 Foreground: 全局那个隐式 TextBlock 样式
                                          带 Foreground setter, 优先级高于继承, 直接写 Content="合集" 是改不动颜色的
                                          (面板展开时要把它点亮成强调色)。 -->
                                     <Button x:Name="BtnSeason" Grid.Column="2" Visibility="Collapsed"
-                                            Style="{StaticResource SubtleButtonStyle}"
-                                            FontSize="12" Margin="10,0,0,0" Padding="10,4"
+                                            Style="{StaticResource ContentActionTabStyle}"
                                             HorizontalAlignment="Left" VerticalAlignment="Center"
                                             Click="OnSeasonToggleClick"
                                             ToolTip="查看/收起视频合集">
-                                        <TextBlock Text="合集" FontSize="12"
+                                        <TextBlock Text="合集" FontSize="15"
                                                    Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                                     </Button>
                                     <!-- 返回评论列表: 进了"评论详情"才出现, 就摆在"评论详情"右边(用户指定)。

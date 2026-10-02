@@ -322,6 +322,21 @@ public class SpaceInfo
     public long VideoCount { get; set; } // 投稿数
 }
 
+/// <summary>
+/// 搜索 / 历史的"看哪一类"标签(2026-10-03 新增)。
+///
+/// 视频与直播间走的是**完全不同的接口和字段**, 但界面上是同一套卡片墙 ——
+/// 所以用同一个枚举把"当前这一类"在页面/VM/接口之间传下去, 而不是各传一个 bool。
+/// </summary>
+public enum ContentKind
+{
+    /// <summary>视频稿件(搜索 search_type=video / 历史 type=archive)</summary>
+    Video,
+
+    /// <summary>直播间(搜索 search_type=live_room / 历史 type=live)</summary>
+    Live,
+}
+
 /// <summary>搜索 API 返回结构</summary>
 public class SearchData
 {
