@@ -8,6 +8,11 @@ obj/
 
 # 发布产物(便携版 zip / 安装器载荷都在这里, 不进仓库)
 发布包/
+Pulish/*
+!Pulish/installer.iss
+
+# 内部开发笔记(项目约定: 不进仓库)
+memory/
 
 # WorkBuddy 会话数据(个人笔记, 不开源)
 .workbuddy/
