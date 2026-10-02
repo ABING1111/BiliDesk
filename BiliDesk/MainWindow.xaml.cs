@@ -268,7 +268,7 @@ public partial class MainWindow : FluentWindow
         Activate();
     }
 
-    /// <summary>切换页面(带淡出 + 上浮入场动画)</summary>
+    /// <summary>切换页面</summary>
     private void ShowPage(PageKey key, bool animate)
     {
         var page = PageOf(key);
@@ -283,32 +283,23 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
-        var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(90));
-        fadeOut.Completed += (_, _) =>
-        {
-            if (!ReferenceEquals(PageHost.Content, page))
-                PageHost.Content = page;
-
-            // ★★ 先把这次挂载引发的**布局**跑完, 再开始动画。
-            //
-            // 为什么: 首页/历史页那种"零虚拟化卡片墙"一挂进可视树就要重新测量+排布整墙卡片,
-            // 是一整块同步耗时(几十毫秒起)。原来的写法是"挂载 + 立刻 BeginAnimation",
-            // 于是那一下布局正好压在动画的第一帧上 —— 用户看到的就是"**切过去卡顿一下**"。
-            // 这里强制先跑完布局: 布局的耗时一次付清, 之后的动画帧是纯合成(不再夹着布局)。
-            // 代价是动画晚一帧开始, 但那一下本来就被 fadeOut 的黑色/底色盖着, 看不出来。
-            PageHost.UpdateLayout();
-
-            page.RenderTransform = new TranslateTransform(0, 10);
-            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-            // 时长也收短了(260 → 170): 整页透明度动画是在重绘整页, 页面越重越贵。
-            // 用户要的是"别卡", 不是"看一段动画"。
-            var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(170)) { EasingFunction = ease };
-            var rise = new DoubleAnimation(10, 0, TimeSpan.FromMilliseconds(170)) { EasingFunction = ease };
-            PageHost.BeginAnimation(OpacityProperty, fadeIn);
-            ((TranslateTransform)page.RenderTransform).BeginAnimation(TranslateTransform.YProperty, rise);
-            MemoryTrim.RequestTrim();
-        };
-        PageHost.BeginAnimation(OpacityProperty, fadeOut);
+        // ★★★ 直接切换, 不再播整页淡出/淡入, 也不再强制同步 UpdateLayout(2026-10-02, 用户报
+        //   "从侧栏切回首页卡几秒 / 点分区卡一秒")。
+        //
+        //   为什么: 旧写法是"90ms 淡出 → 换内容 → `PageHost.UpdateLayout()` 强制同步测完整页 →
+        //   170ms 淡入"。`UpdateLayout()` 把几十上百张卡片的测量**同步堆在点击这一拍**; 而整页
+        //   `PageHost.Opacity` 淡入淡出, 每一帧都要把整页(含 Fant 缩放的封面)重栅格化一遍 ——
+        //   页面越重越贵, 这正是"卡一下/卡几秒"的来源。这段动画当初是为了"切页不突兀"加的,
+        //   但实测它从没真正消除过卡顿(见 2026-09-30 笔记"没验证的: 切页到底还卡不卡")。
+        //
+        //   新做法: `PageHost.Content = page` 直接到位。布局由 WPF 在下一帧的渲染 pass 里异步完成,
+        //   不阻塞点击; 没有整页透明度动画, 也就没有"整页重栅格化"这笔账。
+        //   ★ 观感取舍: 少了淡入过渡, 但换来"点哪到哪、不卡" —— 用户三次报卡顿, 流畅优先。
+        PageHost.Content = page;
+        // 清掉可能残留的整页透明度动画(否则新页面会带着旧动画的 Opacity 值)
+        PageHost.BeginAnimation(OpacityProperty, null);
+        PageHost.Opacity = 1;
+        MemoryTrim.RequestTrim();
     }
 
     // ------------------------------------------------------------ 账户区
