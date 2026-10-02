@@ -119,9 +119,8 @@ public partial class MainWindow : FluentWindow
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         // 首次显示不播入场动画: 窗口刚出来, 再叠一层淡入会很怪。
-        // 这里传的是"设置里的启动页", 不再是写死的首页。
         ShowPage(_vm.Current, animate: false);
-        _ = (_pages[PageKey.Home] as HomePage)?.Init();
+        _ = (PageOf(PageKey.Home) as HomePage)?.Init();
     }
 
     /// <summary>

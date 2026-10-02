@@ -10,7 +10,7 @@ namespace BiliDesk.Helpers;
 
 /// <summary>
 /// 主题服务: 跟随系统深浅色自动切换 / 手动浅色 / 手动深色, 并注入强调色笔刷。
-/// 强调色**固定为 B 站粉**, 不再跟随系统强调色。
+/// 强调色默认 B 站粉, 用户可以在设置页自己调, 也可以选"跟随系统"用 Windows 的强调色。
 /// </summary>
 public class ThemeService
 {
@@ -25,32 +25,186 @@ public class ThemeService
     public bool IsDark { get; private set; }
     public bool IsSystemDark { get; private set; }
 
-    // ---------------------------------------------------------------- 品牌强调色
+    // ---------------------------------------------------------------- 强调色
 
     /// <summary>
-    /// 品牌强调色: B 站粉。全应用统一使用它。
+    /// 默认强调色: B 站粉。用户没自定义主题色时全应用统一使用它。
     ///
-    /// 为什么改成固定值(原先跟随系统强调色):
-    ///   1. 跟随系统时, 用户换壁纸/换主题就会让整个应用的观感漂移, 而且系统色可能是
-    ///      深蓝/墨绿这类和 B 站气质完全无关的颜色 —— 对"一个产品"来说固定品牌色更稳;
-    ///   2. 顺带省掉了启动路径上的 3 次注册表读取, 以及 `SystemParameters.WindowGlassColor`
-    ///      的首次访问(那个静态属性第一次取值会初始化整套系统主题信息, 有实际开销)。
     /// 深浅两套主题用**同一个**粉色, 不做"深色下提亮"的调整 —— 粉色在深色底上是 5.2:1、
     /// 在白色卡片上 2.6:1, 两边都看得清, 调了反而不统一。
     /// </summary>
-    private static readonly Color BrandAccent = Color.FromRgb(0xFB, 0x72, 0x99);
+    public static readonly Color DefaultAccent = Color.FromRgb(0xFB, 0x72, 0x99);
 
     /// <summary>
-    /// 放在品牌强调色上的文字 / 图标颜色。
-    /// 粉底白字是 B 站的标准搭配, 这里直接按品牌色板写死, 不再做对比度推导。
-    /// (对比度约 2.6:1, 属于"大号/半粗文字可接受"的区间; 深色字能到 6.6:1 更保险,
-    ///  但那样按钮就不再是 B 站的观感了 —— 这是刻意的观感取舍, 不是疏漏。)
+    /// 设置里表示"强调色跟随系统"的哨兵值。
+    /// 和颜色值塞进同一个字段(`SettingsStore.AccentColor`)而不是另开一个 bool: 这样
+    /// "跟随系统"和"某个固定颜色"天然互斥, 不会出现两个字段互相打架、谁优先说不清的状态。
     /// </summary>
-    private static readonly Color BrandOnAccent = Colors.White;
+    public const string AccentSystem = "system";
+
+    /// <summary>最近一次读到的系统强调色(读不到就是默认粉)</summary>
+    private Color _systemAccent = DefaultAccent;
+
+    /// <summary>
+    /// 当前主题色。= 用户选的固定色 / 跟随系统时读到的系统强调色; 没设置过就是
+    /// <see cref="DefaultAccent"/>。深浅两套主题共用同一个值。
+    /// </summary>
+    public Color Accent { get; private set; } = DefaultAccent;
+
+    /// <summary>当前是不是"强调色跟随系统"</summary>
+    public bool IsAccentSystem => IsSystemSentinel(Svc.Settings.AccentColor);
+
+    /// <summary>当前是不是"从没自定义过"(存储里是空串 = 默认 B 站粉)</summary>
+    public bool IsDefaultAccent => !IsAccentSystem && Svc.Settings.AccentColor.Length == 0;
+
+    private static bool IsSystemSentinel(string? v)
+        => string.Equals(v?.Trim(), AccentSystem, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 设置强调色。三种输入:
+    ///   null / 空串 / 解析不了 -> 恢复默认 B 站粉(而不是把界面刷成透明或黑色)
+    ///   <see cref="AccentSystem"/> -> 跟随系统强调色
+    ///   `#RRGGBB` / `#AARRGGBB`(不写 # 也行) -> 用这个颜色
+    ///
+    /// <paramref name="settle"/> = false 时**跳过**那次逐控件 InvalidateProperty
+    /// (见下面那段说明)。它是给"调色盘拖动中"用的: 拖动时每秒会来几十次, 每次都走一遍
+    /// 全窗口可视树的开销是白烧的帧; 笔刷本身已经换掉了, 当前看得见的界面本来就立刻变色。
+    /// 代价是"被缓存、当前不在可视树里的页面"要等拖动结束那次 settle 才跟上 —— 而那时候
+    /// 用户正在看设置页, 根本看不见那些页面。
+    /// </summary>
+    public void SetAccent(string? value, bool settle = true)
+    {
+        if (IsSystemSentinel(value))
+        {
+            Svc.Settings.AccentColor = AccentSystem;
+            ReadSystemAccent();
+            Accent = _systemAccent;
+        }
+        else
+        {
+            var next = ParseAccent(value) ?? DefaultAccent;
+            Accent = next;
+            // ★ 存的是"用户选了什么"而不是"颜色值": 等于默认色就存空串(= 跟着默认走),
+            //   默认色以后要是调了, 没自定义过的用户会跟着变 —— 这正是我们要的。
+            //   (注意必须放在 else 里: 跟随系统时即使系统色正好等于默认粉, 也不能被压成空串,
+            //    否则"跟随系统"这个选择会被悄悄丢掉。)
+            Svc.Settings.AccentColor = next == DefaultAccent ? "" : ToHex(next);
+        }
+
+        Svc.Settings.Save();
+        ApplyAccent();
+
+        if (!settle) return;
+        Settle();
+    }
+
+    /// <summary>
+    /// 让所有窗口的可视树重新解析 DynamicResource(换色/换肤的最后一步)。
+    ///
+    /// ★ 和换深浅色同一个坑: 笔刷换了以后, 已 measure 过、当前不在可视树里的页面
+    ///   (被 MainWindow 长期缓存着)可能仍持有旧笔刷的引用 —— 不强制重解析一次的话,
+    ///   切回那个页面会看到它还是旧颜色。
+    /// </summary>
+    public void Settle()
+    {
+        RunOnUi(() =>
+        {
+            if (Application.Current is { } app) RefreshResourceReferences(app);
+        });
+    }
+
+    /// <summary>
+    /// 读 Windows 的强调色(设置 → 个性化 → 颜色 → 强调色)。
+    ///
+    /// ★ 值存在 `HKCU\Software\Microsoft\Windows\DWM\AccentColor`, 格式是 **AABBGGRR**
+    ///   (高字节 alpha, 低字节红 —— 和 COLORREF 一样是"反的")。直接当 AARRGGBB 读会拿到反色:
+    ///   本机实测 0xFFD47800 按 ABGR 解是标准的 Windows 蓝 #0078D4, 按 ARGB 解会变成橙色 #D47800。
+    ///   `AccentPalette`(同键下的 8 段色阶)也是同样的字节序, 可以拿来交叉验证。
+    ///
+    /// 不用 WPF 的 `SystemParameters.WindowGlassColor`: 那个属性第一次取值会初始化整套系统主题
+    /// 信息, 有实际开销; 而且它反映的是"标题栏玻璃色"(会被透明/亚克力效果再加工), 不是用户选的
+    /// 那个强调色。这里只读一个注册表值, 便宜且就是用户看到的那一个。
+    /// </summary>
+    private void ReadSystemAccent()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\DWM");
+            if (key?.GetValue("AccentColor") is int raw)
+            {
+                var v = unchecked((uint)raw);
+                // alpha 为 0 = 没有有效值(某些精简系统/未设置过), 当作读不到
+                if ((v >> 24) != 0)
+                {
+                    _systemAccent = Color.FromRgb(
+                        (byte)(v & 0xFF),
+                        (byte)((v >> 8) & 0xFF),
+                        (byte)((v >> 16) & 0xFF));
+                    return;
+                }
+            }
+        }
+        catch
+        {
+            // 读不到就用默认粉, 不影响功能
+        }
+        _systemAccent = DefaultAccent;
+    }
+
+    /// <summary>把设置里存的值解析成颜色; 空/非法返回 null(= 用默认色)</summary>
+    private static Color? ParseAccent(string? hex)
+    {
+        if (string.IsNullOrWhiteSpace(hex)) return null;
+        try
+        {
+            var text = hex.Trim().TrimStart('#');
+            if (text.Length == 6) text = "FF" + text;
+            if (text.Length != 8) return null;
+            return Color.FromArgb(
+                Convert.ToByte(text.Substring(0, 2), 16),
+                Convert.ToByte(text.Substring(2, 2), 16),
+                Convert.ToByte(text.Substring(4, 2), 16),
+                Convert.ToByte(text.Substring(6, 2), 16));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>颜色 → 设置里存/界面显示的 `#RRGGBB`</summary>
+    public static string ToHex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+
+    /// <summary>
+    /// 放在强调色上的文字 / 图标颜色。
+    /// 默认粉底白字是 B 站的标准搭配; 用户自定义 / 跟随系统的主题色深浅不定, 所以按**对比度**
+    /// 挑黑或白 —— 亮黄/浅绿上用白字会糊成一片(系统强调色也可能是浅色)。
+    /// </summary>
+    private static Color OnAccentFor(Color accent)
+    {
+        // 相对亮度(WCAG 的近似式)。>0.6 视为浅色底, 用深色字。
+        var r = accent.R / 255.0;
+        var g = accent.G / 255.0;
+        var b = accent.B / 255.0;
+        double Lin(double v) => v <= 0.03928 ? v / 12.92 : Math.Pow((v + 0.055) / 1.055, 2.4);
+        var luminance = 0.2126 * Lin(r) + 0.7152 * Lin(g) + 0.0722 * Lin(b);
+        return luminance > 0.6 ? Color.FromRgb(0x20, 0x20, 0x20) : Colors.White;
+    }
 
     public void Initialize()
     {
         Mode = Svc.Settings.ThemeMode;
+        // 只有"跟随系统"才去读注册表 —— 默认那条路上一次系统调用都不用发(以前固定品牌色,
+        // 那次优化就是靠这个省下来的, 现在选了跟随系统才把这笔开销付回去)。
+        if (IsAccentSystem)
+        {
+            ReadSystemAccent();
+            Accent = _systemAccent;
+        }
+        else
+        {
+            Accent = ParseAccent(Svc.Settings.AccentColor) ?? DefaultAccent;
+        }
         ReadSystemTheme();
         Apply();
         HookSystemEvents();
@@ -68,6 +222,7 @@ public class ThemeService
                 {
                     // 只在"跟随系统"模式下才有必要重算; CheckSystemThemeChanged 内部会判断
                     CheckSystemThemeChanged();
+                    CheckSystemAccentChanged();
                 });
             };
         }
@@ -92,6 +247,23 @@ public class ThemeService
         ReadSystemTheme();
         if (old == IsSystemDark || Mode != AppTheme.System) return;
         Apply();
+    }
+
+    /// <summary>
+    /// 系统强调色变化时重新应用(只在用户选了"跟随系统"时才动界面)。
+    ///
+    /// 只在颜色真的变了才重刷: `UserPreferenceChanged` 在切深浅色/换壁纸/插拔显示器时都会来,
+    /// 每次都重刷一遍笔刷 + 全窗口 InvalidateProperty 是白烧的帧。
+    /// </summary>
+    private void CheckSystemAccentChanged()
+    {
+        if (!IsAccentSystem) return;
+        var old = _systemAccent;
+        ReadSystemAccent();
+        if (old == _systemAccent) return;
+        Accent = _systemAccent;
+        ApplyAccent();
+        Settle();
     }
 
     /// <summary>读取系统深浅色(注册表)</summary>
@@ -252,27 +424,28 @@ public class ThemeService
         }
     }
 
-    /// <summary>注入整套 Accent 笔刷(固定品牌粉)</summary>
+    /// <summary>注入整套 Accent 笔刷(用户主题色 / 系统强调色, 默认 B 站粉)</summary>
     private void ApplyAccent()
     {
         var app = Application.Current;
         if (app == null) return;
 
-        var accent = BrandAccent;
+        var accent = Accent;
+        var onAccent = OnAccentFor(accent);
 
         app.Resources["AccentBrush"] = Frozen(accent);
-        // 悬停/按下用与白色/黑色做小幅混合, 而不是再定义一组色值 —— 换品牌色时只需改一处
+        // 悬停/按下用与白色/黑色做小幅混合, 而不是再定义一组色值 —— 换主题色时只需改一处
         app.Resources["AccentHoverBrush"] = Frozen(Blend(accent, Colors.White, 0.12));
         app.Resources["AccentPressedBrush"] = Frozen(Blend(accent, Colors.Black, 0.12));
         app.Resources["AccentSoftFillBrush"] = Frozen(Color.FromArgb(0x1C, accent.R, accent.G, accent.B));
         app.Resources["AccentBorderFillBrush"] = Frozen(Color.FromArgb(0x66, accent.R, accent.G, accent.B));
 
-        // 强调色被当文字色用(导航选中项 / 图标 / kaomoji)。因为品牌粉在浅底深底上都够用,
-        // 这里直接用原色 —— 不再按主题做提亮/压深, 保证深浅两套的主题色完全一致。
+        // 强调色被当文字色用(导航选中项 / 图标 / kaomoji)。深浅两套主题共用同一个值 ——
+        // 不再按主题做提亮/压深, 保证深浅色下的主题色完全一致。
         app.Resources["AccentTextBrush"] = Frozen(accent);
 
-        app.Resources["TextOnAccentBrush"] = Frozen(BrandOnAccent);
-        app.Resources["TextOnAccentSecondaryBrush"] = Frozen(BrandOnAccent);
+        app.Resources["TextOnAccentBrush"] = Frozen(onAccent);
+        app.Resources["TextOnAccentSecondaryBrush"] = Frozen(onAccent);
     }
 
     private static SolidColorBrush Frozen(Color c)

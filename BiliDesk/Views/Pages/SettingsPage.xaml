@@ -1,6 +1,7 @@
 <UserControl x:Class="BiliDesk.Views.Pages.SettingsPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
              Background="{DynamicResource AppBackgroundBrush}">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="36,20,36,32" MaxWidth="660" HorizontalAlignment="Left">
@@ -28,6 +29,70 @@
                     <TextBlock Text="选择「跟随系统」时, 应用会随 Windows 自动切换深浅色"
                                Style="{StaticResource MetaTextStyle}" Margin="0,12,0,0"
                                Foreground="{DynamicResource TextTertiaryBrush}" />
+
+                    <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,14" />
+
+                    <!-- ===== 主题色 =====
+                         应用里所有强调色(按钮/选中态/链接/图标)都走 ThemeService 注入的那几个笔刷,
+                         所以换色只要重刷笔刷即可, 不用重建色板 —— 比切深浅色还轻。 -->
+                    <TextBlock Text="主题色" FontSize="13" />
+                    <TextBlock Text="按钮、选中项、链接等强调色。默认是 B 站粉, 也可以跟随 Windows 或自己调一个"
+                               Style="{StaticResource MetaTextStyle}" Margin="0,4,0,0" TextWrapping="Wrap" />
+
+                    <!-- 来源三选一。用单选而不是一个开关: 开关只有两种状态, 而"B 站粉 / 跟随系统 /
+                         自己调"是并列的三个来源, 用开关表达会让人以为"关掉 = 没有主题色"。
+                         「B 站粉」放第一个并默认选中 —— 它就是"没动过设置"的那个状态(存空串)。 -->
+                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                        <RadioButton GroupName="AccentSourceGroup" Style="{StaticResource SegmentRadioStyle}"
+                                     Content="B 站粉"
+                                     IsChecked="{Binding IsAccentDefault, Mode=TwoWay}" />
+                        <RadioButton GroupName="AccentSourceGroup" Style="{StaticResource SegmentRadioStyle}"
+                                     Content="跟随系统" Margin="6,0,0,0"
+                                     IsChecked="{Binding IsAccentSystem, Mode=TwoWay}" />
+                        <RadioButton GroupName="AccentSourceGroup" Style="{StaticResource SegmentRadioStyle}"
+                                     Content="自定义" Margin="6,0,0,0"
+                                     IsChecked="{Binding IsAccentCustom, Mode=TwoWay}" />
+                    </StackPanel>
+
+                    <!-- 调色盘 + 右侧一列(预览 / HEX / 恢复默认)。
+                         只有「跟随系统」时置灰 —— 那个颜色由 Windows 决定, 让用户拖了却改不动是骗人。
+                         「B 站粉」下**保持可用**: 粉只是一个具体颜色, 用户想微调就拖,
+                         一拖就自动切到「自定义」(见 AccentPickerColor)。
+                         预览块任何时候都不跟着灰 —— 得让人看见当前到底是什么色。 -->
+                    <Grid Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="250" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- 拖动起止由代码后置接到 VM 上(见 SettingsPage.OnLoaded):
+                             控件的这两个事件是无参 Action, XAML 里的普通事件绑定接不了。 -->
+                        <controls:ColorPalette x:Name="Palette" Height="150"
+                                               IsEnabled="{Binding CanEditAccent}"
+                                               Color="{Binding AccentPickerColor, Mode=TwoWay}" />
+
+                        <StackPanel Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Top">
+                            <!-- 当前色预览。直接引 AccentBrush 而不是绑 VM 的颜色属性:
+                                 那个笔刷就是全应用真正在用的那一个, 所以预览永远和实际一致
+                                 (跟随系统时它也会跟着系统色走)。 -->
+                            <Border Width="46" Height="46" CornerRadius="10"
+                                    HorizontalAlignment="Left"
+                                    Background="{DynamicResource AccentBrush}"
+                                    BorderBrush="{DynamicResource InputBorderBrush}" BorderThickness="1" />
+
+                            <TextBox Width="104" Margin="0,12,0,0" HorizontalAlignment="Left"
+                                     Style="{StaticResource FluentTextBoxStyle}"
+                                     IsEnabled="{Binding CanEditAccent}"
+                                     Text="{Binding AccentColor, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                     ToolTip="也可以直接填 HEX, 例如 #7C4DFF" />
+
+                            <!-- 恢复默认 = 回到 B 站粉, 同时也会退出"跟随系统"(它就是选了一个具体颜色) -->
+                            <Button Content="恢复默认" Style="{StaticResource SubtleButtonStyle}"
+                                    Margin="0,10,0,0" Padding="12,5" HorizontalAlignment="Left"
+                                    Command="{Binding ResetAccentCommand}"
+                                    IsEnabled="{Binding IsDefaultAccent, Converter={StaticResource InvBool}}" />
+                        </StackPanel>
+                    </Grid>
                 </StackPanel>
             </Border>
 
@@ -226,35 +291,6 @@
                     <TextBlock Text="片段由网友标注, 可能标错; 跳过时会提示, 可以随时点「撤回」回到片段开头。"
                                Style="{StaticResource MetaTextStyle}" Margin="0,4,0,0"
                                Foreground="{DynamicResource TextTertiaryBrush}" TextWrapping="Wrap" />
-                </StackPanel>
-            </Border>
-
-            <!-- ============ 启动 ============ -->
-            <TextBlock Text="启动" Style="{StaticResource SectionTitleStyle}" Margin="0,26,0,0" />
-            <Border Style="{StaticResource SettingCardStyle}" Margin="0,10,0,0">
-                <StackPanel>
-                    <TextBlock Text="启动时打开" FontSize="13" />
-                    <TextBlock Text="应用启动后直接进入这个页面"
-                               Style="{StaticResource MetaTextStyle}" Margin="0,4,0,0" />
-                    <!-- 用胶囊而非下拉框: 只有 4 个选项, 一眼看全比下拉一层更省事,
-                         而且 ChipTabStyle 是应用里现成的样式, 不用再补一套 ComboBox 外观。
-                         2026-09-26 侧栏改版: 历史/收藏不再是启动页选项(入口收进「我的」)。 -->
-                    <WrapPanel Orientation="Horizontal" Margin="0,12,0,0">
-                        <RadioButton GroupName="StartupGroup" Style="{StaticResource ChipTabStyle}"
-                                     Content="首页" Margin="0,0,8,8"
-                                     IsChecked="{Binding StartupPage, Converter={StaticResource EnumEquals}, ConverterParameter=Home, Mode=TwoWay}" />
-                        <RadioButton GroupName="StartupGroup" Style="{StaticResource ChipTabStyle}"
-                                     Content="动态" Margin="0,0,8,8"
-                                     IsChecked="{Binding StartupPage, Converter={StaticResource EnumEquals}, ConverterParameter=Follow, Mode=TwoWay}" />
-                        <RadioButton GroupName="StartupGroup" Style="{StaticResource ChipTabStyle}"
-                                     Content="我的" Margin="0,0,8,8"
-                                     IsChecked="{Binding StartupPage, Converter={StaticResource EnumEquals}, ConverterParameter=Mine, Mode=TwoWay}" />
-                        <RadioButton GroupName="StartupGroup" Style="{StaticResource ChipTabStyle}"
-                                     Content="设置" Margin="0,0,8,8"
-                                     IsChecked="{Binding StartupPage, Converter={StaticResource EnumEquals}, ConverterParameter=Settings, Mode=TwoWay}" />
-                    </WrapPanel>
-                    <TextBlock Text="{Binding StartupPageHint}" Style="{StaticResource MetaTextStyle}"
-                               Margin="0,2,0,0" Foreground="{DynamicResource TextTertiaryBrush}" />
                 </StackPanel>
             </Border>
 

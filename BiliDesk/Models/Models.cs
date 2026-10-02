@@ -924,10 +924,13 @@ public class AppSettings
     public string SponsorBlockCategories { get; set; } = SponsorCategories.Sponsor;
 
     /// <summary>
-    /// 启动时打开哪个页面(存 PageKey 的名字, 默认 Home)。
-    /// 存字符串而不是枚举值: PageKey 的成员以后可能增删/重排, 存数字会让老配置文件错位。
+    /// 主题色(强调色)。空串 = 用默认的 B 站粉(见 <see cref="Helpers.ThemeService.DefaultAccent"/>),
+    /// 非空时是 `#RRGGBB` 形式。
+    ///
+    /// 为什么默认空串而不是直接存 "#FB7299": 默认色以后可能会调, 空串表示"跟着默认走",
+    /// 老配置(没这个字段 → 空串)自动落到默认值, 用户显式选过的颜色才被记住。
     /// </summary>
-    public string StartupPage { get; set; } = "Home";
+    public string AccentColor { get; set; } = "";
 
     /// <summary>
     /// 关闭主窗口时最小化到托盘(默认 true)。

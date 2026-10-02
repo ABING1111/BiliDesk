@@ -89,31 +89,18 @@ public class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 导航栏上的页面(可作为启动页; 离线缓存 / 消息 / 搜索不在其中)。
+    /// 导航栏上的页面(离线缓存 / 消息 / 搜索不在其中)。
     ///
     /// **搜索页不在导航栏上**(2026-09-26 用户要求"弃用侧边栏搜索"): 它是搜索结果页,
     /// 唯一入口是首页右上角那个搜索卡(选词后由 MainWindow.NavigateToSearch 切过去)。
-    /// 所以它不能当启动页 —— 那等于"开机进一个空结果页, 还没有回去的路"。
     ///
-    /// **收藏/历史也不在导航栏上了**(2026-09-26 用户改版): 侧栏改为 首页/动态/我的/设置,
-    /// 这两个入口收进「我的」页 —— 老配置里存着 History/Favorites 的启动页会自动退回首页。
+    /// **收藏/历史也不在导航栏上了**(2026-09-26 改版): 侧栏改为 首页/动态/我的/设置,
+    /// 这两个入口收进「我的」页。
     /// </summary>
     public static readonly PageKey[] NavPages =
     {
         PageKey.Home, PageKey.Follow, PageKey.Mine, PageKey.Settings
     };
-
-    /// <summary>
-    /// 解析设置里存的"启动页"名字。
-    ///
-    /// 存名字而不是数字是有意的: 名字对不上最多退回首页, 而数字一旦和枚举重排错位,
-    /// 会把用户指到一个完全不相干的页面。
-    /// 只接受导航栏上的那 4 项(首页/动态/我的/设置) —— 离线缓存 / 消息 / 搜索都没有导航入口, 设成启动页等于"有进无出"。
-    /// </summary>
-    public static PageKey ParseStartupPage(string? name)
-        => Enum.TryParse<PageKey>(name, ignoreCase: true, out var key) && NavPages.Contains(key)
-            ? key
-            : PageKey.Home;
 
     /// <summary>刷新登录用户信息(nav 接口)</summary>
     public async System.Threading.Tasks.Task RefreshUserAsync()

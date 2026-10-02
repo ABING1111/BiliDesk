@@ -1,0 +1,128 @@
+<UserControl x:Class="BiliDesk.Views.Controls.ColorPalette"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False">
+    <!--
+        调色盘(设置页「外观 → 主题色」)。
+
+        结构 = 左边一块「饱和度 × 明度」方块 + 右边一条色相竖条, 也就是 PhotoShop / 画图 那套
+        标准 HSV 取色器的样子。选这种而不是色轮 / 一排预设色, 是因为它能在**同一块区域**里
+        覆盖全部 1600 万色: 预设只能给几种, 用户想要个自己的颜色就没辙了。
+
+        为什么不用 WriteableBitmap 画渐变:
+          左边那块其实只要三层叠出来 —— 纯色相底 + 横向白→透明(饱和度) + 纵向透明→黑(明度),
+          数学上正好等于 HSV 色板。用 3 个 Rectangle 比生成并维护一张位图便宜得多:
+          位图每次换色相都要重写全部像素(256×256 = 6.5 万次), 而这里只改一个 SolidColorBrush.Color。
+    -->
+    <Grid x:Name="Root" Background="Transparent">
+        <!--
+            置灰。★ 必须自己画: WPF 的 IsEnabled=False 只是**挡掉输入**, 不会让自绘内容变灰 ——
+            这个控件里全是 Rectangle/Border, 不处理的话"跟随系统"时调色盘看着完全正常、
+            点上去却毫无反应, 比直接变灰更让人困惑。
+            用 DataTrigger 而不是 Trigger: UserControl 的 IsEnabled 不在这层 Grid 上,
+            得向祖先取。
+        -->
+        <Grid.Style>
+            <Style TargetType="Grid">
+                <Style.Triggers>
+                    <DataTrigger Value="False"
+                                 Binding="{Binding IsEnabled,
+                                           RelativeSource={RelativeSource AncestorType=UserControl}}">
+                        <Setter Property="Opacity" Value="0.4" />
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </Grid.Style>
+
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="10" />
+            <ColumnDefinition Width="22" />
+        </Grid.ColumnDefinitions>
+
+        <!-- ============ 饱和度 × 明度 方块 ============ -->
+        <Border Grid.Column="0" CornerRadius="8" BorderThickness="1"
+                BorderBrush="{DynamicResource InputBorderBrush}">
+            <!-- Background=Transparent 是**必须**的: Grid 默认没有背景画刷, 那样整块区域
+                 不参与命中测试, 点在色块上不会有反应(只有叠在上面的 Rectangle 算数,
+                 边缘和圆角处就会漏)。 -->
+            <Grid x:Name="SvHost" Background="Transparent" Cursor="Cross"
+                  MouseLeftButtonDown="OnSvDown" MouseMove="OnSvMove" MouseLeftButtonUp="OnSvUp"
+                  LostMouseCapture="OnHostLostCapture">
+                <!-- 三层渐变叠出 HSV 色板。★ 只有这一层裁剪(ClipToBounds + 圆角),
+                     取色点在外面那层 —— 点拖到边缘最多只能到边界上, 夹在裁剪层里会被切掉一半,
+                     而"纯白 / 纯黑"这两个角恰恰是最常用的位置(见下面 marker 的说明)。 -->
+                <Border CornerRadius="7" ClipToBounds="True">
+                    <Grid>
+                        <!-- ① 纯色相底(只有它的 Color 会随色相变) -->
+                        <Rectangle>
+                            <Rectangle.Fill>
+                                <SolidColorBrush x:Name="HueBase" Color="#FF0000" />
+                            </Rectangle.Fill>
+                        </Rectangle>
+                        <!-- ② 横向白→透明 = 饱和度 -->
+                        <Rectangle>
+                            <Rectangle.Fill>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Color="#FFFFFFFF" Offset="0" />
+                                    <GradientStop Color="#00FFFFFF" Offset="1" />
+                                </LinearGradientBrush>
+                            </Rectangle.Fill>
+                        </Rectangle>
+                        <!-- ③ 纵向透明→黑 = 明度 -->
+                        <Rectangle>
+                            <Rectangle.Fill>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                    <GradientStop Color="#00000000" Offset="0" />
+                                    <GradientStop Color="#FF000000" Offset="1" />
+                                </LinearGradientBrush>
+                            </Rectangle.Fill>
+                        </Rectangle>
+                    </Grid>
+                </Border>
+
+                <!-- 取色点。两层圆环(黑在外/白在内)而不是单色圆圈 —— 单色圈在浅黄或者
+                     纯黑那一角上会整个消失, 用户就找不到自己选在哪了。 -->
+                <Canvas IsHitTestVisible="False">
+                    <Grid x:Name="SvMarker" Width="14" Height="14">
+                        <Ellipse Stroke="#66000000" StrokeThickness="1" />
+                        <Ellipse Margin="1.5" Stroke="White" StrokeThickness="2" />
+                    </Grid>
+                </Canvas>
+            </Grid>
+        </Border>
+
+        <!-- ============ 色相竖条 ============ -->
+        <Border Grid.Column="2" CornerRadius="6" BorderThickness="1"
+                BorderBrush="{DynamicResource InputBorderBrush}">
+            <Grid x:Name="HueHost" Background="Transparent" Cursor="Hand"
+                  MouseLeftButtonDown="OnHueDown" MouseMove="OnHueMove" MouseLeftButtonUp="OnHueUp"
+                  LostMouseCapture="OnHostLostCapture">
+                <Border CornerRadius="5" ClipToBounds="True">
+                    <Rectangle>
+                        <Rectangle.Fill>
+                            <!-- 7 个停点 = 色相环上每 60° 一个, 0 和 360 同为红, 首尾接得上 -->
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                <GradientStop Color="#FF0000" Offset="0" />
+                                <GradientStop Color="#FFFF00" Offset="0.1667" />
+                                <GradientStop Color="#00FF00" Offset="0.3333" />
+                                <GradientStop Color="#00FFFF" Offset="0.5" />
+                                <GradientStop Color="#0000FF" Offset="0.6667" />
+                                <GradientStop Color="#FF00FF" Offset="0.8333" />
+                                <GradientStop Color="#FF0000" Offset="1" />
+                            </LinearGradientBrush>
+                        </Rectangle.Fill>
+                    </Rectangle>
+                </Border>
+
+                <!-- 位置指示: 左右各挑出一个尖, 像刻度尺上的游标(同样不裁剪, 见上) -->
+                <Canvas IsHitTestVisible="False">
+                    <Grid x:Name="HueMarker" Width="22" Height="8">
+                        <Path Fill="White" Stroke="#66000000" StrokeThickness="1"
+                              Data="M0,4 L4,0.5 L18,0.5 L22,4 L18,7.5 L4,7.5 Z" />
+                    </Grid>
+                </Canvas>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

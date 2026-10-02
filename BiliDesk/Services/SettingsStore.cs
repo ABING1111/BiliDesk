@@ -51,11 +51,13 @@ public class SettingsStore
     /// <summary>要跳过的片段类别(逗号分隔的服务端 category 原值)</summary>
     public string SponsorBlockCategories { get; set; } = SponsorCategories.Sponsor;
 
-    /// <summary>启动时打开哪个页面(PageKey 的名字)</summary>
-    public string StartupPage { get; set; } = "Home";
-
     /// <summary>
-    /// 关闭主窗口时是否最小化到托盘。
+    /// 主题色(强调色)的 `#RRGGBB`。空 = 用默认的 B 站粉。
+    /// 老配置没有这个字段 → 反序列化保持初始化值(空串) → 自动落到默认色。
+    /// </summary>
+    public string AccentColor { get; set; } = "";
+
+    /// <summary>关闭主窗口时是否最小化到托盘。
     ///
     /// 默认 **true**: 点右上角关闭键只是把窗口收进托盘(进程继续跑, 双击托盘图标恢复),
     /// 要真正退出得走托盘右键菜单的「退出」。这是用户在 2026-09-24 明确要求的行为 ——
@@ -112,12 +114,15 @@ public class SettingsStore
                     DanmakuBlockKeywords = s.DanmakuBlockKeywords ?? "";
                     // 老配置没有这个字段 —— 反序列化时"缺失字段保持初始化值", 于是自动落到默认的 App
                     RecommendSource = s.RecommendSource;
+                    // 主题色: 老配置没有这个字段(空串) → 保持默认的 B 站粉
+                    AccentColor = s.AccentColor ?? "";
                     // 同理: 老配置的 SponsorBlockEnabled 保持 false(默认关), 类别保持默认的 sponsor。
                     // 类别串要 Sanitize 一下: 配置里可能留着本应用不做的 interaction, 或被手改坏 ——
                     // 不清掉就会出现"界面上一个都没勾、后台却还在按旧类别跳"的矛盾。
                     SponsorBlockEnabled = s.SponsorBlockEnabled;
                     SponsorBlockCategories = SponsorCategories.Sanitize(s.SponsorBlockCategories);
-                    StartupPage = string.IsNullOrWhiteSpace(s.StartupPage) ? "Home" : s.StartupPage;
+                    // 老配置里可能残留 StartupPage 字段 —— 启动页设置已删除, 这里不再读它
+                    // (留着旧值无害: 反序列化比手写的多认字段, 序列化时不再写出去)。
                     // 老配置的 JSON 里没有这个字段 —— 属性初始化默认值是 true, 反序列化时
                     // "缺失的字段保持初始化值", 所以老配置会自动拿到"默认打开", 不需要版本号兼容。
                     CloseToTray = s.CloseToTray;
@@ -200,9 +205,9 @@ public class SettingsStore
                 DanmakuColorful = DanmakuColorful,
                 DanmakuBlockKeywords = DanmakuBlockKeywords,
                 RecommendSource = RecommendSource,
+                AccentColor = AccentColor,
                 SponsorBlockEnabled = SponsorBlockEnabled,
                 SponsorBlockCategories = SponsorBlockCategories,
-                StartupPage = StartupPage,
                 CloseToTray = CloseToTray,
                 AutoCheckUpdate = AutoCheckUpdate,
                 SkippedVersion = SkippedVersion,
@@ -298,15 +303,6 @@ public class SettingsStore
         SponsorBlockCategories = next;
         Save();
         SponsorBlockChanged?.Invoke();
-    }
-
-    /// <summary>改启动页并落盘</summary>
-    public void SetStartupPage(string pageKeyName)
-    {
-        if (string.IsNullOrWhiteSpace(pageKeyName)) return;
-        if (string.Equals(StartupPage, pageKeyName, StringComparison.Ordinal)) return;
-        StartupPage = pageKeyName;
-        Save();
     }
 
     /// <summary>改"关闭时最小化到托盘"并落盘</summary>

@@ -32,6 +32,10 @@ public partial class SettingsPage : UserControl
         {
             _subscribed = true;
             _vm.PropertyChanged += OnVmPropertyChanged;
+            // 调色盘拖动起止: 拖的时候跳过全窗口可视树重解析, 松手补一次
+            // (理由见 SettingsViewModel.AccentPickerColor 上的说明)
+            Palette.DragStarted += _vm.BeginAccentDrag;
+            Palette.DragEnded += _vm.EndAccentDrag;
         }
         _ = LoadAvatarAsync(_vm.UserFace);
     }

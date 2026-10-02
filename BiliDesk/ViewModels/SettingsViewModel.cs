@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Windows.Input;
+using System.Windows.Media;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
@@ -50,47 +51,133 @@ public class SettingsViewModel : ObservableObject
     /// <summary>「关于 → 版本号」一栏右侧显示的版本(与 App.AppVersion 单一来源, 别在这里写死)</summary>
     public string VersionNumber => "v" + App.AppVersion;
 
+    // ----------------- 主题色 -----------------
+
+    /// <summary>
+    /// 主题色(强调色)。读写设置并立刻重刷笔刷, 不用重启就生效。
+    /// 「跟随系统」时返回系统强调色 —— 调色盘和 HEX 框显示的就是当前**实际生效**的颜色,
+    /// 而不是"跟随系统"这个模式本身(模式由 <see cref="IsAccentSystem"/> 那个单选表示)。
+    /// </summary>
+    public string AccentColor
+    {
+        get => ThemeService.ToHex(Svc.Theme.Accent);
+        set
+        {
+            // 跟随系统时不比较: 否则用户手打一个正好等于系统色的 HEX 会被当成"没变化",
+            // 于是没法用它退出"跟随系统"。
+            if (!Svc.Theme.IsAccentSystem &&
+                string.Equals(value, AccentColor, StringComparison.OrdinalIgnoreCase)) return;
+            Svc.Theme.SetAccent(value);
+            RaiseAccentChanged();
+        }
+    }
+
+    /// <summary>
+    /// 调色盘双向绑定的那一份颜色。
+    ///
+    /// 为什么不直接把 <see cref="AccentColor"/> 给调色盘: 那个属性是字符串(存储格式),
+    /// 拖动时每帧都要序列化一次; 更要紧的是拖到纯黑时 `#000000` 反推不出色相, 游标会自己跳
+    /// (见 <see cref="Views.Controls.ColorPalette"/> 的类注释)。这里让调色盘直接持有 Color。
+    ///
+    /// ★ 拖动中传 settle: false 跳过那次全窗口可视树重解析 —— 拖动每秒来几十次, 每次都遍历
+    ///   一遍可视树是白烧的帧(笔刷本身换了, 眼前这一屏立刻就变色), 松手时再补一次
+    ///   (见 <see cref="EndAccentDrag"/> 与控件的 drag 结束回调)。
+    /// </summary>
+    public Color AccentPickerColor
+    {
+        get => Svc.Theme.Accent;
+        set
+        {
+            if (value == Svc.Theme.Accent) return;
+            Svc.Theme.SetAccent(ThemeService.ToHex(value), settle: !_draggingAccent);
+            RaiseAccentChanged();
+        }
+    }
+
+    /// <summary>调色盘是否正在被拖动(决定换色要不要立刻做全量重解析, 见 AccentPickerColor)</summary>
+    private bool _draggingAccent;
+
+    /// <summary>调色盘开始 / 结束拖动。结束时补做一次被拖期间省掉的重解析。</summary>
+    public void BeginAccentDrag() => _draggingAccent = true;
+
+    public void EndAccentDrag()
+    {
+        if (!_draggingAccent) return;
+        _draggingAccent = false;
+        Svc.Theme.Settle();
+    }
+
+    /// <summary>主题色用默认的 B 站粉(单选之一, 默认选中)</summary>
+    public bool IsAccentDefault
+    {
+        get => Svc.Theme.IsDefaultAccent;
+        set
+        {
+            // 单选按钮只会把选中项置 true。置 false 的那一次是"同组里被取消的旧项",
+            // 必须忽略 —— 否则会先落一次默认色, 界面闪一下再变回目标色。
+            if (!value || value == IsAccentDefault) return;
+            // 落回空串 = "没自定义过", 而不是存 "#FB7299" —— 这样默认色以后调了会跟着变
+            Svc.Theme.SetAccent("");
+            RaiseAccentChanged();
+        }
+    }
+
+    /// <summary>强调色跟随系统(单选之二)</summary>
+    public bool IsAccentSystem
+    {
+        get => Svc.Theme.IsAccentSystem;
+        set
+        {
+            if (!value || value == IsAccentSystem) return;
+            Svc.Theme.SetAccent(ThemeService.AccentSystem);
+            RaiseAccentChanged();
+        }
+    }
+
+    /// <summary>强调色用自定义颜色(单选之三)。就是"既不是默认粉、也不是跟随系统"。</summary>
+    public bool IsAccentCustom
+    {
+        get => !Svc.Theme.IsDefaultAccent && !Svc.Theme.IsAccentSystem;
+        set
+        {
+            if (!value || value == IsAccentCustom) return;
+            // 切到自定义: 拿**当前**颜色当起点, 用户想改再拖调色盘 ——
+            // 直接跳回默认粉会让"我只是想微调一下当前色"变成"颜色整个变了"。
+            Svc.Theme.SetAccent(ThemeService.ToHex(Svc.Theme.Accent));
+            RaiseAccentChanged();
+        }
+    }
+
+    /// <summary>
+    /// 调色盘能不能用。
+    /// 只有「跟随系统」时不可用 —— 那个颜色由 Windows 决定, 让用户拖了却改不动是骗人。
+    /// 「B 站粉」下**保持可用**: 粉只是一个具体颜色, 用户想微调就拖, 一拖就自动变成「自定义」。
+    /// </summary>
+    public bool CanEditAccent => !Svc.Theme.IsAccentSystem;
+
+    /// <summary>强调色是不是"没自定义过"(存储里空串 = 默认 B 站粉)</summary>
+    public bool IsDefaultAccent => Svc.Theme.IsDefaultAccent;
+
+    /// <summary>拖动调色盘 / 切来源之后, 一整组相关属性都要通知一遍</summary>
+    private void RaiseAccentChanged()
+    {
+        OnPropertyChanged(nameof(AccentColor));
+        OnPropertyChanged(nameof(AccentPickerColor));
+        OnPropertyChanged(nameof(IsAccentDefault));
+        OnPropertyChanged(nameof(IsAccentSystem));
+        OnPropertyChanged(nameof(IsAccentCustom));
+        OnPropertyChanged(nameof(CanEditAccent));
+        OnPropertyChanged(nameof(IsDefaultAccent));
+    }
+
+    /// <summary>恢复默认的 B 站粉</summary>
+    public ICommand ResetAccentCommand { get; }
+
     public AppTheme ThemeMode
     {
         get => Svc.Theme.Mode;
         set => Svc.Theme.SetMode(value);
     }
-
-    /// <summary>
-    /// 启动时打开哪个页面。
-    /// 只给导航栏上的 4 项(首页/动态/我的/设置)选择 —— 离线缓存 / 消息 / 搜索没有导航入口,
-    /// 设成启动页会"有进无出"; 历史与收藏虽在 PageKey 里, 但已收进「我的」页, 同样不在候选内。
-    /// </summary>
-    public PageKey StartupPage
-    {
-        get => MainViewModel.ParseStartupPage(Svc.Settings.StartupPage);
-        set
-        {
-            // 越界/非法值一律当首页, 免得从界面写进一个解析不出来的名字
-            var safe = MainViewModel.NavPages.Contains(value) ? value : PageKey.Home;
-            Svc.Settings.SetStartupPage(safe.ToString());
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(StartupPageHint));
-        }
-    }
-
-    public string StartupPageHint => StartupPage == PageKey.Home
-        ? "下次启动直接进首页"
-        : $"下次启动直接进「{StartupPageName(StartupPage)}」";
-
-    /// <summary>
-    /// PageKey → 界面名。
-    /// History / Favorites 两个分支目前命中不到(启动页被 NavPages 限制在 4 项内),
-    /// 但它们仍留在 PageKey 里、也在别处当导航目标用 —— 留着是为了以后启动页选项放开时不必再想一遍译名。
-    /// </summary>
-    private static string StartupPageName(PageKey key) => key switch
-    {
-        PageKey.Follow => "关注",
-        PageKey.History => "历史记录",
-        PageKey.Favorites => "收藏",
-        PageKey.Settings => "设置",
-        _ => "首页"
-    };
 
     // ----------------- 推荐算法 -----------------
 
@@ -355,6 +442,9 @@ public class SettingsViewModel : ObservableObject
         ThemeSystemCommand = new RelayCommand(() => ThemeMode = AppTheme.System);
         ThemeLightCommand = new RelayCommand(() => ThemeMode = AppTheme.Light);
         ThemeDarkCommand = new RelayCommand(() => ThemeMode = AppTheme.Dark);
+
+        // 恢复默认 = 落回空串(存"没自定义过", 而不是存 "#FB7299" —— 这样默认色以后调了会跟着变)
+        ResetAccentCommand = new RelayCommand(() => AccentColor = "");
 
         CheckUpdateCommand = new AsyncRelayCommand(CheckUpdateAsync);
 
