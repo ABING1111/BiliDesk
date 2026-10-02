@@ -187,8 +187,10 @@
                 <TextBlock Text="&#xE70E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
             </Button>
 
+            <!-- 刷新: 走 code-behind 的 OnRefreshClick 而不是直接绑命令 —— 刷完要把列表滚回顶部
+                 (见 HomePage.RefreshCurrentTabAsync 的说明), 那是"视图"的事, VM 不该管。 -->
             <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
-                    Command="{Binding RefreshCommand}" ToolTip="刷新">
+                    Click="OnRefreshClick" ToolTip="刷新">
                 <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
             </Button>
 
@@ -307,7 +309,7 @@
                                        VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
                             <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
                                     Margin="16,0,0,0" Padding="10,4"
-                                    Command="{Binding RefreshCommand}" />
+                                    Click="OnRefreshClick" />
                         </StackPanel>
                     </Border>
 
@@ -357,7 +359,7 @@
                                        VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
                             <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
                                     Margin="16,0,0,0" Padding="10,4"
-                                    Command="{Binding RefreshCommand}" />
+                                    Click="OnRefreshClick" />
                         </StackPanel>
                     </Border>
 
@@ -445,7 +447,7 @@
                                        VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
                             <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
                                     Margin="16,0,0,0" Padding="10,4"
-                                    Command="{Binding RefreshCommand}" />
+                                    Click="OnRefreshClick" />
                         </StackPanel>
                     </Border>
 

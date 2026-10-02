@@ -78,6 +78,15 @@ public static class CardWall
         DependencyProperty.RegisterAttached("Columns", typeof(int), typeof(CardWall),
             new PropertyMetadata(0));
 
+    /// <summary>
+    /// 当前列数(只读)。卡片墙面板用它判断"折行还成不成立"(见 CardWallPanel.WrapStillFits)。
+    ///
+    /// ★ 判据必须用**目标值 + 列数**这种"全墙唯一"的量, 不能用各孩子**实际**的宽度:
+    ///   渐进泵跑到一半时墙是"一半新一半旧"的, 那些宽度算出来的是中间态的折行,
+    ///   会把"折行已经坏了"误判成没坏(实测: 省下 1/3 CPU 却换来 15 次 ±237px 上下横跳)。
+    /// </summary>
+    public static int GetColumns(DependencyObject d) => (int)d.GetValue(ColumnsProperty);
+
     private static void OnEnableChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not FrameworkElement el) return;
@@ -92,16 +101,29 @@ public static class CardWall
     }
 
     /// <summary>
-    /// 立刻按**当前**宽度重算一次目标尺寸(状态过渡"收敛可视区"之前必须调)。
+    /// 立刻按**当前**宽度重算一次目标尺寸。
     ///
-    /// ★★ 为什么需要它(2026-10-02, 用户报的"卡片抽动很明显"的根): 正常重算挂在墙的 SizeChanged 上,
+    /// ★★ 为什么需要它(2026-10-01, 用户报的"卡片抽动很明显"的根): 正常重算挂在墙的 SizeChanged 上,
     ///   而 WPF 的 SizeChanged 是**布局走完之后**才发的 —— `FluentWindow.PlayStateTransition` 里那次
     ///   UpdateLayout 之后, 本类的目标值还是**按旧窗口宽度**算出来的旧值。于是"按目标收敛可视区"
     ///   一个孩子都没有可收敛的(探针实测 `收敛=0`), 随后渐进的 PumpStep 才把**整墙含视野上方**
     ///   按 16 张一批收敛(150 张要 10 批、600ms), 而卡片高度随宽度变 ⇒ 可见区被一批批顶走。
     ///   在这里强制重算一次, 过渡期的"一次性收敛"才真的收敛得动。
+    ///
+    /// ★★ 它**绕过拖动期间的合流节流**(2026-10-01): 节流会让目标值最多滞后 120ms, 而折行是按孩子
+    ///   当前宽度算的 —— 滞后期间窗口已经变了上百像素, 一行里最后那张就塞不下、掉到下一行,
+    ///   下一拍又跳回来(用户看到的"可见内容一行一行上下跳")。调用方(卡片墙面板)会在同一次布局
+    ///   更新里把可见带的孩子切过去, 中间态一帧都不会被渲染。
     /// </summary>
-    public static void RefreshNow(FrameworkElement wall) => Update(wall);
+    public static void RefreshNow(FrameworkElement wall) => ApplyNow(wall);
+
+    /// <summary>按当前实际宽度算一次并写下去, 不看 <see cref="NotifyModalResize"/> 的节流开关。</summary>
+    private static void ApplyNow(FrameworkElement wall)
+    {
+        var avail = wall.ActualWidth;
+        if (double.IsNaN(avail) || avail <= 0) return;
+        ApplyTo(wall, avail);
+    }
 
     private static void Update(FrameworkElement wall)
     {

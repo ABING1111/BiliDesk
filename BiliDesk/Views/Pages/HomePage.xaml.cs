@@ -389,6 +389,26 @@ public partial class HomePage : UserControl
         }
     }
 
+    /// <summary>
+    /// 手动刷新(当前 tab)。
+    ///
+    /// ★ 刷新完把当前 tab 滚回顶部(2026-10-01)。刷新换的是**整份列表**: 新的一批可能比旧的短
+    ///   (推荐接口一次只给 10~30 条, 而旧列表可能已经滚了几页), 此时 ScrollViewer 会把越界的
+    ///   偏移夹回来, 夹多少取决于新内容有多高 —— 用户看到的就是"点完刷新页面自己滑了一段"。
+    ///   回到顶部是刷新语义下唯一确定的落点(和下拉刷新一致), 也就没有"滑"这回事了。
+    /// </summary>
+    private async Task RefreshCurrentTabAsync()
+    {
+        if (Vm == null) return;
+        await Vm.RefreshAsync();
+        var tab = CurrentTabFromVm() ?? HomeTabKind.Recommend;
+        ScrollOf(tab)?.ScrollToTop();
+        _savedOffsets.Remove(tab);
+    }
+
+    /// <summary>工具栏刷新键 + 错误条里的「重试」都走这一条</summary>
+    private void OnRefreshClick(object sender, RoutedEventArgs e) => _ = RefreshCurrentTabAsync();
+
     /// <summary>通用: 滚动到底部 / 内容不够一屏时, 自动加载更多</summary>
     private async Task TriggerAutoLoad(ScrollViewer sv, HomeViewModel vm)
     {
@@ -989,18 +1009,61 @@ internal sealed class DeferredFill
                 break;
             case NotifyCollectionChangedAction.Reset:
                 _index = 0;
-                _view.Clear();
                 _completed = false;
+                _rebuildPending = true;    // 换列表整段推迟到下一拍, 见 _rebuildPending 的说明
                 Pump();
                 break;
             // 列表里没有删除/替换/移动的语义, 兜底走全量重同步
             default:
                 _index = 0;
-                _view.Clear();
                 _completed = false;
+                _rebuildPending = true;
                 Pump();
                 break;
         }
+    }
+
+    /// <summary>
+    /// "源列表被整体换掉了, 但视图还没换"。
+    ///
+    /// ★★ 为什么不能在这一拍就 Clear + 重填(2026-10-01, "推荐页点刷新后页面自己滑动" 的根):
+    ///   刷新走的是 `RecommendItems.Clear()` → 再逐条 Add。Clear 发 Reset 时**源还是空的**,
+    ///   此时若立刻 `_view.Clear()`, 视图就真的空了一拍 —— 视图一空, ScrollViewer 的内容高度
+    ///   塌到 0, 当前滚动偏移被夹成 0/一小截(探针实测 700 → 140), 滚动条也消失一次;
+    ///   等下一拍数据填回来, 用户的位置已经回不去了(而且夹小之后每一次补页都会把偏移再推一下,
+    ///   看起来就是"页面自己在往下滑")。
+    ///   推迟到下一拍: Clear 与第一批填充落在**同一个 dispatcher 回调**里, 中间没有布局/渲染,
+    ///   内容高度根本不会塌 —— 列表从旧内容直接换成新内容。
+    /// </summary>
+    private bool _rebuildPending;
+
+    /// <summary>
+    /// 把源列表的下一批补进视图, 返回补了几条(Reset 的"先清后填"也在这里合并完成)。
+    ///
+    /// ★★ 关键点: `_view.Clear()` 与随后的第一批填充必须在**同一个调用**里落地。
+    ///   本类原来的 Reset 分支是"当场 Clear + 排一帧再填", 中间隔了一次布局/渲染的机会 ——
+    ///   ScrollViewer 会看到内容高度塌到 0 并把滚动偏移夹小(探针实测 700 → 140),
+    ///   用户的位置就再也回不去了, 表现是"点刷新后页面自己滑走"。
+    /// </summary>
+    private void FillChunk()
+    {
+        if (_disposed) return;
+
+        if (_rebuildPending)
+        {
+            _rebuildPending = false;
+            _view.Clear();
+        }
+
+        var added = 0;
+        while (added < _chunk && _index < _source.Count)
+        {
+            _view.Add(_source[_index]!);
+            _index++;
+            added++;
+        }
+        if (_index >= _source.Count) _completed = true;
+        if (added > 0) Progress?.Invoke(this, EventArgs.Empty);
     }
 
     private void Pump()
@@ -1010,16 +1073,7 @@ internal sealed class DeferredFill
         _pending = _list.Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
         {
             _pending = null;
-            if (_disposed || _completed) return;
-            var added = 0;
-            while (added < _chunk && _index < _source.Count)
-            {
-                _view.Add(_source[_index]!);
-                _index++;
-                added++;
-            }
-            if (_index >= _source.Count) _completed = true;
-            if (added > 0) Progress?.Invoke(this, EventArgs.Empty);
+            FillChunk();
             if (!_completed) Pump();   // 还有存货, 继续排下一帧
         });
     }
