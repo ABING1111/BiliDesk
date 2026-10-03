@@ -181,9 +181,9 @@
                                    "在两类之间选一个", 与首页那排分段标签是同一个语义, 复用同一套视觉最省心。
                                  ★ GroupName 必须给: 同组 RadioButton 才有互斥。 -->
                             <StackPanel Orientation="Horizontal">
-                                <RadioButton GroupName="SearchKind" Style="{StaticResource PillTabStyle}"
+                                <RadioButton GroupName="SearchKind" Style="{StaticResource SettingsTabStyle}"
                                              Content="视频" IsChecked="{Binding IsVideoKind, Mode=TwoWay}" />
-                                <RadioButton GroupName="SearchKind" Style="{StaticResource PillTabStyle}"
+                                <RadioButton GroupName="SearchKind" Style="{StaticResource SettingsTabStyle}"
                                              Content="直播间" Margin="6,0,0,0"
                                              IsChecked="{Binding IsLiveKind, Mode=TwoWay}" />
                             </StackPanel>

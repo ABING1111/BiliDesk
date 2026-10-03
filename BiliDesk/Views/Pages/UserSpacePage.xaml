@@ -95,11 +95,12 @@
                     </StackPanel>
                 </StackPanel>
 
-                <!-- 关注按钮 -->
-                <Button Grid.Column="2" Style="{StaticResource AccentButtonStyle}"
-                        Command="{Binding FollowCommand}" Padding="22,8"
-                        VerticalAlignment="Center" ToolTip="关注该 UP 主">
-                    <TextBlock Text="+ 关注" FontSize="12" />
+                <!-- 关注按钮: 未关注 = 强调色实底「+ 关注」; 已关注 = 淡色底「已关注」。
+                     底色切换用样式 DataTrigger(读 VM 的 IsNotFollowed)。 -->
+                <Button Grid.Column="2" Command="{Binding ToggleFollowCommand}" Padding="22,8"
+                        VerticalAlignment="Center" ToolTip="关注 / 取消关注该 UP 主"
+                        Style="{StaticResource FollowToggleButtonStyle}">
+                    <TextBlock Text="{Binding FollowLabel}" FontSize="12" />
                 </Button>
             </Grid>
         </Border>

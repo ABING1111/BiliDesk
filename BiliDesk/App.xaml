@@ -21,8 +21,10 @@
             <SolidColorBrush x:Key="AccentHoverBrush" Color="#FB83A5" />
             <SolidColorBrush x:Key="AccentPressedBrush" Color="#DD6487" />
             <SolidColorBrush x:Key="AccentSoftFillBrush" Color="#1CFB7299" />
+            <SolidColorBrush x:Key="AccentSoftFillStrongBrush" Color="#2EFB7299" />
             <SolidColorBrush x:Key="AccentBorderFillBrush" Color="#66FB7299" />
             <SolidColorBrush x:Key="AccentTextBrush" Color="#FB7299" />
+            <SolidColorBrush x:Key="AccentTextStrongBrush" Color="#C4455F" />
             <!--
                 强调色背景上的文字色。粉色是中间调, 品牌规定配白字(粉底白字是 B 站的标准搭配),
                 所以这里和 ThemeService.BrandOnAccent 一样写白色。

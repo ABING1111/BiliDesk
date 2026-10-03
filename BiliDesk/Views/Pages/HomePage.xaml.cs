@@ -498,34 +498,20 @@ public partial class HomePage : UserControl
         ScrollOf(tab)?.ScrollToTop();
     }
 
-    // ------------------------------------------------------------ 右上角搜索卡
+    // ------------------------------------------------------------ 顶部居中搜索卡
     //
-    // 一套动画, 两个阶段:
-    //   ① 向左平移 —— 把卡片(此刻就是那条灰的搜索框)从右上角滑到页面**水平正中**;
-    //   ② 展开 —— 宽度 440→520、高度 48→卡片高, 露出下面的 搜索历史 / 热搜。
-    //   **顶部全程不动**(2026-09-26 用户要求"向左平移到上方正中间"): 卡片长高是往下长,
-    //   所以没有 Y 方向的位移、也没有 Y 的补偿 —— 只有 X 一个方向在动。
+    // 2026-10-03 用户要求"搜索框固定在首页正上方的中间位置, 保留展开动画":
+    //   · 收起态 = 页面水平正中那条灰的搜索框(XAML 里 Center 对齐 + 顶部 16);
+    //   · 展开 = 原地往下长(宽度 440→520、高度 48→卡片高), 露出 搜索历史 / 热搜。
+    //   居中对齐下宽度变化是"两边对称地长", **中心天然不动** —— 旧版"右对齐 + 平移补偿"
+    //   那套(PanXFor / SearchCardTrans.X 关键帧)整体废弃, SearchCardTrans 恒为 0。
     //
-    // ★ 展开时"横向中心钉住不动"的补偿量是这么来的(卡片右对齐):
-    //     渲染中心X = 可用宽 - 右边距 - W/2 + X   →  W 每长 1, 中心就左移 0.5 ⇒ X 要补 +ΔW/2
-    //   代码里不显式写这个补偿量, 而是各算一次 PanXFor(收起宽) / PanXFor(展开宽) 当两段终点 ——
-    //   两者之差恰好就是 ΔW/2。把 X/Width 的**关键帧时间点对齐**, 补偿就天然同步: 补偿量只是
-    //   宽度的线性函数, 跟缓动怎么走无关(两边缓动相同, 但即便不同也严格成立)。
-    //   ⚠ 别"顺手再补一次 ΔW/2": 那是重复补偿, 卡片会整体偏出页面正中半个宽度差(踩过)。
-    //
-    // 为什么两段都用关键帧、而不是"跑完平移再 BeginAnimation 展开": 同一个属性上第二次
+    // 为什么展开仍用关键帧而不是"跑完一步再 BeginAnimation 下一步": 同一个属性上第二次
     // BeginAnimation 会**立刻**把值顶到新动画的 From(BeginTime 只推迟开始, 不推迟生效),
-    // 第一段会被截断 —— 这条在滚动弹幕上踩过, 见 PlayerWindow 里弹幕的注释。
+    // 前一段会被截断 —— 这条在滚动弹幕上踩过, 见 PlayerWindow 里弹幕的注释。
 
     private const double SearchBoxW = 440;
     private const double SearchBoxH = 48;
-    /// <summary>
-    /// 收起态右边距。= 142(窗口那三个自绘按钮在本页坐标里的跨度) + 10 间隙。
-    /// 窗口按钮是 MainWindow 里 `Margin="0,4,4,0"` 右对齐的 3×46 = 138 宽, 在本页坐标里从右边
-    /// 142 起贴到页右缘; 而搜索框跟它处在**同一条水平线**上(与首页标题、左侧 logo 对齐),
-    /// 纵向躲不开, 只能横向让开。改 XAML 里的 Margin 时这里要同步(算平移量要用)。
-    /// </summary>
-    private const double SearchBoxRight = 152;
     private const double SearchCardW = 520;
     /// <summary>内容四周的余量: 免得"刚好放满"因为 1px 取整就冒出滚动条</summary>
     private const double SearchCardSlack = 8;
@@ -700,30 +686,22 @@ public partial class HomePage : UserControl
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
         var w1 = SearchCardW;
         var h1 = ComputeOpenHeight();
-        // 平移段终点 = "把收起宽摆到页面水平正中"; 展开段终点 = "把展开宽摆到页面水平正中"。
-        // 两者之差正好是 ΔW/2 —— 就是宽度增长会让中心跑掉的那一半, 于是展开全程横向中心都不动。
-        var tx = PanXFor(SearchBoxW);
-        var tx1 = PanXFor(w1);
-        var pan = SearchPanMs;
-        var end = SearchPanMs + SearchExpandMs;
+        var expand = SearchExpandMs;
 
-        // 只有 X 在动: 顶部固定, 卡片是往下长高的
-        SearchCardTrans.BeginAnimation(TranslateTransform.XProperty, Keys(
-            K(0, 0), K(pan, tx, ease), K(end, tx1, ease)));
-
-        // 平移段宽度/高度不动: 中间那个关键帧要显式给原值, 否则会从 0 一路线性长到展开值
+        // 居中对齐: 中心天然不动, 只有宽度/高度在长(顶部固定, 卡片往下长高)。
+        // SearchCardTrans 恒为 0, 不再有 X 平移段。
         SearchCard.BeginAnimation(FrameworkElement.WidthProperty, Keys(
-            K(0, SearchBoxW), K(pan, SearchBoxW), K(end, w1, ease)));
+            K(0, SearchBoxW), K(expand, w1, ease)));
 
-        var height = Keys(K(0, SearchBoxH), K(pan, SearchBoxH), K(end, h1, ease));
+        var height = Keys(K(0, SearchBoxH), K(expand, h1, ease));
         height.Completed += (_, _) => OnSearchOpened();
         SearchCard.BeginAnimation(FrameworkElement.HeightProperty, height);
 
         // 内容框随展开淡入 —— 底色硬切在动画里很跳。搜索框自己不用淡入: 它一直都在,
         // 展开只是"旁边多长出一个框"。
-        FadeIn(SearchContentBox, pan, SearchExpandMs);
+        FadeIn(SearchContentBox, 0, expand);
         // 框里的内容等长开一点再露, 看着像"被框一点点让出来"
-        FadeIn(SearchCardScroll, pan + (int)(SearchExpandMs * 0.35), (int)(SearchExpandMs * 0.65));
+        FadeIn(SearchCardScroll, (int)(expand * 0.35), (int)(expand * 0.65));
     }
 
     private void OnSearchOpened()
@@ -748,10 +726,9 @@ public partial class HomePage : UserControl
         _searchInputReady = false;
         _searchClosing = true;
 
-        // 拿当前值当起点: 动画被打断时就从这一刻的尺寸/位置收回去, 不跳
+        // 拿当前值当起点: 动画被打断时就从这一刻的尺寸收回去, 不跳
         var w0 = SearchCard.Width > 0 ? SearchCard.Width : SearchBoxW;
         var h0 = SearchCard.Height > 0 ? SearchCard.Height : SearchBoxH;
-        var x0 = SearchCardTrans.X;
 
         var fade = TimeSpan.FromMilliseconds(SearchFadeOutMs);
         // From **必须显式给当前值**: 不写 From 时动画从属性**基值**起步, 而基值仍是收起态的 0,
@@ -767,8 +744,7 @@ public partial class HomePage : UserControl
         SearchContentBox.BeginAnimation(OpacityProperty,
             new DoubleAnimation(SearchContentBox.Opacity, 0, fadeBack) { BeginTime = fade });
 
-        SearchCardTrans.BeginAnimation(TranslateTransform.XProperty, Keys(
-            K(0, x0), K(hold, x0), K(end, 0, ease)));
+        // 居中对齐: 收起只有尺寸在缩, 没有位移
         SearchCard.BeginAnimation(FrameworkElement.WidthProperty, Keys(
             K(0, w0), K(hold, w0), K(end, SearchBoxW, ease)));
 
@@ -781,7 +757,7 @@ public partial class HomePage : UserControl
     /// 恢复成收起态并清掉全部动画。
     ///
     /// 必须清动画: 关键帧动画是 HoldEnd 的, 不清的话属性被动画值一直占着 —— 下次打开时
-    /// 关键帧的起点就不再是收起值, 窗口缩放后卡片也回不到右上角。
+    /// 关键帧的起点就不再是收起值, 窗口缩放后卡片也回不到收起尺寸。
     /// </summary>
     private void ResetSearchCard()
     {
@@ -801,7 +777,7 @@ public partial class HomePage : UserControl
         // 先清动画再落本地值, 否则会被残留的动画值顶掉
         SearchCard.Width = SearchBoxW;
         SearchCard.Height = SearchBoxH;
-        SearchCardTrans.X = 0;
+        SearchCardTrans.X = 0;   // 居中对齐后恒为 0(保留元素本身, 动画代码仍会碰它)
         SearchContentBox.Opacity = 0;
         SearchCardScroll.Opacity = 0;
         SearchCardBgHover.Opacity = 0;
@@ -811,21 +787,11 @@ public partial class HomePage : UserControl
     }
 
     /// <summary>
-    /// 让"宽度为 w 的卡片"横向居中于页面所需的 X 位移。
-    /// 卡片是右对齐的, 所以布局左边界 = 可用宽 - 右边距 - w;
-    /// 顶部固定(竖向不需要位移), 于是整个动画只有这一个量。
+    /// 窗口尺寸变了: 卡片开着也不需要补偿 —— 居中对齐跟着布局走,
+    /// 中心永远在页面正中(保留空实现是给 SizeChanged 的订阅留个语义清晰的落点)。
     /// </summary>
-    private double PanXFor(double w)
-        => ActualWidth / 2 - (ActualWidth - SearchBoxRight - w / 2);
-
-    /// <summary>窗口尺寸变了: 卡片开着就按新位置重新居中(不重播动画, 直接落到新位置)</summary>
     private void RelayoutSearchCard()
     {
-        // _searchInputReady 为真 = 已展开完且没在收 —— 动画中途不动它, 否则会把动画打断
-        if (!_searchInputReady) return;
-
-        SearchCardTrans.BeginAnimation(TranslateTransform.XProperty, null);
-        SearchCardTrans.X = PanXFor(SearchCard.Width);
     }
 
     // ---------------- 输入框 / 遮罩的交互 ----------------

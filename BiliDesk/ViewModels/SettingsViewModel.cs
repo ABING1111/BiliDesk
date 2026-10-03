@@ -11,6 +11,9 @@ namespace BiliDesk.ViewModels;
 /// <summary>设置页 ViewModel: 外观 + 账户 + 数据 + 关于</summary>
 public class SettingsViewModel : ObservableObject
 {
+    /// <summary>作者 B 站 UID(设置页「关于」Tab 的作者栏)。与导航服务共用。</summary>
+    private const long AuthorMid = 697238372;
+
     private bool _isLoggedIn;
     private string _userName = "";
     private string _userFace = "";
@@ -50,6 +53,36 @@ public class SettingsViewModel : ObservableObject
 
     /// <summary>「关于 → 版本号」一栏右侧显示的版本(与 App.AppVersion 单一来源, 别在这里写死)</summary>
     public string VersionNumber => "v" + App.AppVersion;
+
+    // ----------------- 顶部 Tab(2026-10-03 重做) -----------------
+
+    private int _tabIndex;
+
+    /// <summary>当前选中 Tab 的序号(0=通用 1=播放 2=数据管理 3=关于)。
+    /// 页面用它切内容; 四个 bool 属性是给 XAML 胶囊 Tab 双向绑定的投影。</summary>
+    public int TabIndex
+    {
+        get => _tabIndex;
+        set
+        {
+            if (!SetProperty(ref _tabIndex, value)) return;
+            OnPropertyChanged(nameof(IsGeneralTab));
+            OnPropertyChanged(nameof(IsPlaybackTab));
+            OnPropertyChanged(nameof(IsDataTab));
+            OnPropertyChanged(nameof(IsAboutTab));
+        }
+    }
+
+    /// <summary>
+    /// Tab 投影。★ **只写 true**: RadioButton 组里的一个被勾上时, WPF 会先把**上一个**
+    /// Radio 的 IsChecked 置 false —— TwoWay 绑定把 false 也写进来, 如果无条件执行
+    /// TabIndex = 0, 刚切到的 Tab 会被立刻盖回去, 表现就是"四个 Tab 都点不动"。
+    /// false 只来自"取消勾选", 目标 Tab 自己的 true 会跟着来, 忽略即可。
+    /// </summary>
+    public bool IsGeneralTab  { get => TabIndex == 0; set { if (value) TabIndex = 0; } }
+    public bool IsPlaybackTab { get => TabIndex == 1; set { if (value) TabIndex = 1; } }
+    public bool IsDataTab     { get => TabIndex == 2; set { if (value) TabIndex = 2; } }
+    public bool IsAboutTab    { get => TabIndex == 3; set { if (value) TabIndex = 3; } }
 
     // ----------------- 主题色 -----------------
 
@@ -179,6 +212,47 @@ public class SettingsViewModel : ObservableObject
         set => Svc.Theme.SetMode(value);
     }
 
+    /// <summary>颜色模式下拉框的投影(AppTheme 枚举 0=System 1=Light 2=Dark, 顺序即下拉顺序)。
+    /// ComboBox 的 SelectedIndex 只吃 int, 枚举值本身按数字排列, 直接透传。</summary>
+    public int ThemeModeInt
+    {
+        get => (int)Svc.Theme.Mode;
+        set => ThemeMode = (AppTheme)value;
+    }
+
+    /// <summary>
+    /// 下拉框的 ItemsSource(字符串)与选中投影。
+    /// ★ 为什么不用 SelectedIndex + ComboBoxItem: ThemeService.Mode **没有**变化通知,
+    ///   ComboBox 的 SelectedIndex 初始化读一次后, 主题在别处被改(跟随系统的自动逻辑)
+    ///   下拉框不会跟着刷; 用"字符串列表 + SelectedItem"再靠 OnPropertyChanged 推,
+    ///   至少能保证"打开页面就是当前值、点选就生效"。
+    /// </summary>
+    public string[] ThemeOptions { get; } = { "跟随系统", "浅色", "深色" };
+
+    public string ThemeSelected
+    {
+        get => ThemeOptions[(int)Svc.Theme.Mode];
+        set
+        {
+            var idx = Array.IndexOf(ThemeOptions, value);
+            if (idx >= 0) ThemeMode = (AppTheme)idx;
+            OnPropertyChanged();
+        }
+    }
+
+    public string[] RecommendOptions { get; } = { "B 站官方 App", "浏览器网页版" };
+
+    public string RecommendSelected
+    {
+        get => RecommendOptions[(int)Svc.Settings.RecommendSource];
+        set
+        {
+            var idx = Array.IndexOf(RecommendOptions, value);
+            if (idx >= 0) RecommendSource = (RecommendSource)idx;
+            OnPropertyChanged();
+        }
+    }
+
     // ----------------- 推荐算法 -----------------
 
     /// <summary>
@@ -200,6 +274,17 @@ public class SettingsViewModel : ObservableObject
     public string RecommendSourceHint => Svc.Settings.RecommendSource == RecommendSource.App
         ? "与手机 App 首页推荐一致 · 每次刷新给你全新的一批 10 条"
         : "与网页版 bilibili.com 首页推荐一致 · 每次最多 30 条";
+
+    /// <summary>推荐算法下拉框的投影(RecommendSource 枚举 0=App 1=Web)。</summary>
+    public int RecommendSourceInt
+    {
+        get => (int)Svc.Settings.RecommendSource;
+        set
+        {
+            if ((int)Svc.Settings.RecommendSource == value) return;
+            RecommendSource = (RecommendSource)value;
+        }
+    }
 
     // ----------------- 跳过赞助片段(SponsorBlock) -----------------
 
@@ -436,6 +521,10 @@ public class SettingsViewModel : ObservableObject
     public ICommand ClearCacheCommand { get; }
     public ICommand ClearVideoCacheCommand { get; }
     public ICommand ShowDisclaimerCommand { get; }
+    /// <summary>打开作者 B 站主页。旧版是页面 code-behind 的 Click 处理器;
+    /// 2026-10-03 重做后页面内容整体搬进 ResourceDictionary(模板里不能挂事件),
+    /// 所以改成命令。与原实现同一条路: NavigationDispatcher.OpenUserSpace。</summary>
+    public ICommand OpenAuthorCommand { get; }
 
     public SettingsViewModel()
     {
@@ -473,6 +562,21 @@ public class SettingsViewModel : ObservableObject
         });
 
         LogoutCommand = new AsyncRelayCommand(LogoutAsync);
+
+        // 作者主页(设置页「关于」Tab)。与原 code-behind 同一入口。
+        OpenAuthorCommand = new RelayCommand(() =>
+        {
+            try
+            {
+                var dispatcher = Svc.Navigate
+                    ?? new NavigationDispatcher(System.Windows.Application.Current.MainWindow);
+                dispatcher.OpenUserSpace(AuthorMid.ToString());
+            }
+            catch (Exception ex)
+            {
+                Svc.Toast.Show("打开作者主页失败: " + ex.Message);
+            }
+        });
 
         // 立即收进托盘(按钮点一下就能验证"关闭到托盘"是什么效果, 不用真的去点关闭键)
         MinimizeToTrayCommand = new RelayCommand(() => TrayService.Instance.MinimizeToTray());

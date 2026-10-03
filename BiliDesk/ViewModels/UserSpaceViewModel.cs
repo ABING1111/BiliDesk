@@ -47,6 +47,34 @@ public class UserSpaceViewModel : ObservableObject
     public string FollowingText => VideoItem.FormatCount(Following);
     public string VideoCountText => VideoItem.FormatCount(VideoCount);
 
+    // ----------------- 关注状态 -----------------
+    // 与播放器里同一套逻辑(PlayerWindow.RefreshFollowStateAsync):
+    // 先查与该 UP 的关系, 已关注则按钮显示「已关注」、点击发送取消关注。
+    // 之前这里恒发 follow=true, 已关注的用户点按钮只会得到
+    // "已经关注用户, 无法重复关注"(用户 2026-10-03 报的"无法取消关注")。
+
+    private bool _isFollowed;
+    /// <summary>是否已关注该 UP 主(进入页面时查询一次, 成功操作后本地翻转)</summary>
+    public bool IsFollowed
+    {
+        get => _isFollowed;
+        private set
+        {
+            if (SetProperty(ref _isFollowed, value))
+            {
+                OnPropertyChanged(nameof(FollowLabel));
+                OnPropertyChanged(nameof(IsNotFollowed));
+            }
+        }
+    }
+
+    /// <summary>未关注 = 显示强调色「+ 关注」; 已关注 = 切成淡色「已关注」</summary>
+    public bool IsNotFollowed => !IsFollowed;
+
+    public string FollowLabel => IsFollowed ? "已关注" : "+ 关注";
+
+    public ICommand ToggleFollowCommand { get; }
+
     public ICommand RefreshCommand { get; }
     public ICommand LoadMoreCommand { get; }
     public ICommand FollowCommand { get; }
@@ -56,6 +84,7 @@ public class UserSpaceViewModel : ObservableObject
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
         LoadMoreCommand = new AsyncRelayCommand(LoadMoreAsync);
         FollowCommand = new AsyncRelayCommand(FollowAsync);
+        ToggleFollowCommand = new AsyncRelayCommand(ToggleFollowAsync);
     }
 
     public async Task InitAsync(long mid)
@@ -86,9 +115,10 @@ public class UserSpaceViewModel : ObservableObject
         Error = "";
         try
         {
-            // 信息与列表并行加载, 互不阻塞
+            // 信息与列表并行加载, 互不阻塞; 关注状态顺带查一次(未登录静默跳过)
             var infoTask = Svc.Api.GetSpaceInfoAsync(_mid);
             var videosTask = LoadVideosAsync(reset: true);
+            _ = RefreshFollowStateAsync();
             var (infoOk, _, info) = await infoTask;
             await videosTask;
 
@@ -167,5 +197,30 @@ public class UserSpaceViewModel : ObservableObject
         if (_mid <= 0) return;
         var (ok, err) = await Svc.Api.FollowUpAsync(_mid, true);
         Svc.Toast.Show(ok ? "已关注" : "关注失败: " + (err ?? "未知错误"));
+    }
+
+    /// <summary>查询与该 UP 的关注关系(进页面时调一次)</summary>
+    public async Task RefreshFollowStateAsync()
+    {
+        if (_mid <= 0 || !Svc.Session.HasLogin) return;
+        var (ok, _, followed) = await Svc.Api.GetRelationAsync(_mid);
+        if (ok) IsFollowed = followed;
+    }
+
+    /// <summary>关注 / 取消关注(按当前状态切换)。按钮文案随 IsFollowed 变。</summary>
+    private async Task ToggleFollowAsync()
+    {
+        if (!Svc.Session.HasLogin) { Svc.Toast.Show("关注需要先登录"); return; }
+        if (_mid <= 0) return;
+        var (ok, err) = await Svc.Api.FollowUpAsync(_mid, !IsFollowed);
+        if (ok)
+        {
+            IsFollowed = !IsFollowed;
+            Svc.Toast.Show(IsFollowed ? "已关注" : "已取消关注");
+        }
+        else
+        {
+            Svc.Toast.Show("操作失败: " + (err ?? "未知错误"));
+        }
     }
 }

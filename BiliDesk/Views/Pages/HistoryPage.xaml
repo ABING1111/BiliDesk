@@ -52,9 +52,9 @@
                    复用同一套视觉。GroupName 必须给, 否则两个都能同时选中。 -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom"
                         Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
-                <RadioButton GroupName="HistoryKind" Style="{StaticResource PillTabStyle}"
+                <RadioButton GroupName="HistoryKind" Style="{StaticResource SettingsTabStyle}"
                              Content="视频" IsChecked="{Binding IsVideoKind, Mode=TwoWay}" />
-                <RadioButton GroupName="HistoryKind" Style="{StaticResource PillTabStyle}"
+                <RadioButton GroupName="HistoryKind" Style="{StaticResource SettingsTabStyle}"
                              Content="直播间" Margin="6,0,0,0"
                              IsChecked="{Binding IsLiveKind, Mode=TwoWay}" />
             </StackPanel>

@@ -599,6 +599,245 @@
         <Setter Property="Padding" Value="20" />
     </Style>
 
+    <!-- ==================== 设置页 2026-10-03 重做 ==================== -->
+
+    <!-- 区块标题: 左侧一根强调色竖条 + 加粗小标题(参考图样式)。
+         套 StackPanel 让竖条和文字各自对齐, 文字行高变化时竖条自动跟随。 -->
+    <Style x:Key="SettingsSectionHeaderStyle" TargetType="StackPanel">
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="Margin" Value="0,28,0,12" />
+    </Style>
+
+    <!-- 设置卡片: 白底大圆角, 内边距比旧版大(参考图的留白更宽松) -->
+    <Style x:Key="SettingsCardStyle" TargetType="Border" BasedOn="{StaticResource SettingCardStyle}">
+        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="Padding" Value="26,8" />
+    </Style>
+
+    <!-- 卡片内一行设置项。左侧标题+描述, 右侧控件由各行的使用处自己放(列 2)。
+         TargetType 用 **Panel**: 行大多是 Grid(标题列+控件列), 但少数"竖排"行
+         (主题色/关键词屏蔽这类内容放不进一行两列的)是 StackPanel —— 两者的公共基类
+         就是 Panel, 写成它两种都能套(样式本身只设 Margin, 不依赖具体类型)。 -->
+    <Style x:Key="SettingsRowStyle" TargetType="Panel">
+        <Setter Property="Margin" Value="0,14" />
+    </Style>
+
+    <!-- 行分隔线: 比页面通用分隔线更淡, 只在卡片内部用 -->
+    <Style x:Key="SettingsRowDivider" TargetType="Border">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Background" Value="{DynamicResource DividerBrush}" />
+        <Setter Property="Opacity" Value="0.7" />
+    </Style>
+
+    <!-- 行标题(粗体 14)与行描述(12 次级色) -->
+    <Style x:Key="SettingsRowTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+
+    <Style x:Key="SettingsRowDescStyle" TargetType="TextBlock" BasedOn="{StaticResource MetaTextStyle}">
+        <Setter Property="Margin" Value="0,4,0,0" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    </Style>
+
+    <!-- 开关(ToggleSwitch): 布尔设置的新默认控件。
+         参考图里"减少动画"那种: 关 = 灰底圆点在左; 开 = 强调色底圆点在右。
+         为什么不用 CheckBox 换皮: CheckBox 的语义是"多选框", 之前设置页全部用 CheckBox
+         当开关用, 视觉上是一堆 20px 小方块, 与"一行一个大开关"的参考图差距最大的一项。
+         绑定方式与 CheckBox 完全一致(IsChecked TwoWay), 换控件不用动 VM。 -->
+    <!-- 设置页下拉框(ComboBox): 参考图右侧那种浅灰圆角选择器。
+         WPF 自带 ComboBox 的默认模板是 Win32 老样式, 与整套 Fluent 风格不搭,
+         且主题里此前从未定制过 —— 这里完整重写模板。
+         只覆盖本页用得到的形态: 文本项 + 关闭态显示选中文字, 弹层白卡圆角带阴影。 -->
+    <Style x:Key="SettingsComboStyle" TargetType="ComboBox">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Height" Value="34" />
+        <Setter Property="MinWidth" Value="150" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="ItemContainerStyle">
+            <Setter.Value>
+                <Style TargetType="ComboBoxItem">
+                    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                    <Setter Property="Padding" Value="12,7" />
+                    <Setter Property="Cursor" Value="Hand" />
+                    <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ComboBoxItem">
+                                <Border x:Name="Bd" CornerRadius="8" Margin="6,2"
+                                        Padding="{TemplateBinding Padding}"
+                                        Background="Transparent">
+                                    <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Bd" Property="Background"
+                                                Value="{DynamicResource ControlFillHoverBrush}" />
+                                    </Trigger>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter TargetName="Bd" Property="Background"
+                                                Value="{DynamicResource AccentSoftFillBrush}" />
+                                        <Setter Property="Foreground"
+                                                Value="{DynamicResource AccentTextBrush}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid>
+                        <!-- 关闭态: 浅灰圆角底 + 选中文字 + 下拉箭头。
+                            ToggleButton 是 ComboBox 的标准交互件(点它开/关弹层)。 -->
+                        <ToggleButton x:Name="Toggle" Focusable="False" ClickMode="Press">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border x:Name="Bd" CornerRadius="8"
+                                            Background="{DynamicResource InputBackgroundBrush}"
+                                            BorderBrush="{DynamicResource InputBorderBrush}"
+                                            BorderThickness="1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="30" />
+                                            </Grid.ColumnDefinitions>
+                                            <!-- 选中文字。★ 必须用 ContentPresenter 而不是 TextBlock:
+                                                 XAML 里声明的是 <ComboBoxItem Content="..."/>,
+                                                 SelectionBoxItem 给的是**容器对象**(ComboBoxItem),
+                                                 TextBlock.Text 只能拿到类型名(空)。ContentPresenter
+                                                 会按 item 的模板正确显示内容字符串。 -->
+                                            <ContentPresenter Grid.Column="0" Margin="12,0,4,0"
+                                                              VerticalAlignment="Center"
+                                                              IsHitTestVisible="False"
+                                                              Content="{Binding SelectionBoxItem, RelativeSource={RelativeSource TemplatedParent}}" />
+                                            <TextBlock Grid.Column="1" Text="&#xE70D;" FontSize="10"
+                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Bd" Property="Background"
+                                                    Value="{DynamicResource ControlFillDefaultBrush}" />
+                                            <Setter TargetName="Bd" Property="BorderBrush"
+                                                    Value="{DynamicResource InputBorderBrush}" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <!-- 弹层: 白卡圆角 + 阴影 + 内部列表 -->
+                        <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}"
+                               Placement="Bottom" AllowsTransparency="True" PopupAnimation="Fade"
+                               Margin="0,4,0,0">
+                            <Border MinWidth="{TemplateBinding ActualWidth}"
+                                    MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                    Background="{DynamicResource CardBackgroundBrush}"
+                                    BorderBrush="{DynamicResource CardBorderBrush}"
+                                    BorderThickness="1" CornerRadius="12" Margin="8"
+                                    Padding="0,4">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.14" />
+                                </Border.Effect>
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <ItemsPresenter />
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 开关(ToggleSwitch): 布尔设置的新默认控件。
+         参考图里"减少动画"那种: 关 = 灰底圆点在左; 开 = 强调色底圆点在右。
+         为什么不用 CheckBox 换皮: CheckBox 的语义是"多选框", 之前设置页全部用 CheckBox
+         当开关用, 视觉上是一堆 20px 小方块, 与"一行一个大开关"的参考图差距最大的一项。
+         绑定方式与 CheckBox 完全一致(IsChecked TwoWay), 换控件不用动 VM。 -->
+    <Style x:Key="SettingsToggleStyle" TargetType="CheckBox">
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <Grid Width="44" Height="24" Background="Transparent">
+                        <!-- 轨道。用双层 Border 而不是改 Background 色: 开启色是强调色
+                             (DynamicResource), 动画 Opacity 淡入切换即可, 换主题天然跟随。 -->
+                        <Border x:Name="TrackOff" CornerRadius="12"
+                                Background="{DynamicResource ControlFillHoverBrush}" />
+                        <Border x:Name="TrackOn" CornerRadius="12" Opacity="0"
+                                Background="{DynamicResource AccentBrush}" />
+                        <!-- 圆点: 关在左 2px, 开在右 2px。位置动画 120ms, 与轨道淡入同步。 -->
+                        <Border x:Name="Thumb" Width="18" Height="18" CornerRadius="9"
+                                HorizontalAlignment="Left" Margin="3,0,0,0"
+                                Background="{DynamicResource CardBackgroundBrush}">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity="0.25" />
+                            </Border.Effect>
+                            <Border.RenderTransform>
+                                <TranslateTransform x:Name="ThumbShift" X="0" />
+                            </Border.RenderTransform>
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="TrackOn"
+                                                          Storyboard.TargetProperty="Opacity"
+                                                          To="1" Duration="0:0:0.12" />
+                                        <DoubleAnimation Storyboard.TargetName="ThumbShift"
+                                                          Storyboard.TargetProperty="X"
+                                                          To="20" Duration="0:0:0.12">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="TrackOn"
+                                                          Storyboard.TargetProperty="Opacity"
+                                                          To="0" Duration="0:0:0.12" />
+                                        <DoubleAnimation Storyboard.TargetName="ThumbShift"
+                                                          Storyboard.TargetProperty="X"
+                                                          To="0" Duration="0:0:0.12">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- 播放器底部工具栏按钮 -->
     <Style x:Key="CompactButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="{DynamicResource ControlFillDefaultBrush}" />
@@ -890,6 +1129,170 @@
         <Setter Property="Padding" Value="14,6" />
     </Style>
 
+    <!-- 关注/取关切换按钮(UP 主空间页):
+         未关注 = 强调色实底白字(与 AccentButtonStyle 同一套, 引人点); 已关注 = 淡色底
+         (AccentSoftFill)+ 深强调色文字(用户 2026-10-03 要求"把关注按钮的背景色调淡一些")。
+         悬停/按压的过渡与 AccentButtonStyle 保持一致的手感。 -->
+    <Style x:Key="FollowToggleButtonStyle" TargetType="Button">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="20,8" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentHoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentPressedBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <!-- 已关注: 淡底 + 深强调色文字。数据源是页面的 DataContext, 走 DataTrigger。 -->
+            <DataTrigger Binding="{Binding IsFollowed}" Value="True">
+                <Setter Property="Background" Value="{DynamicResource AccentSoftFillBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- 设置页顶部 Tab 的"淡色胶囊"版: 选中 = 强调色柔和底(AccentSoftFill, ~11% 透明度)
+         + 深一档的强调色文字, 不再用实色胶囊 —— 实色底 + 深色文字时, 强调色偏深会把文字盖住
+         (用户 2026-10-03 反馈"颜色很容易把文字盖住")。
+         ★ 悬停时整颗胶囊轻微放大(1.04, 140ms): 之前悬停只有一层几乎看不见的灰底,
+           反馈太弱; 放大是"要进入"的暗示, 与点击的缩放动画同一套语言。
+         ★ 文字色用 AccentTextStrongBrush(深一档的强调色, 按当前强调色推导, 见 ThemeService):
+           与胶囊底同色系但更深, 选中态读得清, 也不会被底色盖住。
+         ★ 选中动画去掉 PillTabStyle 那个 0.9→1 缩放: 那是"按下去"的手感,
+           Tab 切换要的是平稳过渡, 只淡入胶囊即可。 -->
+    <Style x:Key="SettingsTabStyle" TargetType="RadioButton" BasedOn="{StaticResource PillTabStyle}">
+        <Setter Property="Padding" Value="20,8" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid x:Name="Root" Background="Transparent" RenderTransformOrigin="0.5,0.5">
+                        <Grid.RenderTransform>
+                            <ScaleTransform ScaleX="1" ScaleY="1" />
+                        </Grid.RenderTransform>
+                        <Border x:Name="Hover" CornerRadius="16" Opacity="0"
+                                Background="{DynamicResource ControlFillHoverBrush}" />
+                        <Border x:Name="Pill" CornerRadius="16" Opacity="0"
+                                Background="{DynamicResource AccentSoftFillStrongBrush}" />
+                        <Border CornerRadius="16" Padding="{TemplateBinding Padding}">
+                            <!-- ★ ContentPresenter.Resources 里必须挡一下全局隐式 TextBlock 样式:
+                                 它带 Foreground setter, 优先级高于继承, 会吃掉这里下去的前景色 ——
+                                 表现就是"选中后文字颜色不变"(与 UnderlineTabStyle 同一个成因,
+                                 那边的注释写得最全)。基于 {x:Null} 重建, 只保留文字栅格化模式。 -->
+                            <ContentPresenter
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                TextElement.Foreground="{TemplateBinding Foreground}">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                        <Setter Property="Foreground"
+                                                Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
+                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Hover"
+                                                          Storyboard.TargetProperty="Opacity"
+                                                          To="1" Duration="0:0:0.14" />
+                                        <DoubleAnimation Storyboard.TargetName="Root"
+                                                          Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                          To="1.04" Duration="0:0:0.14">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                        <DoubleAnimation Storyboard.TargetName="Root"
+                                                          Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                          To="1.04" Duration="0:0:0.14">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Hover"
+                                                          Storyboard.TargetProperty="Opacity"
+                                                          To="0" Duration="0:0:0.14" />
+                                        <DoubleAnimation Storyboard.TargetName="Root"
+                                                          Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                          To="1" Duration="0:0:0.14">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                        <DoubleAnimation Storyboard.TargetName="Root"
+                                                          Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                          To="1" Duration="0:0:0.14">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Pill"
+                                                          Storyboard.TargetProperty="Opacity"
+                                                          To="1" Duration="0:0:0.18" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Pill"
+                                                          Storyboard.TargetProperty="Opacity"
+                                                          To="0" Duration="0:0:0.14" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ============ 右键菜单 ============
          全局隐式样式: 之前完全没管 ContextMenu/MenuItem, 走的是 WPF 默认外观
          (直角 + 系统灰 + 大间距), 和应用的圆角 Fluent 风格明显不搭。
@@ -1103,6 +1506,55 @@
         </Style.Triggers>
     </Style>
     <!-- ============ 列表编辑模式 ============ -->
+
+    <!--
+        复选框(带文字版, 2026-10-03): 模板含 ContentPresenter, 勾选方块右侧显示
+        Content 文字 —— 设置页"跳过的类别"这类多选 chips 用它
+        (旧版误用了不带 ContentPresenter 的 FluentCheckBoxStyle, 结果只剩方框没有文字)。
+    -->
+    <Style x:Key="LabeledCheckBoxStyle" TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <StackPanel Orientation="Horizontal" Background="Transparent">
+                        <Border x:Name="Box" Width="20" Height="20" CornerRadius="6"
+                                VerticalAlignment="Center"
+                                Background="{DynamicResource InputBackgroundBrush}"
+                                BorderBrush="{DynamicResource InputBorderBrush}" BorderThickness="1.4">
+                            <TextBlock x:Name="Mark" Text="&#xE73E;" Opacity="0"
+                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextOnAccentBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center"
+                                          RecognizesAccessKey="True"
+                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Box" Property="BorderBrush"
+                                    Value="{DynamicResource AccentBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Box" Property="Background"
+                                    Value="{DynamicResource AccentBrush}" />
+                            <Setter TargetName="Box" Property="BorderBrush"
+                                    Value="{DynamicResource AccentBrush}" />
+                            <Setter TargetName="Mark" Property="Opacity" Value="1" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 
     <!--
         复选框(仅用于"独立的小方块", 不带文字)。

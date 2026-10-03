@@ -504,8 +504,8 @@
                 Background="Transparent" Visibility="Collapsed"
                 MouseLeftButtonDown="OnSearchScrimClick" />
 
-        <!-- ===== 搜索卡(收起态就是右上角那个搜索框) =====
-             它是**一个元素**: 收起态只有上面那个搜索框, 点一下先整体平移到页面水平正中, 再原地往下长大,
+        <!-- ===== 搜索卡(收起态就是页面正上方那条搜索框) =====
+             它是**一个元素**: 收起态只有上面那个搜索框, 点一下原地往下长大,
              露出下面的内容框。为什么不让"搜索框"和"内容"做成两个各自动画的元素: 两段动画共用一个容器,
              中间没有交接点, 也就不存在"旧元素淡出 / 新元素淡入"对不齐的问题。
 
@@ -514,18 +514,13 @@
                ② 内容框 —— 自带圆角底 + 细描边, 与搜索框隔开 10px。
              外面这层 Border 只负责动画与布局, **自己不画任何底色**。
 
-             位置动画走 RenderTransform(不参与布局, 不会把右侧图标列挤动), 尺寸走 Width/Height;
-             **顶部不动**(展开是往下长), 只有 X 方向在动 —— 点开时向左滑到页面正中, 推导见
-             HomePage.xaml.cs 的 PanXFor。
-
-             ★ 右边距 152 不是随手定的(2026-09-26 修"搜索框与最小化/最大化重合"):
-               窗口那三个自绘按钮在 MainWindow 里是 `Margin="0,4,4,0"` 右对齐的 3×46 = 138 宽,
-               换算到本页坐标就是右边 142 起、一直贴到页右缘; 而搜索框与它们处在**同一条水平线**上
-               (与首页标题、左侧 logo 对齐), 纵向躲不开 —— 只能横向让开: 138 + 12 间隙 ≈ 152。
-               改这个数时记得同步 HomePage.xaml.cs 里的 SearchBoxRight(算平移量要用)。 -->
+             ★ 2026-10-03 用户要求"搜索框固定在首页正上方的中间位置, 保留展开动画":
+               收起态从右上角(Right 对齐 + 152 右边距)改为**水平居中**(Center 对齐)。
+               居中对齐下宽度变化是"两边对称地长", 中心天然不动 —— 旧代码那套 X 平移补偿
+               (PanXFor / SearchCardTrans)全部不再需要, 置 0 即可(见 HomePage.xaml.cs)。 -->
         <Border x:Name="SearchCard" Grid.RowSpan="3" Panel.ZIndex="31"
-                HorizontalAlignment="Right" VerticalAlignment="Top"
-                Margin="0,16,152,0" Width="440" Height="48"
+                HorizontalAlignment="Center" VerticalAlignment="Top"
+                Margin="0,16,0,0" Width="440" Height="48"
                 PreviewMouseLeftButtonDown="OnSearchCardPreviewMouseDown"
                 PreviewKeyDown="OnSearchCardPreviewKeyDown">
             <Border.RenderTransform>

@@ -87,31 +87,41 @@
 
         <!-- 收藏夹选择条(登录后才有内容)。
              用 RadioButton + GroupName 而不是 Button: 单选中状态由控件自己维护,
-             选中样式能直接写在样式触发器里, 不必在代码后置里手动遍历改 FontWeight。 -->
+             选中样式能直接写在样式触发器里, 不必在代码后置里手动遍历改 FontWeight。
+             ★ 外层 Border = 白色椭圆底(2026-10-03 用户要求"胶囊样式做成下面有椭圆白底的",
+               与设置页顶部 Tab 的悬浮胶囊同一形态), 投影让它从页面背景上浮起来。 -->
         <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Disabled" Margin="36,14,36,10"
                       Visibility="{Binding Folders.Count, Converter={StaticResource CountToVis}}">
-            <ItemsControl ItemsSource="{Binding Folders}">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <!-- CommandParameter 传数据项本身(FavFolder);
-                             选中态由 RadioButton + GroupName 自己维护, 不需要代码后置插手。
-                             ★ IsCurrent 是"程序切夹"的同步通道: OneWay 绑定 + ToggleButton 的
-                             SetCurrentValue 特性让用户点击也不会扯断这条绑定 -->
-                        <RadioButton GroupName="FavFolderChip" Style="{StaticResource ChipTabStyle}"
-                                     Content="{Binding DisplayText}"
-                                     IsChecked="{Binding IsCurrent, Mode=OneWay}"
-                                     Command="{Binding DataContext.SelectFolderCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                     CommandParameter="{Binding}"
-                                     Margin="0,0,8,0" />
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+            <Border HorizontalAlignment="Left"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                    CornerRadius="22" Padding="5">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
+                </Border.Effect>
+                <ItemsControl ItemsSource="{Binding Folders}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- CommandParameter 传数据项本身(FavFolder);
+                                 选中态由 RadioButton + GroupName 自己维护, 不需要代码后置插手。
+                                 ★ IsCurrent 是"程序切夹"的同步通道: OneWay 绑定 + ToggleButton 的
+                                 SetCurrentValue 特性让用户点击也不会扯断这条绑定 -->
+                            <RadioButton GroupName="FavFolderChip" Style="{StaticResource SettingsTabStyle}"
+                                         Content="{Binding DisplayText}"
+                                         IsChecked="{Binding IsCurrent, Mode=OneWay}"
+                                         Command="{Binding DataContext.SelectFolderCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                         CommandParameter="{Binding}"
+                                         Margin="0,0,4,0" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Border>
         </ScrollViewer>
 
         <!-- 内容 -->
