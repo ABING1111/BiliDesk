@@ -11,11 +11,11 @@
 # 目录名 "Pulish" 是既有拼写, 别顺手改成 Publish —— .iss 与文档都按它引用。
 #
 # 用法(在仓库根目录):
-#   powershell -ExecutionPolicy Bypass -File 发布.ps1 [-Version 1.2.1]
+#   powershell -ExecutionPolicy Bypass -File 发布.ps1 [-Version 1.2.2]
 #
 # 注意: 这里的默认版本号要跟 App.AppVersion / csproj 的 <Version> / installer.iss 的
 # MyAppVersion 一起改 —— 它只决定 zip 的文件名, 不参与程序内部显示。
-param([string]$Version = "1.2.1")
+param([string]$Version = "1.2.2")
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path

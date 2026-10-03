@@ -13,10 +13,10 @@ public partial class App : Application
 {
     /// <summary>
     /// 程序版本号 —— **单一来源**, 改版本只动这一处。
-    /// 同步点(漏一个就会出现"关于页写 1.2.1、安装包文件名还是 1.2.0"这种不一致):
-    ///   BiliDesk.csproj 的 &lt;Version&gt;、发布包\installer.iss 的 MyAppVersion、发布.ps1 的默认 $Version。
+    /// 同步点(漏一个就会出现"关于页写 1.2.2、安装包文件名还是 1.2.1"这种不一致):
+    ///   BiliDesk.csproj 的 &lt;Version&gt;、Pulish\installer.iss 的 MyAppVersion、发布.ps1 的默认 $Version。
     /// </summary>
-    public const string AppVersion = "1.2.1";
+    public const string AppVersion = "1.2.2";
 
     public static MainViewModel MainVm { get; } = new();
 
