@@ -2,13 +2,13 @@
 #
 # 一次产出两套(2026-09-26 定):
 #   1) 便携版(zip): 自包含 + 单文件压缩 —— 用户机器**不用装 .NET**, 解压即用;
-#   2) 安装器载荷: 框架依赖(只含 app + LibVLC, ~67MB) —— 配 Pulish\installer.iss 打 Inno 安装包,
+#   2) 安装器载荷: 框架依赖(只含 app + LibVLC, ~67MB) —— 配 Publish\installer.iss 打 Inno 安装包,
 #      .NET 8 桌面运行时由安装器检测、缺失时引导下载(见 installer.iss 的 [Code])。
 #
-# 产物统一落在仓库根的 Pulish\ (installer.iss 就在那里, 它的相对路径按同级目录写):
-#   Pulish\BiliDesk-便携版\            Pulish\BiliDesk-安装器-files\
-#   Pulish\BiliDesk-<ver>-portable.zip
-# 目录名 "Pulish" 是既有拼写, 别顺手改成 Publish —— .iss 与文档都按它引用。
+# 产物统一落在仓库根的 Publish\ (installer.iss 就在那里, 它的相对路径按同级目录写):
+#   Publish\BiliDesk-便携版\            Publish\BiliDesk-安装器-files\
+#   Publish\BiliDesk-<ver>-portable.zip
+# (2026-10-03 由 "Pulish" 更正为 "Publish" —— 这是拼写错误, 目录、脚本、.gitignore、.iss 一起改。)
 #
 # 用法(在仓库根目录):
 #   powershell -ExecutionPolicy Bypass -File 发布.ps1 [-Version 1.2.2]
@@ -19,11 +19,11 @@ param([string]$Version = "1.2.2")
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Out = Join-Path $Root "Pulish"
+$Out = Join-Path $Root "Publish"
 $PortableDir = Join-Path $Out "BiliDesk-便携版"
 $InstallerDir = Join-Path $Out "BiliDesk-安装器-files"
 
-# 只建目录, 不清理: Pulish 下还放着 installer.iss, 任何 Remove-Item Pulish\* 都会连带删掉它。
+# 只建目录, 不清理: Publish 下还放着 installer.iss, 任何 Remove-Item Publish\* 都会连带删掉它。
 if (-not (Test-Path $Out)) { New-Item -ItemType Directory -Path $Out -Force | Out-Null }
 
 Write-Host "== 1/3 便携版(自包含 + 压缩) =="
@@ -49,4 +49,4 @@ Write-Host "完成:"
 Write-Host "  便携版目录 : $PortableDir"
 Write-Host "  便携版 zip : $zip"
 Write-Host "  安装器载荷 : $InstallerDir"
-Write-Host "  下一步     : 用 Inno Setup 编译 Pulish\installer.iss (载荷目录与它同级)"
+Write-Host "  下一步     : 用 Inno Setup 编译 Publish\installer.iss (载荷目录与它同级)"
