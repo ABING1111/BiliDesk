@@ -130,11 +130,13 @@
                         </Grid>
 
                         <!-- 「⋯」折叠按钮: 有被折进去的夹子时才显示。
-                             红点 = 当前选中的夹子在被折叠的那部分里(别让用户以为它丢了)。 -->
-                        <Button x:Name="FolderMoreButton" Style="{StaticResource SettingsTabStyle}"
-                                VerticalAlignment="Center" Margin="0,0,0,0"
+                             红点 = 当前选中的夹子在被折叠的那部分里(别让用户以为它丢了)。
+                             ★ 用 SubtleButtonStyle(Button), 不能用 SettingsTabStyle
+                               (那是 RadioButton 的样式, 套在 Button 上直接抛 XamlParse)。 -->
+                        <Button x:Name="FolderMoreButton" Style="{StaticResource SubtleButtonStyle}"
+                                VerticalAlignment="Center"
                                 Click="OnFolderMoreClick" ToolTip="更多收藏夹"
-                                Cursor="Hand" Padding="10,8">
+                                Cursor="Hand" Padding="10,7">
                             <Grid>
                                 <TextBlock Text="&#xE712;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                            FontSize="14" />
