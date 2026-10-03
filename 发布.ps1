@@ -11,11 +11,11 @@
 # (2026-10-03 由 "Pulish" 更正为 "Publish" —— 这是拼写错误, 目录、脚本、.gitignore、.iss 一起改。)
 #
 # 用法(在仓库根目录):
-#   powershell -ExecutionPolicy Bypass -File 发布.ps1 [-Version 1.2.2]
+#   powershell -ExecutionPolicy Bypass -File 发布.ps1 [-Version 1.2.3]
 #
 # 注意: 这里的默认版本号要跟 App.AppVersion / csproj 的 <Version> / installer.iss 的
 # MyAppVersion 一起改 —— 它只决定 zip 的文件名, 不参与程序内部显示。
-param([string]$Version = "1.2.2")
+param([string]$Version = "1.2.3")
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path

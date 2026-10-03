@@ -13,7 +13,7 @@
     <AssemblyName>BiliDesk</AssemblyName>
     <AssemblyTitle>BiliDesk</AssemblyTitle>
     <Product>BiliDesk</Product>
-    <Version>1.2.2</Version>
+    <Version>1.2.3</Version>
     <PlatformTarget>x64</PlatformTarget>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
