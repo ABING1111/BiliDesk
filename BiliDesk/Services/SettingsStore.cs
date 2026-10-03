@@ -83,6 +83,21 @@ public class SettingsStore
     /// </summary>
     public bool NoLogin1080P { get; set; } = true;
 
+    // ----------------- CDN(线路)设置 -----------------
+    // 详见 Models/CdnOption.cs 与 Services/CdnService.cs
+
+    /// <summary>线路选择策略(默认自动测速)</summary>
+    public CdnSelectMode CdnMode { get; set; } = CdnSelectMode.Auto;
+
+    /// <summary>手动模式下选定的 CDN Id(见 CdnOption.All; 空/失效时自动退回测速)</summary>
+    public string CdnManualId { get; set; } = "";
+
+    /// <summary>
+    /// 屏蔽 PCDN(点对点分发)。默认**开** —— PCDN 拿其他用户的带宽做节点,
+    /// 速度不稳定且对他人有影响; 实测同一档清晰度常规 CDN 吞吐高一倍以上。
+    /// </summary>
+    public bool BlockPcdn { get; set; } = true;
+
     /// <summary>用户同意过的是第几版声明(见 DisclaimerText.Version)</summary>
     public int AcceptedDisclaimerVersion { get; set; }
 
@@ -145,6 +160,12 @@ public class SettingsStore
                     SkippedVersion = s.SkippedVersion ?? "";
                     // 老配置没有这个字段 —— 属性初始化默认值(true)自动生效, 不需要版本号兼容。
                     NoLogin1080P = s.NoLogin1080P;
+                    // CDN 设置: 同样靠属性初始化值兜底(自动测速 / 空 / 屏蔽 PCDN 打开)。
+                    // ★ CdnManualId 要校验: 老配置里的 Id 可能已从候选表下线,
+                    //   留着它会让"手动模式"指到一条不存在的线路(见 CdnService.SelectUrlAsync)。
+                    CdnMode = s.CdnMode;
+                    CdnManualId = CdnOption.ById(s.CdnManualId)?.Id ?? "";
+                    BlockPcdn = s.BlockPcdn;
                     // 老配置里只有 DisclaimerAccepted(bool)、没有版本号。
                     // 那时用户同意的是第 1 版声明, 所以按 1 记 —— 这一版改动后仍会正常再问一次。
                     AcceptedDisclaimerVersion = s.DisclaimerVersion > 0
@@ -228,6 +249,9 @@ public class SettingsStore
                 AutoCheckUpdate = AutoCheckUpdate,
                 SkippedVersion = SkippedVersion,
                 NoLogin1080P = NoLogin1080P,
+                CdnMode = CdnMode,
+                CdnManualId = CdnManualId,
+                BlockPcdn = BlockPcdn,
                 DisclaimerAccepted = DisclaimerAccepted,
                 DisclaimerVersion = AcceptedDisclaimerVersion
             }, JsonOpts);
@@ -357,6 +381,29 @@ public class SettingsStore
         if (NoLogin1080P == value) return;
         NoLogin1080P = value;
         Save();
+    }
+
+    /// <summary>
+    /// 改 CDN 线路设置并落盘。
+    /// 三个值放在同一个方法里: 它们总是被同一张设置卡片一起改,
+    /// 分开写迟早出现"改了模式却把手动选的那家重置掉"。
+    ///
+    /// ★ 只要这三项里有任何一项变了, 就必须让测速缓存失效 ——
+    ///   否则用户从"自动"切到"手动指定腾讯云"后会仍然用着缓存里的阿里云,
+    ///   表现是"改了设置根本没生效"。
+    /// </summary>
+    public void SetCdn(CdnSelectMode mode, string manualId, bool blockPcdn)
+    {
+        var nextId = CdnOption.ById(manualId)?.Id ?? "";
+        if (CdnMode == mode &&
+            string.Equals(CdnManualId, nextId, StringComparison.Ordinal) &&
+            BlockPcdn == blockPcdn) return;
+
+        CdnMode = mode;
+        CdnManualId = nextId;
+        BlockPcdn = blockPcdn;
+        Save();
+        CdnService.Instance.InvalidateCache();
     }
 
     /// <summary>标记已同意免责声明并落盘(记下同意的是哪一版)</summary>

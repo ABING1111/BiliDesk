@@ -16,6 +16,8 @@ public static class Svc
     public static PlayerService Player { get; } = new();
     /// <summary>赞助片段标注数据源(SponsorBlock 兼容服务端)</summary>
     public static SponsorBlockService SponsorBlock => SponsorBlockService.Instance;
+    /// <summary>视频线路(CDN)测速与选择, 设置页可配</summary>
+    public static CdnService Cdn => CdnService.Instance;
     public static HistorySyncService HistorySync => HistorySyncService.Instance;
     public static NavigationDispatcher? Navigate { get; set; }
 }

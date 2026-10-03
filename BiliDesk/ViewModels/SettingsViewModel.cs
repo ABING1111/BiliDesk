@@ -361,6 +361,144 @@ public class SettingsViewModel : ObservableObject
         ? "已登录, 按账号等级取流, 此开关不参与"
         : "未登录也能看 1080P; 关闭后回到 360P/480P";
 
+    // ----------------- CDN(线路)设置 -----------------
+    // 逻辑见 Services/CdnService.cs; 实测依据见该文件顶部注释
+
+    /// <summary>线路策略下拉框的显示项(顺序即 CdnSelectMode 的取值顺序)</summary>
+    public string[] CdnModeOptions { get; } = { "自动测速", "手动指定", "跟随服务端" };
+
+    /// <summary>当前策略(用字符串投影, 理由同 ThemeSelected —— 服务对象没有变化通知)</summary>
+    public string CdnModeSelected
+    {
+        get => CdnModeOptions[(int)Svc.Settings.CdnMode];
+        set
+        {
+            var idx = Array.IndexOf(CdnModeOptions, value);
+            if (idx < 0) return;
+            var mode = (CdnSelectMode)idx;
+            if (mode == Svc.Settings.CdnMode) return;
+            Svc.Settings.SetCdn(mode, Svc.Settings.CdnManualId, Svc.Settings.BlockPcdn);
+            RaiseCdnChanged();
+        }
+    }
+
+    /// <summary>可选 CDN 的名字列表(下拉框数据源)</summary>
+    public string[] CdnHostOptions { get; } = CdnOption.All.Select(o => o.Name).ToArray();
+
+    /// <summary>
+    /// 手动模式下选中的 CDN 名。
+    /// 老配置里 Id 已失效时 CdnManualId 是空串 → 下拉框落到第一项(不显示空白)。
+    /// </summary>
+    public string CdnHostSelected
+    {
+        get
+        {
+            var cur = CdnOption.ById(Svc.Settings.CdnManualId);
+            return cur?.Name ?? CdnOption.All[0].Name;
+        }
+        set
+        {
+            var opt = CdnOption.All.FirstOrDefault(o => o.Name == value);
+            if (opt == null || opt.Id == Svc.Settings.CdnManualId) return;
+            Svc.Settings.SetCdn(Svc.Settings.CdnMode, opt.Id, Svc.Settings.BlockPcdn);
+            RaiseCdnChanged();
+        }
+    }
+
+    /// <summary>
+    /// 手动选择的下拉框是否可用 —— 只有"手动指定"模式下才让它可点。
+    /// 置灰而不是隐藏: 用户要能看见"有这么个选项、只是当前模式用不到"。
+    /// </summary>
+    public bool CanPickCdn => Svc.Settings.CdnMode == CdnSelectMode.Manual;
+
+    /// <summary>屏蔽 PCDN(点对点分发)</summary>
+    public bool BlockPcdn
+    {
+        get => Svc.Settings.BlockPcdn;
+        set
+        {
+            if (value == Svc.Settings.BlockPcdn) return;
+            Svc.Settings.SetCdn(Svc.Settings.CdnMode, Svc.Settings.CdnManualId, value);
+            RaiseCdnChanged();
+        }
+    }
+
+    /// <summary>最近一次测速结果的文字说明(让用户看到"测了什么、多快")</summary>
+    public string CdnSpeedReport => Svc.Cdn.LastReport;
+
+    /// <summary>正在测速时的提示(按钮防连点 + 反馈)</summary>
+    public string CdnTestStatus
+    {
+        get => _cdnTestStatus;
+        private set => SetProperty(ref _cdnTestStatus, value);
+    }
+    private string _cdnTestStatus = "";
+
+    /// <summary>
+    /// 手动触发一轮测速。
+    ///
+    /// 用途: 换了网络(切 Wi-Fi / 换运营商)后排名会变, 而缓存有 10 分钟 ——
+    /// 给用户一个"立刻重测"的按钮, 比等缓存过期或重启程序友好。
+    /// </summary>
+    public ICommand TestCdnCommand { get; }
+
+    private async System.Threading.Tasks.Task TestCdnAsync()
+    {
+        if (_testingCdn) return;
+        _testingCdn = true;
+        CdnTestStatus = "正在测速…";
+        try
+        {
+            // 借一次真实取流拿到带签名的候选 URL 当测速样本
+            var (ok, err, items) = await Svc.Api.GetPopularAsync(1);
+            var first = items?.FirstOrDefault();
+            if (!ok || first == null)
+            {
+                CdnTestStatus = "测速失败: 拿不到测试视频" + (string.IsNullOrEmpty(err) ? "" : $" ({err})");
+                return;
+            }
+            var (dOk, dErr, detail) = await Svc.Api.GetVideoAsync(first.Bvid);
+            if (!dOk || detail == null || detail.Cid <= 0)
+            {
+                CdnTestStatus = "测速失败: 拿不到视频信息" + (string.IsNullOrEmpty(dErr) ? "" : $" ({dErr})");
+                return;
+            }
+
+            var sample = await Svc.Api.GetCdnSampleUrlsAsync(first.Bvid, detail.Cid);
+            if (sample.Count == 0)
+            {
+                CdnTestStatus = "测速失败: 没有可用的测速样本";
+                return;
+            }
+
+            Svc.Cdn.InvalidateCache();
+            var ranked = await Svc.Cdn.RankAsync(sample);
+            CdnTestStatus = ranked.Count == 0
+                ? "测速失败: 候选线路都不可达"
+                : $"测速完成, 最快 {ranked[0].BytesPerSecond / 1024}KB/s";
+            OnPropertyChanged(nameof(CdnSpeedReport));
+        }
+        catch (Exception ex)
+        {
+            CdnTestStatus = "测速异常: " + ex.Message;
+        }
+        finally
+        {
+            _testingCdn = false;
+        }
+    }
+    private bool _testingCdn;
+
+    /// <summary>CDN 相关属性整组刷新(切换模式会影响联动项, 一次全推开免漏)</summary>
+    private void RaiseCdnChanged()
+    {
+        OnPropertyChanged(nameof(CdnModeSelected));
+        OnPropertyChanged(nameof(CdnHostSelected));
+        OnPropertyChanged(nameof(CanPickCdn));
+        OnPropertyChanged(nameof(BlockPcdn));
+        OnPropertyChanged(nameof(CdnSpeedReport));
+    }
+
     // ----------------- 检查更新 -----------------
 
     /// <summary>启动后自动检查更新(默认开; 关掉后仍可用下面的「检查更新」按钮手动查)</summary>
@@ -540,6 +678,9 @@ public class SettingsViewModel : ObservableObject
         ResetAccentCommand = new RelayCommand(() => AccentColor = "");
 
         CheckUpdateCommand = new AsyncRelayCommand(CheckUpdateAsync);
+
+        // CDN 手动重测: 换网络后排名会变, 而自动测速结果有 10 分钟缓存
+        TestCdnCommand = new AsyncRelayCommand(TestCdnAsync);
 
         // 只读查看免责声明。和首次启动那个弹窗是**同一个窗口 + 同一份正文**:
         // 用户事后能翻到的, 就是他当初点"同意"时看到的那一份。

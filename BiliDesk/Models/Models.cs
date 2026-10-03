@@ -1104,6 +1104,25 @@ public class AppSettings
     public bool NoLogin1080P { get; set; } = true;
 
     /// <summary>
+    /// 视频线路(CDN)选择策略。默认自动测速 —— 实测各家 CDN 同一时刻吞吐能差 4 倍以上,
+    /// 且排名随网络/地区/时段变化, 所以默认让程序自己挑。详见 Services/CdnService.cs。
+    /// </summary>
+    public CdnSelectMode CdnMode { get; set; } = CdnSelectMode.Auto;
+
+    /// <summary>
+    /// 手动模式下选定的 CDN Id(见 Models/CdnOption.All)。
+    /// 存 Id 而不是 host: B 站换域名时 Id 不变, 老配置才不会失效。
+    /// 读配置时用 CdnOption.ById 校验, 已下线的 Id 会被清成空串(退回自动)。
+    /// </summary>
+    public string CdnManualId { get; set; } = "";
+
+    /// <summary>
+    /// 屏蔽 PCDN(点对点分发)。默认开 —— PCDN 拿其他用户的带宽做节点, 速度不稳定;
+    /// 实测同一档清晰度常规 CDN 吞吐高一倍以上。
+    /// </summary>
+    public bool BlockPcdn { get; set; } = true;
+
+    /// <summary>
     /// 是否已同意首次启动的免责声明。
     /// 默认 false —— 老版本升级上来的用户也会被问一次, 这是有意的:
     /// 声明里有"账号风控/数据丢失风险自担"这类实质内容, 让所有人在同一份文本上确认一次更稳妥。

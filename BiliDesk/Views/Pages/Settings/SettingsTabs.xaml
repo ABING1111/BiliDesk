@@ -182,6 +182,82 @@
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding NoLogin1080P, Mode=TwoWay}" />
                     </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- CDN 线路: 自动测速挑最快 / 手动指定一家 / 跟随服务端。
+                         实测各家 CDN 同一时刻吞吐能差 4 倍以上, 且排名随网络/地区/时段变化,
+                         所以默认自动。逻辑与实测依据见 Services/CdnService.cs。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="线路选择" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="B 站为同一视频提供多家 CDN; 自动测速会实测吞吐挑最快的一条"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
+                                  Width="170" VerticalAlignment="Center"
+                                  ItemsSource="{Binding CdnModeOptions}"
+                                  SelectedItem="{Binding CdnModeSelected, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 手动指定: 只在「手动指定」模式下可点(置灰而非隐藏) -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="指定 CDN" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="仅在「手动指定」时生效; 该线路不可用时会自动改用最快线路"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
+                                  Width="170" VerticalAlignment="Center"
+                                  IsEnabled="{Binding CanPickCdn}"
+                                  ItemsSource="{Binding CdnHostOptions}"
+                                  SelectedItem="{Binding CdnHostSelected, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 屏蔽 PCDN: 默认开。PCDN 拿其他用户带宽做节点, 速度不稳定 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="屏蔽 PCDN" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="不参与点对点分发(会占用他人带宽且速度不稳定); 实测常规 CDN 吞吐更高"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding BlockPcdn, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 重新测速: 换网络后排名会变, 而自动测速有 10 分钟缓存 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="重新测速" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding CdnSpeedReport}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                            <TextBlock Text="{Binding CdnTestStatus}"
+                                       Style="{StaticResource SettingsRowDescStyle}"
+                                       Visibility="{Binding CdnTestStatus, Converter={StaticResource StrToVis}}" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="开始测速" Style="{StaticResource SubtleButtonStyle}"
+                                VerticalAlignment="Center"
+                                Command="{Binding TestCdnCommand}" />
+                    </Grid>
                 </StackPanel>
             </Border>
 

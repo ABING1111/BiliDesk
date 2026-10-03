@@ -1118,10 +1118,15 @@ public class ApiClient
                     }
                     if (bestId > 0)
                     {
-                        // ★ 线路也要挑: B 站会把一部分流指到 mcdn(PCDN, 靠其他用户做节点分发),
-                        //   实测同一档清晰度 upos 常规 CDN 是 mcdn 的 2 倍以上吞吐
-                        //   (id=112: upos 85.85Mbps vs mcdn 40.10Mbps); 而 mcdn 的 baseUrl
-                        //   后面**一定**跟着 upos 的 backupUrl, 所以只要把顺序换一下就能绕开。
+                        // ★ 线路选择交给 CdnService(2026-10-03 新增, 设置页可配)。
+                        //   它负责三件事: 按用户策略(自动测速/手动指定/跟随服务端)选线路、
+                        //   剔除 PCDN、全部失败时回退。详细依据见 Services/CdnService.cs。
+                        //
+                        //   以前这里只有一条静态规则"优先非 mcdn", 问题是:
+                        //     · 无法利用"各家 CDN 同一时刻吞吐差 4 倍"这件事(实测 2.5~11MB/s);
+                        //     · 认不出**伪装域名** —— 实测 B 站给过
+                        //       `mv0bz14m.edge.mountaintoys.cn`(query 里 os=mcdn), 域名看不出
+                        //       PCDN 特征, 旧规则会把它当成正常线路用。
                         var cands = new List<string>();
                         var baseUrl = GetStr(best, "baseUrl");
                         if (baseUrl.Length > 0) cands.Add(baseUrl);
@@ -1133,11 +1138,17 @@ public class ApiClient
                                 if (!string.IsNullOrEmpty(s)) cands.Add(s);
                             }
                         }
-                        var (mainUrl, rest) = PickFastestHost(cands);
-                        videoUrl = mainUrl;
-                        backups.AddRange(rest);
-                        chosenQn = bestId;
-                        chosen = best;
+                        if (cands.Count > 0)
+                        {
+                            var picked = await CdnService.Instance.SelectUrlAsync(cands[0], cands);
+                            videoUrl = picked;
+                            // 备用线路 = 其余候选(去重、且不包含已选中的那条)
+                            foreach (var c in cands)
+                                if (!string.Equals(c, picked, StringComparison.Ordinal) && !backups.Contains(c))
+                                    backups.Add(c);
+                            chosenQn = bestId;
+                            chosen = best;
+                        }
                     }
                 }
 
@@ -1164,7 +1175,8 @@ public class ApiClient
                         }
                         if (acands.Count == 0) continue;
                         bestBw = bw;
-                        audioUrl = PickFastestHost(acands).main;
+                        // 音轨复用视频那次测速的结果, 不单独测速(见 SelectSecondaryUrl 的说明)
+                        audioUrl = CdnService.Instance.SelectSecondaryUrl(acands[0], acands);
                         chosenAudio = a;
                     }
                 }
@@ -1339,6 +1351,72 @@ public class ApiClient
         var bytes = new byte[n];
         Random.Shared.NextBytes(bytes);
         return Convert.ToBase64String(bytes);
+    }
+
+    /// <summary>
+    /// 取一组"带签名的真实媒体 URL", 专门给 CDN 测速当样本用(设置页「重新测速」)。
+    ///
+    /// 为什么单独一个方法、而不是复用 GetPlayUrlAsync:
+    ///   GetPlayUrlAsync 返回的是**已经按用户策略选好线路**的那一条, 拿它测速等于
+    ///   "只测了当前用的这条", 测不出别的线路更快。测速需要的是**原始候选集**
+    ///   (baseUrl + 所有 backupUrl), 所以这里返回全部候选。
+    ///
+    /// 返回空列表 = 没有可用样本(取流失败/付费视频), 调用方据此提示用户。
+    /// </summary>
+    public async Task<List<string>> GetCdnSampleUrlsAsync(string bvid, long cid, int qn = 80)
+    {
+        var urls = new List<string>();
+        try
+        {
+            await EnsureBuvidAsync();
+            var ps = new Dictionary<string, string>
+            {
+                ["bvid"] = bvid,
+                ["cid"] = cid.ToString(),
+                ["qn"] = qn.ToString(),
+                ["fnval"] = "16",
+                ["fnver"] = "0",
+                ["fourk"] = "1"
+            };
+            ApplyTryLook(ps);
+            var (code, _, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/player/wbi/playurl", ps, sign: true);
+            if (code != 0 || data == null) return urls;
+
+            if (!data.Value.TryGetProperty("dash", out var dash) ||
+                dash.ValueKind != JsonValueKind.Object ||
+                !dash.TryGetProperty("video", out var videos) ||
+                videos.ValueKind != JsonValueKind.Array ||
+                videos.GetArrayLength() == 0)
+                return urls;
+
+            // 用最高那段视频当样本(它最吃带宽, 测出来的差距最有代表性)
+            JsonElement best = default;
+            var bestId = 0;
+            foreach (var v in videos.EnumerateArray())
+            {
+                var id = GetInt(v, "id");
+                if (id > bestId) { bestId = id; best = v; }
+            }
+            if (bestId <= 0) return urls;
+
+            var baseUrl = GetStr(best, "baseUrl");
+            if (baseUrl.Length > 0) urls.Add(baseUrl);
+            if (best.TryGetProperty("backupUrl", out var bu) && bu.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var u in bu.EnumerateArray())
+                {
+                    var s = u.GetString();
+                    if (!string.IsNullOrEmpty(s) && !urls.Contains(s)) urls.Add(s);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // 测速样本拿不到不该弹错(那是设置页的一个辅助功能), 但要在日志里留痕
+            App.ReportError(ex);
+        }
+        return urls;
     }
 
     /// <summary>清晰度 id 转显示名</summary>
@@ -3122,41 +3200,16 @@ public class ApiClient
     }
 
     /// <summary>
-    /// 这条线路是不是 mcdn(PCDN, 靠其他用户做节点分发)。
+    /// 线路选择已迁到 <see cref="CdnService"/>(2026-10-03)。
     ///
-    /// 实测(2026-09-28)同一视频同一档清晰度: `upos-sz-mirrorcos` 85.85Mbps,
-    /// 而 `xy58x222x41x95xy.mcdn.bilivideo.cn` 只有 40.10Mbps —— 差一倍以上。
+    /// 以前这里是两个静态方法(IsPcdnHost / PickFastestHost): 只按"域名里有没有 mcdn"
+    /// 换一下顺序。现在换成 CdnService, 因为它要额外负责:
+    ///   · 自动测速挑最快(各家 CDN 实测吞吐能差 4 倍)、手动指定、跟随服务端三种策略;
+    ///   · 认出**伪装域名**的 PCDN(实测 `mv0bz14m.edge.mountaintoys.cn` 带 os=mcdn,
+    ///     只看域名会漏 —— 旧规则的漏洞);
+    ///   · 失败回退与测速缓存。
+    /// 逻辑集中在一处, 设置页改设置 -> 下次取流生效, 不需要动这里。
     /// </summary>
-    private static bool IsPcdnHost(string url)
-    {
-        try
-        {
-            var host = new Uri(url).Host;
-            return host.Contains("mcdn.", StringComparison.OrdinalIgnoreCase) ||
-                   host.Contains("pcdn.", StringComparison.OrdinalIgnoreCase);
-        }
-        catch { return false; }
-    }
-
-    /// <summary>
-    /// 从 [baseUrl, ...backupUrl] 里挑主线路: **优先非 mcdn(PCDN)的**, 其余原序当备用。
-    ///
-    /// 只换顺序、不用试探性请求测速: 起播前多几毫秒的握手就够让"缓冲久"更严重,
-    /// 而 B 站给 mcdn 的流后面一定跟着 upos 备用线, 静态规则就足以绕开 PCDN。
-    /// 全部都是 mcdn 时保持服务端给的第一条(没有更好的选择)。
-    /// </summary>
-    private static (string main, List<string> backups) PickFastestHost(List<string> candidates)
-    {
-        if (candidates.Count == 0) return ("", new List<string>());
-
-        var idx = candidates.FindIndex(u => !IsPcdnHost(u));
-        if (idx < 0) idx = 0;
-
-        var rest = new List<string>(candidates.Count - 1);
-        for (var i = 0; i < candidates.Count; i++)
-            if (i != idx) rest.Add(candidates[i]);
-        return (candidates[idx], rest);
-    }
 
     private static string GetStr(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) &&
