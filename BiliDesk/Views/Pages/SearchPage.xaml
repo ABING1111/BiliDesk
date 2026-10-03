@@ -6,6 +6,28 @@
              Background="{DynamicResource AppBackgroundBrush}"
              PreviewMouseDown="OnPagePreviewMouseDown">
     <Grid>
+        <!-- ===== 搜索类别(视频 / 直播间): 左上角常驻 =====
+             2026-10-03 用户要求把它从搜索卡内部挪到页面左上角 —— 搜索框聚焦才展开,
+             类别不该藏在里面。白椭圆底 + 投影, 与收藏页夹子条同一形态。
+             两类内容来自**完全不同的接口**(search_type=video / live_room),
+             切换时必须重搜一次 —— 由 VM 的 Kind setter 负责。 -->
+        <Border HorizontalAlignment="Left" VerticalAlignment="Top"
+                Margin="36,24,0,0" Panel.ZIndex="5"
+                Background="{DynamicResource CardBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                CornerRadius="22" Padding="5">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
+            </Border.Effect>
+            <StackPanel Orientation="Horizontal">
+                <RadioButton GroupName="SearchKind" Style="{StaticResource SettingsTabStyle}"
+                             Content="视频" IsChecked="{Binding IsVideoKind, Mode=TwoWay}" />
+                <RadioButton GroupName="SearchKind" Style="{StaticResource SettingsTabStyle}"
+                             Content="直播间" Margin="2,0,0,0"
+                             IsChecked="{Binding IsLiveKind, Mode=TwoWay}" />
+            </StackPanel>
+        </Border>
+
         <!-- 结果区。顶部空出的 76 = 16(上边距) + 48(收起态搜索框高) + 12(间隙) ——
              搜索框是**浮在上面**的(见文件末尾那块, 不参与这层布局), 所以展开时它直接盖住结果区顶部,
              结果列表不会被挤得抖一下(与首页那张卡一个思路)。 -->
@@ -172,30 +194,10 @@
                                   VerticalScrollBarVisibility="Hidden"
                                   HorizontalScrollBarVisibility="Disabled">
                         <StackPanel Margin="20,14,20,16">
-                            <!-- ===== 搜索类别(视频 / 直播间) =====
-                                 两类内容来自**完全不同的接口**(search_type=video / live_room),
-                                 所以切换时必须重搜一次 —— 由 VM 的 Kind setter 负责(见 SearchViewModel)。
-                                 ★ 外层白椭圆底与收藏页/历史页同一形态(2026-10-03 用户要求统一)。
-                                 ★ GroupName 必须给: 同组 RadioButton 才有互斥。 -->
-                            <StackPanel Orientation="Horizontal">
-                                <Border Background="{DynamicResource CardBackgroundBrush}"
-                                        BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
-                                        CornerRadius="22" Padding="5">
-                                    <Border.Effect>
-                                        <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
-                                    </Border.Effect>
-                                    <StackPanel Orientation="Horizontal">
-                                        <RadioButton GroupName="SearchKind" Style="{StaticResource SettingsTabStyle}"
-                                                     Content="视频" IsChecked="{Binding IsVideoKind, Mode=TwoWay}" />
-                                        <RadioButton GroupName="SearchKind" Style="{StaticResource SettingsTabStyle}"
-                                                     Content="直播间" Margin="2,0,0,0"
-                                                     IsChecked="{Binding IsLiveKind, Mode=TwoWay}" />
-                                    </StackPanel>
-                                </Border>
-                            </StackPanel>
+                            <!-- ===== 搜索类别已挪到页面左上角(2026-10-03), 卡内只留历史与热搜 ===== -->
 
                             <!-- 搜索历史那一段(标题 + 词条)。整体随 HasHistory 显隐:
-                                 历史为空时只藏这一段, 上面的类别标签照常露出来。 -->
+                                 历史为空时只藏这一段。 -->
                             <StackPanel Visibility="{Binding HasHistory, Converter={StaticResource BoolToVis}}">
                             <Grid Margin="0,14,0,0">
                                 <TextBlock Text="搜索历史" FontSize="13" FontWeight="SemiBold"
