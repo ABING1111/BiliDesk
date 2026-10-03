@@ -159,7 +159,8 @@
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.14" />
                         </Border.Effect>
-                        <ItemsControl x:Name="FolderMoreList" ItemsSource="{Binding Folders}">
+                        <ItemsControl x:Name="FolderMoreList"
+                                      ItemsSource="{Binding HiddenFolders, RelativeSource={RelativeSource AncestorType=UserControl}}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <WrapPanel Orientation="Horizontal" />

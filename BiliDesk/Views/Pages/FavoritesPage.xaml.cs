@@ -104,6 +104,7 @@ public partial class FavoritesPage : UserControl
         // 找出"宽度累积超过 clipW"的第一颗 chip: 它之前(不含)的都显示。
         // chip 宽度要从生成的容器(ContentPresenter)里取 —— 直接遍历 ItemsHost。
         var acc = 0.0;
+        var accBefore = 0.0;      // 溢出那颗之前的累积宽 = 主条应显示到的宽度(chip 边界处截断)
         var visibleCount = FolderChips.Items.Count;
         var host = FindItemsHost(FolderChips);
         if (host != null)
@@ -119,10 +120,13 @@ public partial class FavoritesPage : UserControl
                     visibleCount = i;
                     break;
                 }
+                accBefore = acc;
             }
         }
 
-        FolderBarClip.Width = Math.Min(clipW, acc > 0 ? acc : clipW);
+        // ★ 主条宽度必须停在 **chip 边界**(accBefore): 钳到 clipW 会把最后一颗可见 chip
+        //   从中间截断(真机截图实证: 露出半颗"V...")。
+        FolderBarClip.Width = accBefore;
         ApplyRoundedClip(FolderBarClip, 18);
 
         // 红点 = 当前选中的夹子排不进主条(它藏在浮层里)
@@ -132,7 +136,18 @@ public partial class FavoritesPage : UserControl
             if (FolderChips.Items[i] is FavFolder f && f.IsCurrent) { currentIdx = i; break; }
         }
         FolderMoreDot.Visibility = currentIdx >= visibleCount ? Visibility.Visible : Visibility.Collapsed;
+
+        // ★ 浮层只列**被折叠**的那些(2026-10-03 用户反馈: 浮层里不该重复出现主条已显示的)。
+        //   用独立集合装, 绑在浮层 ItemsControl 上(见 XAML)。
+        HiddenFolders.Clear();
+        for (var i = visibleCount; i < FolderChips.Items.Count; i++)
+        {
+            if (FolderChips.Items[i] is FavFolder f) HiddenFolders.Add(f);
+        }
     }
+
+    /// <summary>被折叠进「⋯」浮层的那部分收藏夹(主条放不下的尾部)。</summary>
+    public System.Collections.ObjectModel.ObservableCollection<FavFolder> HiddenFolders { get; } = new();
 
     /// <summary>找到 ItemsControl 生成的横向 ItemsHost(StackPanel)。</summary>
     private static StackPanel? FindItemsHost(DependencyObject root)
