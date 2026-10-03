@@ -77,6 +77,12 @@ public class SettingsStore
     /// <summary>用户点过「跳过此版本」的版本号(空 = 没跳过; 只影响自动检查, 见 UpdateChecker.AutoCheckAsync)</summary>
     public string SkippedVersion { get; set; } = "";
 
+    /// <summary>
+    /// 免登录 1080P(默认开)。未登录时给取流请求补 try_look + dm_img_* 四件套,
+    /// 把匿名可见清晰度从 360P/480P 提到 720P/1080P —— 依据见 ApiClient.ApplyTryLook。
+    /// </summary>
+    public bool NoLogin1080P { get; set; } = true;
+
     /// <summary>用户同意过的是第几版声明(见 DisclaimerText.Version)</summary>
     public int AcceptedDisclaimerVersion { get; set; }
 
@@ -137,6 +143,8 @@ public class SettingsStore
                     // 老配置没有这两个字段 —— 属性初始化默认值(true / 空串)自动生效, 不需要版本号兼容。
                     AutoCheckUpdate = s.AutoCheckUpdate;
                     SkippedVersion = s.SkippedVersion ?? "";
+                    // 老配置没有这个字段 —— 属性初始化默认值(true)自动生效, 不需要版本号兼容。
+                    NoLogin1080P = s.NoLogin1080P;
                     // 老配置里只有 DisclaimerAccepted(bool)、没有版本号。
                     // 那时用户同意的是第 1 版声明, 所以按 1 记 —— 这一版改动后仍会正常再问一次。
                     AcceptedDisclaimerVersion = s.DisclaimerVersion > 0
@@ -219,6 +227,7 @@ public class SettingsStore
                 CloseToTray = CloseToTray,
                 AutoCheckUpdate = AutoCheckUpdate,
                 SkippedVersion = SkippedVersion,
+                NoLogin1080P = NoLogin1080P,
                 DisclaimerAccepted = DisclaimerAccepted,
                 DisclaimerVersion = AcceptedDisclaimerVersion
             }, JsonOpts);
@@ -335,6 +344,18 @@ public class SettingsStore
         var next = version ?? "";
         if (string.Equals(SkippedVersion, next, StringComparison.Ordinal)) return;
         SkippedVersion = next;
+        Save();
+    }
+
+    /// <summary>
+    /// 改"免登录 1080P"并落盘。
+    /// 不需要广播事件: 该开关只在下一次取流时被读取(ApiClient.ApplyTryLook),
+    /// 播放中的视频不会因为改它而中断 —— 用户想立刻生效, 换一集/重进即可。
+    /// </summary>
+    public void SetNoLogin1080P(bool value)
+    {
+        if (NoLogin1080P == value) return;
+        NoLogin1080P = value;
         Save();
     }
 

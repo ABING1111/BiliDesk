@@ -161,6 +161,31 @@
                  所以连"算法"这个概念一起撤掉, 首页推荐固定走网页版。详见 ApiClient.GetRecommendAsync。 -->
 
             <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
+                            Content="播放" />
+
+            <!-- 免登录 1080P: 未登录时给取流请求补 try_look + dm_img_* 四件套,
+                 把匿名可见清晰度从 360P/480P 提到 720P/1080P(依据见 ApiClient.ApplyTryLook)。
+                 这是设备指纹启发式放权, B 站改判据就会失效, 所以给用户一个关掉的入口。 -->
+            <Border Style="{StaticResource SettingsCardStyle}">
+                <StackPanel>
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="免登录 1080P" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding NoLogin1080PHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding NoLogin1080P, Mode=TwoWay}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
                             Content="弹幕" />
 
             <Border Style="{StaticResource SettingsCardStyle}">

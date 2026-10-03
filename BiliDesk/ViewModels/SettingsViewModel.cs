@@ -22,7 +22,17 @@ public class SettingsViewModel : ObservableObject
     private string _cacheSizeText = "计算中…";
     private string _videoCacheSizeText = "计算中…";
 
-    public bool IsLoggedIn { get => _isLoggedIn; private set => SetProperty(ref _isLoggedIn, value); }
+    public bool IsLoggedIn
+    {
+        get => _isLoggedIn;
+        private set
+        {
+            if (!SetProperty(ref _isLoggedIn, value)) return;
+            // 免登录 1080P 的副标题跟着登录态走(见 NoLogin1080PHint) ——
+            // 登录/退出后不刷它, 用户会看到"已登录"却还写着"未登录也能看 1080P"。
+            OnPropertyChanged(nameof(NoLogin1080PHint));
+        }
+    }
     public string UserName { get => _userName; private set => SetProperty(ref _userName, value); }
     public string UserFace { get => _userFace; private set => SetProperty(ref _userFace, value); }
     public int UserLevel { get => _userLevel; private set => SetProperty(ref _userLevel, value); }
@@ -325,6 +335,31 @@ public class SettingsViewModel : ObservableObject
 
     /// <summary>立即把主界面收进托盘(等价于点关闭键的效果, 方便先试一下手感)</summary>
     public ICommand MinimizeToTrayCommand { get; }
+
+    // ----------------- 免登录 1080P -----------------
+
+    /// <summary>
+    /// 未登录时把匿名可见清晰度从 360P/480P 提到 720P/1080P(默认开)。
+    /// 已登录用户不受影响 —— 那种情况按账号等级取流, 开关不参与(见 ApiClient.ApplyTryLook)。
+    /// </summary>
+    public bool NoLogin1080P
+    {
+        get => Svc.Settings.NoLogin1080P;
+        set
+        {
+            if (value == Svc.Settings.NoLogin1080P) return;
+            Svc.Settings.SetNoLogin1080P(value);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
+    /// 副标题随登录态变化 —— 这个开关只对未登录有意义, 登录用户看到"已登录, 按账号等级取流"
+    /// 才不会以为是开关坏了。
+    /// </summary>
+    public string NoLogin1080PHint => IsLoggedIn
+        ? "已登录, 按账号等级取流, 此开关不参与"
+        : "未登录也能看 1080P; 关闭后回到 360P/480P";
 
     // ----------------- 检查更新 -----------------
 

@@ -1050,6 +1050,7 @@ public class ApiClient
                 ["fnver"] = "0",
                 ["fourk"] = "1"
             };
+            ApplyTryLook(ps);
             var (code, _, data) = await GetJsonAsync(
                 "https://api.bilibili.com/x/player/wbi/playurl", ps, sign: true);
             if (code == 0 && data != null &&
@@ -1277,6 +1278,67 @@ public class ApiClient
             // 这里刻意不 ReportError: 拿到了 200 但结构不认识属于内容问题, 不该弹窗打扰用户。
             return (null, backups, 0, qualities, 0);
         }
+    }
+
+    /// <summary>
+    /// 未登录时补上"免登录 1080P"参数(仿 PiliPlus 的做法)。
+    ///
+    /// ★★ 这里有一个**只加 try_look 会完全无效**的坑, 实测结论(2026-10-03, 见 .probes/bd-probe-trylook):
+    ///
+    ///   必要性矩阵(未登录, 同一视频, 每格重复 2 轮结果一致):
+    ///     都不加                       -> dash.video id = [16,32]           只有 360P/480P
+    ///     **只加 try_look=1**          -> dash.video id = [16,32]           依然只有 360P/480P  ← 无效!
+    ///     **只加 dm_img_* 四个**        -> dash.video id = [16,32]           依然只有 360P/480P  ← 无效!
+    ///     try_look=1 + dm_img_* 四个   -> dash.video id = [16,32,64,80]     ★ 720P + 1080P 解锁
+    ///
+    ///   也就是说这是**两要素同时成立**才放行: try_look 触发"试看"通道, 四个 dm_img_*
+    ///   是被校验的设备指纹。少任何一个都退回 360P/480P —— 而且**四个一个都不能少**
+    ///   (单独抽掉 dm_img_inter 就会立刻退回 [16,32])。
+    ///
+    ///   为什么别的项目里"只发 try_look"也能看到 1080P 的说法靠不住:
+    ///   PiliPlus 是 2026-05-08 才补上 dm_img_* 的(此前只发 try_look), 那次补丁正是为了修
+    ///   它自己 issue #2020「免登录1080p看不了」。照抄它的旧版参数就会复现那个 bug。
+    ///
+    /// 顺带实测确认**不需要**的东西(避免以后有人"顺手加上去"):
+    ///   · 不需要 Cookie(完全无 session 也能解锁)
+    ///   · 不需要改 UA / Referer / Origin / env / app-key / x-bili-aurora-zone
+    ///   · 不需要把 fnval 从 16 改成 4048, 也不需要动 fourk / fnver
+    ///   · qn 不决定返回哪些流(qn=16 照样返回 [16,32,64,80]), 它只决定哪一条带可播放地址
+    ///
+    /// 能力上限: 只到 1080P(id=80)。1080P+(112) / 60帧(116) / 4K(120) / HDR 匿名拿不到,
+    /// 那是账号等级限制, 不是参数问题。番剧(PGC)也不适用 —— 那条接口匿名返回空 dash。
+    ///
+    /// ⚠️ data.quality 在 qn=80 时会返回 64(看起来像只给了 720P), 但 dash.video 里
+    ///    **确实有** id=80 的 1920x1080 流。判断清晰度必须看 dash.video[].id, 不能看它。
+    ///
+    /// ⚠️ 这是一套设备指纹启发式校验, B 站随时可能改判据(历史上已失效过两次)。
+    ///    所以失败要能静默回退 —— 这里只是"多加几个参数", 最坏情况就是退回现在的 360P/480P,
+    ///    不会让播放本身出错。
+    /// </summary>
+    private static void ApplyTryLook(Dictionary<string, string> ps)
+    {
+        // 只在"未登录 + 用户开着该开关"时发。
+        // 已登录时 B 站按账号等级给流, 发这个参数没有意义(还可能干扰), 所以直接不发。
+        if (SessionManager.Instance.HasLogin) return;
+        if (!SettingsStore.Instance.NoLogin1080P) return;
+
+        ps["try_look"] = "1";
+        // 四个设备指纹参数必须**成组**出现, 缺一不可(见上方必要性矩阵)。
+        // 取值本身几乎不被校验: dm_img_str / dm_cover_img_str 用随机 base64 即可,
+        // 但要保证是"非空的、形状像指纹"的串 —— 这是 PiliPlus 用随机 base64 的原因。
+        ps["dm_img_list"] = "[]";
+        ps["dm_img_str"] = RandomBase64(16, 64);
+        ps["dm_cover_img_str"] = RandomBase64(32, 128);
+        ps["dm_img_inter"] = "{\"ds\":[],\"wh\":[0,0,0],\"of\":[0,0,0]}";
+    }
+
+    /// <summary>生成指定长度范围内的随机 base64 串(用于 dm_img_str / dm_cover_img_str)</summary>
+    private static string RandomBase64(int minLen, int maxLen)
+    {
+        var n = Random.Shared.Next(minLen, maxLen + 1);
+        var bytes = new byte[n];
+        Random.Shared.NextBytes(bytes);
+        return Convert.ToBase64String(bytes);
     }
 
     /// <summary>清晰度 id 转显示名</summary>

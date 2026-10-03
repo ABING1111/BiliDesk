@@ -1092,6 +1092,18 @@ public class AppSettings
     public string SkippedVersion { get; set; } = "";
 
     /// <summary>
+    /// 免登录 1080P(默认 true)。
+    ///
+    /// 未登录时在取流请求里补上 try_look + 四个 dm_img_* 设备指纹参数, 把匿名可见的
+    /// 清晰度从 360P/480P 提到 720P/1080P —— 做法与参数依据见 ApiClient.ApplyTryLook。
+    ///
+    /// 默认 true 与 PiliPlus 一致: 只影响"未登录"这一种状态, 已登录用户按账号等级取流,
+    /// 这个开关对它们没有任何作用(ApplyTryLook 会直接跳过)。
+    /// 老配置缺这个字段时保持初始化值 ⇒ "默认打开"自动成立, 不需要版本号兼容。
+    /// </summary>
+    public bool NoLogin1080P { get; set; } = true;
+
+    /// <summary>
     /// 是否已同意首次启动的免责声明。
     /// 默认 false —— 老版本升级上来的用户也会被问一次, 这是有意的:
     /// 声明里有"账号风控/数据丢失风险自担"这类实质内容, 让所有人在同一份文本上确认一次更稳妥。
