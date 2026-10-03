@@ -13,6 +13,7 @@ Pulish/*
 
 # 内部开发笔记(项目约定: 不进仓库)
 memory/
+长期记忆/
 
 # WorkBuddy 会话数据(个人笔记, 不开源)
 .workbuddy/
