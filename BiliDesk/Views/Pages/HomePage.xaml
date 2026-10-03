@@ -551,6 +551,14 @@
                             BorderBrush="{DynamicResource AccentBrush}" BorderThickness="2" />
 
                     <Grid Margin="10,0">
+                        <!-- 占位提示"搜索你感兴趣的视频"(2026-10-03 用户要求):
+                             独立 TextBlock 浮在输入框上 —— 三个条件任一满足就渐隐:
+                             输入框有文字 / 聚焦中(展开点入要打字) / 遮罩开着(卡片展开中)。
+                             渐隐动画由代码后置驱动(见 RefreshSearchPlaceholder), 这里只给初值。 -->
+                        <TextBlock x:Name="SearchPlaceholder" Text="搜索你感兴趣的视频"
+                                   FontSize="14" Margin="10,0,44,0"
+                                   VerticalAlignment="Center" IsHitTestVisible="False"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
                         <TextBox x:Name="SearchKeywordBox"
                                  Background="Transparent" BorderThickness="0"
                                  Foreground="{DynamicResource TextPrimaryBrush}"

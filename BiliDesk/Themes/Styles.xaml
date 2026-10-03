@@ -696,8 +696,12 @@
                 <ControlTemplate TargetType="ComboBox">
                     <Grid>
                         <!-- 关闭态: 浅灰圆角底 + 选中文字 + 下拉箭头。
-                            ToggleButton 是 ComboBox 的标准交互件(点它开/关弹层)。 -->
-                        <ToggleButton x:Name="Toggle" Focusable="False" ClickMode="Press">
+                            ToggleButton 是 ComboBox 的标准交互件。
+                            ★ IsChecked 必须绑回 IsDropDownOpen: ComboBox 打开/关闭弹层靠的就是
+                              "点 ToggleButton → IsChecked 翻转 → 同步 IsDropDownOpen" 这条链,
+                              漏了它点击毫无反应(真机实证"候选框点不了"的根因)。 -->
+                        <ToggleButton x:Name="Toggle" Focusable="False" ClickMode="Press"
+                                      IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
                             <ToggleButton.Template>
                                 <ControlTemplate TargetType="ToggleButton">
                                     <Border x:Name="Bd" CornerRadius="8"
@@ -709,15 +713,14 @@
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="30" />
                                             </Grid.ColumnDefinitions>
-                                            <!-- 选中文字。★ 必须用 ContentPresenter 而不是 TextBlock:
-                                                 XAML 里声明的是 <ComboBoxItem Content="..."/>,
-                                                 SelectionBoxItem 给的是**容器对象**(ComboBoxItem),
-                                                 TextBlock.Text 只能拿到类型名(空)。ContentPresenter
-                                                 会按 item 的模板正确显示内容字符串。 -->
-                                            <ContentPresenter Grid.Column="0" Margin="12,0,4,0"
-                                                              VerticalAlignment="Center"
-                                                              IsHitTestVisible="False"
-                                                              Content="{Binding SelectionBoxItem, RelativeSource={RelativeSource TemplatedParent}}" />
+                                            <!-- 选中文字。ItemsSource 是字符串数组,
+                                                 SelectionBoxItem 就是选中的那个字符串, 直接显示。 -->
+                                            <TextBlock Grid.Column="0" Margin="12,0,4,0"
+                                                       VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Text="{Binding SelectionBoxItem, RelativeSource={RelativeSource TemplatedParent}}"
+                                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                                       FontSize="13" />
                                             <TextBlock Grid.Column="1" Text="&#xE70D;" FontSize="10"
                                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                        Foreground="{DynamicResource TextSecondaryBrush}"
@@ -728,17 +731,17 @@
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter TargetName="Bd" Property="Background"
                                                     Value="{DynamicResource ControlFillDefaultBrush}" />
-                                            <Setter TargetName="Bd" Property="BorderBrush"
-                                                    Value="{DynamicResource InputBorderBrush}" />
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
                             </ToggleButton.Template>
                         </ToggleButton>
-                        <!-- 弹层: 白卡圆角 + 阴影 + 内部列表 -->
+                        <!-- 弹层: 白卡圆角 + 阴影 + 内部列表。
+                             Margin=8 是给投影留的空间(不留会被裁), 用 Horizontal/VerticalOffset
+                             抵回来, 让卡片视觉上正对选择框。 -->
                         <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}"
                                Placement="Bottom" AllowsTransparency="True" PopupAnimation="Fade"
-                               Margin="0,4,0,0">
+                               HorizontalOffset="-8" VerticalOffset="0">
                             <Border MinWidth="{TemplateBinding ActualWidth}"
                                     MaxHeight="{TemplateBinding MaxDropDownHeight}"
                                     Background="{DynamicResource CardBackgroundBrush}"

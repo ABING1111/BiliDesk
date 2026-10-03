@@ -5,66 +5,63 @@
     <!--
         设置页 2026-10-03 重做(参考外部应用设置页截图):
           · 顶部: 页面标题 + 居中悬浮的胶囊 Tab(通用 / 播放 / 数据管理 / 关于),
-            选中的 Tab 由强调色胶囊铺底(PillTabStyle, 与首页收藏夹选择条同一套)。
-          · 区块标题: 左侧一根强调色竖条 + 加粗小标题(不再用 20px 大字)。
+            选中的 Tab 由柔和强调色胶囊铺底(SettingsTabStyle)。
+            ★ 标题与 Tab 在滚动画布**内部**(2026-10-03 用户要求"与下方内容同一层级"):
+              页面滚动时它们跟着一起滚, 而不是钉在视口顶部。
+          · 区块标题: 左侧一根强调色竖条 + 加粗小标题。
           · 卡片: 白底大圆角(SettingsCardStyle), 一行一设置项 —— 左标题+描述, 右控件,
-            行间用更淡的分隔线。布尔项换成 SettingsToggleStyle 开关,
-            枚举项换成 SettingsComboStyle 下拉(旧版是分段单选, 长文案放不下)。
+            行间用更淡的分隔线。布尔项用 SettingsToggleStyle 开关,
+            枚举项用 SettingsComboStyle 下拉。
         功能一个不少: 旧页的每一项绑定都原样搬进新布局, VM 只加了 Tab 投影属性。
         四个 Tab 的内容在 Settings/SettingsTabs.xaml(独立 ResourceDictionary,
         模板里不能挂事件, 作者栏因此改走 OpenAuthorCommand)。
     -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="36,20,36,32">
 
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
+            <!-- ============ 标题 + 居中胶囊 Tab(随内容一起滚动) ============ -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="应用设置" Style="{StaticResource PageTitleStyle}"
+                           VerticalAlignment="Center" />
 
-        <!-- ============ 顶部: 标题 + 居中胶囊 Tab ============ -->
-        <Grid Grid.Row="0" Margin="36,20,36,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Grid.Column="0" Text="应用设置" Style="{StaticResource PageTitleStyle}"
-                       VerticalAlignment="Center" />
+                <!-- 胶囊 Tab。外层 Border 给白卡浮层感 -->
+                <Border Grid.Column="1" Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                        CornerRadius="22" Padding="5" VerticalAlignment="Center"
+                        HorizontalAlignment="Center">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
+                    </Border.Effect>
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
+                                     Content="通用"
+                                     IsChecked="{Binding IsGeneralTab, Mode=TwoWay}" />
+                        <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
+                                     Content="播放" Margin="2,0,0,0"
+                                     IsChecked="{Binding IsPlaybackTab, Mode=TwoWay}" />
+                        <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
+                                     Content="数据管理" Margin="2,0,0,0"
+                                     IsChecked="{Binding IsDataTab, Mode=TwoWay}" />
+                        <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
+                                     Content="关于" Margin="2,0,0,0"
+                                     IsChecked="{Binding IsAboutTab, Mode=TwoWay}" />
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="2" />
+            </Grid>
 
-            <!-- 胶囊 Tab。外层 Border 给白卡浮层感(参考图: 圆角胶囊浮在页面上) -->
-            <Border Grid.Column="1" Background="{DynamicResource CardBackgroundBrush}"
-                    BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
-                    CornerRadius="22" Padding="5" VerticalAlignment="Center"
-                    HorizontalAlignment="Center">
-                <Border.Effect>
-                    <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
-                </Border.Effect>
-                <StackPanel Orientation="Horizontal">
-                    <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
-                                 Content="通用"
-                                 IsChecked="{Binding IsGeneralTab, Mode=TwoWay}" />
-                    <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
-                                 Content="播放" Margin="2,0,0,0"
-                                 IsChecked="{Binding IsPlaybackTab, Mode=TwoWay}" />
-                    <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
-                                 Content="数据管理" Margin="2,0,0,0"
-                                 IsChecked="{Binding IsDataTab, Mode=TwoWay}" />
-                    <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
-                                 Content="关于" Margin="2,0,0,0"
-                                 IsChecked="{Binding IsAboutTab, Mode=TwoWay}" />
-                </StackPanel>
-            </Border>
-            <Border Grid.Column="2" />
-        </Grid>
-
-        <!-- ============ 内容区 ============
-             Tab 切换 = ContentControl + DataTriggers 换 ContentTemplate。
-             ★ Content 必须保持是 **VM 本身**({Binding}): 模板里所有 Command / 属性绑定
-               都以 Content 为数据源 —— 之前把它设成 "{Binding TabIndex}"(一个 int),
-               所有按钮的绑定就全落空了(真机症状: 四个 Tab 的功能全没反应)。
-               Triggers 只负责读 TabIndex 换模板, 不动 Content。 -->
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-            <ContentControl Margin="36,4,36,32" HorizontalAlignment="Stretch"
+            <!-- ============ 内容区 ============
+                 Tab 切换 = ContentControl + DataTriggers 换 ContentTemplate。
+                 ★ Content 必须保持是 **VM 本身**({Binding}): 模板里所有 Command / 属性绑定
+                   都以 Content 为数据源 —— 之前把它设成 "{Binding TabIndex}"(一个 int),
+                   所有按钮的绑定就全落空了(真机症状: 四个 Tab 的功能全没反应)。
+                   Triggers 只负责读 TabIndex 换模板, 不动 Content。 -->
+            <ContentControl Margin="0,4,0,0" HorizontalAlignment="Stretch"
                             Focusable="False"
                             Content="{Binding}">
                 <ContentControl.Resources>
@@ -91,6 +88,6 @@
                     </Style>
                 </ContentControl.Style>
             </ContentControl>
-        </ScrollViewer>
-    </Grid>
+        </StackPanel>
+    </ScrollViewer>
 </UserControl>

@@ -63,6 +63,8 @@ public partial class HomePage : UserControl
         FilterService.Instance.PropertyChanged += OnFilterChanged;
         // 窗口缩放时若搜索卡正开着, 要让它重新对中(RenderTransform 是绝对位移, 不跟布局走)
         SizeChanged += (_, _) => RelayoutSearchCard();
+        // 输入任何文字时占位提示要立刻渐隐(聚焦淡出在 GotFocus 里, 这里管"打了字又删光")
+        SearchKeywordBox.TextChanged += (_, _) => RefreshSearchPlaceholder();
         // 屏蔽面板改到工具列左边后(Placement=Left), 垂直方向要自己底对齐: 面板(≈340px)比
         // 工具列(≈214px)高, 默认顶对齐会顺着往窗口下缘外长出去。Opened 时面板的高度才可信
         // (先量 Child, 兜底; ActualHeight 在布局后也可用), 按"面板底缘 ≈ 工具列底缘 - 2px"算。
@@ -678,6 +680,8 @@ public partial class HomePage : UserControl
         _searchOpen = true;
         // 遮罩先出来: 展开这一段里点页面任何地方都算"点外面"
         SearchScrim.Visibility = Visibility.Visible;
+        // 展开即视为"选中了搜索框": 占位提示渐隐
+        RefreshSearchPlaceholder();
         // 热搜是懒加载的: 现在就去拉, 等卡片展开完基本已经就位
         _ = SearchVm?.EnsureHotSearchAsync();
         // 高度在变, 这段别让 Auto 闪出滚动条(动画结束再切回 Auto)
@@ -784,6 +788,8 @@ public partial class HomePage : UserControl
         SearchInputRing.Opacity = 0;
         SearchCardScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Hidden;
         SearchScrim.Visibility = Visibility.Collapsed;
+        // 卡片收起后占位提示要回来(淡入)
+        RefreshSearchPlaceholder();
     }
 
     /// <summary>
@@ -817,10 +823,16 @@ public partial class HomePage : UserControl
     /// From 取当前值, 所以淡出途中再聚焦也不会跳。
     /// </summary>
     private void OnSearchKeywordGotFocus(object sender, KeyboardFocusChangedEventArgs e)
-        => FadeSearchRing(true);
+    {
+        FadeSearchRing(true);
+        RefreshSearchPlaceholder();
+    }
 
     private void OnSearchKeywordLostFocus(object sender, KeyboardFocusChangedEventArgs e)
-        => FadeSearchRing(false);
+    {
+        FadeSearchRing(false);
+        RefreshSearchPlaceholder();
+    }
 
     private void FadeSearchRing(bool on)
         => SearchInputRing.BeginAnimation(OpacityProperty,
@@ -829,6 +841,28 @@ public partial class HomePage : UserControl
             {
                 EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
             });
+
+    // ---------------- 占位提示("搜索你感兴趣的视频") ----------------
+    // 2026-10-03 用户要求: 搜索框里有这句提示, 选中(聚焦)时渐隐消失。
+    // 显隐三条件: 有文字 / 聚焦中 / 卡片展开中 —— 任一成立就藏。
+    // ★ 淡出而不是瞬间消失: 与搜索卡其它淡入淡出是同一套语言。
+
+    /// <summary>占位提示渐隐/渐显的目标透明度。0 = 藏, 1 = 显。</summary>
+    private const double PlaceholderVisibleOpacity = 1.0;
+    private const int PlaceholderFadeMs = 160;
+
+    private void RefreshSearchPlaceholder()
+    {
+        var visible = string.IsNullOrEmpty(SearchKeywordBox.Text)
+                      && !SearchKeywordBox.IsKeyboardFocusWithin
+                      && !_searchOpen;
+        SearchPlaceholder.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(SearchPlaceholder.Opacity, visible ? PlaceholderVisibleOpacity : 0,
+                TimeSpan.FromMilliseconds(PlaceholderFadeMs))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
+    }
 
     /// <summary>悬停加深。2026-09-26 起这层只盖住搜索框自己(事件挂在输入行上), 所以两种状态都要亮。</summary>
     private void OnSearchCardMouseEnter(object sender, MouseEventArgs e)
