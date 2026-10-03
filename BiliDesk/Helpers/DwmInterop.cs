@@ -29,6 +29,15 @@ public static class DwmInterop
     [DllImport("user32.dll", SetLastError = true)]
     private static extern long SetWindowLongPtr(IntPtr hwnd, int index, long value);
 
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+    private const uint SwpNosize = 0x0001;
+    private const uint SwpNomove = 0x0002;
+    private const uint SwpNozorder = 0x0004;
+    private const uint SwpNoactivate = 0x0010;
+    private const uint SwpFramechanged = 0x0020;
+
     public static IntPtr GetHwnd(Window window) => new WindowInteropHelper(window).Handle;
 
     /// <summary>是否为 Win11(Build 22000+)</summary>
@@ -124,10 +133,68 @@ public static class DwmInterop
     //   DWMWA_TRANSITIONS_FORCEDISABLED=3, 关掉该窗口的 DWM 过渡动画), 2026-10-02
     //   **连同那个 DWMWA 常量一起删除, 别再加回来**。
     //
-    // 删除原因 = 用户要求"把软件全屏动画改成 Windows 系统自带的动画, 不再自己绘制":
-    //   播放器以前是"秒切、无动画", 为了让那一下不叠上系统的窗口缩放过渡, 就在
-    //   SourceInitialized 里把这个开关打开, 主动把 Windows 自己的动画掐掉了。
-    //   现在方向正好相反 —— 自绘动画已全部删除, 要的就是 DWM 那段系统过渡。
-    //   一旦有谁再调一次 DisableWindowTransitions, 系统动画会**静默消失**(窗口照常最大化,
-    //   只是没有过渡), 表现出来就是"改了没用 / 又变成硬切", 极难排查。
+    //   删除原因 = 用户要求"把全屏动画改成 Windows 系统自带的动画, 不再自己绘制":
+    //     播放器以前是"秒切、无动画", 为了让那一下不叠上系统的窗口缩放过渡, 就在
+    //     SourceInitialized 里把这个开关打开, 主动把 Windows 自己的动画掐掉了。
+    //     现在方向正好相反 —— 自绘动画已全部删除, 要的就是 DWM 那段系统过渡。
+    //     一旦有谁再调一次 DisableWindowTransitions, 系统动画会**静默消失**(窗口照常最大化,
+    //     只是没有过渡), 表现出来就是"改了没用 / 又变成硬切", 极难排查。
+
+    // ------------------------------------------------------------ 全屏盖任务栏
+
+    /// <summary>
+    /// 摘掉 <c>WS_CAPTION</c> 样式位。播放器**进全屏**时调; 退全屏用 <see cref="RestoreCaption"/>。
+    ///
+    /// ★★★ 为什么进全屏必须摘掉它(2026-10-03, 用户报"视频全屏后盖不住任务栏"的根因):
+    ///   同一天为了"最小化/全屏有系统动画", <see cref="RestoreCaptionForDwmAnimation"/> 把
+    ///   WS_CAPTION 补回了所有自绘标题栏窗口 —— 动画回来了, 但 Windows 外壳的全屏检测
+    ///   (FULLSCREENOBJECT/任务栏自动隐藏)只认"**无**标题栏样式 + 铺满显示器"的窗口:
+    ///   带 WS_CAPTION 的窗口就算尺寸铺满整屏, 外壳仍当它是普通最大化窗口, 任务栏照常浮在上面。
+    ///   (历史上一直没暴露, 是因为旧代码从补 WS_CAPTION 那天起才有这个样式位。)
+    ///
+    ///   全屏期间自绘标题栏整行已收成 0 高(见 PlayerWindow.ApplyFullscreenLayout),
+    ///   WS_CAPTION 没有可见作用; 而全屏的第一诉求就是盖住任务栏, 所以这里摘掉,
+    ///   退全屏时由 <see cref="RestoreCaption"/> 补回来, 系统动画照旧。
+    ///
+    /// ★ SetWindowLongPtr 之后必须跟一个 SetWindowPos(SWP_FRAMECHANGED), 否则新的样式
+    ///   不会立刻反映到外壳的窗口判定上(样式改了但框架没重算, 任务栏该露还露)。
+    /// </summary>
+    public static bool SuppressCaptionForFullscreen(Window window)
+    {
+        try
+        {
+            var hwnd = GetHwnd(window);
+            if (hwnd == IntPtr.Zero) return false;
+            var style = GetWindowLongPtr(hwnd, GWL_STYLE);
+            if ((style & WS_CAPTION) == 0) return true;   // 本来就没有, 无需动
+            SetWindowLongPtr(hwnd, GWL_STYLE, style & ~WS_CAPTION);
+            SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                SwpNomove | SwpNosize | SwpNozorder | SwpNoactivate | SwpFramechanged);
+            return (GetWindowLongPtr(hwnd, GWL_STYLE) & WS_CAPTION) == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>把 <c>WS_CAPTION</c> 补回来(退全屏用)。与 <see cref="RestoreCaptionForDwmAnimation"/> 相同的核对方式。</summary>
+    public static bool RestoreCaption(Window window)
+    {
+        try
+        {
+            var hwnd = GetHwnd(window);
+            if (hwnd == IntPtr.Zero) return false;
+            var style = GetWindowLongPtr(hwnd, GWL_STYLE);
+            if ((style & WS_CAPTION) == WS_CAPTION) return true;
+            SetWindowLongPtr(hwnd, GWL_STYLE, style | WS_CAPTION);
+            SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                SwpNomove | SwpNosize | SwpNozorder | SwpNoactivate | SwpFramechanged);
+            return (GetWindowLongPtr(hwnd, GWL_STYLE) & WS_CAPTION) == WS_CAPTION;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }

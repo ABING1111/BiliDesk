@@ -77,9 +77,12 @@ public static class ShortVideoCache
     /// v2: mfhd 序列号重新编号 + elst.segment_duration 补成真实时长;
     /// v3: **改成"展开成普通 MP4"**(完整 stbl 表, 与 B 站自己的单流文件同构) —— 分片 MP4
     ///     在跳转时只能靠解复用器边扫边定位, 真机上表现为花屏 + 音轨不同步。
+    /// v4: elst 空编辑(media_time=-1)的 segment_duration 不再补全片时长 —— 旧版合成的文件里,
+    ///     音频那条空编辑被放大成全片时长, 播放器把整条音频轨当成静默编辑期,
+    ///     症状是"整条视频有画面没声音"(2026-10-03 修)。带 v3 前缀的文件由 Prune 清掉, 自动重下。
     /// 带旧版本前缀的文件由 Prune 清掉, 相当于自动重下。
     /// </summary>
-    private const string FormatVersion = "v3";
+    private const string FormatVersion = "v4";
 
     /// <summary>缓存键: 同一视频的不同清晰度是两份文件(切清晰度要重新合)</summary>
     private static string KeyOf(string bvid, int qn) => $"{FormatVersion}_{bvid}_{qn}";

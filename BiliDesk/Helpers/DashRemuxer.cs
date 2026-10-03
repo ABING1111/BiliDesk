@@ -179,6 +179,8 @@ public static class DashRemuxer
         public int MdhdTimescale;
         public int ElstVersion;
         public int ElstSegDurOffset = -1;
+        /// <summary>elst 第一条是不是 media_time=-1 的**空编辑**(是 => segment_duration 不补, 保持原样)</summary>
+        public bool ElstFirstEntryIsEmpty;
         public byte[] Udta = Array.Empty<byte>();
         public readonly List<Frag> Frags = new();
 
@@ -283,6 +285,17 @@ public static class DashRemuxer
                             if (elst.Count == 2)
                             {
                                 ElstVersion = moov[elst[1].Offset + 8];
+                                // entry_count 之后就是第一条编辑(见 ISO 14496-12: version/flags(4)
+                                // + entry_count(4) + entries)。第一条 media_time 为 -1 表示**空编辑**
+                                // (对位垫片): 它的 segment_duration 绝不能被"补真实时长"逻辑放大,
+                                // 否则整条轨被宣告成静默编辑期("有画面没声音", 见 BuildTrak 的说明)。
+                                // entry 大小: ver 0 是 segDur(u32)+mediaTime(u32 各 4B), ver 1 是各 8B。
+                                var firstEntry = elst[1].Offset + 16;
+                                var mtOff = firstEntry + (ElstVersion == 0 ? 4 : 8);
+                                var mediaTime = ElstVersion == 0
+                                    ? (long)(int)ReadU32(moov, mtOff)
+                                    : (long)ReadU64(moov, mtOff);
+                                ElstFirstEntryIsEmpty = mediaTime < 0;
                                 ElstSegDurOffset = elst[1].Offset + 16 - off;
                             }
                             break;
@@ -481,7 +494,18 @@ public static class DashRemuxer
         }
         // elst.segment_duration: 源文件里是占位的 0, 补成真实时长(与 B 站自己的单流文件一致)。
         // **media_time 绝不动**: 那是 B 站有意的 0.1 秒音画对位(视频首个样本 cts 偏移正好 1600)。
-        if (t.ElstSegDurOffset >= 0 && movieDuration > 0)
+        //
+        // ★★★ 只补 **media_time >= 0** 的那条(2026-10-03, "整条视频没声音"的根因):
+        //   B 站 DASH 的音频 init 段里 elst 有**两条**编辑, 第一条是 media_time = -1 的
+        //   **空编辑**(empty edit, 对位垫片): 官方单流文件里它只有 ~11ms, 对播放无感。
+        //   旧逻辑"把第一条的 segment_duration 补成全片时长"作用在这条空编辑上, 等于宣告
+        //   "音频前 23.9 秒全是静默编辑期" —— 解复用器照办, 全片直到结尾都不出声。
+        //   (视频的 elst 只有一条 media_time=2133 的正常编辑, 所以画面一直正常 ——
+        //    症状是"有画面没声音", 与本例吻合。)
+        //   正确做法与官方单流一致: media_time = -1 的空编辑保持**原样**(时长是占位就让它
+        //   留着占位), 只补 media_time >= 0 的主编辑段。找到哪条主编辑需要记录它的偏移,
+        //   见 ParseMoov 里 ElstMediaTimeNeg 标记。
+        if (t.ElstSegDurOffset >= 0 && movieDuration > 0 && !t.ElstFirstEntryIsEmpty)
         {
             if (t.ElstVersion == 0) WriteU32(trak, t.ElstSegDurOffset, (uint)movieDuration);
             else WriteU64(trak, t.ElstSegDurOffset, (ulong)movieDuration);

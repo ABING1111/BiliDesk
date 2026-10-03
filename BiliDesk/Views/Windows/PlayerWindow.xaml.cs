@@ -3120,6 +3120,11 @@ public partial class PlayerWindow : FluentWindow
             // 是给主窗口的"普通最大化"定的规矩: 只占工作区(任务栏照常露在外面)。
             // 播放器全屏要的是整块显示器, 所以这里把开关翻过来 —— 见 MaximizeCoversTaskbar。
             MaximizeCoversTaskbar = true;
+            // ★★★ 尺寸铺满还不够: Windows 外壳只对"无标题栏样式 + 铺满显示器"的窗口做
+            //   全屏判定(自动藏任务栏)。SourceInitialized 里为了系统动画补回的 WS_CAPTION
+            //   必须在这里摘掉, 否则任务栏照样浮在全屏画面上(2026-10-03 用户报的 bug)。
+            //   退全屏时由下面的对称分支补回来, 系统动画不受影响。
+            DwmInterop.SuppressCaptionForFullscreen(this);
             // ★ 开关改完必须逼窗口**重新走一次最大化**: WM_GETMINMAXINFO 只在窗口开始
             //   最大化/移动/缩放时发一次, 已经处于 Maximized 的窗口再改开关不会有任何效果
             //   (表现就是"全屏进去了, 任务栏还在")。先退成 Normal 再最大化即可。
@@ -3132,6 +3137,9 @@ public partial class PlayerWindow : FluentWindow
             // 而不是刚才那块"全屏黑"。(FluentWindow 按深浅主题挑 WindowSolid*)
             MaximizeCoversTaskbar = false;
             ApplyChrome();
+            // ★ 把进全屏时摘掉的 WS_CAPTION 补回来: 最小化/最大化的系统过渡动画靠它
+            //   (见 DwmInterop.SuppressCaptionForFullscreen 的说明)。
+            DwmInterop.RestoreCaption(this);
             // 退全屏立刻撤黑幕: 画面本来就在, 没有 vout 重协商的空窗要挡
             ReleaseFullscreenCover();
             // 根网格底色还给主题(与 ApplyChrome 同理: 缩回过程露出的边角要主题色)
@@ -4764,6 +4772,9 @@ public partial class PlayerWindow : FluentWindow
             {
                 try
                 {
+                    // 进全屏时 WS_CAPTION 被摘掉了(盖任务栏用, 见 ApplyFullscreenLayout):
+                    // 这里要切成 SingleBorderWindow, 必须先把样式位补回来, 否则系统标题栏缺失。
+                    DwmInterop.RestoreCaption(this);
                     WindowStyle = WindowStyle.SingleBorderWindow;
                     WindowState = WindowState.Normal;
                 }
