@@ -40,10 +40,16 @@ public class SettingsStore
     public string DanmakuBlockKeywords { get; set; } = "";
 
     /// <summary>
-    /// 首页「推荐」用哪套算法: App 官方(app.bilibili.com/x/v2/feed/index) 或 浏览器网页版。
-    /// 默认 App(见 RecommendSource 的说明)。
+    /// 首页「推荐」用哪套算法。★ 2026-10-03 起**固定为网页版**, 字段只为兼容老配置保留。
+    ///
+    /// 历史: 这里原来是"App 官方 / 浏览器网页版"二选一, 默认 App。
+    ///   但实测 App 端接口(app.bilibili.com/x/v2/feed/index)对第三方客户端**不提供个性化** ——
+    ///   即使拿到有效 access_key, 返回的仍是全站通用热门池(100 条里命中关注的 UP 只有 1~2 个,
+    ///   平均播放量 66~103 万); 网页 rcmd 平均只有 17 万、内容明显更垂直。
+    ///   所以选择项与 App 令牌机制整体删除, 默认值也改成 Web —— 老配置里存着 App 的用户
+    ///   在启动时会被下面的迁移逻辑纠正。
     /// </summary>
-    public RecommendSource RecommendSource { get; set; } = RecommendSource.App;
+    public RecommendSource RecommendSource { get; set; } = RecommendSource.Web;
 
     /// <summary>是否启用"跳过赞助片段"(默认关, 原因见 AppSettings.SponsorBlockEnabled)</summary>
     public bool SponsorBlockEnabled { get; set; }
@@ -112,8 +118,10 @@ public class SettingsStore
                     // 老配置同样靠"属性初始化值"拿到默认 true
                     DanmakuColorful = s.DanmakuColorful;
                     DanmakuBlockKeywords = s.DanmakuBlockKeywords ?? "";
-                    // 老配置没有这个字段 —— 反序列化时"缺失字段保持初始化值", 于是自动落到默认的 App
-                    RecommendSource = s.RecommendSource;
+                    // ★ 算法选择已删除(2026-10-03): 一律落到网页版。
+                    //   老配置里存着 App 的会被这里纠正 —— 那一档实测对第三方客户端
+                    //   不提供个性化(通用热门池), 让它继续生效就是让用户看一屏热门。
+                    RecommendSource = RecommendSource.Web;
                     // 主题色: 老配置没有这个字段(空串) → 保持默认的 B 站粉
                     AccentColor = s.AccentColor ?? "";
                     // 同理: 老配置的 SponsorBlockEnabled 保持 false(默认关), 类别保持默认的 sponsor。

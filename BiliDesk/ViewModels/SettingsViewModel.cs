@@ -244,52 +244,16 @@ public class SettingsViewModel : ObservableObject
         }
     }
 
-    public string[] RecommendOptions { get; } = { "B 站官方 App", "浏览器网页版" };
-
-    public string RecommendSelected
-    {
-        get => RecommendOptions[(int)Svc.Settings.RecommendSource];
-        set
-        {
-            var idx = Array.IndexOf(RecommendOptions, value);
-            if (idx < 0 || (int)Svc.Settings.RecommendSource == idx) return;
-            RecommendSource = (RecommendSource)idx;
-            OnPropertyChanged();
-        }
-    }
-
-    // ----------------- 推荐算法 -----------------
-
-    /// <summary>
-    /// 首页「推荐」用哪套算法(App 官方 / 浏览器网页版)。
-    /// 直接读写 SettingsStore —— 换算法要立刻落盘, 不然改完重启又变回去了。
-    /// </summary>
-    public RecommendSource RecommendSource
-    {
-        get => Svc.Settings.RecommendSource;
-        set
-        {
-            Svc.Settings.SetRecommendSource(value);
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(RecommendSourceHint));
-        }
-    }
-
-    /// <summary>当前算法的一句话说明(切完立刻能看到它变了, 不用猜有没有生效)</summary>
-    public string RecommendSourceHint => Svc.Settings.RecommendSource == RecommendSource.App
-        ? "与手机 App 首页推荐一致 · 每次刷新给你全新的一批 10 条"
-        : "与网页版 bilibili.com 首页推荐一致 · 每次最多 30 条";
-
-    /// <summary>推荐算法下拉框的投影(RecommendSource 枚举 0=App 1=Web)。</summary>
-    public int RecommendSourceInt
-    {
-        get => (int)Svc.Settings.RecommendSource;
-        set
-        {
-            if ((int)Svc.Settings.RecommendSource == value) return;
-            RecommendSource = (RecommendSource)value;
-        }
-    }
+    // ----------------- 推荐算法(已固定为网页版, 不再提供选择) -----------------
+    //
+    // ★ 2026-10-03 删除了"算法选择"(原来可在 App 官方 / 浏览器网页版之间切换)与整套
+    //   App 令牌机制, 原因见 ApiClient.GetRecommendAsync 的说明:
+    //   App 端接口(app.bilibili.com/x/v2/feed/index)对第三方客户端**不提供个性化** ——
+    //   即便拿到有效 access_key, 返回的仍是全站通用热门池(实测 100 条里命中关注的 UP
+    //   只有 1~2 个、平均播放量 66~103 万), 而网页 rcmd 平均只有 17 万、明显更贴口味。
+    //   留着那个选项只会让用户以为"App 算法"能更准, 是误导。
+    //   RecommendSource 枚举与 SettingsStore 字段保留(老配置反序列化不会炸), 但读取处
+    //   一律走网页路。
 
     // ----------------- 跳过赞助片段(SponsorBlock) -----------------
 

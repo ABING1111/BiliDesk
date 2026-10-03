@@ -234,6 +234,7 @@ public class SessionManager
         Add("DedeUserID", Current.DedeUserID);
         Add("DedeUserID__ckMd5", Current.DedeUserIDCkMd5);
         Add("buvid3", Current.Buvid3);
+        Add("buvid4", Current.Buvid4);
         return string.Join("; ", parts);
     }
 }

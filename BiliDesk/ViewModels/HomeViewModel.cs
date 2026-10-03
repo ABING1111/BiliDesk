@@ -81,14 +81,8 @@ public class HomeViewModel : ObservableObject
         Svc.SearchHistory.Changed += RebuildHistoryShown;
         RebuildHistoryShown();
 
-        // 设置页切了推荐算法(App 官方 / 网页版): 手里这份列表是**上一套模型**给的,
-        // 留着不换用户会以为"改了没用" —— 直接清掉重新拉一次。
-        // 还没加载过(列表为空)就不动, 免得把一次没必要的请求打出去。
-        Svc.Settings.RecommendSourceChanged += () =>
-        {
-            if (RecommendItems.Count == 0) return;
-            _ = LoadRecommendAsync(reset: true);
-        };
+        // (2026-10-03 删除) 这里原来订阅 RecommendSourceChanged —— 设置页切换"App 官方 /
+        // 网页版"算法时清空重拉。算法选择已整体删除(固定网页版), 订阅自然也没了意义。
 
         RefreshGreeting();
     }

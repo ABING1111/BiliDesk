@@ -303,45 +303,40 @@ public class ApiClient
     }
 
     /// <summary>
-    /// 首页个性化推荐。具体打哪个接口由设置里的「推荐算法」决定(见 RecommendSource):
-    ///   · App  -> app.bilibili.com/x/v2/feed/index     (B 站官方 App 首页推荐流)
-    ///   · Web  -> wbi/index/top/feed/rcmd              (浏览器网页版「为你推荐」)
+    /// 首页个性化推荐(浏览器网页版「为你推荐」, wbi/index/top/feed/rcmd)。
     ///
-    /// 两条路都保留"失败时自动重试一次(刷新 WBI 密钥), 仍未成功则降级返回热门",
-    /// 保证首页任何时候都不会是空列表。
+    /// ★ 为什么只剩网页这一条路(2026-10-03 定):
+    ///   以前还有个"B 站官方 App 算法"选项(app.bilibili.com/x/v2/feed/index)。
+    ///   实测它对第三方客户端**不提供个性化** —— 即便拿到了有效的 access_key
+    ///   (电视端扫码, myinfo 能返回真实昵称), 该接口返回的仍是全站通用热门池:
+    ///   100 条里命中用户关注的 UP 只有 1~2 个、不重复 UP 达 90/100、平均播放量 66~103 万;
+    ///   而网页 rcmd 的平均播放量只有 17 万、内容明显更垂直。参数层面穷举过 20 多种组合
+    ///   (UA / buvid / session_id / recsys_mode / idx 游标接力 / fnval 变体)都无改善 ——
+    ///   服务端按"手机端登录身份 + 手机端设备指纹"才给个性化, 第三方拿不到那个身份组合。
+    ///   所以那个选项与 access_key 机制已整体删除, 只保留这条真正个性化的网页路。
     ///
-    /// <paramref name="reset"/> = true 表示"下拉刷新"语义: App 端会把游标清掉, 从推荐池
-    /// 最前面重新开始(见 _appFeedIdx)。点「加载更多」必须传 false, 否则每次都从头拉同一段。
+    /// 失败时自动重试一次(刷新 WBI 密钥), 仍未成功则降级返回热门, 保证首页不会是空列表。
     /// </summary>
+    /// <param name="reset">保留下拉刷新语义(此接口每次请求都返回新一批, 参数不影响)</param>
     public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRecommendAsync(bool reset = false)
     {
+        _ = reset;
         try
         {
-            // 刷新: 清游标 + pull=true(从推荐池最前面取最新的一批); 加载更多: 带游标往下翻。
-            // 两者必须**配套**设置, 只有 pull 与 idx 的组合正确时窗口才会前进(见 _appFeedPull)。
-            _appFeedPull = reset;
-            if (reset) _appFeedIdx = 0;
             await EnsureBuvidAsync();
-            var useApp = Svc.Settings.RecommendSource == RecommendSource.App;
-            var (ok, err, items) = await GetRecommendCoreAsync(useApp);
+            var (ok, err, items) = await GetWebRecommendCoreAsync();
             if (!ok || items == null || items.Count == 0)
             {
                 // 重试一次。
                 // ★ 这里**故意不**清 _buvid3/_buvid4: 设备指纹是推荐系统认人的凭据,
-                //   前面那版清掉它们等于"失败一次就换一台新设备重来", 会让推荐模型重新冷启动
+                //   清掉它们等于"失败一次就换一台新设备重来", 会让推荐模型重新冷启动
                 //   —— 与"让推荐更准"正相反。真正需要刷新的是 WBI 密钥(会过期)。
                 _wbiKeys = null;
-                if (useApp)
-                {
-                    // App 端失败多半是游标过期(隔太久服务端已经不认那一页) -> 退回刷新语义重来一次
-                    _appFeedPull = true;
-                    _appFeedIdx = 0;
-                }
                 await EnsureBuvidAsync();
-                (ok, err, items) = await GetRecommendCoreAsync(useApp);
+                (ok, err, items) = await GetWebRecommendCoreAsync();
             }
             if (ok && items != null && items.Count > 0) return (true, null, items);
-            // 全部失败 -> 降级热门
+            // 失败 -> 降级热门
             return await GetPopularAsync(1);
         }
         catch
@@ -349,9 +344,6 @@ public class ApiClient
             return await GetPopularAsync(1);
         }
     }
-
-    private Task<(bool ok, string? err, List<VideoItem>? items)> GetRecommendCoreAsync(bool useApp)
-        => useApp ? GetAppRecommendCoreAsync() : GetWebRecommendCoreAsync();
 
     private async Task<(bool ok, string? err, List<VideoItem>? items)> GetWebRecommendCoreAsync()
     {
@@ -389,220 +381,6 @@ public class ApiClient
         catch (Exception ex)
         {
             return (false, ex.Message, null);
-        }
-    }
-
-    // ---------------------------------------------------------------- App 端推荐流
-
-    /// <summary>App 端签名用的 appkey / appsec(粉版 android, "获取资源通用" 那一对)</summary>
-    private const string AppKey = "1d8b6e7d45233436";
-    private const string AppSec = "560c52ccd288fed045859ed18bffd973";
-
-    /// <summary>
-    /// App 端接口签名: 加 appkey → 按 key 升序 → 拼 query → 末尾接 appsec → MD5。
-    /// 与 WBI 签名是两套独立机制(WBI 是网页端每日轮换密钥), 别混用。
-    /// </summary>
-    private static void AppSign(Dictionary<string, string> ps)
-    {
-        ps["appkey"] = AppKey;
-        var query = string.Join("&",
-            ps.OrderBy(kv => kv.Key, StringComparer.Ordinal)
-              .Select(kv => $"{kv.Key}={Enc(kv.Value)}"));
-        ps["sign"] = Hashing.Md5Hex(query + AppSec);
-    }
-
-    /// <summary>
-    /// App 端推荐流的翻页游标(上一批末条的 `idx`)。
-    ///
-    /// ★★ 这是"App 端算法不够准"的核心修复点。原实现认为这个接口"每次返回全新一批、没有页码",
-    /// 于是「加载更多」就是**再请求一次同一个接口**。实测证明那是错的:
-    ///
-    ///   不带 idx 连拉 5 次 -> 各批首条 idx = 1790903549, 1790903549, 1790903549, 1790903550, 1790903550
-    ///   带 idx 接力 5 次   -> 各批首条 idx = 1790903550, 1790903540, 1790903530, 1790903520, 1790903510
-    ///
-    /// 也就是说: **不带游标时服务端的窗口几乎不往前挪** —— 它每次都在推荐池里差不多同一个位置
-    /// 附近取 10 条给我们, 我们看到的自然是"同一小片区域里反复横跳"的内容, 越翻越像随机。
-    /// 带上 idx 才是真的顺着推荐排序往下走(每批严格前进 10, idx 是严格递减的)。
-    ///
-    /// idx 是"位置", 不是"内容 id": 把**最新一批**的末条 idx 带回去就能接着下一段;
-    /// 拿一个过期的 idx 会退回去重取那一段。所以刷新(reset)时要清零, 从池子最前面重新开始。
-    /// </summary>
-    private long _appFeedIdx;
-
-    /// <summary>
-    /// 本次请求是不是"下拉刷新"语义(App 里 pull=true)。
-    ///
-    /// ★ `pull` 与 `idx` 是**成对**使用的, 实测四种组合只有一种能让窗口前进:
-    ///
-    ///     pull=false, 无 idx   首 idx 1790903849 x3     窗口不动   ← 原实现
-    ///     pull=false, 带 idx   1790903839 → 3829 → 3819  推进 20   ← 加载更多用这个
-    ///     pull=true,  无 idx   1790903862 x3             窗口不动, 但**起点更高**
-    ///     pull=true,  带 idx   1790903850 → 3851 → 3852  窗口不动
-    ///
-    /// 所以: 刷新用 pull=true 且不带 idx(从推荐池**最前面**取, 拿到的更新),
-    /// 加载更多用 pull=false 且带 idx(顺着往下翻)。两个都不带 idx 时窗口都不动,
-    /// 区别只在起点高低 —— 这正是"下拉刷新该给我最新的"那件事。
-    /// </summary>
-    private bool _appFeedPull;
-
-    /// <summary>
-    /// B 站官方 App 首页推荐流(app.bilibili.com/x/v2/feed/index)。
-    ///
-    /// ★ 与网页端那套完全不是一个模型, 必须知道的差异:
-    ///   1. **靠 `idx` 游标翻页**(见 _appFeedIdx): 把上一批最小的 idx 带回去才拿得到"下一段";
-    ///      不带游标时服务端窗口几乎不动(实测每批只挪 0.4), 这是原先"越翻越不准"的根因。
-    ///      `pull` 要和 idx 配套(见 _appFeedPull)。
-    ///   2. **只给 avid 不给 bvid**(items[].param / player_args.aid), bvid 由
-    ///      UrlParser.AvToBv 本地换算, 省掉"每条一次 view 接口"的开销。
-    ///   3. 播放量/弹幕数给的是**已格式化好的文本**("149.1万"), 只能反解回近似数值 ——
-    ///      够用来排序和显示, 但没有网页端那么精确。
-    ///
-    /// 参数坑(实测): 参数表里出现过的 `appver` 会让服务端直接 -400(整套参数被拒),
-    /// 而 build/mobi_app/platform/fnval/fourk 这些是安全的。appkey+sign 必须带。
-    /// </summary>
-    private async Task<(bool ok, string? err, List<VideoItem>? items)> GetAppRecommendCoreAsync()
-    {
-        try
-        {
-            var loggedIn = SessionManager.Instance.HasLogin;
-            var ps = new Dictionary<string, string>
-            {
-                ["build"] = "8130300",
-                ["mobi_app"] = "android",
-                ["platform"] = "android",
-                ["device"] = "phone",
-                ["c_locale"] = "zh_CN",
-                ["s_locale"] = "zh_CN",
-                ["fnval"] = "272",
-                ["fnver"] = "1",
-                ["fourk"] = "1",
-                ["video_mode"] = "1",
-                ["network"] = "wifi",
-                ["qn"] = "32",
-                ["recsys_mode"] = "0",
-                ["guidance"] = "0",
-                ["https_url_req"] = "0",
-                ["inline_danmu"] = "2",
-                ["inline_sound"] = "1",
-                ["interest_id"] = "0",
-                // 刷新 = pull=true(从池子最前面取); 加载更多 = pull=false(配合 idx 往下翻)
-                ["pull"] = _appFeedPull ? "true" : "false",
-                // 0 = 已登录, 1 = 未登录(接口自己的约定)。
-                // 实测两种取值的返回内容确实不同(30 条里只重合 1 条), 说明它真的在切模型分支。
-                ["login_event"] = loggedIn ? "0" : "1"
-            };
-            // 翻页游标: 只有"接着往下翻"时才带, 刷新时是 0(不带)
-            if (_appFeedIdx > 0) ps["idx"] = _appFeedIdx.ToString();
-            AppSign(ps);
-
-            var (code, msg, data) = await GetJsonAsync(
-                "https://app.bilibili.com/x/v2/feed/index", ps);
-            if (code != 0 || data == null)
-                return (false, msg ?? $"请求失败 (code {code})", null);
-
-            var items = new List<VideoItem>();
-            var minIdx = long.MaxValue;
-            if (data.Value.TryGetProperty("items", out var arr) && arr.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var e in arr.EnumerateArray())
-                {
-                    // ★ 游标要取**最小**的那个 idx(= 这一批读到推荐池最深处的位置), 而不是最大的。
-                    //   idx 在一批里是从大到小排的; 服务端的语义是"给我 idx 小于这个值的内容",
-                    //   所以带回去的必须是**最深**的那个, 下一批才真的往下走 10 条。
-                    //   (实测: 记录最大 idx 时, 每批只前进 1, 等于反复重读同一小段;
-                    //    记录最小 idx 时, 每批稳定前进 10。)
-                    //   注意要遍历**全部**条目: 直播/横幅这些非 av 项同样占着流里的位置,
-                    //   跳过它们会让游标偏浅, 下一批又从那段中间重来。
-                    if (e.TryGetProperty("idx", out var ix) && ix.TryGetInt64(out var iv) &&
-                        iv > 0 && iv < minIdx)
-                        minIdx = iv;
-
-                    var item = ParseAppFeedItem(e);
-                    if (item != null) items.Add(item);
-                }
-            }
-            // 记下"这一段读到哪了"。取不到 idx(接口改版)时保持不变, 退回旧的"每次新一批"语义。
-            if (minIdx != long.MaxValue) _appFeedIdx = minIdx;
-            return (true, null, items);
-        }
-        catch (Exception ex)
-        {
-            return (false, ex.Message, null);
-        }
-    }
-
-    /// <summary>解析 App 推荐流的一条。非视频卡片(直播/横幅/广告)返回 null, 由调用方跳过</summary>
-    private static VideoItem? ParseAppFeedItem(JsonElement e)
-    {
-        try
-        {
-            // card_goto/goto: av = 普通视频, live = 直播, banner = 横幅。
-            // 只收 av —— 与网页端推荐的处理保持一致(直播另有专门的 tab)。
-            var kind = GetStr(e, "card_goto");
-            if (kind.Length == 0) kind = GetStr(e, "goto");
-            if (kind != "av") return null;
-
-            // param 是**字符串**型的 avid(不是数字), 所以不能走 GetLong; 缺了再退回 player_args.aid
-            long.TryParse(GetStr(e, "param"), out var aid);
-            if (aid <= 0) aid = GetNestedLong(e, "player_args", "aid");
-            if (aid <= 0) return null;
-            var bvid = BiliDesk.Utils.UrlParser.AvToBv(aid);
-            if (bvid.Length == 0) return null;
-
-            // UP 主: 名字在 desc_button.text, mid 要从 desc_button.uri(bilibili://space/{mid}) 里抠
-            var upName = "";
-            long ownerMid = 0;
-            if (e.TryGetProperty("desc_button", out var db) && db.ValueKind == JsonValueKind.Object)
-            {
-                upName = GetStr(db, "text");
-                var upUri = GetStr(db, "uri");
-                var slash = upUri.LastIndexOf('/');
-                if (slash >= 0 && slash + 1 < upUri.Length)
-                    long.TryParse(upUri[(slash + 1)..], out ownerMid);
-            }
-
-            return new VideoItem
-            {
-                Bvid = bvid,
-                Aid = aid,
-                Title = GetStr(e, "title").StripHtml(),
-                Cover = UrlUtil.Normalize(GetStr(e, "cover")),
-                Author = upName,
-                OwnerMid = ownerMid,
-                // 时长只在 player_args.duration 里是秒数; cover_right_text 是 "7:51" 这种给人看的串
-                Duration = VideoItem.FormatSeconds((int)GetNestedLong(e, "player_args", "duration")),
-                ViewCount = ParseFormattedCount(GetStr(e, "cover_left_text_1")),
-                DanmakuCount = ParseFormattedCount(GetStr(e, "cover_left_text_2"))
-            };
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// 把接口给的**已格式化**计数文本反解回数字("149.1万" → 1491000, "2.9万" → 29000)。
-    /// App 端推荐流不给数值型 stat, 只有这种给人看的串; 解析失败一律返回 0,
-    /// 界面按"0 = 未知"处理(不显示那个胶囊), 不会显示成错误的 0。
-    /// </summary>
-    private static long ParseFormattedCount(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return 0;
-        var s = text.Trim();
-        try
-        {
-            double mul = 1;
-            if (s.EndsWith("亿", StringComparison.Ordinal)) { mul = 100_000_000; s = s[..^1]; }
-            else if (s.EndsWith("万", StringComparison.Ordinal)) { mul = 10_000; s = s[..^1]; }
-            return double.TryParse(s, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out var v)
-                ? (long)(v * mul)
-                : 0;
-        }
-        catch
-        {
-            return 0;
         }
     }
 

@@ -155,30 +155,10 @@
     <DataTemplate x:Key="PlaybackTabTemplate">
         <StackPanel>
 
-            <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
-                            Content="推荐" />
-
-            <Border Style="{StaticResource SettingsCardStyle}">
-                <Grid Style="{StaticResource SettingsRowStyle}">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                        <TextBlock Text="首页推荐算法" Style="{StaticResource SettingsRowTitleStyle}" />
-                        <TextBlock Text="{Binding RecommendSourceHint}"
-                                   Style="{StaticResource SettingsRowDescStyle}" />
-                        <TextBlock Text="切换后立即重新拉取; 未登录时两个来源都只能拿到通用热门流"
-                                   Style="{StaticResource SettingsRowDescStyle}"
-                                   Foreground="{DynamicResource TextTertiaryBrush}" />
-                    </StackPanel>
-                    <!-- 两套算法是两个不同的服务端模型, 下拉可读性优于两个词都超出宽度的分段 -->
-                    <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
-                              Width="170" VerticalAlignment="Center"
-                              ItemsSource="{Binding RecommendOptions}"
-                              SelectedItem="{Binding RecommendSelected, Mode=TwoWay}" />
-                </Grid>
-            </Border>
+            <!-- 推荐算法这一块整体删除了(2026-10-03): 原本有「B 站官方 App / 浏览器网页版」
+                 二选一, 但实测 App 端接口对第三方客户端不提供个性化(返回全站通用热门池,
+                 平均播放量 66~103 万; 网页 rcmd 只有 17 万且明显更贴口味)。留着只会误导,
+                 所以连"算法"这个概念一起撤掉, 首页推荐固定走网页版。详见 ApiClient.GetRecommendAsync。 -->
 
             <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
                             Content="弹幕" />

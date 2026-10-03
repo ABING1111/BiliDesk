@@ -961,16 +961,15 @@ public enum AppTheme
 }
 
 /// <summary>
-/// 首页「推荐」tab 用哪一套推荐算法。
+/// 首页「推荐」tab 的算法来源。★ 2026-10-03 起这个选择**已取消**, 固定用网页版。
 ///
-/// 两边是**两套完全不同的服务端模型**, 不是同一个接口换参数:
-///   · <see cref="App"/>  —— B 站官方 App 首页推荐流(app.bilibili.com/x/v2/feed/index)。
-///     拿的是 App 用户看到的那份推荐, 每次请求返回 10 条**全新**内容(等价于 App 的"下拉刷新"),
-///     所以没有"翻页"概念, 只有一批一批地换。
-///   · <see cref="Web"/>  —— 浏览器网页版「为你推荐」(wbi/index/top/feed/rcmd)。
-///     即网页 bilibili.com 首页看到的那份, 单次最多 30 条。
+/// 保留枚举只是为了让老 settings.json 里存着的值仍能反序列化(删掉枚举会让老配置解析失败,
+/// 那会连带把整个设置文件清空)。实际读取处一律强制 Web —— 原因见 ApiClient.GetRecommendAsync:
+/// App 端接口对第三方客户端不提供个性化, 返回的是全站通用热门池。
 ///
-/// 默认 App: 用户 2026-09-27 指定 —— 这是他平时在手机上看到的推荐流。
+/// 两个值的差别(历史记录, 供以后参考):
+///   · App —— app.bilibili.com/x/v2/feed/index, 每次 10 条;
+///   · Web —— wbi/index/top/feed/rcmd, 单次最多 30 条, **实测更贴口味**。
 /// </summary>
 public enum RecommendSource
 {
@@ -1040,10 +1039,10 @@ public class AppSettings
     public string DanmakuBlockKeywords { get; set; } = "";
 
     /// <summary>
-    /// 首页「推荐」tab 的算法来源(App 官方 / 网页版)。
-    /// 老配置里没有这个字段时会保持初始化值 —— 于是"默认 App"自动成立, 不需要版本号兼容。
+    /// 首页「推荐」tab 的算法来源。★ 2026-10-03 起固定为网页版(字段仅为兼容老配置保留,
+    /// 读取时一律强制 Web, 见 SettingsStore.Load)。
     /// </summary>
-    public RecommendSource RecommendSource { get; set; } = RecommendSource.App;
+    public RecommendSource RecommendSource { get; set; } = RecommendSource.Web;
 
     /// <summary>
     /// 是否启用"跳过赞助片段"(SponsorBlock)。
