@@ -438,19 +438,27 @@ public class ThemeService
         app.Resources["AccentHoverBrush"] = Frozen(Blend(accent, Colors.White, 0.12));
         app.Resources["AccentPressedBrush"] = Frozen(Blend(accent, Colors.Black, 0.12));
         app.Resources["AccentSoftFillBrush"] = Frozen(Color.FromArgb(0x1C, accent.R, accent.G, accent.B));
-        // 胶囊 Tab 的选中底(侧边栏选中态那种观感): 卡片是纯白底, 0x1C 太淡(用户 2026-10-03
-        // 反馈"底色太淡了"), 提到 0x2E —— 在白底上的观感与侧边栏灰底上的 0x1C 一致。
-        app.Resources["AccentSoftFillStrongBrush"] = Frozen(Color.FromArgb(0x2E, accent.R, accent.G, accent.B));
+        // 胶囊 Tab 的选中底(侧边栏选中态那种观感)。
+        // ★ 分深浅主题(2026-10-03 用户报"深色模式下胶囊按钮可读性差"):
+        //   浅色: 白卡片上 0x1C 太淡, 用 0x2E;
+        //   深色: 深灰卡片上叠半透明强调色会"糊"进底色, 文字读不清 —— 底色反而要**提亮**:
+        //   用强调色与白色 30% 混合的实色, 亮出一截, 配深色文字对比才够。
+        app.Resources["AccentSoftFillStrongBrush"] = IsDark
+            ? Frozen(Blend(accent, Colors.White, 0.30))
+            : Frozen(Color.FromArgb(0x2E, accent.R, accent.G, accent.B));
         app.Resources["AccentBorderFillBrush"] = Frozen(Color.FromArgb(0x66, accent.R, accent.G, accent.B));
 
         // 强调色被当文字色用(导航选中项 / 图标 / kaomoji)。深浅两套主题共用同一个值 ——
         // 不再按主题做提亮/压深, 保证深浅色下的主题色完全一致。
         app.Resources["AccentTextBrush"] = Frozen(accent);
 
-        // 深一档的强调色文字(2026-10-03, 设置页 Tab 用): 柔和底(AccentSoftFill)上叠
-        // AccentTextBrush 时两者亮度太接近, 选中项的文字读不清。把文字往黑色方向压 35%,
-        // 与底色同色系但对比明显; 换强调色时跟着重算(与上面所有笔刷同一个入口)。
-        app.Resources["AccentTextStrongBrush"] = Frozen(Blend(accent, Colors.Black, 0.35));
+        // 深一档的强调色文字(2026-10-03, 胶囊 Tab 选中态用): 柔和底上叠 AccentTextBrush
+        // 两者亮度太接近, 选中项的文字读不清。
+        // ★ 跟着底色走: 浅色底(白/淡强调)文字往黑压 35%; 深色下选中底是"提亮的强调色",
+        //   文字用深色(压黑 55%)保证对比。换强调色/换主题时都会跟着重算。
+        app.Resources["AccentTextStrongBrush"] = IsDark
+            ? Frozen(Blend(accent, Colors.Black, 0.55))
+            : Frozen(Blend(accent, Colors.Black, 0.35));
 
         app.Resources["TextOnAccentBrush"] = Frozen(onAccent);
         app.Resources["TextOnAccentSecondaryBrush"] = Frozen(onAccent);
