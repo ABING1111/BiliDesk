@@ -235,7 +235,11 @@ public class SettingsViewModel : ObservableObject
         set
         {
             var idx = Array.IndexOf(ThemeOptions, value);
-            if (idx >= 0) ThemeMode = (AppTheme)idx;
+            if (idx < 0 || (int)Svc.Theme.Mode == idx) return;
+            ThemeMode = (AppTheme)idx;
+            // ★ 必须显式通知: SelectedItem 的显示 = getter 的返回值, 但 TwoWay 回写时
+            //   WPF 不会重新读一遍 —— 主题模式在 ThemeService 侧落定后, 这里不推通知的话
+            //   方框里的文字保持空白/旧值(真机实证)。
             OnPropertyChanged();
         }
     }
@@ -248,7 +252,8 @@ public class SettingsViewModel : ObservableObject
         set
         {
             var idx = Array.IndexOf(RecommendOptions, value);
-            if (idx >= 0) RecommendSource = (RecommendSource)idx;
+            if (idx < 0 || (int)Svc.Settings.RecommendSource == idx) return;
+            RecommendSource = (RecommendSource)idx;
             OnPropertyChanged();
         }
     }

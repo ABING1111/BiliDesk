@@ -67,6 +67,27 @@ public partial class ColorPalette : UserControl
     {
         InitializeComponent();
         Loaded += (_, _) => SyncMarkers();
+        // 圆角裁剪(2026-10-03 用户要求"为画盘添加圆角"):
+        // 内层 Border 的 CornerRadius 只圆它自己的底, **不会裁剪子元素** ——
+        // 里面的渐变 Rectangle 实际渲染出来是直角, 圆角框被四个直角盖住等于没有。
+        // 在 SizeChanged 时按最新尺寸生成圆角 RectangleGeometry 裁到内容上。
+        SvHost.SizeChanged += (_, _) => ApplyRoundedClip(SvHost, SvClipRadius);
+        HueHost.SizeChanged += (_, _) => ApplyRoundedClip(HueHost, HueClipRadius);
+    }
+
+    /// <summary>色块的圆角半径(与外层 CornerRadius=8 的内缘一致)</summary>
+    private const double SvClipRadius = 7;
+    /// <summary>色相条的圆角半径</summary>
+    private const double HueClipRadius = 5;
+
+    private static void ApplyRoundedClip(System.Windows.UIElement host, double radius)
+    {
+        if (host is not System.Windows.FrameworkElement fe) return;
+        var w = fe.ActualWidth;
+        var h = fe.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+        var r = Math.Min(radius, Math.Min(w, h) / 2);
+        fe.Clip = new RectangleGeometry(new System.Windows.Rect(0, 0, w, h), r, r);
     }
 
     // ------------------------------------------------------------------ 属性同步

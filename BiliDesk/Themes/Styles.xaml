@@ -714,11 +714,16 @@
                                                 <ColumnDefinition Width="30" />
                                             </Grid.ColumnDefinitions>
                                             <!-- 选中文字。ItemsSource 是字符串数组,
-                                                 SelectionBoxItem 就是选中的那个字符串, 直接显示。 -->
+                                                 SelectionBoxItem 就是选中的那个字符串, 直接显示。
+                                                 ★ RelativeSource 必须用 AncestorType=ComboBox:
+                                                   这段在 ToggleButton 自己的模板里, TemplatedParent
+                                                   是 ToggleButton(它没有 SelectionBoxItem 属性),
+                                                   绑上去永远是 null —— 这就是"选择后上方方框空白"
+                                                   的根因(2026-10-03 真机实证)。 -->
                                             <TextBlock Grid.Column="0" Margin="12,0,4,0"
                                                        VerticalAlignment="Center"
                                                        TextTrimming="CharacterEllipsis"
-                                                       Text="{Binding SelectionBoxItem, RelativeSource={RelativeSource TemplatedParent}}"
+                                                       Text="{Binding SelectionBoxItem, RelativeSource={RelativeSource AncestorType=ComboBox}}"
                                                        Foreground="{DynamicResource TextPrimaryBrush}"
                                                        FontSize="13" />
                                             <TextBlock Grid.Column="1" Text="&#xE70D;" FontSize="10"
@@ -756,6 +761,104 @@
                                 </ScrollViewer>
                             </Border>
                         </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 现代滑杆(设置页"弹幕显示区域"等): 细圆角轨道 + 强调色已选段 + 白色圆点滑块。
+         WPF 默认 Slider 是 Win32 老样式(粗轨 + 小三角块), 与整套 Fluent 风格不搭。
+         已选段的实现走标准套路: Track 的 DecreaseRepeatButton(滑块左侧区域)铺强调色,
+         IncreaseRepeatButton(右侧)铺灰轨, 两个 RepeatButton 本身不参与点击外观
+         (IsMoveToPointEnabled=True 时点击轨道即跳值)。 -->
+    <Style x:Key="SliderRepeatButtonTrackStyle" TargetType="RepeatButton">
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RepeatButton">
+                    <Border Height="6" CornerRadius="3" Background="Transparent">
+                        <Border Background="{DynamicResource AccentBrush}" CornerRadius="3" Opacity="0.85" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="SliderRepeatButtonRestStyle" TargetType="RepeatButton">
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RepeatButton">
+                    <Border Height="6" CornerRadius="3" Background="Transparent">
+                        <Border Background="{DynamicResource ControlFillHoverBrush}" CornerRadius="3" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="SliderThumbStyle" TargetType="Thumb">
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Thumb">
+                    <Grid Background="Transparent">
+                        <Ellipse x:Name="Thumb" Width="20" Height="20" Fill="White"
+                                 Stroke="{DynamicResource InputBorderBrush}" StrokeThickness="1">
+                            <Ellipse.Effect>
+                                <DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity="0.25" />
+                            </Ellipse.Effect>
+                        </Ellipse>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Thumb" Property="Width" Value="22" />
+                            <Setter TargetName="Thumb" Property="Height" Value="22" />
+                            <Setter TargetName="Thumb" Property="Stroke" Value="{DynamicResource AccentBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsDragging" Value="True">
+                            <Setter TargetName="Thumb" Property="Stroke" Value="{DynamicResource AccentBrush}" />
+                            <Setter TargetName="Thumb" Property="StrokeThickness" Value="2" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="SettingsSliderStyle" TargetType="Slider">
+        <Setter Property="Height" Value="24" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="IsMoveToPointEnabled" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Slider">
+                    <Grid VerticalAlignment="Center" Background="Transparent">
+                        <Track x:Name="PART_Track">
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Command="{x:Static Slider.DecreaseLarge}"
+                                              Style="{StaticResource SliderRepeatButtonTrackStyle}" />
+                            </Track.DecreaseRepeatButton>
+                            <Track.Thumb>
+                                <Thumb Style="{StaticResource SliderThumbStyle}" />
+                            </Track.Thumb>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Command="{x:Static Slider.IncreaseLarge}"
+                                              Style="{StaticResource SliderRepeatButtonRestStyle}" />
+                            </Track.IncreaseRepeatButton>
+                        </Track>
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsEnabled" Value="False">

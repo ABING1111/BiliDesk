@@ -210,10 +210,10 @@
                             <TextBlock Text="{Binding DanmakuAreaText}"
                                        Style="{StaticResource SettingsRowDescStyle}" />
                         </StackPanel>
-                        <Slider Grid.Column="1" VerticalAlignment="Center"
+                        <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                Width="240" VerticalAlignment="Center"
                                 Minimum="25" Maximum="100" IsSnapToTickEnabled="True" TickFrequency="5"
-                                Value="{Binding DanmakuAreaPercent, Mode=TwoWay}"
-                                IsMoveToPointEnabled="True" Cursor="Hand" />
+                                Value="{Binding DanmakuAreaPercent, Mode=TwoWay}" />
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
                     <Grid Style="{StaticResource SettingsRowStyle}">
