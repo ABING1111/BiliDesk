@@ -1236,8 +1236,12 @@
     </Style>
 
     <!-- 关注/取关切换按钮(UP 主空间页):
-         未关注 = 强调色实底白字(与 AccentButtonStyle 同一套, 引人点); 已关注 = 淡色底
-         (AccentSoftFill)+ 深强调色文字(用户 2026-10-03 要求"把关注按钮的背景色调淡一些")。
+         两个状态**都是**强调色实底白字(AccentBrush + TextOnAccentBrush),
+         只靠文字区分(「+ 关注」/「已关注」)。
+         ★ 2026-10-03 用户要求"把已关注改成和关注按钮一样的颜色" —— 之前已关注态是淡色底
+           (AccentSoftFill) + 深强调色字, 观感偏灰、像被禁用的按钮, 与未关注态差异过猛;
+           现在统一成实底, 与播放器侧边栏那个关注按钮的观感也对齐了。
+         ★ 所以这里**不要**再加 "IsFollowed=True 时换底色" 的 DataTrigger。
          悬停/按压的过渡与 AccentButtonStyle 保持一致的手感。 -->
     <Style x:Key="FollowToggleButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
@@ -1269,13 +1273,6 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
-        <Style.Triggers>
-            <!-- 已关注: 淡底 + 深强调色文字。数据源是页面的 DataContext, 走 DataTrigger。 -->
-            <DataTrigger Binding="{Binding IsFollowed}" Value="True">
-                <Setter Property="Background" Value="{DynamicResource AccentSoftFillBrush}" />
-                <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
-            </DataTrigger>
-        </Style.Triggers>
     </Style>
 
     <!-- 设置页顶部 Tab 的"淡色胶囊"版: 选中 = 强调色柔和底(AccentSoftFill, ~11% 透明度)
