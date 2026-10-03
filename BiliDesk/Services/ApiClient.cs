@@ -2520,6 +2520,23 @@ public class ApiClient
                            up.ValueKind == JsonValueKind.Object
                 ? GetLong(up, "mid") : 0L;
 
+            // ★★★ 置顶评论(2026-10-03 修"置顶评论不可见"): 置顶那条**不在 replies 里**,
+            //   而是在 `data.top.upper`(UP 主置顶)或 `data.top.admin`(管理员置顶)。
+            //   只读 replies 就会把它整条丢掉 —— 用户看到的就是"明明有置顶, 却一条都看不到"。
+            //   实测(data.top.upper.rpid=315658667873 在 replies 里搜不到)。
+            //   ★ 放在 replies **之前**: 置顶本来就该排在最前面。
+            //   ★ 两个都可能有值, 但语义上只应展示一条置顶, 所以 upper 优先、admin 兜底。
+            if (data.Value.TryGetProperty("top", out var top) && top.ValueKind == JsonValueKind.Object)
+            {
+                var topEl = TryObject(top, "upper") ?? TryObject(top, "admin");
+                if (topEl != null)
+                {
+                    var pinned = ParseComment(topEl.Value, withReplies: true, upperMid: upperMid);
+                    pinned.IsPinned = true;
+                    result.Add(pinned);
+                }
+            }
+
             if (data.Value.TryGetProperty("replies", out var arr) && arr.ValueKind == JsonValueKind.Array)
             {
                 foreach (var e in arr.EnumerateArray())
@@ -2538,6 +2555,10 @@ public class ApiClient
         }
         return (true, null, result);
     }
+
+    /// <summary>取对象里的某个子对象; 不存在或是 null 时返回 null(置顶评论可能只有 upper 或只有 admin)</summary>
+    private static JsonElement? TryObject(JsonElement parent, string name)
+        => parent.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Object ? v : null;
 
     /// <summary>
     /// 取某条评论下的**全部**回复(楼中楼)。

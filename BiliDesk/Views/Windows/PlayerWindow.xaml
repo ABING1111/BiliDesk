@@ -176,6 +176,18 @@
                 <Setter Property="Margin" Value="4,0,0,0" />
                 <Setter Property="VerticalAlignment" Value="Center" />
             </Style>
+            <!-- 「置顶」标(2026-10-03 修"置顶评论不可见"时加)。
+                 ★ 摆在昵称**最前面**(见评论模板), 因为"置顶"说的是这条评论的位置属性,
+                   不是作者身份 —— 跟在 UP 标后面会让人以为是第三种身份标。
+                 ★ 色值写死成中性灰蓝: 与 UP 标(#FB7299)/等级蓝(#5B8FF9)区分开, 不跟主题色走
+                   (与上面两个身份标同一个理由)。 -->
+            <Style x:Key="PinnedBadgeStyle" TargetType="Border">
+                <Setter Property="Background" Value="#7A7A7A" />
+                <Setter Property="CornerRadius" Value="3" />
+                <Setter Property="Padding" Value="4,0,4,1" />
+                <Setter Property="Margin" Value="0,0,4,0" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+            </Style>
 
             <!-- 评论操作行(赞 / 踩 / 回复)。
                  卡片、详情页根评论、详情页回复三处共用一份 —— 同款按钮抄三遍的话,
@@ -272,6 +284,12 @@
             </Border>
             <StackPanel Grid.Column="1" Margin="8,0,0,0">
                 <StackPanel Orientation="Horizontal">
+                    <!-- 「置顶」标摆在昵称**最前面**: 它说的是这条评论的位置属性, 不是作者身份。
+                         见 PinnedBadgeStyle 的说明。 -->
+                    <Border Style="{StaticResource PinnedBadgeStyle}"
+                            Visibility="{Binding IsPinned, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="置顶" FontSize="9" FontWeight="SemiBold" Foreground="White" />
+                    </Border>
                     <TextBlock Text="{Binding UserName}"
                                FontWeight="SemiBold" FontSize="12" />
                     <!-- 等级徽章 + UP 标 -->
@@ -1010,6 +1028,11 @@
                                                                     </Border>
                                                                     <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
                                                                         <StackPanel Orientation="Horizontal">
+                                                                            <!-- 置顶评论点进来后这里也要显示"置顶"标(与列表模板一致) -->
+                                                                            <Border Style="{StaticResource PinnedBadgeStyle}"
+                                                                                    Visibility="{Binding IsPinned, Converter={StaticResource BoolToVis}}">
+                                                                                <TextBlock Text="置顶" FontSize="9.5" FontWeight="SemiBold" Foreground="White" />
+                                                                            </Border>
                                                                             <TextBlock Text="{Binding UserName}" FontSize="13" FontWeight="SemiBold" />
                                                                             <Border Style="{StaticResource LevelBadgeStyle}"
                                                                                     Visibility="{Binding HasLevel, Converter={StaticResource BoolToVis}}">

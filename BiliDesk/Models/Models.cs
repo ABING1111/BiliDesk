@@ -452,6 +452,16 @@ public class CommentItem : System.ComponentModel.INotifyPropertyChanged
     public bool IsUp { get; set; }
 
     /// <summary>
+    /// 这条是不是**置顶评论**(UP 主置顶 / 管理员置顶)。
+    ///
+    /// ★ 2026-10-03 修"置顶评论不可见": 置顶那条**不在** `data.replies` 里, 而在
+    ///   `data.top.upper`(UP 主置顶)或 `data.top.admin`(管理员置顶) —— 只读 replies 的话
+    ///   它永远不会出现在列表里。实测: 置顶 rpid=315658667873 在 replies 里**找不到**。
+    ///   解析时由调用方置位, 界面据此在最前面挂一个"置顶"标。
+    /// </summary>
+    public bool IsPinned { get; set; }
+
+    /// <summary>
     /// 被回复的那条评论 id。
     /// 直接回复楼主时它等于线程根(可用它判"这是给楼主的第一层回复"), 回复楼中楼里某个人时
     /// 指向那个人 —— 与 root 不同就说明这是"对话中的再回复"。
