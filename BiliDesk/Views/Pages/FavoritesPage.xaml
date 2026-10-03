@@ -89,10 +89,12 @@
              用 RadioButton + GroupName 而不是 Button: 单选中状态由控件自己维护,
              选中样式能直接写在样式触发器里, 不必在代码后置里手动遍历改 FontWeight。
              ★ 外层 Border = 白色椭圆底(与设置页顶部 Tab 同一形态)。
-             ★ 溢出折叠(2026-10-03): 收藏夹太多塞不下时, 后面的收进「⋯」按钮的浮层 ——
-               主条 (FolderBarClip) 宽度钳在页面宽内, 浮层 (MorePopup) 流式多行展示全部;
-               逻辑在代码后置 (UpdateFolderOverflow), 窗口缩放/夹数变化都会重算。
-             ★ 主条不放 ScrollViewer: 横向滚动条会露底, 改为裁剪 + 折叠。 -->
+             ★ 溢出折叠(2026-10-03): 收藏夹太多塞不下时, 后面的收进「⋯」按钮的浮层。
+               分配逻辑在代码后置 (UpdateFolderOverflow): 用 FormattedText 量每颗 chip 的
+               文字宽, 把 Folders **划分**成 VisibleFolders(主条)与 HiddenFolders(浮层)
+               两个集合 —— 主条不裁剪、不残留, 窗口缩放/夹数增删都会重算。
+               (第一版"裁剪 + 视觉树量宽"被删掉: 删除夹子后重算时视觉树给的是过期
+                宽度, 表现为"主条整个空了只剩按钮", 不可救药, 换集合划分。) -->
         <Grid Grid.Row="1" Margin="36,14,36,10"
               Visibility="{Binding Folders.Count, Converter={StaticResource CountToVis}}">
             <Grid x:Name="FolderBarHost">
@@ -104,30 +106,28 @@
                         <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
                     </Border.Effect>
                     <StackPanel Orientation="Horizontal">
-                        <!-- 主条: 宽度被代码钳住, 超出部分由 Clip 裁掉 -->
-                        <Grid x:Name="FolderBarClip" HorizontalAlignment="Left">
-                            <ItemsControl x:Name="FolderChips" ItemsSource="{Binding Folders}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Orientation="Horizontal" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <!-- CommandParameter 传数据项本身(FavFolder);
-                                             选中态由 RadioButton + GroupName 自己维护, 不需要代码后置插手。
-                                             ★ IsCurrent 是"程序切夹"的同步通道: OneWay 绑定 + ToggleButton 的
-                                             SetCurrentValue 特性让用户点击也不会扯断这条绑定 -->
-                                        <RadioButton GroupName="FavFolderChip" Style="{StaticResource SettingsTabStyle}"
-                                                     Content="{Binding DisplayText}"
-                                                     IsChecked="{Binding IsCurrent, Mode=OneWay}"
-                                                     Command="{Binding DataContext.SelectFolderCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                     CommandParameter="{Binding}"
-                                                     Margin="0,0,4,0" />
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </Grid>
+                        <!-- 主条: 只放 VisibleFolders(划分在代码后置完成) -->
+                        <ItemsControl x:Name="FolderChips" ItemsSource="{Binding VisibleFolders, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <!-- CommandParameter 传数据项本身(FavFolder);
+                                         选中态由 RadioButton + GroupName 自己维护, 不需要代码后置插手。
+                                         ★ IsCurrent 是"程序切夹"的同步通道: OneWay 绑定 + ToggleButton 的
+                                         SetCurrentValue 特性让用户点击也不会扯断这条绑定 -->
+                                    <RadioButton GroupName="FavFolderChip" Style="{StaticResource SettingsTabStyle}"
+                                                 Content="{Binding DisplayText}"
+                                                 IsChecked="{Binding IsCurrent, Mode=OneWay}"
+                                                 Command="{Binding DataContext.SelectFolderCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                 CommandParameter="{Binding}"
+                                                 Margin="0,0,4,0" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
 
                         <!-- 「⋯」折叠按钮: 有被折进去的夹子时才显示。
                              红点 = 当前选中的夹子在被折叠的那部分里(别让用户以为它丢了)。
@@ -149,7 +149,7 @@
                     </StackPanel>
                 </Border>
 
-                <!-- 折叠浮层: 白卡圆角带投影, 流式多行展示全部收藏夹 -->
+                <!-- 折叠浮层: 白卡圆角带投影, 流式多行展示**被折叠的**收藏夹 -->
                 <Popup x:Name="FolderMorePopup" PlacementTarget="{Binding ElementName=FolderMoreButton}"
                        Placement="Bottom" AllowsTransparency="True" PopupAnimation="Fade"
                        StaysOpen="False">

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Specialized;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -28,7 +29,7 @@ public partial class FavoritesPage : UserControl
     {
         InitializeComponent();
         Loaded += OnLoaded;
-        SizeChanged += (_, _) => UpdateFolderOverflow();
+        SizeChanged += (_, _) => ScheduleOverflowUpdate();
         // 纳入全局屏蔽(命中关键词的内容会被隐藏), 见 FilterService
         DataContextChanged += (_, e) =>
         {
@@ -43,6 +44,7 @@ public partial class FavoritesPage : UserControl
     {
         if (Vm == null) return;
         HookFolderCollection();
+        ScheduleOverflowUpdate();
         // 已经拿到内容就不再重复请求(页面会被主窗口反复挂载/卸载);
         // 但"上次没登录 / 请求失败"这两种情况要再给一次机会, 否则用户登录后回到这一页
         // 只能看到旧错误提示, 必须手动点刷新。
@@ -65,112 +67,128 @@ public partial class FavoritesPage : UserControl
     }
 
     private void OnFoldersChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
-            UpdateFolderOverflow);
+        => ScheduleOverflowUpdate();
+
+    /// <summary>夹子条的文字宽度全部按这个字号/字体估 —— 与 chip 样式(SettingsTabStyle)一致</summary>
+    private const double ChipFontSize = 13;
+    /// <summary>chip 的左右内边距(SettingsTabStyle Padding 20,8)+ 描边 + 右间距 4 的合计</summary>
+    private const double ChipChromeWidth = 20 * 2 + 4 + 4;
+
+    /// <summary>单条 DisplayText 的测量结果缓存(文本 → 像素宽), 夹子多时省重复排版</summary>
+    private readonly System.Collections.Generic.Dictionary<string, double> _textWidthCache = new();
+
+    /// <summary>折叠重算的合并节流: 连续变化(加载分页时一次进好几条)只算最后一遍</summary>
+    private bool _overflowUpdatePending;
+
+    private void ScheduleOverflowUpdate()
+    {
+        if (_overflowUpdatePending) return;
+        _overflowUpdatePending = true;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+        {
+            _overflowUpdatePending = false;
+            UpdateFolderOverflow();
+        }));
+    }
 
     // ------------------------------------------------------------ 收藏夹溢出折叠
 
+    /// <summary>主条上显示的收藏夹(划分在 UpdateFolderOverflow 完成)</summary>
+    public System.Collections.ObjectModel.ObservableCollection<FavFolder> VisibleFolders { get; } = new();
+
+    /// <summary>被折叠进「⋯」浮层的那部分收藏夹</summary>
+    public System.Collections.ObjectModel.ObservableCollection<FavFolder> HiddenFolders { get; } = new();
+
     /// <summary>
-    /// 重算"主条能放下几颗 chip": 放不下时显示「⋯」按钮, 并把主条宽度钳到
-    /// 按钮左侧 —— 超出的 chips 由 Clip 裁掉(它们仍然存在于可视树, 但看不见)。
-    /// 布局必须已经跑过才有可信的 ActualWidth, 调用方负责排到 Loaded 优先级。
+    /// 把 Folders 划分成 主条(VisibleFolders) / 浮层(HiddenFolders)。
+    ///
+    /// ★ 第二版(2026-10-03): 第一版"裁剪 + 视觉树量宽"在夹子被删除后重算时,
+    ///   视觉树给的是过期宽度, 主条会整个空掉只剩按钮 —— 不可救药, 换成
+    ///   **纯文本测量 + 集合划分**: 不碰视觉树, 每颗 chip 宽度 = 文字宽 + 固定 chrome,
+    ///   结果与布局引擎实测一致(同字体同字号), 且天然没有"半颗 chip"问题。
     /// </summary>
     private void UpdateFolderOverflow()
     {
-        if (FolderChips.Items.Count == 0 || FolderBarHost.ActualWidth <= 0) return;
+        if (Vm == null || FolderBarHost.ActualWidth <= 0) return;
 
-        // 量 chips 总宽: 让容器先按无限宽测量
-        FolderBarClip.Width = double.NaN;
-        FolderChips.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        var totalW = FolderChips.DesiredSize.Width;
         var availW = FolderBarHost.ActualWidth;
 
-        // 放得下: 全部显示, 按钮藏掉
-        if (totalW <= availW)
-        {
-            FolderMoreButton.Visibility = Visibility.Collapsed;
-            FolderMoreDot.Visibility = Visibility.Collapsed;
-            FolderBarClip.Width = double.NaN;
-            FolderBarClip.Clip = null;
-            return;
-        }
+        // 「⋯」按钮自己的宽度(有折叠才显示, 但估算时先按"显示"算, 少一颗也比溢出强)
+        var moreW = 46;
 
-        // 放不下: 按钮占一份宽, 主条钳到剩余宽度
-        FolderMoreButton.Visibility = Visibility.Visible;
-        FolderMoreButton.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        var moreW = FolderMoreButton.DesiredSize.Width;
-        var clipW = Math.Max(80, availW - moreW - 4);
-
-        // 找出"宽度累积超过 clipW"的第一颗 chip: 它之前(不含)的都显示。
-        // chip 宽度要从生成的容器(ContentPresenter)里取 —— 直接遍历 ItemsHost。
         var acc = 0.0;
-        var accBefore = 0.0;      // 溢出那颗之前的累积宽 = 主条应显示到的宽度(chip 边界处截断)
-        var visibleCount = FolderChips.Items.Count;
-        var host = FindItemsHost(FolderChips);
-        if (host != null)
+        var firstOverflowIdx = -1;   // 第一颗放不下的夹子下标
+        for (var i = 0; i < Vm.Folders.Count; i++)
         {
-            visibleCount = host.Children.Count;
-            for (var i = 0; i < host.Children.Count; i++)
+            acc += MeasureChip(Vm.Folders[i].DisplayText);
+            if (acc > availW - moreW && firstOverflowIdx < 0)
             {
-                if (host.Children[i] is not FrameworkElement fe) continue;
-                var w = fe.ActualWidth > 0 ? fe.ActualWidth : fe.DesiredSize.Width;
-                acc += w;
-                if (acc > clipW)
-                {
-                    visibleCount = i;
-                    break;
-                }
-                accBefore = acc;
+                firstOverflowIdx = i;
             }
         }
 
-        // ★ 主条宽度必须停在 **chip 边界**(accBefore): 钳到 clipW 会把最后一颗可见 chip
-        //   从中间截断(真机截图实证: 露出半颗"V...")。
-        FolderBarClip.Width = accBefore;
-        ApplyRoundedClip(FolderBarClip, 18);
-
-        // 红点 = 当前选中的夹子排不进主条(它藏在浮层里)
-        var currentIdx = -1;
-        for (var i = 0; i < FolderChips.Items.Count; i++)
+        // 全放得下: 主条 = 全部
+        if (firstOverflowIdx < 0)
         {
-            if (FolderChips.Items[i] is FavFolder f && f.IsCurrent) { currentIdx = i; break; }
+            ReplaceIfChanged(VisibleFolders, Vm.Folders);
+            HiddenFolders.Clear();
+            FolderMoreButton.Visibility = Visibility.Collapsed;
+            FolderMoreDot.Visibility = Visibility.Collapsed;
+            return;
         }
-        FolderMoreDot.Visibility = currentIdx >= visibleCount ? Visibility.Visible : Visibility.Collapsed;
 
-        // ★ 浮层只列**被折叠**的那些(2026-10-03 用户反馈: 浮层里不该重复出现主条已显示的)。
-        //   用独立集合装, 绑在浮层 ItemsControl 上(见 XAML)。
+        // 放不下: [0, firstOverflowIdx) 进主条, 其余进浮层
+        VisibleFolders.Clear();
+        for (var i = 0; i < firstOverflowIdx; i++)
+            VisibleFolders.Add(Vm.Folders[i]);
+
         HiddenFolders.Clear();
-        for (var i = visibleCount; i < FolderChips.Items.Count; i++)
+        for (var i = firstOverflowIdx; i < Vm.Folders.Count; i++)
+            HiddenFolders.Add(Vm.Folders[i]);
+
+        FolderMoreButton.Visibility = Visibility.Visible;
+
+        // 红点 = 当前选中的夹子被折进了浮层(别让用户以为它丢了)
+        var dotVisible = false;
+        for (var i = firstOverflowIdx; i < Vm.Folders.Count; i++)
         {
-            if (FolderChips.Items[i] is FavFolder f) HiddenFolders.Add(f);
+            if (Vm.Folders[i].IsCurrent) { dotVisible = true; break; }
         }
+        FolderMoreDot.Visibility = dotVisible ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    /// <summary>被折叠进「⋯」浮层的那部分收藏夹(主条放不下的尾部)。</summary>
-    public System.Collections.ObjectModel.ObservableCollection<FavFolder> HiddenFolders { get; } = new();
-
-    /// <summary>找到 ItemsControl 生成的横向 ItemsHost(StackPanel)。</summary>
-    private static StackPanel? FindItemsHost(DependencyObject root)
+    /// <summary>量一颗 chip 的总宽(文字 + 内边距 + 间距)。文本宽有缓存。</summary>
+    private double MeasureChip(string text)
     {
-        if (root is StackPanel { Orientation: System.Windows.Controls.Orientation.Horizontal } sp
-            && sp.Parent is ItemsPresenter) return sp;
-        var n = VisualTreeHelper.GetChildrenCount(root);
-        for (var i = 0; i < n; i++)
+        if (!_textWidthCache.TryGetValue(text, out var w))
         {
-            var found = FindItemsHost(VisualTreeHelper.GetChild(root, i));
-            if (found != null) return found;
+            var typeface = new Typeface(FontFamily.Source);
+            var ft = new FormattedText(
+                text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                typeface, ChipFontSize, Brushes.Black,
+                VisualTreeHelper.GetDpi(this).PixelsPerDip);
+            w = ft.Width;
+            _textWidthCache[text] = w;
         }
-        return null;
+        return w + ChipChromeWidth;
     }
 
-    /// <summary>给主条加圆角裁剪: 裁掉超宽部分的同时保留胶囊右缘的圆角观感。</summary>
-    private static void ApplyRoundedClip(UIElement host, double radius)
+    /// <summary>集合内容替换(引用不同但内容相同的项不重复 Add, 减少容器重建)</summary>
+    private static void ReplaceIfChanged(
+        System.Collections.ObjectModel.ObservableCollection<FavFolder> target,
+        System.Collections.ObjectModel.ObservableCollection<FavFolder> source)
     {
-        if (host is FrameworkElement fe && fe.ActualWidth > 0)
+        if (target.Count == source.Count)
         {
-            fe.Clip = new RectangleGeometry(
-                new Rect(0, 0, fe.ActualWidth, fe.ActualHeight), radius, radius);
+            var same = true;
+            for (var i = 0; i < source.Count; i++)
+            {
+                if (!ReferenceEquals(target[i], source[i])) { same = false; break; }
+            }
+            if (same) return;
         }
+        target.Clear();
+        foreach (var f in source) target.Add(f);
     }
 
     private void OnFolderMoreClick(object sender, RoutedEventArgs e)
