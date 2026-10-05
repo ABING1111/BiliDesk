@@ -200,6 +200,12 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>黑幕兜底超时(毫秒): 一直没等到新帧就自己撤掉, 免得挡住画面</summary>
     private const int FullscreenCoverTimeoutMs = 600;
 
+    /// <summary>
+    /// "拖动改大小期间的按住闸": 为真时 <see cref="ReleaseFullscreenCover"/> 拒绝撤罩。
+    /// 用来保证遮罩从 WM_ENTERSIZEMOVE 一直压到 WM_EXITSIZEMOVE ——
+    /// 拖动期间 LibVLC 会反复重协商 vout, 中途放行必然又露出白底(见 ArmResizeCover)。</summary>
+    private bool _resizeHold;
+
     private static Brush CreateVideoAreaBackBrush()
     {
         var b = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x01, 0, 0, 0));
@@ -2381,6 +2387,11 @@ public partial class PlayerWindow : FluentWindow
 
         // 先放掉 WPF 持有的鼠标捕获, 否则模态缩放循环拿不到鼠标
         ReleaseCapture();
+        // ★ 遮罩交给 FluentWindow 的 WM_ENTERSIZEMOVE/EXITSIZEMOVE 钩子管(见 OnModalResizeStarted):
+        //   DefWindowProc 进入的是**系统模态缩放循环**, 拖动全程由它占着消息循环,
+        //   WndProc 钩子照样能收到 ENTER/EXIT —— 所以这里不必手动压, 免得多一份状态。
+        //   (2026-10-05 第一版就是在这里手动压的, 压一次就撤 ⇒ 闪白依旧;
+        //    真因是"按一下就放行"而非"没压到", 正确修法见 ArmResizeCover。)
         // 直接把"按在缩放带上"交给 DefWindowProc: 它进入系统模态缩放循环, 松开鼠标才返回
         DefWindowProc(hwnd, WmNcLButtonDown, (IntPtr)ht, IntPtr.Zero);
         return true;
@@ -3426,8 +3437,16 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 全屏黑幕: 切换期间把手势层压黑, 盖住 vout HWND 露出的白底。
+    /// 视频区遮罩: 在"窗口尺寸正在变"的窗口期把手势层压黑, 盖住 vout HWND 露出的白底。
     ///
+    /// ★★ 2026-10-05 用户报"拖动窗口边缘调节大小时视频区闪白"—— 本方法原先只挂在**全屏切换**上,
+    ///   而拖边缘 resize 走的是完全不同的代码路径, 从不经过这里, 于是白底照样露出来。
+    ///   它挡的机制与全屏完全相同(LibVLC 要重协商 vout, 那一瞬没有新帧 → 露出 vout 的默认白底),
+    ///   所以复用一个遮罩即可, 不必再造第二套。触发点见 <see cref="ArmFullscreenCover"/> /
+    ///   <see cref="ArmResizeCover"/>(后者由 WM_ENTERSIZEMOVE 驱动)。
+    /// </summary>
+    ///
+    /// <remarks>
     /// ★ 为什么必须压手势层, 而不是切窗口/RootGrid 底色(2026-10-01 修长期未愈的白闪):
     ///   `VideoView` 是 **HwndHost**(airspace), 它画在**所有 WPF 元素之上**。视频区那层
     ///   `Background="Black"` 的 Grid 是 VideoView 的**父容器** —— 父容器画不到子 HWND 上面。
@@ -3445,7 +3464,7 @@ public partial class PlayerWindow : FluentWindow
     ///   ★★ 2026-10-02 用户要求"全屏动画改用 Windows 自带的"之后**它仍然必须留着**:
     ///   它挡的是 LibVLC vout 重协商时的**白底空窗**, 与"动画由谁播"完全无关 ——
     ///   改成系统动画后窗口尺寸变化依旧发生, 空窗依旧存在, 去掉它浅色主题就会闪白。
-    /// </summary>
+    /// </remarks>
     private void ArmFullscreenCover()
     {
         if (_closing || VideoAreaRoot == null) return;
@@ -3460,9 +3479,19 @@ public partial class PlayerWindow : FluentWindow
         _fullscreenCoverTimer.Start();
     }
 
-    /// <summary>撤掉全屏黑幕(视频已经在出帧了, 再挡着就看不见画面了)</summary>
+    /// <summary>
+    /// 撤掉视频区遮罩(视频已经在出帧了, 再挡着就看不见画面了)。
+    ///
+    /// ★★ _resizeHold 这道闸是修"拖边缘闪白"的关键(2026-10-05):
+    ///   拖动期间 LibVLC 会**反复**重协商 vout, 每轮都露一次白底。若此时 TimeChanged /
+    ///   Playing 一发就把遮罩撤了, 后面每一轮重协商又白一下 —— 表现为"闪白依旧"。
+    ///   所以按住期间(TimeChanged/Playing/兜底超时 都会走到这里)**一律不撤**,
+    ///   只等 WM_EXITSIZEMOVE 由 ReleaseResizeHold 放闸后, 这里才真正生效。
+    /// </summary>
     private void ReleaseFullscreenCover()
     {
+        // ★ 拖动按住期间不放行(计时器也不停: 它只做"万一 EXIT 没送到"的兜底)
+        if (_resizeHold) return;
         _fullscreenCoverTimer?.Stop();
         if (_closing || !_fullscreenCoverArmed || VideoAreaRoot == null) return;
         _fullscreenCoverArmed = false;
@@ -3475,6 +3504,58 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void OnFullscreenCoverTimeout(object? sender, EventArgs e) => ReleaseFullscreenCover();
 
+    /// <summary>
+    /// resize 期间的视频区遮罩。
+    ///
+    /// ★★★ 这一版与上一版的区别, 以及上一版为什么没修好(2026-10-05 用户反馈"闪白问题依旧"):
+    ///   上一版是"进 resize 时压一次, 靠 TimeChanged/Playing 收到新帧就撤"。看着对, 但拖动期间
+    ///   窗口尺寸**每帧都在变** ⇒ LibVLC 每一帧都在重协商 vout ⇒ 白底反复露出。
+    ///   第一次重协商一结束遮罩就被撤了, 后面每一轮重协商又白一下 —— 观感就是"闪白依旧",
+    ///   而且用户截图里那种整块白正是这一轮轮的叠加。
+    ///   ★ 所以正确语义是"按住整个拖动期": 进入压黑, **期间谁来撤都不放行**(见 _resizeHold),
+    ///     一直到 WM_EXITSIZEMOVE 才撤(见 OnModalResizeEnded)。
+    ///   ★ 为什么仍然复用 _fullscreenCoverArmed 而不是另开一个字段: 两者最终都只改
+    ///     VideoAreaRoot.Background, 各开一份状态就会出现两份状态互抢同一属性。
+    ///     _resizeHold 是"额外的闸": 它为真时 ReleaseFullscreenCover 拒绝撤罩。
+    /// </summary>
+    private void ArmResizeCover()
+    {
+        if (_closing || VideoAreaRoot == null) return;
+        _resizeHold = true;
+        VideoAreaRoot.Background = Brushes.Black;
+        _fullscreenCoverArmed = true;
+        // ★ 计时器在按住期间**只做兜底**: 它到期时若还在拖动就不撤(由 _resizeHold 挡住),
+        //   万一 WM_EXITSIZEMOVE 因为异常路径没送到, 至少不会永远黑屏。
+        _fullscreenCoverTimer ??= new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(FullscreenCoverTimeoutMs)
+        };
+        _fullscreenCoverTimer.Tick -= OnFullscreenCoverTimeout;
+        _fullscreenCoverTimer.Tick += OnFullscreenCoverTimeout;
+        _fullscreenCoverTimer.Start();
+    }
+
+    /// <summary>拖动结束: 放掉"按住不放"的闸, 正常恢复由新帧驱动</summary>
+    private void ReleaseResizeHold()
+    {
+        _resizeHold = false;
+    }
+
+    /// <summary>
+    /// 拖动期间**按住**遮罩(2026-10-05 修"拖边缘 resize 闪白"的真正修法)。
+    /// 见 <see cref="ArmResizeCover"/> 的说明。</summary>
+    protected override void OnModalResizeStarted() => ArmResizeCover();
+
+    /// <summary>
+    /// 拖动结束才撤遮罩 —— 不是靠"新帧到达"(那样会在拖动中途被反复放行, 闪白依旧)。
+    /// </summary>
+    protected override void OnModalResizeEnded()
+    {
+        ReleaseResizeHold();
+        // 撤闸后立刻尝试恢复正常底色: 此时若已经收到过新帧就会立刻还原;
+        // 若还没出帧, 由 TimeChanged/Playing 稍后撤 —— 两种情况都不会留下黑屏。
+        ReleaseFullscreenCover();
+    }
     /// <summary>当前是否处于全屏(顶栏已收起、右侧信息栏已收成 0 宽)</summary>
     private bool _isFullscreen;
 

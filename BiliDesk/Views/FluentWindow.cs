@@ -262,8 +262,41 @@ public class FluentWindow : Window
             // 广播出去是为了让卡片墙把重算**合流**: 拖动期间跟着每一帧重算整墙卡片,
             // 就是用户说的"拖边缘很卡"。
             CardWall.NotifyModalResize(msg == WM_ENTERSIZEMOVE);
+
+            // ★ 2026-10-05: 播放器靠这一对钩子在"拖动改大小"期间**按住**视频区遮罩,
+            //   盖住 LibVLC 反复重协商 vout 露出的白底(拖边缘闪白)。
+            //   ★★ 为什么开始/结束**都要**通知(上一版只发开始, 结果没修好 —— 2026-10-05):
+            //     遮罩若只在开始时压一次、靠"新帧到达"撤掉, 那么第一次重协商一过去就被撤了;
+            //     而拖动期间窗口尺寸每帧都在变, LibVLC 会**反复**重协商 vout
+            //     ⇒ 后面每一轮又露出白底, 于是"闪白依旧"。
+            //     所以遮罩的语义必须是"从 ENTER 一直压到 EXIT", 中途绝不放行。
+            if (msg == WM_ENTERSIZEMOVE) OnModalResizeStarted();
+            else OnModalResizeEnded();
         }
         return IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// 用户**开始**"拖着窗口边缘改大小"时调用(仅 <c>WM_ENTERSIZEMOVE</c>), 供子类挂副作用。
+    /// 与 <see cref="OnModalResizeEnded"/> 成对, 语义是"这段模态 resize 的起止"。
+    ///
+    /// ★ 播放器用它压黑视频区手势层, 盖住 LibVLC 在 resize 期间重协商 vout 露出的白底。
+    ///   做成虚方法而不是在基类里判断类型: 基类不该知道播放器有视频区这回事。
+    ///   默认空实现 —— 不重写的窗口(主窗口/登录框等)行为完全不变。
+    /// </summary>
+    protected virtual void OnModalResizeStarted()
+    {
+    }
+
+    /// <summary>
+    /// 用户**结束**"拖着窗口边缘改大小"时调用(仅 <c>WM_EXITSIZEMOVE</c>), 与
+    /// <see cref="OnModalResizeStarted"/> 成对。
+    ///
+    /// ★ 播放器在**这里**才撤掉遮罩, 而不是靠"新帧到达" —— 理由见 WndProc 里那段注释:
+    ///   拖动期间会反复重协商 vout, 中途撤罩等于放行后面每一轮的白闪。
+    /// </summary>
+    protected virtual void OnModalResizeEnded()
+    {
     }
 
     /// <summary>
