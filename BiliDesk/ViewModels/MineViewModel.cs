@@ -113,7 +113,12 @@ public class MineViewModel : ObservableObject
         });
         RefreshCommand = new RelayCommand(() => _ = LoadAsync());
         LoginCommand = new RelayCommand(() => App.MainVm.OpenLoginWindow());
+        // 登录态变化(扫码成功/退出)时原地刷新 —— 否则用户在「我的」页点「去登录」,
+        // 登录窗口关了页面还停在未登录态, 得切出去再切回来才恢复
+        Svc.Session.Changed += OnSessionChanged;
     }
+
+    private void OnSessionChanged() => _ = LoadAsync();
 
     /// <summary>
     /// 拉全部数据。每个子项独立容错: 某一项挂了不影响其它项显示
