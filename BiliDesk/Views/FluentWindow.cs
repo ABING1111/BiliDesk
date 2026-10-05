@@ -86,16 +86,23 @@ public class FluentWindow : Window
             // ★ 亚克力(实验性)与"禁用云母"共用 DWMWA_SYSTEMBACKDROP_TYPE, 所以必须在这里**一次决定**:
             //   开亚克力时不去禁云母(会被覆盖), 关亚克力时按老规矩禁掉 Mica。
             //   两处各写一遍必然出现"开了亚克力又被下一句关掉"。
-            var acrylic = Svc.Settings.AcrylicBackground;
-            if (acrylic)
+            // ★★★ 亚克力只对**自绘边框窗口**生效(2026-10-05 修"浅色亚克力下收藏界面发黑"):
+            //   SetAcrylicBackdrop 对没有 WindowChrome 的**系统标准窗口**会返回 false ——
+            //   那种窗口要把客户区当普通内容画, 不能扩展玻璃(否则整个内容区被 DWM 当非客户区压黑)。
+            //   ★ 所以必须**先看返回值再决定窗口底色**: 只有亚克力真的启用了, 才能把窗口背景设成透明
+            //     (透明是靠底下的 DWM 合成层兜住的); 失败时一旦也设透明, 客户区就没有任何底色 —— 直接黑。
+            var acrylicOn = false;
+            if (Svc.Settings.AcrylicBackground) acrylicOn = DwmInterop.SetAcrylicBackdrop(this, true);
+
+            if (acrylicOn)
             {
                 // 亚克力生效的前提是窗口背景能透出合成层: 用**全透明**的窗口底色,
                 // 页面那层半透明 AppBackgroundBrush 再叠上去(见 Colors.*.xaml 的说明)。
                 Background = Brushes.Transparent;
-                DwmInterop.SetAcrylicBackdrop(this, true);
             }
             else
             {
+                // 没开亚克力 / 该窗口不支持亚克力: 一律回落普通实色背景
                 DwmInterop.SetAcrylicBackdrop(this, false);
                 DwmInterop.DisableMica(this);
                 // 统一纯色背景, 深浅主题用各自的 WindowSolid* 资源
