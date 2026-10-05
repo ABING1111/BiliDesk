@@ -1039,6 +1039,14 @@ public class AppSettings
     public string DanmakuBlockKeywords { get; set; } = "";
 
     /// <summary>
+    /// 默认画质(qn)。用户在设置页**开始播放前**预先选定的清晰度档位,
+    /// 每次起播都用它取流; 该档拿不到时自动降级(见 ApiClient.GetPlayUrlAsync)。
+    /// 默认取 QualityPreference.DefaultQn(1080P) —— 与新增本设置项之前播放器里
+    /// 写死的 qn=80 一致, 老用户升级后起播画质不变。
+    /// </summary>
+    public int PreferredQualityQn { get; set; } = QualityPreference.DefaultQn;
+
+    /// <summary>
     /// 首页「推荐」tab 的算法来源。★ 2026-10-03 起固定为网页版(字段仅为兼容老配置保留,
     /// 读取时一律强制 Web, 见 SettingsStore.Load)。
     /// </summary>

@@ -40,6 +40,15 @@ public class SettingsStore
     public string DanmakuBlockKeywords { get; set; } = "";
 
     /// <summary>
+    /// 默认画质(qn)。用户在设置页**开始播放前**预先选定的清晰度,
+    /// 之后每次点开视频/换集都用它起播; 该档不可用时自动降级(见 ApiClient.GetPlayUrlAsync)。
+    /// ★ 默认取 <see cref="QualityPreference.DefaultQn"/>(1080P) —— 与新增本设置项之前
+    ///   播放器里写死的 qn=80 一致, 老用户升级后起播画质不变。
+    /// 老配置没有这个字段 → 反序列化保持属性初始化值 → 自动落到默认档。
+    /// </summary>
+    public int PreferredQualityQn { get; set; } = QualityPreference.DefaultQn;
+
+    /// <summary>
     /// 首页「推荐」用哪套算法。★ 2026-10-03 起**固定为网页版**, 字段只为兼容老配置保留。
     ///
     /// 历史: 这里原来是"App 官方 / 浏览器网页版"二选一, 默认 App。
@@ -139,6 +148,9 @@ public class SettingsStore
                     // 老配置同样靠"属性初始化值"拿到默认 true
                     DanmakuColorful = s.DanmakuColorful;
                     DanmakuBlockKeywords = s.DanmakuBlockKeywords ?? "";
+                    // ★ 默认画质要 Normalize: 手改过的配置可能有 0 / 已下线的档位 / 串到别处
+                    //   的值, 直接流进取流请求会变成一个谁也不认识的 qn(表现为画质莫名其妙)。
+                    PreferredQualityQn = QualityPreference.Normalize(s.PreferredQualityQn);
                     // ★ 算法选择已删除(2026-10-03): 一律落到网页版。
                     //   老配置里存着 App 的会被这里纠正 —— 那一档实测对第三方客户端
                     //   不提供个性化(通用热门池), 让它继续生效就是让用户看一屏热门。
@@ -241,6 +253,7 @@ public class SettingsStore
                 DanmakuSmartFilter = DanmakuSmartFilter,
                 DanmakuColorful = DanmakuColorful,
                 DanmakuBlockKeywords = DanmakuBlockKeywords,
+                PreferredQualityQn = PreferredQualityQn,
                 RecommendSource = RecommendSource,
                 AccentColor = AccentColor,
                 SponsorBlockEnabled = SponsorBlockEnabled,
@@ -380,6 +393,24 @@ public class SettingsStore
     {
         if (NoLogin1080P == value) return;
         NoLogin1080P = value;
+        Save();
+    }
+
+    /// <summary>
+    /// 改"默认画质"并落盘。
+    ///
+    /// ★ 不需要广播事件: 它只在**取流那一刻**被读(播放器 ResetForNewMedia 快照给 _currentQn,
+    ///   以及 ApiClient.GetPlayUrlAsync 的降级判定), 播放中的视频不会因为改它而中断 ——
+    ///   要立刻生效, 换一集/重进即可。这与"免登录 1080P"同款(见 SetNoLogin1080P)。
+    ///
+    /// 非法档位(Normalize 之后与现值相同)直接 return, 不写盘: 下拉框回写时可能把一个
+    /// 表外的值送进来, 落盘一个表外值会让下次启动的 Normalize 白跑一趟。
+    /// </summary>
+    public void SetPreferredQuality(int qn)
+    {
+        var next = QualityPreference.Normalize(qn);
+        if (PreferredQualityQn == next) return;
+        PreferredQualityQn = next;
         Save();
     }
 

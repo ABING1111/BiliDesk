@@ -382,11 +382,24 @@
                            TextTrimming="CharacterEllipsis" Text="播放器" />
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <!-- 全屏 (F) -->
-                    <Button Style="{StaticResource IconButtonStyle}" Width="34" Height="34"
-                            ToolTip="全屏 (F)" Click="OnFullscreenClick"
+                    <!-- 铺满窗口(2026-10-04 按用户要求把这里原来是"全屏"的功能改成它):
+                         点了之后视频铺满**顶栏以下的整个窗口宽度**, 右侧信息栏整个收起
+                         (不再占任何显示空间), 窗口尺寸本身完全不变; 再点一次还原。
+                         ★ 与"真全屏"是两件事, 别把它们合并: 全屏会连顶栏一起收起、把窗口
+                           最大化到整块显示器并盖住任务栏。真全屏的入口仍然是 F 键 / 双击视频 /
+                           控制栏那个同款图标 —— 三者都还是 OnFullscreenClick。
+                         ★ 图标两种状态可区分(进入 / 已铺满), 由 UpdateFillWindowButton 切换:
+                           进入前 = 虚线框(E9A6, "填充这块区域"); 已铺满 = 向内的双箭头(E73F, "还原")。
+                           为什么不继续用 E92D(对角双箭头): 它在这个窗口里已经是"真全屏"的语义
+                           (F/双击/控制栏三处都在用), 同一个字形挂两种行为会让人以为是同一个功能。
+                         ★ 字形必须写进**显式 TextBlock**: 全局隐式 TextBlock 样式带 Foreground
+                           setter, 会吃掉 Button.Foreground(项目里反复踩的那个坑)。 -->
+                    <Button x:Name="BtnFillWindow" Style="{StaticResource IconButtonStyle}"
+                            Width="34" Height="34"
+                            ToolTip="铺满窗口" Click="OnFillWindowClick"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                        <TextBlock Text="&#xE92D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                        <TextBlock x:Name="FillWindowGlyph" Text="&#xE9A6;"
+                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                    FontSize="14" />
                     </Button>
 

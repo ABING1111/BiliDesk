@@ -163,6 +163,28 @@
             <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
                             Content="播放" />
 
+            <!-- 默认画质(2026-10-04 新增): 开始播放**之前**先选定本次要用的清晰度,
+                 之后每条视频都用它起播; 该档不存在/没有权限时自动降到可用的下一档
+                 (降级规则见 ApiClient.GetPlayUrlAsync 的选流分支)。
+                 默认档是 1080P —— 与播放器改动前写死的 qn=80 一致, 老用户升级后画质不变。 -->
+            <Border Style="{StaticResource SettingsCardStyle}">
+                <Grid Style="{StaticResource SettingsRowStyle}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                        <TextBlock Text="默认画质" Style="{StaticResource SettingsRowTitleStyle}" />
+                        <TextBlock Text="{Binding QualityHint}"
+                                   Style="{StaticResource SettingsRowDescStyle}" />
+                    </StackPanel>
+                    <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
+                              Width="170" VerticalAlignment="Center"
+                              ItemsSource="{Binding QualityOptions}"
+                              SelectedItem="{Binding QualitySelected, Mode=TwoWay}" />
+                </Grid>
+            </Border>
+
             <!-- 免登录 1080P: 未登录时给取流请求补 try_look + dm_img_* 四件套,
                  把匿名可见清晰度从 360P/480P 提到 720P/1080P(依据见 ApiClient.ApplyTryLook)。
                  这是设备指纹启发式放权, B 站改判据就会失效, 所以给用户一个关掉的入口。 -->

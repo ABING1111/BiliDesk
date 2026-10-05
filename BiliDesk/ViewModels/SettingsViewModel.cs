@@ -361,6 +361,42 @@ public class SettingsViewModel : ObservableObject
         ? "已登录, 按账号等级取流, 此开关不参与"
         : "未登录也能看 1080P; 关闭后回到 360P/480P";
 
+    // ----------------- 默认画质 -----------------
+
+    /// <summary>默认画质下拉框的显示项(顺序即 QualityPreference.All 的顺序)</summary>
+    public string[] QualityOptions { get; } =
+        QualityPreference.All.Select(c => c.Label).ToArray();
+
+    /// <summary>
+    /// 当前默认画质(用**字符串投影**, 理由同 CdnModeSelected —— SettingsStore 没有变化通知,
+    /// 直接绑 qn 会在别处改动后不刷新)。
+    ///
+    /// setter 里落盘 + 推自己的通知: 下拉框的 SelectedItem 靠 getter 读回显示文字,
+    /// WPF 在 TwoWay 回写后不会重新读一遍 —— 不推通知的话方框里可能停在旧文字上。
+    /// </summary>
+    public string QualitySelected
+    {
+        get => QualityPreference.LabelOf(Svc.Settings.PreferredQualityQn);
+        set
+        {
+            var qn = QualityPreference.QnOf(value);
+            if (qn == Svc.Settings.PreferredQualityQn) return;
+            Svc.Settings.SetPreferredQuality(qn);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(QualityHint));
+        }
+    }
+
+    /// <summary>
+    /// 副标题: 把"预先选定 + 不可用时自动降级"这条行为写清楚 ——
+    /// 这是本设置项唯一容易误解的地方(用户会以为选了 4K 就一定有 4K)。
+    /// </summary>
+    public string QualityHint =>
+        Svc.Settings.PreferredQualityQn == QualityPreference.AutoQn
+            ? "每次起播自动取当前账号可用的最高清晰度"
+            : $"每次起播都请求 {QualityPreference.LabelOf(Svc.Settings.PreferredQualityQn)}; " +
+              "该清晰度不存在或没有权限时自动降到可用的下一档";
+
     // ----------------- CDN(线路)设置 -----------------
     // 逻辑见 Services/CdnService.cs; 实测依据见该文件顶部注释
 

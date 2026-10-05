@@ -241,7 +241,18 @@ public partial class PlayerWindow : FluentWindow
 
     // --- 清晰度 ---
     private readonly List<(int qn, string label)> _qualities = new();
-    private int _currentQn = 80;          // 默认请求 1080P(qn=80)
+
+    /// <summary>
+    /// 本次播放**请求**的清晰度(qn)。
+    ///
+    /// ★ 2026-10-04 起它的初值不再是写死的 80, 而是用户设置里的「默认画质」
+    ///   (见 SettingsStore.PreferredQualityQn)。每个片源开始时由
+    ///   <see cref="ResetForNewMedia"/> 重新快照一次 —— 所以用户在设置页改完再点开
+    ///   下一个视频就生效, 不需要重启。
+    /// ★ 起播完成后这里会被换成**实际拿到**的档位(见 FillQualityMenu): 该档不存在或
+    ///   没有权限时 B 站会降级返回别的档, 之后"切清晰度"的基准应该是实际在播的那一档。
+    /// </summary>
+    private int _currentQn = QualityPreference.DefaultQn;
     private bool _switchingQuality;
     private bool _fillingQualityMenu;
     // 切换清晰度后要恢复到的进度(>0 生效, 起播后清零)
@@ -454,6 +465,11 @@ public partial class PlayerWindow : FluentWindow
         }));
 
         _currentBvid = bvid;
+        // ★ 这条构造函数路径(直接带 bvid new 出窗口)**不走 ResetForNewMedia**
+        //   —— 而 _currentQn 的字段初值是"内置默认档"而不是用户设置。
+        //   漏了这一句的结果是: 带 bvid 直接打开的第一个视频永远按内置默认档起播,
+        //   用户在设置页选的「默认画质」要到第二条视频才生效(极难定位的那种"设置时灵时不灵")。
+        ApplyPreferredQuality();
         _progressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _progressTimer.Tick += (_, _) =>
         {
@@ -541,6 +557,10 @@ public partial class PlayerWindow : FluentWindow
             TimeText.Text = "直播中";
             _qualities.Clear();
             FillQualityMenu(0);
+            // ★ 直播没有"可选清晰度"这一说(清晰度由服务端/主播推流决定), 所以按钮上不显示
+            //   用户设置的「默认画质」—— 那会在直播里写成一个用户根本控制不了、甚至拿不到的档位
+            //   (2026-10-04: 新增「默认画质」后 FillQualityMenu(0) 会回落到偏好标签, 这里盖掉)。
+            if (QualityText != null) QualityText.Text = "直播";
             if (CommentHint != null) CommentHint.Text = "直播没有评论区";
             UpdateButtonState();
 
@@ -594,6 +614,37 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
+    /// 把"本片源要请求的清晰度"快照成设置里的「默认画质」。
+    ///
+    /// ★ 为什么单独一个方法: 有**三**条起播路径需要它, 各写一遍必然漏一条 ——
+    ///   构造函数(带 bvid 直接开)、ResetForNewMedia(复用窗口换片)、以及将来新增的入口。
+    ///   实际漏过一次的原形就摆在眼前: 只放 ResetForNewMedia 时, "带 bvid 开新窗口"这条
+    ///   路径拿到的是字段初值而不是用户设置。
+    ///
+    /// ★ 为什么不沿用上一个视频手动切到的档位: 那个选项叫**默认**画质 —— 手动切清晰度只对
+    ///   当前这一条有效, 下一条仍然从用户选定的默认档起播(B 站客户端同款语义)。
+    ///
+    /// ★ 为什么走 <see cref="QualityPreference.RequestQn"/> 而不是直接赋值:
+    ///   设置页把「自动(最高可用)」存成哨兵值 0, 而发给接口的必须是"最高可用档"(127)。
+    ///   同时 RequestQn 内部会 Normalize —— 配置被手改坏 / 存着已下线的档位时,
+    ///   不会把一个谁也不认识的 qn 发进取流请求。
+    /// </summary>
+    private void ApplyPreferredQuality()
+    {
+        _currentQn = QualityPreference.RequestQn(Svc.Settings.PreferredQualityQn);
+        // ★ 顺手把控件栏那个清晰度按钮的文案摆成"**本次要请求的**档位"(2026-10-04)。
+        //
+        // 为什么必须在这里写一次: XAML 里 `QualityText` 的初值是写死的 "1080P"。
+        // 用户把默认画质设成 720P / 4K 之后, 从"点开视频"到"取流成功调用 FillQualityMenu"
+        // 之间——以及**取流直接失败**那条路(ShowFail 后 return, 根本不会调 FillQualityMenu)
+        // ——按钮上都会挂着一个 "1080P", 而那既不是用户选的档、也不是正在播的档。
+        // 之前写死 qn=80 时它与请求一致所以看不出来, 有了这个设置项就变成实打实的错报。
+        // 本地文件/直播那两条路随后会各自用 "本地"/"直播" 覆盖掉它, 不受这里影响。
+        if (QualityText != null)
+            QualityText.Text = QualityPreference.ShortLabelOf(Svc.Settings.PreferredQualityQn);
+    }
+
+    /// <summary>
     /// 换片源前把"上一条视频的痕迹"清干净。
     /// 尤其是 _commentsLoaded / CommentList.ItemsSource —— 原来没清, 于是同一个播放器窗口
     /// 换视频之后评论 tab 里一直挂着上一条视频的评论(而且不会再重新加载)。
@@ -603,6 +654,10 @@ public partial class PlayerWindow : FluentWindow
         _indexInLib = 0;
         // 换片: 音频链路诊断重新记一次(每个片源一条, 见 LogAudioStateOnce)
         _audioStateLogged = false;
+        // ★ 每个片源开始时都把"要请求的清晰度"快照成设置里的「默认画质」(2026-10-04)。
+        //   放在这里而不是只放构造函数里, 是为了让"设置页改完 → 点开下一个视频"立刻生效,
+        //   不必重启。
+        ApplyPreferredQuality();
         _danmaku.Clear();
         _danmakuRaw.Clear();
         // SponsorBlock: 上一片的片段数据与"已处理"记录全部作废。
@@ -784,6 +839,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_teardownDone),       // 拆解只做一次
         nameof(_playerRegistered),   // 注册计数, 生命周期是窗口而非片源
         nameof(_seasonOpen),         // 合集面板的展开态: 用户开着面板连看几集是常态, 换片收起它很烦
+        nameof(_isFillWindow),       // 「铺满窗口」是窗口级的显示模式(同 _isFullscreen), 换片不该把它弹回去
     };
 
     /// <summary>
@@ -873,6 +929,9 @@ public partial class PlayerWindow : FluentWindow
     {
         if (TabIntro != null && IntroPanel != null) TabIntro.IsChecked = true;
         UpdateButtonState();
+        // 「铺满窗口」按钮的字形初值: XAML 里写的是"进入前"那个字形(E9A6), 这里按实际状态
+        // 再同步一次 —— 窗口是复用的, 复用到一个"上次已铺满"的窗口时不能显示成未铺满。
+        UpdateFillWindowButton();
         // 覆盖层窗口(VideoView 的 ForegroundWindow)这时才建出来 —— 把键盘处理也挂上去,
         // 否则点过一次视频/控制栏之后快捷键就全哑了(见 HookOverlayKeyboard 的说明)
         HookOverlayKeyboard();
@@ -2137,7 +2196,16 @@ public partial class PlayerWindow : FluentWindow
             foreach (var (qn, label) in _qualities)
                 QualityList.Items.Add(new ListBoxItem { Tag = qn, Content = label });
             if (actualQn > 0) _currentQn = actualQn;
-            var label2 = ApiClient.QnToLabel(_currentQn);
+            // ★★★ 按钮上的文字必须按"**接口实际给的**档位"或"用户的偏好"来取,
+            //   **绝不能**对 _currentQn 直接调 QnToLabel(2026-10-04 修):
+            //   「默认画质 = 自动」时 _currentQn 是发给接口的请求上界 127, 而 QnToLabel(127)
+            //   是"杜比视界"(那是真实流里的 8K 档)。于是本地文件/直播/起播失败(actualQn == 0)
+            //   这些"没有实际档位可显示"的路径上, 按钮会写成一个用户根本没有的档位。
+            //   这里只显示**确实在播的那一档**: 有实际档位就说它, 没有(本地/直播)就说用户的偏好,
+            //   两者都不会把"请求用的内部值"当成画质名报给用户。
+            var label2 = actualQn > 0
+                ? ApiClient.QnToLabel(actualQn)
+                : QualityPreference.LabelOf(Svc.Settings.PreferredQualityQn);
             if (QualityText != null) QualityText.Text = label2;
             // 高亮与实际清晰度匹配的项
             for (var i = 0; i < QualityList.Items.Count; i++)
@@ -3000,9 +3068,13 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// "返回上一层"的统一处理(键盘 Esc / 鼠标侧键共用)。
     ///
-    /// 两级语义, 与所有播放器一致:
-    ///   全屏中 → 先退全屏(而不是直接关窗口, 否则用户按一下就"连界面一起没了");
-    ///   非全屏 → 关闭播放器回到主界面。
+    /// 三层语义, **由内到外**逐级退, 与所有播放器一致:
+    ///   全屏中     → 先退全屏(而不是直接关窗口, 否则用户按一下就"连界面一起没了");
+    ///   已铺满窗口 → 再退铺满窗口(信息栏回来);
+    ///   都没有     → 关闭播放器回到主界面。
+    /// ★ 铺满窗口必须夹在中间: 它是最"内层"的一个显示模式(窗口尺寸都没变), 用户按 Esc 的
+    ///   预期是"先把我刚展开的这个视图收回去", 而不是"直接关掉播放器"。
+    ///   少了这一级, 用户在铺满窗口状态下按 Esc 会直接关窗 —— 与真全屏下按 Esc 的行为不一致。
     /// 两个入口必须走同一个方法, 不然很容易出现"Esc 是对的、侧键直接关窗"这种不一致。
     /// </summary>
     private void HandleBackRequest()
@@ -3011,6 +3083,13 @@ public partial class PlayerWindow : FluentWindow
         {
             _isFullscreen = false;
             ApplyFullscreen(false);
+            return;
+        }
+        if (_isFillWindow)
+        {
+            _isFillWindow = false;
+            ApplyInfoPanelState();
+            UpdateFillWindowButton();
             return;
         }
         Close();
@@ -3108,12 +3187,9 @@ public partial class PlayerWindow : FluentWindow
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             TopBar.Visibility = Visibility.Collapsed;
             TopRow.Height = new GridLength(0);
-            // ★ 信息栏必须**整个 Collapsed**, 不能只把列宽设成 0。
-            //   宽度为 0 的面板仍然参与 measure/arrange/render —— 里面挂着几百张评论卡
-            //   (无对象池, 见 notes-player-internals), 每一次全屏切换都要把这棵评论树
-            //   重新量一遍, 这就是用户说的"卡顿一下"(退出时还要再付一次)。
-            if (InfoPanel != null) InfoPanel.Visibility = Visibility.Collapsed;
-            if (RightColumn != null) RightColumn.Width = new GridLength(0);
+            // ★ 信息栏的收起**必须走这一个入口**(收起原因见 ApplyInfoPanelState 的说明):
+            //   全屏与"铺满窗口"两个开关共用它, 谁都不许自己改 InfoPanel/RightColumn。
+            ApplyInfoPanelState();
 
             // ★ 全屏必须**盖住任务栏**。
             // 无边框窗口的最大化尺寸由 WM_GETMINMAXINFO 决定, 而 FluentWindow 里那条钩子
@@ -3147,8 +3223,12 @@ public partial class PlayerWindow : FluentWindow
 
             TopBar.Visibility = Visibility.Visible;
             TopRow.Height = new GridLength(44);
-            if (InfoPanel != null) InfoPanel.Visibility = Visibility.Visible;
-            if (RightColumn != null) RightColumn.Width = new GridLength(400);
+            // 与进全屏同一个入口: 退出全屏后信息栏是否回来, 还要看"铺满窗口"是不是还开着
+            // (两个开关可以叠加: 先铺满窗口再按 F 进全屏, 退出全屏时应该回到"仍铺满"状态)。
+            ApplyInfoPanelState();
+            // 退全屏要把窗口从最大化还原 —— 全屏就是靠"最大化 + 收顶栏"实现的。
+            // ★ 这一句与 ApplyInfoPanelState 的顺序无关, 但**不能删**: 少了它退全屏后窗口
+            //   会一直贴在整块显示器上(铺满窗口那个模式本身不改窗口状态)。
             if (WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
 
             // 信息栏直接到位, 不再淡入 —— 全屏切换整体没有任何过渡动画了。
@@ -3213,6 +3293,69 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>当前是否处于全屏(顶栏已收起、右侧信息栏已收成 0 宽)</summary>
     private bool _isFullscreen;
+
+    /// <summary>
+    /// "铺满窗口"是否开着(2026-10-04 新增, 顶栏右上角那个按钮)。
+    ///
+    /// 与 <see cref="_isFullscreen"/> 是**两个独立的开关**, 要叠加使用:
+    ///   · 它只做一件事 —— 把右侧信息栏整个收掉, 让视频铺满窗口宽度; **窗口尺寸/状态一概不动**;
+    ///   · 真全屏是"收顶栏 + 最大化到整块显示器 + 盖任务栏", 它不碰。
+    /// 两者都收信息栏, 所以"信息栏收没收"由 <see cref="ApplyInfoPanelState"/> 取**或**之后统一决定 ——
+    /// 那正是两个开关能叠加的原因(先铺满窗口再按 F 进全屏、退出全屏仍保持铺满)。
+    /// </summary>
+    private bool _isFillWindow;
+
+    /// <summary>
+    /// 右上角「铺满窗口」按钮的点击入口。
+    /// Esc 的处理见 <see cref="HandleBackRequest"/> —— 它按"由内到外"退: 全屏 → 铺满窗口 → 关窗。
+    /// </summary>
+    private void OnFillWindowClick(object sender, RoutedEventArgs e) => ToggleFillWindow();
+
+    private void ToggleFillWindow()
+    {
+        if (_closing) return;
+        _isFillWindow = !_isFillWindow;
+        ApplyInfoPanelState();
+        UpdateFillWindowButton();
+    }
+
+    /// <summary>
+    /// 按两个开关的当前值把右侧信息栏设成"该收"或"该展"。**唯一改 InfoPanel / RightColumn 的地方。**
+    ///
+    /// ★ 为什么信息栏必须**整个 Collapsed**, 不能只把列宽设成 0:
+    ///   宽度为 0 的面板仍然参与 measure/arrange/render —— 里面挂着几百张评论卡
+    ///   (无对象池, 见 notes-player-internals), 每切一次都要把这棵评论树重新量一遍,
+    ///   这就是用户说的"卡顿一下"(退出时还要再付一次)。
+    ///
+    /// ★ 为什么必须收敛到一个入口: 收信息栏的现在有两个开关(全屏 / 铺满窗口), 各自改一遍
+    ///   会立刻出现"退出全屏把铺满窗口的状态也顶掉"这种互相打架 ——
+    ///   两个开关叠加时, 谁先谁后都不能让信息栏闪一下或者卡在错误状态。
+    /// </summary>
+    private void ApplyInfoPanelState()
+    {
+        if (_closing) return;
+        var hide = _isFullscreen || _isFillWindow;
+        if (InfoPanel != null)
+            InfoPanel.Visibility = hide ? Visibility.Collapsed : Visibility.Visible;
+        // ★ 列宽必须跟着一起给回去: 只把 Visibility 改回 Visible 而列宽还停在 0,
+        //   面板会量成 0 宽(用户看到的是"信息栏没回来")。
+        if (RightColumn != null)
+            RightColumn.Width = new GridLength(hide ? 0 : 400);
+    }
+
+    /// <summary>
+    /// 同步「铺满窗口」按钮的字形与提示(进入前 = 虚线框"填充这块区域", 已铺满 = 向内的双箭头"还原")。
+    ///
+    /// 为什么图标要跟着状态变: 同一个位置点两下是"进入/退出", 字形不变的话用户不知道
+    /// 现在是不是已经铺满了, 也不知道再点一下会发生什么。
+    /// </summary>
+    private void UpdateFillWindowButton()
+    {
+        if (BtnFillWindow == null) return;
+        // E9A6 = 虚线框(填充区域) / E73F = 向内的双箭头(还原)。两者在本字体里形状差异明显。
+        if (FillWindowGlyph != null) FillWindowGlyph.Text = _isFillWindow ? "\uE73F" : "\uE9A6";
+        BtnFillWindow.ToolTip = _isFillWindow ? "还原 (退出铺满窗口)" : "铺满窗口";
+    }
 
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreen();
 
