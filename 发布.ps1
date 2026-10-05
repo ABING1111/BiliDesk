@@ -1,4 +1,4 @@
-﻿# BiliDesk 发布脚本
+# BiliDesk 发布脚本
 #
 # 一次产出两套(2026-09-26 定):
 #   1) 便携版(zip): 自包含 + 单文件压缩 —— 用户机器**不用装 .NET**, 解压即用;
@@ -11,11 +11,11 @@
 # (2026-10-03 由 "Pulish" 更正为 "Publish" —— 这是拼写错误, 目录、脚本、.gitignore、.iss 一起改。)
 #
 # 用法(在仓库根目录):
-#   powershell -ExecutionPolicy Bypass -File 发布.ps1 [-Version 1.2.3]
+#   powershell -ExecutionPolicy Bypass -File 发布.ps1 [-Version 1.2.4]
 #
 # 注意: 这里的默认版本号要跟 App.AppVersion / csproj 的 <Version> / installer.iss 的
 # MyAppVersion 一起改 —— 它只决定 zip 的文件名, 不参与程序内部显示。
-param([string]$Version = "1.2.3")
+param([string]$Version = "1.2.4")
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path

@@ -8,7 +8,7 @@
 ; 用 Inno Setup 打开本文件编译即可。
 ; ============================================================
 #define MyAppName "BiliDesk"
-#define MyAppVersion "1.2.3"
+#define MyAppVersion "1.2.4"
 #define MyAppPublisher "ABing"
 #define MyAppExeName "BiliDesk.exe"
 ; 指向发布脚本生成的框架依赖目录(相对本 .iss 所在目录)
