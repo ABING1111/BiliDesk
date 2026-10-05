@@ -10,6 +10,10 @@ public static class DwmInterop
 {
     private const int DwmwaUseImmersiveDarkMode = 20;
     private const int DwmwaSystemBackdropType = 38;
+    /// <summary>DWMWA_NCRENDERING_POLICY: 控制 DWM 是否绘制非客户区(系统标题栏/按钮)</summary>
+    private const int DwmwaNcRenderingPolicy = 2;
+    private const int DwmNcrpUseWindowStyle = 0;   // DWMNCRP_USEWINDOWSTYLE(默认)
+    private const int DwmNcrpDisabled = 1;         // DWMNCRP_DISABLED
     private const int DwmwaWindowCornerPreference = 33;
 
     // DWMSBT 值: 1=None 2=Mica 3=Acrylic 4=Tabbed
@@ -19,6 +23,8 @@ public static class DwmInterop
     private const int GWL_STYLE = -16;
     /// <summary>WS_CAPTION = WS_BORDER | WS_DLGFRAME(0x00C00000)</summary>
     private const long WS_CAPTION = 0x00C00000L;
+    /// <summary>WS_SYSMENU = 0x00080000: 系统菜单。DWM 画"系统标题栏按钮"也要它</summary>
+    private const long WS_SYSMENU = 0x00080000L;
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
@@ -122,6 +128,178 @@ public static class DwmInterop
             var hwnd = GetHwnd(window);
             // DWMSBT_AUTO=0, DWMSBT_NONE=1, DWMSBT_MAINWINDOW=2(Mica)
             return SetAttr(hwnd, DwmwaSystemBackdropType, 1);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    // ------------------------------------------------------------ 全局亚克力(实验性)
+
+    /// <summary>DWMWA_SYSTEMBACKDROP_TYPE 的取值</summary>
+    private const int DwmsbtNone = 1;
+    private const int DwmsbtAcrylic = 3;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Margins
+    {
+        public int Left, Right, Top, Bottom;
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref Margins margins);
+
+    /// <summary>
+    /// <summary>
+    /// 开启/关闭"全局亚克力"背景(Win11 实验性)。
+    ///
+    /// ★★★ 客户区扩展**必须**走 <c>WindowChrome.GlassFrameThickness</c>(2026-10-05 修):
+    ///   本工程窗口全是 WindowStyle=None + WindowChrome, 而 WindowChromeWorker 会在窗口初始化时
+    ///   按 GlassFrameThickness 自己调一次 DwmExtendFrameIntoClientArea —— **晚于**我们能在
+    ///   SourceInitialized 里做的任何事, 会把我们设的 -1 边距覆盖掉。
+    ///   症状很隐蔽: 材质类型设上了(DwmGetWindowAttribute 读回确实是 3=Acrylic), 但客户区没扩展,
+    ///   WPF 把整块画成不透明灰 ⇒ 用户看到"开了亚克力却几乎没有, 只是偏灰"。
+    ///   实测(探针 .probes/bd-probe-acrylic2/3): 五种时序(SourceInitialized 先后 / Loaded 重试 /
+    ///   消息钩子重试 / 运行时改属性)里, 只有让 WindowChromeWorker 拿到 -1 才真正合成出桌面内容。
+    ///   ★ 真机验证(红底 A/B, 噪声基线 0.1%): 修复前红底只引起 1% 像素变化, 修复后 42~46%,
+    ///     运行时开关也能双向切换(backdrop 3↔1)并立即生效。
+    ///
+    /// 关闭时把 GlassFrameThickness 还原成 XAML 里的 0,0,0,1, 并把材质设回 None。
+    ///
+    /// 返回是否成功(Win10 或不支持时返回 false, 调用方据此回退到普通纯色背景)。
+    /// </summary>
+    /// <summary>
+    /// 按"亚克力是否开启 + 窗口当前状态"把 <c>WS_CAPTION</c> 同步到该有的样子。
+    ///
+    /// 规则:
+    ///   · 开了亚克力 → 必须**摘掉**(否则 DWM 会在客户区右上角再画一套系统标题栏按钮,
+    ///     与自绘 WindowButtons 重叠, 见 <see cref="SetAcrylicBackdrop"/> 的说明);
+    ///   · 没开亚克力 → 窗口处于 Normal 时**补回**(系统最小化/最大化过渡动画靠它),
+    ///     处于最大化/全屏时不动(全屏本来就该没有它, 由 ApplyFullscreenLayout 自己管)。
+    ///
+    /// ★ 为什么单独开一个方法: 退全屏时"窗口状态还原"与"补 WS_CAPTION"有先后依赖 ——
+    ///   ApplyChrome 跑在还是 Maximized 的时刻, 那时补不回来; 必须等状态还原后再调一次这个。
+    /// </summary>
+    public static void SyncCaptionForAcrylic(Window window)
+    {
+        try
+        {
+            if (Svc.Settings.AcrylicBackground)
+            {
+                // 开亚克力: 去掉 WS_SYSMENU —— DWM 便不再画它那套标题栏按钮,
+                // 而 **WS_CAPTION 保留**, 最小化/最大化/全屏的系统过渡动画也就在。
+                // (早先那版是摘 WS_CAPTION, 会把动画一起摘掉 —— 已废弃, 别再改回去。)
+                HideSystemCaptionButtons(window);
+            }
+            else
+            {
+                RestoreSystemCaptionButtons(window);
+            }
+
+            // ★ WS_CAPTION 的去留只跟"是不是全屏/最大化"有关, 与亚克力无关:
+            //   播放器全屏时摘掉它是为了盖住任务栏(见 SuppressCaptionForFullscreen),
+            //   退全屏(状态已还原成 Normal)时补回来, 动画才会恢复。
+            //   ★ 时机: 必须在 WindowState 已经回到 Normal **之后**调这个方法 ——
+            //     ApplyChrome 跑在"还是 Maximized"的时刻, 那时补不回来。
+            if (window.WindowState == WindowState.Normal) RestoreCaption(window);
+        }
+        catch
+        {
+            // 同步失败不致命: 顶多是少个过渡动画, 或(开亚克力时)多一套系统按钮
+        }
+    }
+
+    /// <summary>
+    /// 去掉 <c>WS_SYSMENU</c> —— 让 DWM 不画系统标题栏按钮。
+    ///
+    /// ★ 为什么不摘 <c>WS_CAPTION</c>(那是上一版的做法): <c>WS_CAPTION</c> 同时是
+    ///   **"DWM 播窗口过渡动画"的依据** —— 摘了它, 最小化/最大化/全屏的动画会一起消失
+    ///   (2026-10-05 用户报"全屏过渡动画消失"就是这个原因)。
+    ///   而系统按钮那套图形还额外要求 <c>WS_SYSMENU</c>(窗口菜单), 去掉它既能消掉重复按钮,
+    ///   又不动动画所依赖的样式位。
+    /// </summary>
+    private static bool HideSystemCaptionButtons(Window window)
+    {
+        try
+        {
+            var hwnd = GetHwnd(window);
+            if (hwnd == IntPtr.Zero) return false;
+            var style = GetWindowLongPtr(hwnd, GWL_STYLE);
+            if ((style & WS_SYSMENU) == 0) return true;
+            SetWindowLongPtr(hwnd, GWL_STYLE, style & ~WS_SYSMENU);
+            SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                SwpNomove | SwpNosize | SwpNozorder | SwpNoactivate | SwpFramechanged);
+            return (GetWindowLongPtr(hwnd, GWL_STYLE) & WS_SYSMENU) == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>把 <c>WS_SYSMENU</c> 补回来(关掉亚克力时)</summary>
+    private static bool RestoreSystemCaptionButtons(Window window)
+    {
+        try
+        {
+            var hwnd = GetHwnd(window);
+            if (hwnd == IntPtr.Zero) return false;
+            var style = GetWindowLongPtr(hwnd, GWL_STYLE);
+            if ((style & WS_SYSMENU) == WS_SYSMENU) return true;
+            SetWindowLongPtr(hwnd, GWL_STYLE, style | WS_SYSMENU);
+            SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                SwpNomove | SwpNosize | SwpNozorder | SwpNoactivate | SwpFramechanged);
+            return (GetWindowLongPtr(hwnd, GWL_STYLE) & WS_SYSMENU) == WS_SYSMENU;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+
+    public static bool SetAcrylicBackdrop(Window window, bool on)
+    {
+        try
+        {
+            if (!IsWindows11) return false;
+            var hwnd = GetHwnd(window);
+            if (hwnd == IntPtr.Zero) return false;
+
+            // ★★★ 关键: 客户区扩展**必须**走 WindowChrome.GlassFrameThickness,
+            //   不能只自己调 DwmExtendFrameIntoClientArea —— 实测(探针 bd-probe-acrylic2):
+            //   本工程窗口是 WindowStyle=None + WindowChrome, WindowChromeWorker 会**在**
+            //   我们的 SourceInitialized 之后**按 GlassFrameThickness 自己再调一次那个 API,
+            //   把我们设的 -1 边距覆盖掉。结果: 材质类型设上了(读回确实是 3), 但客户区没扩展,
+            //   WPF 把整块画成不透明灰 —— 用户看到的就是"开了亚克力却几乎没有, 只是偏灰"。
+            //   实测五种时序(SourceInitialized 先后 / Loaded 重试 / 消息钩子重试)全是灰,
+            //   只有 GlassFrameThickness = -1 才真正合成出桌面内容(偏红 251,159,159)。
+            var chrome = System.Windows.Shell.WindowChrome.GetWindowChrome(window);
+            if (chrome != null)
+            {
+                var glass = on ? new Thickness(-1) : new Thickness(0, 0, 0, 1);
+                if (chrome.GlassFrameThickness != glass) chrome.GlassFrameThickness = glass;
+            }
+            else
+            {
+                // 兜底: 窗口没挂 WindowChrome 时, 自己调一次同样有效
+                var margins = on
+                    ? new Margins { Left = -1, Right = -1, Top = -1, Bottom = -1 }
+                    : new Margins { Left = 0, Right = 0, Top = 0, Bottom = 0 };
+                DwmExtendFrameIntoClientArea(hwnd, ref margins);
+            }
+
+
+            // ★★★ 处理"右上角按钮重复"(2026-10-05):
+            //   GlassFrameThickness=-1 把整个客户区纳入 DWM 合成后, DWM 会**自己也在右上角
+            //   画一套系统标题栏按钮**, 与自绘 WindowButtons 叠在一起。
+            //   实测(真机截图, 右上角 300x60 暗像素占比): 关闭亚克力 0.49%(仅自绘字形),
+            //   开亚克力不处理 0.91%(多出一套系统按钮)。
+            //   ★ 做法: 去掉 **WS_SYSMENU**(见 SyncCaptionForAcrylic) —— **不要**动 WS_CAPTION,
+            //     那是 DWM 播窗口过渡动画的依据, 摘了会让最小化/最大化/全屏都没动画。
+            SyncCaptionForAcrylic(window);
+            return SetAttr(hwnd, DwmwaSystemBackdropType, on ? DwmsbtAcrylic : DwmsbtNone);
         }
         catch
         {

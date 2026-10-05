@@ -1017,6 +1017,12 @@ public class AppSettings
 {
     public AppTheme ThemeMode { get; set; } = AppTheme.System;
 
+    /// <summary>
+    /// 全局亚克力背景(实验性, 默认关)。开启后窗口改用 Win11 的 Acrylic 系统材质,
+    /// 详见 Services/SettingsStore.cs 的同名属性与 DwmInterop.SetAcrylicBackdrop。
+    /// </summary>
+    public bool AcrylicBackground { get; set; }
+
     /// <summary>弹幕开关(全局, 播放器不再提供弹幕按钮)</summary>
     public bool DanmakuEnabled { get; set; } = true;
 
@@ -1037,6 +1043,22 @@ public class AppSettings
     /// 以 "re:" 开头的行按正则处理(用于 "只要包含日期就屏蔽" 这类模式匹配)。
     /// </summary>
     public string DanmakuBlockKeywords { get; set; } = "";
+
+    /// <summary>
+    /// 弹幕类型过滤(只显示勾选的类型)。四个独立开关而不是位标志: 界面上就是四个胶囊按钮,
+    /// 位运算每次都要拆合容易写错; 存 JSON 时 bool 可读、老配置缺字段自动拿默认值。
+    /// 默认全部 true —— 过滤是减法功能, 默认不该动用户能看到的弹幕。
+    /// </summary>
+    public bool DanmakuFilterScroll { get; set; } = true;
+
+    /// <summary>固定弹幕(顶部/底部)</summary>
+    public bool DanmakuFilterFixed { get; set; } = true;
+
+    /// <summary>彩色弹幕(按颜色过滤; 与 DanmakuColorful 的"是否上色"是两件事)</summary>
+    public bool DanmakuFilterColorful { get; set; } = true;
+
+    /// <summary>高级弹幕(mode 7 高级 / 8 代码 / 9 BAS)</summary>
+    public bool DanmakuFilterAdvanced { get; set; } = true;
 
     /// <summary>
     /// 默认画质(qn)。用户在设置页**开始播放前**预先选定的清晰度档位,

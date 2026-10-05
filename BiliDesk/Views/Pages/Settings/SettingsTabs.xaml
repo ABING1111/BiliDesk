@@ -108,6 +108,35 @@
                             </StackPanel>
                         </Grid>
                     </StackPanel>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 全局亚克力(2026-10-05 新增, 实验性): 默认关, 需要用户手动打开。
+                         ★ 放在"外观"卡片里(用户要求): 它改的就是整个应用的背景观感, 与主题/主题色同属一类。
+                         ★ 文案必须点明"实验性": 不同机器/显卡的合成效果有差异, 且多一层 GPU 合成开销,
+                           不能让用户以为是稳定功能然后回来报"偶尔发灰"。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="亚克力背景" Style="{StaticResource SettingsRowTitleStyle}" />
+                                <!-- "实验性"标记: 与标题同一行的浅色小胶囊, 不抢标题的视觉重心 -->
+                                <Border Background="{DynamicResource AccentSoftFillStrongBrush}"
+                                        CornerRadius="6" Padding="6,1" Margin="8,0,0,0"
+                                        VerticalAlignment="Center">
+                                    <TextBlock Text="实验性" FontSize="10.5"
+                                               Foreground="{DynamicResource AccentTextStrongBrush}" />
+                                </Border>
+                            </StackPanel>
+                            <TextBlock Text="{Binding AcrylicHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding AcrylicBackground, Mode=TwoWay}" />
+                    </Grid>
                 </StackPanel>
             </Border>
 
@@ -318,6 +347,31 @@
                                 Value="{Binding DanmakuAreaPercent, Mode=TwoWay}" />
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
+                    <!-- 按类型过滤(2026-10-05 新增): 四个并列可叠加的胶囊, 关掉哪一类就把它从画面去掉。
+                         ★ 为什么不做成"每组单选": 这四个是**并列的过滤维度**而不是互斥的类别 ——
+                           一条弹幕可能同时是"滚动 + 彩色", 用户要能同时关掉/保留任意组合。
+                         ★ 四个开关全开 = 不过滤(默认), 播放器那边有对应的短路, 不白跑一遍过滤。 -->
+                    <StackPanel Style="{StaticResource SettingsRowStyle}">
+                        <TextBlock Text="按类型过滤" Style="{StaticResource SettingsRowTitleStyle}" />
+                        <TextBlock Text="{Binding DanmakuTypeFilterHint}"
+                                   Style="{StaticResource SettingsRowDescStyle}" />
+                        <WrapPanel Margin="0,12,0,0">
+                            <ToggleButton Style="{StaticResource SettingsFilterChipStyle}" Content="滚动"
+                                          IsChecked="{Binding DanmakuFilterScroll, Mode=TwoWay}" />
+                            <ToggleButton Style="{StaticResource SettingsFilterChipStyle}" Content="固定"
+                                          Margin="8,0,0,0"
+                                          IsChecked="{Binding DanmakuFilterFixed, Mode=TwoWay}" />
+                            <ToggleButton Style="{StaticResource SettingsFilterChipStyle}" Content="彩色"
+                                          Margin="8,0,0,0"
+                                          IsChecked="{Binding DanmakuFilterColorful, Mode=TwoWay}" />
+                            <ToggleButton Style="{StaticResource SettingsFilterChipStyle}" Content="高级"
+                                          Margin="8,0,0,0"
+                                          ToolTip="高级弹幕是会用图形/动画自己绘制的一类(mode 7/8/9), 与普通文字弹幕不同源"
+                                          IsChecked="{Binding DanmakuFilterAdvanced, Mode=TwoWay}" />
+                        </WrapPanel>
+                    </StackPanel>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -331,21 +385,6 @@
                         <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding DanmakuSmartFilter, Mode=TwoWay}" />
-                    </Grid>
-                    <Border Style="{StaticResource SettingsRowDivider}" />
-                    <Grid Style="{StaticResource SettingsRowStyle}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                            <TextBlock Text="彩色弹幕" Style="{StaticResource SettingsRowTitleStyle}" />
-                            <TextBlock Text="按发送者选的颜色显示弹幕; 关闭后全部显示为白色"
-                                       Style="{StaticResource SettingsRowDescStyle}" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
-                                  VerticalAlignment="Center"
-                                  IsChecked="{Binding DanmakuColorful, Mode=TwoWay}" />
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
                     <StackPanel Style="{StaticResource SettingsRowStyle}">

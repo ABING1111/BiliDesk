@@ -93,6 +93,8 @@ public class ThemeService
 
         Svc.Settings.Save();
         ApplyAccent();
+        // 主题色变了也要重算: 亚克力开启时那几层基底的透明度是按当前深浅主题给的
+        ApplyAcrylicSurfaces();
 
         if (!settle) return;
         Settle();
@@ -230,6 +232,15 @@ public class ThemeService
         {
             // 订阅失败不影响功能, 应用内仍可手动切换
         }
+
+        // 亚克力开关切换: 基底那几层的透明度要跟着换(见 ApplyAcrylicSurfaces),
+        // 然后强制刷新可视树 —— 不刷新的话已缓存页面仍持有旧的半透明底,
+        // 表现是"开了亚克力, 但切回首页还是实心的"。
+        Svc.Settings.AcrylicChanged += () => RunOnUi(() =>
+        {
+            ApplyAcrylicSurfaces();
+            Settle();
+        });
     }
 
     private static void RunOnUi(Action action)
@@ -360,6 +371,7 @@ public class ThemeService
         _activeColorsDict = colors;
 
         ApplyAccent();
+        ApplyAcrylicSurfaces();
 
         // 通知所有窗口重建 chrome(标题栏深浅色 / 窗口底色)
         ThemeChanged?.Invoke();
@@ -422,6 +434,90 @@ public class ThemeService
             for (var i = 0; i < count; i++)
                 Invalidate(VisualTreeHelper.GetChild(node, i));
         }
+    }
+
+    /// <summary>
+    /// 亚克力开启时, 把"页面基底"那几层刷成**更透明** —— 否则它们会把 DWM 合成出来的
+    /// 亚克力整个盖住, 用户看到的就是"开了跟没开一样, 只是偏灰"(2026-10-05 用户反馈)。
+    ///
+    /// ★ 根因: 色板里的 AppBackgroundBrush 是 <c>#B3F3F3F3</c> = **70% 不透明**, 它铺在
+    ///   窗口最底层之上, 亚克力只剩 30% 能透出来 —— 淡到几乎看不见, 且因为"白底掺灰"而发灰。
+    ///   侧边栏 #8CF3F3F3(55%) 同理。所以开亚克力时必须把这两个键**覆盖**成低透明度版本。
+    ///
+    /// ★ 为什么覆盖成 Application.Resources 的直接项而不是改色板文件: 与强调色那套完全一致 ——
+    ///   色板文件是"浅色/深色"两套静态资源, 而透明度要跟着"亚克力开关"变; 直接项优先级高于
+    ///   字典项, 所以这里写入的值能压过色板, 关掉时移除即可自动回落到色板原值。
+    ///
+    /// ★ 覆盖的键必须与窗口/页面实际用的键完全一致(AppBackgroundBrush / SideBarBackgroundBrush),
+    ///   少覆盖一层就会有一块"没透出亚克力"的区域(表现是某一片比别处更实)。
+    /// </summary>
+    /// <summary>
+    /// 亚克力开启时, 把"不透明实色块"整体压暗一档, 让它们不再在透出壁纸的亮底上显白。
+    ///
+    /// ★★★ 为什么必须这么做(2026-10-05 用户连续两次反馈"还是白"的**真根因**):
+    ///   亚克力会让页面底**透出桌面壁纸**, 实测合成后约 226(浅色壁纸时) —— 而卡片/浮层/输入框
+    ///   是**不透明实色**(243 附近)。于是亮度差拉到 17 阶, 那一块块实色在浅色壁纸上就是"白块",
+    ///   且因为**不透明**, 它完全不跟着亚克力呼吸, 视觉上格外突兀。
+    ///   (前两轮只在色板里把 255 微调到 248, 只有 3~7 阶, 肉眼根本看不出 —— 所以用户说"还是白"。)
+    ///
+    /// ★ 为什么不直接把色板里的值压暗: 那会破坏**纯色模式**的层次 —— 纯色模式页面底是 236,
+    ///   卡片必须比它亮才像"浮起来"; 压到 226 就比页面底还暗, 层次反了。
+    ///   所以两套模式各给一套值: 纯色用色板原值, 亚克力用这里覆盖的暗一档的值。
+    ///
+    /// ★ 覆盖的是 Application.Resources 的直接项(优先级高于色板字典项), 关闭时移除即自动回落。
+    /// </summary>
+    private void ApplyAcrylicSurfaces()
+    {
+        var app = Application.Current;
+        if (app == null) return;
+
+        // 亚克力开启时要覆盖的键: 页面基底 + 所有"不透明实色块"
+        // (卡片/浮层/输入框/提示条/工具列/Toast) —— 漏一个就会有一块"没跟着压暗的白"。
+        var keys = new[]
+        {
+            "AppBackgroundBrush", "SideBarBackgroundBrush",
+            "CardBackgroundBrush", "InfoBarBackgroundBrush",
+            "InputBackgroundBrush", "FlyoutBackgroundBrush",
+            "ToastBackgroundBrush", "FloatingFillBrush",
+        };
+
+        if (!Svc.Settings.AcrylicBackground)
+        {
+            // 关掉: 全部移除覆盖项, 自动回落到色板里的原值(不需要记旧值)
+            foreach (var k in keys) app.Resources.Remove(k);
+            return;
+        }
+
+        // 开: 页面底压到很低的透明度(让亚克力质感透出来);
+        // 实色块压暗一档 —— 深色主题压得更狠(深色底本来就暗, 不压会和页面底糊在一起)。
+        app.Resources["AppBackgroundBrush"] = IsDark
+            ? Frozen(Color.FromArgb(0x4D, 0x20, 0x20, 0x20))
+            : Frozen(Color.FromArgb(0x4D, 0xEC, 0xED, 0xEF));
+        app.Resources["SideBarBackgroundBrush"] = IsDark
+            ? Frozen(Color.FromArgb(0x33, 0x20, 0x20, 0x20))
+            : Frozen(Color.FromArgb(0x33, 0xEC, 0xED, 0xEF));
+
+        // 卡片/提示条: 比纯色模式的 #F0F1F3 再压 6 阶(→ 约 234)
+        app.Resources["CardBackgroundBrush"] = Frozen(IsDark
+            ? Color.FromRgb(0x26, 0x26, 0x26)
+            : Color.FromRgb(0xE9, 0xEA, 0xEC));
+        app.Resources["InfoBarBackgroundBrush"] = Frozen(IsDark
+            ? Color.FromRgb(0x26, 0x26, 0x26)
+            : Color.FromRgb(0xE9, 0xEA, 0xEC));
+
+        // 浮层/输入框/工具列/Toast: 比纯色模式的 #F3F4F6 再压 6 阶(→ 约 237)
+        app.Resources["InputBackgroundBrush"] = Frozen(IsDark
+            ? Color.FromRgb(0x2A, 0x2A, 0x2A)
+            : Color.FromRgb(0xEC, 0xED, 0xEF));
+        app.Resources["FlyoutBackgroundBrush"] = Frozen(IsDark
+            ? Color.FromRgb(0x2A, 0x2A, 0x2A)
+            : Color.FromRgb(0xEC, 0xED, 0xEF));
+        app.Resources["ToastBackgroundBrush"] = Frozen(IsDark
+            ? Color.FromRgb(0x2A, 0x2A, 0x2A)
+            : Color.FromRgb(0xEC, 0xED, 0xEF));
+        app.Resources["FloatingFillBrush"] = Frozen(IsDark
+            ? Color.FromRgb(0x2A, 0x2A, 0x2A)
+            : Color.FromRgb(0xEC, 0xED, 0xEF));
     }
 
     /// <summary>注入整套 Accent 笔刷(用户主题色 / 系统强调色, 默认 B 站粉)</summary>

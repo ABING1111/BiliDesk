@@ -24,6 +24,17 @@ public class SettingsStore
 
     public AppTheme ThemeMode { get; set; } = AppTheme.System;
 
+    /// <summary>
+    /// 全局亚克力背景(实验性, 默认**关**)。
+    ///
+    /// 开启后所有窗口改用 Win11 的 Acrylic 系统材质做背景(见 DwmInterop.SetAcrylicBackdrop)。
+    /// 默认关的原因: ① 它是实验性观感, 不同机器/显卡上合成效果有差异;
+    /// ② 亚克力要实时采样背后的桌面内容, 比纯色背景多一层 GPU 合成开销;
+    /// ③ 关掉时一切照旧(纯色背景), 不影响任何既有功能。
+    /// 老配置没有这个字段 → 属性初始化值(false)自动生效。
+    /// </summary>
+    public bool AcrylicBackground { get; set; }
+
     /// <summary>弹幕开关(全局)</summary>
     public bool DanmakuEnabled { get; set; } = true;
 
@@ -38,6 +49,26 @@ public class SettingsStore
 
     /// <summary>弹幕关键词屏蔽(换行/逗号分隔, "re:" 前缀表示正则)</summary>
     public string DanmakuBlockKeywords { get; set; } = "";
+
+    /// <summary>
+    /// 弹幕类型过滤: 只显示勾选的类型(滚动/固定/彩色/高级)。
+    ///
+    /// ★ 为什么用"四个 bool"而不是一个位标志/枚举串:
+    ///   · 界面上就是四个独立开关(截图里的胶囊按钮), 位运算每次都要拆合, 容易写错;
+    ///   · 存 JSON 时 bool 可读、老配置缺字段自动拿默认值, 不需要版本兼容代码;
+    ///   · 与 DanmakuColorful 那种"单项开关"语义一致 —— 新增一类只要加一个 bool。
+    /// ★ 默认全部显示(true): 过滤是"减法"功能, 默认不该动用户能看到的弹幕。
+    /// </summary>
+    public bool DanmakuFilterScroll { get; set; } = true;
+
+    /// <summary>固定弹幕(顶部/底部)</summary>
+    public bool DanmakuFilterFixed { get; set; } = true;
+
+    /// <summary>彩色弹幕(与"彩色弹幕"显示开关不同: 这里是从过滤角度决定"要不要放行")</summary>
+    public bool DanmakuFilterColorful { get; set; } = true;
+
+    /// <summary>高级弹幕(mode 7 高级 / 8 代码 / 9 BAS)</summary>
+    public bool DanmakuFilterAdvanced { get; set; } = true;
 
     /// <summary>
     /// 默认画质(qn)。用户在设置页**开始播放前**预先选定的清晰度,
@@ -120,6 +151,9 @@ public class SettingsStore
     /// <summary>设置变更通知(播放器等运行中的界面据此同步)</summary>
     public event Action? DanmakuSettingsChanged;
 
+    /// <summary>全局亚克力开关变化。所有已打开的窗口据此重设背景(见 FluentWindow.ApplyChrome)</summary>
+    public event Action? AcrylicChanged;
+
     /// <summary>
     /// 推荐算法来源变更。首页据此清掉旧列表并按新来源重新拉一次 ——
     /// 不通知的话用户切完算法还得自己去点刷新才生效, 看起来像"改了没用"。
@@ -142,12 +176,19 @@ public class SettingsStore
                 if (s != null)
                 {
                     ThemeMode = s.ThemeMode;
+                    // 老配置没有这个字段 → 属性初始化值(false)自动生效, 不需要版本兼容。
+                    AcrylicBackground = s.AcrylicBackground;
                     DanmakuEnabled = s.DanmakuEnabled;
                     DanmakuAreaPercent = Math.Clamp(s.DanmakuAreaPercent, 25, 100);
                     DanmakuSmartFilter = s.DanmakuSmartFilter;
                     // 老配置同样靠"属性初始化值"拿到默认 true
                     DanmakuColorful = s.DanmakuColorful;
                     DanmakuBlockKeywords = s.DanmakuBlockKeywords ?? "";
+                    // 弹幕类型过滤: 老配置没有这四个字段 → 属性初始化值(true)自动生效, 不需要版本兼容。
+                    DanmakuFilterScroll = s.DanmakuFilterScroll;
+                    DanmakuFilterFixed = s.DanmakuFilterFixed;
+                    DanmakuFilterColorful = s.DanmakuFilterColorful;
+                    DanmakuFilterAdvanced = s.DanmakuFilterAdvanced;
                     // ★ 默认画质要 Normalize: 手改过的配置可能有 0 / 已下线的档位 / 串到别处
                     //   的值, 直接流进取流请求会变成一个谁也不认识的 qn(表现为画质莫名其妙)。
                     PreferredQualityQn = QualityPreference.Normalize(s.PreferredQualityQn);
@@ -248,11 +289,16 @@ public class SettingsStore
             return JsonSerializer.Serialize(new AppSettings
             {
                 ThemeMode = ThemeMode,
+                AcrylicBackground = AcrylicBackground,
                 DanmakuEnabled = DanmakuEnabled,
                 DanmakuAreaPercent = DanmakuAreaPercent,
                 DanmakuSmartFilter = DanmakuSmartFilter,
                 DanmakuColorful = DanmakuColorful,
                 DanmakuBlockKeywords = DanmakuBlockKeywords,
+                DanmakuFilterScroll = DanmakuFilterScroll,
+                DanmakuFilterFixed = DanmakuFilterFixed,
+                DanmakuFilterColorful = DanmakuFilterColorful,
+                DanmakuFilterAdvanced = DanmakuFilterAdvanced,
                 PreferredQualityQn = PreferredQualityQn,
                 RecommendSource = RecommendSource,
                 AccentColor = AccentColor,
@@ -415,6 +461,20 @@ public class SettingsStore
     }
 
     /// <summary>
+    /// 开关"全局亚克力"背景并落盘, 广播给所有已打开的窗口。
+    /// 与主题色那类"纯资源替换"不同: 它要动窗口的原生合成属性(DWM), 必须让每个窗口
+    /// 自己重设一次, 所以走事件而不是只改资源字典。
+    /// </summary>
+    public void SetAcrylic(bool on)
+    {
+        if (AcrylicBackground == on) return;
+        AcrylicBackground = on;
+        Save();
+        AcrylicChanged?.Invoke();
+    }
+
+
+    /// <summary>
     /// 改 CDN 线路设置并落盘。
     /// 三个值放在同一个方法里: 它们总是被同一张设置卡片一起改,
     /// 分开写迟早出现"改了模式却把手动选的那家重置掉"。
@@ -453,19 +513,33 @@ public class SettingsStore
     /// (表现就是"改 A 顺手把 B 重置回默认")。
     /// </summary>
     public void UpdateDanmakuSettings(bool enabled, int areaPercent, bool smartFilter,
-        string? blockKeywords = null, bool? colorful = null)
+        string? blockKeywords = null, bool? colorful = null,
+        bool? filterScroll = null, bool? filterFixed = null,
+        bool? filterColorful = null, bool? filterAdvanced = null)
     {
         var nextKeywords = blockKeywords ?? DanmakuBlockKeywords;
         var nextColorful = colorful ?? DanmakuColorful;
+        var nextFScroll = filterScroll ?? DanmakuFilterScroll;
+        var nextFFixed = filterFixed ?? DanmakuFilterFixed;
+        var nextFColorful = filterColorful ?? DanmakuFilterColorful;
+        var nextFAdvanced = filterAdvanced ?? DanmakuFilterAdvanced;
         var changed = enabled != DanmakuEnabled
             || areaPercent != DanmakuAreaPercent
             || smartFilter != DanmakuSmartFilter
             || nextColorful != DanmakuColorful
+            || nextFScroll != DanmakuFilterScroll
+            || nextFFixed != DanmakuFilterFixed
+            || nextFColorful != DanmakuFilterColorful
+            || nextFAdvanced != DanmakuFilterAdvanced
             || !string.Equals(nextKeywords, DanmakuBlockKeywords, StringComparison.Ordinal);
         DanmakuEnabled = enabled;
         DanmakuAreaPercent = Math.Clamp(areaPercent, 25, 100);
         DanmakuSmartFilter = smartFilter;
         DanmakuColorful = nextColorful;
+        DanmakuFilterScroll = nextFScroll;
+        DanmakuFilterFixed = nextFFixed;
+        DanmakuFilterColorful = nextFColorful;
+        DanmakuFilterAdvanced = nextFAdvanced;
         DanmakuBlockKeywords = nextKeywords;
         Save();
         if (changed) DanmakuSettingsChanged?.Invoke();

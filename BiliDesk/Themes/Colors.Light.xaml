@@ -40,11 +40,13 @@
          ⚠ 为什么必须另立一组: 上面那三个是带透明度的(#0A000000 = 4% 黑), 只适合"浮在纯色
          页面背景上"; 而右下角工具列是浮在**卡片封面**上的, 半透明就等于露出底下的图片,
          图标会糊进图案里看不清(用户截图反馈)。
-         ★ 常态是**纯白**(用户 2026-09-30 指定) —— 它比页面底色 #F3F3F3 更亮, 压在封面上就是
-         一排小白块, 很清楚地"浮"着; 悬停/按下才往下压一档给反馈。 -->
-    <SolidColorBrush x:Key="FloatingFillBrush" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="FloatingFillHoverBrush" Color="#F0F0F0" />
-    <SolidColorBrush x:Key="FloatingFillPressedBrush" Color="#E2E2E2" />
+         ★ 常态色 2026-10-05 由纯白改为 #E8EAED: 用户反馈"右下角工具列按钮仍偏白"。
+            它们压在**彩色封面**上, 纯白在彩色背景旁边会被读成刺眼的"白块"; 压到 #E8EAED
+            后既不再扎眼, 又仍然比页面底(#F3F3F3)更"实", 图标可读性不受影响。
+            ★ 不能改成半透明: 半透明会露出封面图案, 图标会糊掉(见上面那条)。 -->
+    <SolidColorBrush x:Key="FloatingFillBrush" Color="#E8EAED" />
+    <SolidColorBrush x:Key="FloatingFillHoverBrush" Color="#DDE0E4" />
+    <SolidColorBrush x:Key="FloatingFillPressedBrush" Color="#CFD3D8" />
 
     <!-- 输入框 -->
     <SolidColorBrush x:Key="InputBackgroundBrush" Color="#B3FFFFFF" />

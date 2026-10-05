@@ -5,6 +5,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
+using BiliDesk.Services;
 
 namespace BiliDesk.Views;
 
@@ -32,8 +33,8 @@ public class FluentWindow : Window
         try
         {
             DwmInterop.SetRoundCorners(this);
-            // 不启用 Mica: 半透明 AppBackgroundBrush + Mica 透色 = 偏暗且不一致
-            DwmInterop.DisableMica(this);
+            // 云母/亚克力的最终状态由 ApplyChrome 统一决定(两者都走 DWMWA_SYSTEMBACKDROP_TYPE,
+            // 必须一个入口说了算, 否则"开亚克力又被 DisableMica 关掉"这类互相打架必现)
             // ★★★ 把 WS_CAPTION 补回来, 否则 DWM **不会播**最小化/最大化/还原的窗口过渡动画。
             //   本工程所有窗口都是 WindowStyle=None 的自绘标题栏, 这个样式位被摘掉了 ——
             //   这正是"最小化没动画、全屏硬切"的真根因(与本类那层已删的自绘动画无关)。
@@ -64,11 +65,15 @@ public class FluentWindow : Window
         {
             _hooked = true;
             ThemeService.Instance.ThemeChanged += OnThemeChanged;
+            Svc.Settings.AcrylicChanged += OnAcrylicChanged;
         }
         ApplyChrome();
     }
 
     private void OnThemeChanged() => ApplyChrome();
+
+    /// <summary>全局亚克力开关变化(来自设置页): 所有已开窗口都要立刻跟着换背景</summary>
+    private void OnAcrylicChanged() => ApplyChrome();
 
     // protected: 播放器退出全屏时要主动把窗口底色从"全屏黑"还原成主题色
     protected void ApplyChrome()
@@ -77,10 +82,27 @@ public class FluentWindow : Window
         {
             var dark = ThemeService.Instance.IsDark;
             DwmInterop.SetDarkTitleBar(this, dark);
-            // 统一纯色背景, 深浅主题用各自的 WindowSolid* 资源
-            Background = dark
-                ? (Brush)FindResource("WindowSolidDarkBrush")
-                : (Brush)FindResource("WindowSolidLightBrush");
+
+            // ★ 亚克力(实验性)与"禁用云母"共用 DWMWA_SYSTEMBACKDROP_TYPE, 所以必须在这里**一次决定**:
+            //   开亚克力时不去禁云母(会被覆盖), 关亚克力时按老规矩禁掉 Mica。
+            //   两处各写一遍必然出现"开了亚克力又被下一句关掉"。
+            var acrylic = Svc.Settings.AcrylicBackground;
+            if (acrylic)
+            {
+                // 亚克力生效的前提是窗口背景能透出合成层: 用**全透明**的窗口底色,
+                // 页面那层半透明 AppBackgroundBrush 再叠上去(见 Colors.*.xaml 的说明)。
+                Background = Brushes.Transparent;
+                DwmInterop.SetAcrylicBackdrop(this, true);
+            }
+            else
+            {
+                DwmInterop.SetAcrylicBackdrop(this, false);
+                DwmInterop.DisableMica(this);
+                // 统一纯色背景, 深浅主题用各自的 WindowSolid* 资源
+                Background = dark
+                    ? (Brush)FindResource("WindowSolidDarkBrush")
+                    : (Brush)FindResource("WindowSolidLightBrush");
+            }
         }
         catch
         {
@@ -91,6 +113,7 @@ public class FluentWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         if (_hooked) ThemeService.Instance.ThemeChanged -= OnThemeChanged;
+        Svc.Settings.AcrylicChanged -= OnAcrylicChanged;
         base.OnClosed(e);
     }
 

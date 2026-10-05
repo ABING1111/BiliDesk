@@ -1284,6 +1284,93 @@
            与胶囊底同色系但更深, 选中态读得清, 也不会被底色盖住。
          ★ 选中动画去掉 PillTabStyle 那个 0.9→1 缩放: 那是"按下去"的手感,
            Tab 切换要的是平稳过渡, 只淡入胶囊即可。 -->
+    <!-- 多选胶囊(设置页"按类型过滤"这类"可以同时选中几个"的开关)。
+         ★ 为什么不用 RadioButton/PillTabStyle: 那套是单选语义, 组内互斥;
+           这里四个类型是**并列可叠加**的过滤维度, 用 ToggleButton 表达才正确。
+         ★ 选中观感刻意与 SettingsTabStyle 对齐(淡强调底 + 深一档强调文字),
+           用户刚在设置页顶部看过那套 Tab, 这里的选中态跟它一致才不像两套东西。
+         ★ ContentPresenter.Resources 里必须挡一下全局隐式 TextBlock 样式: 它带
+           Foreground setter, 优先级高于继承, 会吃掉这里的 Foreground(项目里反复踩的坑)。 -->
+    <Style x:Key="SettingsFilterChipStyle" TargetType="ToggleButton">
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Padding" Value="16,7" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Grid Background="Transparent">
+                        <Border x:Name="Hover" CornerRadius="14" Opacity="0"
+                                Background="{DynamicResource ControlFillHoverBrush}" />
+                        <Border x:Name="Pill" CornerRadius="14" Opacity="0"
+                                Background="{DynamicResource AccentSoftFillStrongBrush}" />
+                        <Border CornerRadius="14" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                TextElement.Foreground="{TemplateBinding Foreground}">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                        <Setter Property="Foreground"
+                                                Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}" />
+                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Hover"
+                                                         Storyboard.TargetProperty="Opacity"
+                                                         To="1" Duration="0:0:0.14" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Hover"
+                                                         Storyboard.TargetProperty="Opacity"
+                                                         To="0" Duration="0:0:0.14" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Pill"
+                                                         Storyboard.TargetProperty="Opacity"
+                                                         To="1" Duration="0:0:0.16" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Pill"
+                                                         Storyboard.TargetProperty="Opacity"
+                                                         To="0" Duration="0:0:0.16" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <Style x:Key="SettingsTabStyle" TargetType="RadioButton" BasedOn="{StaticResource PillTabStyle}">
         <Setter Property="Padding" Value="20,8" />
         <Setter Property="Template">

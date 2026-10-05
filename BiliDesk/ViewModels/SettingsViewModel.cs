@@ -254,6 +254,28 @@ public class SettingsViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 全局亚克力背景(实验性, 默认关)。
+    /// 它不是"换个颜色"那种纯资源替换 —— 要动窗口的原生合成属性, 所以走存储层的
+    /// SetAcrylic(落盘 + 广播), 由每个已打开窗口自己重设背景。
+    /// </summary>
+    public bool AcrylicBackground
+    {
+        get => Svc.Settings.AcrylicBackground;
+        set
+        {
+            if (value == Svc.Settings.AcrylicBackground) return;
+            Svc.Settings.SetAcrylic(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(AcrylicHint));
+        }
+    }
+
+    /// <summary>亚克力开关的说明文案(跟随开关状态给出不同提示, 用户一眼知道当前处于哪一态)</summary>
+    public string AcrylicHint => Svc.Settings.AcrylicBackground
+        ? "已开启: 窗口背景使用系统亚克力材质, 会实时透出桌面内容"
+        : "实验性功能: 让窗口背景变成半透明亚克力材质(需要 Windows 11)";
+
     // ----------------- 推荐算法(已固定为网页版, 不再提供选择) -----------------
     //
     // ★ 2026-10-03 删除了"算法选择"(原来可在 App 官方 / 浏览器网页版之间切换)与整套
@@ -645,21 +667,6 @@ public class SettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>彩色弹幕。关掉之后所有弹幕统一白色(有些视频满屏五颜六色反而看不清内容)</summary>
-    public bool DanmakuColorful
-    {
-        get => Svc.Settings.DanmakuColorful;
-        set
-        {
-            Svc.Settings.UpdateDanmakuSettings(
-                Svc.Settings.DanmakuEnabled,
-                Svc.Settings.DanmakuAreaPercent,
-                Svc.Settings.DanmakuSmartFilter,
-                colorful: value);
-            OnPropertyChanged();
-        }
-    }
-
     /// <summary>
     /// 弹幕关键词屏蔽(用户手写黑名单)。
     /// 用 TextChanged 慢一点也关系不大: 每敲一个字就重算规则并让播放器重新过滤,
@@ -690,6 +697,81 @@ public class SettingsViewModel : ObservableObject
             return n == 0 ? "尚未设置屏蔽规则" : $"已启用 {n} 条屏蔽规则";
         }
     }
+
+    // ---- 弹幕类型过滤(滚动/固定/彩色/高级) ----
+    // 四个属性写法完全一致, 只是把"自己这一项"作为可选覆盖传给存储层 ——
+    // UpdateDanmakuSettings 的其余参数传 null 表示"不改那一项",
+    // 所以这里不需要把别的开关再抄一遍(抄了反而会在加字段时漏掉)。
+
+    /// <summary>滚动弹幕(mode 1/2/3/6)</summary>
+    public bool DanmakuFilterScroll
+    {
+        get => Svc.Settings.DanmakuFilterScroll;
+        set
+        {
+            if (value == Svc.Settings.DanmakuFilterScroll) return;
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent,
+                Svc.Settings.DanmakuSmartFilter, filterScroll: value);
+            OnPropertyChanged(nameof(DanmakuTypeFilterHint));
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>固定弹幕(顶部/底部)</summary>
+    public bool DanmakuFilterFixed
+    {
+        get => Svc.Settings.DanmakuFilterFixed;
+        set
+        {
+            if (value == Svc.Settings.DanmakuFilterFixed) return;
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent,
+                Svc.Settings.DanmakuSmartFilter, filterFixed: value);
+            OnPropertyChanged(nameof(DanmakuTypeFilterHint));
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>彩色弹幕(按颜色过滤, 与 DanmakuColorful 的"是否上色"不同)</summary>
+    public bool DanmakuFilterColorful
+    {
+        get => Svc.Settings.DanmakuFilterColorful;
+        set
+        {
+            if (value == Svc.Settings.DanmakuFilterColorful) return;
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent,
+                Svc.Settings.DanmakuSmartFilter, filterColorful: value);
+            OnPropertyChanged(nameof(DanmakuTypeFilterHint));
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>高级弹幕(mode 7/8/9)</summary>
+    public bool DanmakuFilterAdvanced
+    {
+        get => Svc.Settings.DanmakuFilterAdvanced;
+        set
+        {
+            if (value == Svc.Settings.DanmakuFilterAdvanced) return;
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent,
+                Svc.Settings.DanmakuSmartFilter, filterAdvanced: value);
+            OnPropertyChanged(nameof(DanmakuTypeFilterHint));
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
+    /// 类型过滤的说明文案(四个开关上方的提示)。
+    /// 全部打开时说"不过滤", 这样用户一眼知道当前是默认态。
+    /// </summary>
+    public string DanmakuTypeFilterHint =>
+        Svc.Settings.DanmakuFilterScroll && Svc.Settings.DanmakuFilterFixed
+        && Svc.Settings.DanmakuFilterColorful && Svc.Settings.DanmakuFilterAdvanced
+            ? "当前显示全部类型; 关掉某一类即可把它从画面里去掉"
+            : "只显示已选中的类型";
 
     public ICommand ThemeSystemCommand { get; }
     public ICommand ThemeLightCommand { get; }

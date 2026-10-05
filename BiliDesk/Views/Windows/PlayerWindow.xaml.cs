@@ -2756,22 +2756,40 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private static IEnumerable<RawDanmaku> ApplyDanmakuFilter(IEnumerable<RawDanmaku> list)
     {
-        var smart = Svc.Settings.DanmakuSmartFilter;
-        var rules = DanmakuKeywordFilter.Build(Svc.Settings.DanmakuBlockKeywords);
+        var s = Svc.Settings;
+        var smart = s.DanmakuSmartFilter;
+        var rules = DanmakuKeywordFilter.Build(s.DanmakuBlockKeywords);
 
-        // 两个开关都没开就原样返回, 省掉一次完整遍历
-        if (!smart && rules == null) return list;
-        return FilterCore(list, smart, rules);
+        // 类型过滤(滚动/固定/彩色/高级): 四项全开 = 不过滤。
+        // ★ 用"是否全开"而不是"是否有任一项关闭"来判断能不能跳过 —— 后者写反过一次,
+        //   表现是默认状态下弹幕全没了。
+        var typeFilter = !(s.DanmakuFilterScroll && s.DanmakuFilterFixed
+                           && s.DanmakuFilterColorful && s.DanmakuFilterAdvanced);
+
+        // 三件事都没开就原样返回, 省掉一次完整遍历
+        if (!smart && rules == null && !typeFilter) return list;
+        return FilterCore(list, smart, rules, typeFilter,
+            s.DanmakuFilterScroll, s.DanmakuFilterFixed,
+            s.DanmakuFilterColorful, s.DanmakuFilterAdvanced);
 
         static IEnumerable<RawDanmaku> FilterCore(
             IEnumerable<RawDanmaku> src,
             bool smart,
-            DanmakuKeywordFilter? rules)
+            DanmakuKeywordFilter? rules,
+            bool typeFilter,
+            bool allowScroll,
+            bool allowFixed,
+            bool allowColorful,
+            bool allowAdvanced)
         {
             var seen = new Dictionary<string, int>();
             foreach (var d in src)
             {
                 if (string.IsNullOrWhiteSpace(d.Text)) continue;
+
+                // 类型过滤: 用户没勾的类型直接丢弃(与智能屏蔽/关键词都解耦)
+                if (typeFilter && !IsTypeAllowed(d, allowScroll, allowFixed, allowColorful, allowAdvanced))
+                    continue;
 
                 // 关键词/正则黑名单: 命中即丢弃(与智能屏蔽解耦)
                 if (rules != null && rules.IsBlocked(d.Text)) continue;
@@ -2787,6 +2805,34 @@ public partial class PlayerWindow : FluentWindow
                 }
                 yield return d;
             }
+        }
+    }
+
+    /// <summary>
+    /// 这条弹幕是否在用户勾选的类型里。
+    ///
+    /// 类型划分(与 B 站客户端的分类口径一致):
+    ///   · 滚动 = mode 1/2/3/6(6 在解析时已被归一成 1)
+    ///   · 固定 = mode 4(底部)/5(顶部)
+    ///   · 高级 = mode 7(高级)/8(代码)/9(BAS) —— 这类会自己画图形/动画, 和普通弹幕不同源
+    ///   · 彩色 = 颜色非白(0xFFFFFF)。它与"彩色弹幕"显示开关是两件事:
+    ///     那个决定"彩色要不要按原色画", 这个决定"彩色要不要出现"。
+    ///
+    /// ★ 四个维度是**或**的关系: 只要命中的类型里有任意一项被允许就放行。
+    ///   一条弹幕可能同时是"滚动 + 彩色", 关掉滚动但留着彩色时它应该还在。
+    /// </summary>
+    private static bool IsTypeAllowed(RawDanmaku d,
+        bool allowScroll, bool allowFixed, bool allowColorful, bool allowAdvanced)
+    {
+        var colorful = d.Color != 0xFFFFFF && d.Color != 0;
+
+        // 滚动类(1/2/3)与高级类(7/8/9)之外的 mode 都算固定(4/5), 未知 mode 也归固定 ——
+        // 宁可多显示一条, 也别让接口新增的 mode 变成"凭空消失的弹幕"
+        switch (d.Mode)
+        {
+            case 1: case 2: case 3: return allowScroll || (colorful && allowColorful);
+            case 7: case 8: case 9: return allowAdvanced || (colorful && allowColorful);
+            default: return allowFixed || (colorful && allowColorful);
         }
     }
 
@@ -3345,10 +3391,11 @@ public partial class PlayerWindow : FluentWindow
             // 而不是刚才那块"全屏黑"。(FluentWindow 按深浅主题挑 WindowSolid*)
             MaximizeCoversTaskbar = false;
             ApplyChrome();
-            // ★ 把进全屏时摘掉的 WS_CAPTION 补回来: 最小化/最大化的系统过渡动画靠它
-            //   (见 DwmInterop.SuppressCaptionForFullscreen 的说明)。
-            DwmInterop.RestoreCaption(this);
-            // 退全屏立刻撤黑幕: 画面本来就在, 没有 vout 重协商的空窗要挡
+            // ★★ 不要在这里补 WS_CAPTION: 它由下面对"窗口状态还原之后"那次
+            //   SyncCaptionForAcrylic 统一补(那时 WindowState 已回到 Normal, 才补得回来) ——
+            //   在这里补会因为窗口还是 Maximized 而被跳过, 退全屏后就没动画了。
+            //   (重复按钮的克制现在靠去掉 WS_SYSMENU, 不再靠摘 WS_CAPTION。)
+
             ReleaseFullscreenCover();
             // 根网格底色还给主题(与 ApplyChrome 同理: 缩回过程露出的边角要主题色)
             RootGrid.SetResourceReference(BackgroundProperty, "AppBackgroundBrush");
@@ -3362,6 +3409,11 @@ public partial class PlayerWindow : FluentWindow
             // ★ 这一句与 ApplyInfoPanelState 的顺序无关, 但**不能删**: 少了它退全屏后窗口
             //   会一直贴在整块显示器上(铺满窗口那个模式本身不改窗口状态)。
             if (WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
+            // ★ 窗口状态**还原之后**要再同步一次 WS_CAPTION(2026-10-05): 上面那次 ApplyChrome 跑在
+            //   "还是 Maximized"的时刻, 而"没开亚克力时补回 WS_CAPTION"只在 Normal 下做 ——
+            //   不在还原后补这一下, 退全屏会永久丢掉系统最小化/最大化过渡动画。
+            //   (开亚克力时这一句是空操作: 那条路要的是"保持摘掉"。)
+            DwmInterop.SyncCaptionForAcrylic(this);
 
             // 信息栏直接到位, 不再淡入 —— 全屏切换整体没有任何过渡动画了。
             // 顺手把可能的残留动画摘掉并归位, 免得哪天有人给它加动画时被这里顶掉。
