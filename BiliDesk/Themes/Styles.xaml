@@ -155,14 +155,19 @@
                     <Grid>
                         <!-- 投影层: 空底 + 柔和影子。BlurRadius 12 / Depth 2 / 0.35 是
                              "贴在卡片封面上也看得出浮起、又不至于脏"的观感值。 -->
-                        <Border x:Name="ShadowBd" Background="{TemplateBinding Background}" CornerRadius="8">
+                        <!-- ★ 底色直连 DynamicResource 而**不是** TemplateBinding: TemplateBinding 是轻量绑定,
+                             不参与 DynamicResource 的失效传播 —— 亚克力开关改色后它不会重取,
+                             按钮会一直停在首次应用模板时的颜色(实测表现: 开了亚克力按钮还是实色)。
+                             这个样式只服务工具列(10 处, 无人覆盖 Background), 所以直连最稳。 -->
+                        <Border x:Name="ShadowBd" Background="{DynamicResource FloatingFillBrush}" CornerRadius="8">
                             <Border.Effect>
                                 <DropShadowEffect BlurRadius="12" ShadowDepth="2" Direction="270"
                                                   Opacity="0.35" Color="#000000" />
                             </Border.Effect>
                         </Border>
                         <!-- 内容层: 透明底, 悬停/按下底色打在它身上(ShadowBd 被盖住, 只出影子) -->
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8"
+                                BorderBrush="{DynamicResource FlyoutBorderBrush}" BorderThickness="1">
                             <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                               VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                               TextElement.Foreground="{TemplateBinding Foreground}">

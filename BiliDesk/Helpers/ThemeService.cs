@@ -479,6 +479,7 @@ public class ThemeService
             "CardBackgroundBrush", "InfoBarBackgroundBrush",
             "InputBackgroundBrush", "FlyoutBackgroundBrush",
             "ToastBackgroundBrush", "FloatingFillBrush",
+            "FloatingFillHoverBrush", "FloatingFillPressedBrush",
         };
 
         if (!Svc.Settings.AcrylicBackground)
@@ -515,9 +516,25 @@ public class ThemeService
         app.Resources["ToastBackgroundBrush"] = Frozen(IsDark
             ? Color.FromRgb(0x2A, 0x2A, 0x2A)
             : Color.FromRgb(0xEC, 0xED, 0xEF));
+        // ★★★ 工具列按钮: 亚克力模式下改成**半透明**, 让它也跟着呈现亚克力质感
+        //   (2026-10-05 用户要求"亚克力时右下角工具列也应用亚克力效果")。
+        //   ★ 为什么只能"半透明"而不能真做局部亚克力: DWM 的亚克力是**挂在窗口 HWND 上的
+        //     整窗一层材质**, WPF 没有 per-element backdrop API —— 元素层面拿不到"自己那块区域的
+        //     背景采样"。唯一可行的近似是**留出透明度让底下那层(页面底的亚克力)透上来**,
+        //     视觉上就成了一片亚克力浮层。
+        //   ★ 为什么普通模式不能也跟着半透明: 这排按钮浮在**卡片封面(彩色图片)**上,
+        //     底色一透就会露出封面图案、图标糊掉(见 Colors.Light.xaml 里 FloatingFill 的说明)。
+        //     普通模式没有"底下透出亚克力"这个收益, 所以两套材质继续分开: 普通=不透明, 亚克力=半透明。
+        //   ★ 悬停/按下要比常态**更实**(不透明度递增) —— 这样交互反馈方向与原"压暗一档"一致。
         app.Resources["FloatingFillBrush"] = Frozen(IsDark
-            ? Color.FromRgb(0x2A, 0x2A, 0x2A)
-            : Color.FromRgb(0xEC, 0xED, 0xEF));
+            ? Color.FromArgb(0xC7, 0x2A, 0x2A, 0x2A)
+            : Color.FromArgb(0xB3, 0xEC, 0xED, 0xEF));
+        app.Resources["FloatingFillHoverBrush"] = Frozen(IsDark
+            ? Color.FromArgb(0xD9, 0x33, 0x33, 0x33)
+            : Color.FromArgb(0xC7, 0xE2, 0xE4, 0xE7));
+        app.Resources["FloatingFillPressedBrush"] = Frozen(IsDark
+            ? Color.FromArgb(0xEB, 0x3E, 0x3E, 0x3E)
+            : Color.FromArgb(0xD9, 0xD5, 0xD9, 0xDE));
     }
 
     /// <summary>注入整套 Accent 笔刷(用户主题色 / 系统强调色, 默认 B 站粉)</summary>
