@@ -48,6 +48,18 @@
     <SolidColorBrush x:Key="FloatingFillHoverBrush" Color="#DDE0E4" />
     <SolidColorBrush x:Key="FloatingFillPressedBrush" Color="#CFD3D8" />
 
+    <!--
+        浮层面板底色(如播放器的合集面板): **恒为不透明**, 且**刻意不进** ThemeService 的
+        ApplyAcrylicSurfaces 覆盖清单 —— 亚克力开关改不了它。
+        ★ 为什么必须与 FloatingFillBrush 分开: 那个键给"右下角工具列"用, 亚克力开启时会被
+          覆盖成 70% 半透明(工具列浮在卡片封面上, 透出壁纸才叫亚克力质感)。但浮层面板
+          底下是**内容**(简介/评论列表), 半透明会让底下文字整片透上来糊成一片。
+          两个用途的需求正好相反, 共用一个键必然有一处被牺牲 —— 2026-10-05 用户报的
+          "亚克力下合集页背景几乎透明"就是这么来的。
+        ★ 取值与 FloatingFillBrush 的常态色一致, 纯色模式下两者看不出差别;
+          亚克力模式下这个键仍是不透明, 合集面板不会跟着工具列一起变透。 -->
+    <SolidColorBrush x:Key="OverlaySurfaceBrush" Color="#E8EAED" />
+
     <!-- 输入框 -->
     <SolidColorBrush x:Key="InputBackgroundBrush" Color="#B3FFFFFF" />
     <SolidColorBrush x:Key="InputBorderBrush" Color="#22000000" />

@@ -1155,15 +1155,21 @@
                      ★ 用 Grid 而不是 Popup: Popup 是独立 HWND, 会盖在 VideoView 那个 airspace 之上,
                        窗口缩放/全屏切换时两者位置容易错开; 这里只需要盖住右侧 400px, 同窗口内最稳。
                      IsHitTestVisible 靠 Visibility 控制: 收起时整棵树既不渲染也不参与命中测试。
-                     ★★★ 底色必须用**不透明**的 FloatingFillBrush, 不能用 AppBackgroundBrush
-                       (2026-10-02 修): AppBackgroundBrush 是**半透明**的(#B3F3F3F3 / #B3202020,
-                       70% 不透明), 而这是个**盖在简介文字上的浮层** —— 底下那层简介/UP 主卡片
-                       会整片透上来, 与合集列表的标题叠在一起变成一团糊字(用户截图报的正是这个)。
-                       页面级底色可以半透明(它底下是云母/窗口底色, 透出来是想要的质感),
-                       但**浮层不行**, 浮层底下是内容。FloatingFillBrush 那组就是为这种场合准备的
-                       (见 Colors.Light.xaml 里 FloatingFill* 的注释)。 -->
+                     ★★★ 底色必须**不透明** —— 这是浮层, 底下就是简介/评论的内容。
+                       ★★ 2026-10-05 修"亚克力下合集页背景几乎透明"(用户截图): 这个绑定原先写的是
+                         FloatingFillBrush, 注释也假定它**永远不透明**(它现在是 #E8EAED/#2D2D2D 实色)。
+                         但 ThemeService.ApplyAcrylicSurfaces 为了让**右下角工具列**也有亚克力质感,
+                         在亚克力开启时把这个**全局共享键**覆盖成了 70% 半透明(#B3ECEDEF)。
+                         FloatingFillBrush 不止工具列在用 —— 合集面板整块因此被改成半透明, 压在简介/
+                         评论内容上, 文字整片透上来糊成一片, 正是上面这段注释当年要防的现象。
+                         ★ 真凶在颜色覆盖层, 不在绑定本身: 所以"把 FloatingFillBrush 调不透明"
+                           那种改法是治不好的 —— 工具列要半透明正是它自己的需求。
+                       ★ 正确解法是**另立一个专用键**: 工具列浮在卡片封面上, 透出壁纸才叫亚克力质感;
+                         合集面板底下是内容, 必须实。两者需求相反, 不能共用一个键。
+                         OverlaySurfaceBrush 恒为不透明, 且刻意**不进** ApplyAcrylicSurfaces 的
+                         覆盖清单(见 Colors.Light.xaml / Colors.Dark.xaml)。 -->
                 <Grid x:Name="SeasonPanel" Visibility="Collapsed"
-                      Background="{DynamicResource FloatingFillBrush}">
+                      Background="{DynamicResource OverlaySurfaceBrush}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
