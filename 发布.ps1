@@ -3,7 +3,8 @@
 # 一次产出两套(2026-09-26 定):
 #   1) 便携版(zip): 自包含 + 单文件压缩 —— 用户机器**不用装 .NET**, 解压即用;
 #   2) 安装器载荷: 框架依赖(只含 app + LibVLC, ~67MB) —— 配 Publish\installer.iss 打 Inno 安装包,
-#      .NET 8 桌面运行时由安装器检测、缺失时引导下载(见 installer.iss 的 [Code])。
+#      .NET 桌面运行时(8+)由安装器检测、全无时引导下载 .NET 10(见 installer.iss 的 [Code];
+#      程序在 csproj 配了 RollForward=Major, 只有 .NET 10+ 也能跑)。
 #
 # 产物统一落在仓库根的 Publish\ (installer.iss 就在那里, 它的相对路径按同级目录写):
 #   Publish\BiliDesk-便携版\            Publish\BiliDesk-安装器-files\
@@ -32,7 +33,7 @@ dotnet publish (Join-Path $Root "BiliDesk\BiliDesk.csproj") -c Release -r win-x6
     -o $PortableDir
 if ($LASTEXITCODE -ne 0) { throw "便携版发布失败" }
 
-Write-Host "== 2/3 安装器载荷(依赖 .NET 8 桌面运行时) =="
+Write-Host "== 2/3 安装器载荷(依赖 .NET 8+ 桌面运行时) =="
 dotnet publish (Join-Path $Root "BiliDesk\BiliDesk.csproj") -c Release -r win-x64 `
     --self-contained false -p:PublishSingleFile=false `
     -o $InstallerDir
