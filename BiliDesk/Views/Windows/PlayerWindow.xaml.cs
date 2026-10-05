@@ -4,12 +4,14 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
@@ -929,6 +931,8 @@ public partial class PlayerWindow : FluentWindow
     {
         if (TabIntro != null && IntroPanel != null) TabIntro.IsChecked = true;
         UpdateButtonState();
+        // 窗口是复用的: 按当前状态(铺满/常规)同步一次信息栏与窗口最小尺寸
+        ApplyInfoPanelState();
         // 「铺满窗口」按钮的字形初值: XAML 里写的是"进入前"那个字形(E9A6), 这里按实际状态
         // 再同步一次 —— 窗口是复用的, 复用到一个"上次已铺满"的窗口时不能显示成未铺满。
         UpdateFillWindowButton();
@@ -2319,6 +2323,130 @@ public partial class PlayerWindow : FluentWindow
         Svc.Settings.UpdateDanmakuSettings(Svc.Settings.DanmakuEnabled, pct, Svc.Settings.DanmakuSmartFilter);
     }
 
+    // ------------------------------------------------------------ 视频区边缘缩放
+
+    /// <summary>缩放带宽度(DIP), 与 XAML 里 WindowChrome 的 ResizeBorderThickness=6 一致</summary>
+    private const double ResizeEdgeDip = 6;
+
+    private const int WmNcLButtonDown = 0x00A1;
+
+    // Win32 的 HT*(10~17), 给 DefWindowProc 判定缩放方向
+    private const int HtLeft = 10;
+    private const int HtRight = 11;
+    private const int HtTop = 12;
+    private const int HtTopLeft = 13;
+    private const int HtTopRight = 14;
+    private const int HtBottom = 15;
+    private const int HtBottomLeft = 16;
+    private const int HtBottomRight = 17;
+
+    /// <summary>
+    /// 视频区按下左键时先走这里: 指针在缩放带里就发起系统缩放并返回 true,
+    /// 调用方要吞掉这次按下 —— 它是"拖边缘", 不能顺带当成视频区手势(播放/暂停等)。
+    ///
+    /// 视频区把窗口的左/右/下边缘盖住了, WindowChrome 的缩放边框够不着, 这里手动补上"拖边缘改大小"。
+    ///
+    /// ★ 根因(2026-10-05 修"铺满窗口时窗口边缘无法拖动缩放"):
+    ///   窗口是 WindowStyle=None + WindowChrome(ResizeBorderThickness=6), 那 6px 缩放带的
+    ///   命中测试发生在 **PlayerWindow** 的窗口过程上。而视频区被 LibVLC 的两层 HWND 盖着:
+    ///   ① VideoView 的原生视频子窗口; ② VideoView 的 ForegroundWindow(弹幕/控制栏所在的
+    ///   透明浮动顶层窗口, 见 DetachVideoOverlay 的说明)。鼠标压在这两层上时消息根本到不了
+    ///   PlayerWindow, 缩放带形同虚设 —— 平时只有右侧信息栏那一边是纯 WPF 还能拖, 「铺满窗口」
+    ///   把信息栏收掉后右边缘也被视频区盖住, 于是"整个窗口边缘都拖不动"。
+    ///
+    /// ★ 修法: 视频区左键按下时, 指针落在哪条缩放带就替系统发起哪个方向的缩放 ——
+    ///   ReleaseCapture() 之后**直接调 DefWindowProc**(WM_NCLBUTTONDOWN + 对应 HT*)。
+    ///   ★★ 必须"直接调 DefWindowProc", 不要改成 SendMessage 把消息发回主窗口:
+    ///   实测(真窗口探针 .probes/bd-probe-edgeresize, 2026-10-05)合成的 WM_NCLBUTTONDOWN
+    ///   会被 WPF/WindowChrome 的消息链吃掉, 根本走不到 DefWindowProc, 表现是"点了毫无反应";
+    ///   直接调则与原生拖边缘完全同一条路(ENTER → SIZING… → EXITSIZE, FluentWindow 里
+    ///   CardWall.NotifyModalResize 照常收到)。实测拖 120px: 窗口宽 1000 → 1120。
+    /// </summary>
+    private bool TryBeginEdgeResize()
+    {
+        if (_closing) return false;
+        // 全屏/最大化时没有"改窗口大小"这回事, 交给原有手势
+        if (_isFullscreen || WindowState != WindowState.Normal) return false;
+
+        var ht = HitTestResizeEdge();
+        if (ht == 0) return false;
+
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return false;
+
+        // 手势状态全部作废: 缩放循环会把松开事件吃掉, 挂起的长按/单击不能再触发
+        _singleClickTimer?.Stop();
+        _longPressTimer?.Stop();
+        _suppressSingleClick = true;
+
+        // 先放掉 WPF 持有的鼠标捕获, 否则模态缩放循环拿不到鼠标
+        ReleaseCapture();
+        // 直接把"按在缩放带上"交给 DefWindowProc: 它进入系统模态缩放循环, 松开鼠标才返回
+        DefWindowProc(hwnd, WmNcLButtonDown, (IntPtr)ht, IntPtr.Zero);
+        return true;
+    }
+
+    /// <summary>
+    /// 指针现在落在窗口四边/四角的哪条缩放带上, 返回 HT*(0 = 不在缩放带)。
+    /// 用 Win32 的屏幕物理像素(GetCursorPos + GetWindowRect)而不是 WPF 坐标:
+    /// 要判定的是**窗口**的边缘, 而事件来自另一层浮动窗口, 坐标原点/DPI 换算都不好拿。
+    /// </summary>
+    private int HitTestResizeEdge()
+    {
+        if (!GetCursorPos(out var pt)) return 0;
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var r)) return 0;
+
+        var scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        var border = Math.Max(2, (int)Math.Ceiling(ResizeEdgeDip * scale));
+
+        var left = pt.X - r.Left < border;
+        var right = r.Right - pt.X <= border;
+        var top = pt.Y - r.Top < border;
+        var bottom = r.Bottom - pt.Y <= border;
+
+        if (top && left) return HtTopLeft;
+        if (top && right) return HtTopRight;
+        if (bottom && left) return HtBottomLeft;
+        if (bottom && right) return HtBottomRight;
+        if (left) return HtLeft;
+        if (right) return HtRight;
+        if (top) return HtTop;
+        if (bottom) return HtBottom;
+        return 0;
+    }
+
+    /// <summary>
+    /// 鼠标在视频区移动时, 落在缩放带上就把指针换成对应的方向箭头 ——
+    /// 原生缩放带会自动换指针, 但这里事件在浮动窗口里, 不给反馈就没人知道边缘能拖。
+    /// (不在缩放带要换回普通箭头: 从边缘移回来时得变回去。)
+    /// </summary>
+    private void UpdateVideoAreaResizeCursor()
+    {
+        if (_closing || VideoAreaRoot == null) return;
+        if (_isFullscreen || WindowState != WindowState.Normal) return;
+
+        VideoAreaRoot.Cursor = HitTestResizeEdge() switch
+        {
+            HtLeft or HtRight => Cursors.SizeWE,
+            HtTop or HtBottom => Cursors.SizeNS,
+            HtTopLeft or HtBottomRight => Cursors.SizeNWSE,
+            HtTopRight or HtBottomLeft => Cursors.SizeNESW,
+            _ => Cursors.Arrow,
+        };
+    }
+
+    [DllImport("user32.dll")] private static extern bool GetCursorPos(out NativePoint pt);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
+    [DllImport("user32.dll")] private static extern bool ReleaseCapture();
+    [DllImport("user32.dll")] private static extern IntPtr DefWindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint { public int X; public int Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect { public int Left; public int Top; public int Right; public int Bottom; }
+
     // ------------------------------------------------------------ 视频区手势
 
     /// <summary>
@@ -2330,6 +2458,8 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void OnVideoAreaMouseLeftDown(object sender, MouseButtonEventArgs e)
     {
+        // 落在窗口边缘缩放带里的按下是"拖边缘改大小", 不算视频区手势(见 TryBeginEdgeResize)
+        if (TryBeginEdgeResize()) { e.Handled = true; return; }
         if (_mp == null) return;
         // 点视频区会把焦点交给那层浮动覆盖窗口/原生视频窗口, 顺手把键盘焦点收回 WPF 树
         RestoreKeyboardFocus();
@@ -2444,6 +2574,8 @@ public partial class PlayerWindow : FluentWindow
         if (_controlsHidden) ShowControls();
         if (ShouldHideControls()) StartControlsHideCountdown();
         else _controlsHideTimer?.Stop();
+        // 靠近窗口边缘时把指针换成缩放箭头(见 UpdateVideoAreaResizeCursor)
+        UpdateVideoAreaResizeCursor();
     }
 
     /// <summary>现在是否处于"应该隐藏控制栏"的状态: 只在**播放中**自动隐藏。</summary>
@@ -3319,6 +3451,20 @@ public partial class PlayerWindow : FluentWindow
         UpdateFillWindowButton();
     }
 
+    /// <summary>常规模式(信息栏展开)的窗口最小尺寸 —— 与 XAML 里的 MinWidth/MinHeight 保持一致</summary>
+    private const double NormalWindowMinWidth = 1100;
+    private const double NormalWindowMinHeight = 600;
+
+    /// <summary>视频列在常规模式下的最小宽度(与 XAML 的 MinWidth 一致); 信息栏收起后放开到 0</summary>
+    private const double VideoColumnNormalMinWidth = 480;
+
+    /// <summary>
+    /// 铺满窗口/全屏(信息栏收起)时允许缩到的最小尺寸 —— 此时窗口里只剩视频,
+    /// 没有"布局放不下"的问题, 可以缩到很小。
+    /// </summary>
+    private const double FillWindowMinWidth = 320;
+    private const double FillWindowMinHeight = 200;
+
     /// <summary>
     /// 按两个开关的当前值把右侧信息栏设成"该收"或"该展"。**唯一改 InfoPanel / RightColumn 的地方。**
     ///
@@ -3341,6 +3487,16 @@ public partial class PlayerWindow : FluentWindow
         //   面板会量成 0 宽(用户看到的是"信息栏没回来")。
         if (RightColumn != null)
             RightColumn.Width = new GridLength(hide ? 0 : 400);
+
+        // ★ 最小尺寸必须跟着状态走(2026-10-05 修"铺满窗口后缩到某个程度就被卡住"):
+        //   常规的 1100×600 是按"视频列 480 + 信息栏 400"的布局定的下限; 信息栏收起后
+        //   整个窗口只剩视频, 再拿它当底线没有道理。视频列的 MinWidth 同理 —— 不跟着放开,
+        //   窗口缩到 480 以下时列宽比窗口还宽, 画面会被裁偏。
+        //   (FluentWindow 的 WM_GETMINMAXINFO 在每次拖动时重读 MinWidth/MinHeight, 改属性即可。)
+        if (VideoColumn != null)
+            VideoColumn.MinWidth = hide ? 0 : VideoColumnNormalMinWidth;
+        MinWidth = hide ? FillWindowMinWidth : NormalWindowMinWidth;
+        MinHeight = hide ? FillWindowMinHeight : NormalWindowMinHeight;
     }
 
     /// <summary>
