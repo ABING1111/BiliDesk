@@ -2,7 +2,9 @@
 
 哔哩哔哩第三方桌面客户端（Windows / WPF / .NET 8）。
 
-![程序主界面](docs/screenshot-home.jpg)
+![主界面](docs/screenshot-home.jpg)
+
+![播放器](docs/screenshot-player.jpg)
 
 > 非官方、非商业的开源项目，与哔哩哔哩官方无任何关联。视频内容与版权归哔哩哔哩所有。
 
