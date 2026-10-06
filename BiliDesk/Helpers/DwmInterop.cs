@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using BiliDesk.Models;
 
 namespace BiliDesk.Helpers;
 
@@ -140,7 +141,7 @@ public static class DwmInterop
 
     // ------------------------------------------------------------ 全局亚克力(实验性)
 
-    /// <summary>DWMWA_SYSTEMBACKDROP_TYPE 的取值</summary>
+    /// <summary>DWMWA_SYSTEMBACKDROP_TYPE 的取值(与 Models.BackdropMaterial 的枚举值一一对应)</summary>
     private const int DwmsbtNone = 1;
     private const int DwmsbtAcrylic = 3;
 
@@ -188,6 +189,9 @@ public static class DwmInterop
     {
         try
         {
+            // ★ AcrylicBackground 现在是由材质**派生**的("材质 != None"), 语义仍然是
+            //   "有没有用材质" —— 云母/云母Alt 同样需要摘 WS_SYSMENU(它们也会让 DWM 画系统按钮),
+            //   所以这里按派生值判断是对的, 不要改成"只有亚克力才算"。
             if (Svc.Settings.AcrylicBackground)
             {
                 // 开亚克力: 去掉 WS_SYSMENU —— DWM 便不再画它那套标题栏按钮,
@@ -262,7 +266,17 @@ public static class DwmInterop
     }
 
 
-    public static bool SetAcrylicBackdrop(Window window, bool on)
+    /// <summary>
+    /// 按用户选择的**材质变体**下发背景材质(Win11 实验性)。
+    ///
+    /// ★★★ 参数为什么是枚举而不是 bool(2026-10-06): 系统没有任何 API 能改**模糊半径**
+    ///   (模糊是 DWM 写死的内部常量), 唯一官方开放、且观感差异明显的就是"用哪种材质"。
+    ///   所以把 <c>DWMWA_SYSTEMBACKDROP_TYPE</c> 这个选择器开放给用户, 见 BackdropMaterial。
+    ///   ★ 枚举值直接就是 DWMSBT_* 的取值, 这里不做映射 —— 少一层转换少一处写错。
+    /// </summary>
+    /// <param name="material">要下发的材质; <see cref="BackdropMaterial.None"/> 表示不申请材质(全透明)</param>
+    /// <returns>true 表示该窗口已按此材质设置好(调用方据此决定窗口底色)</returns>
+    public static bool SetAcrylicBackdrop(Window window, BackdropMaterial material)
     {
         try
         {
@@ -270,6 +284,8 @@ public static class DwmInterop
             var hwnd = GetHwnd(window);
             if (hwnd == IntPtr.Zero) return false;
 
+            // ★ 无材质 == 关闭: 复用下面"关闭"那条路(玻璃边距还原、材质置 None)
+            var on = material != BackdropMaterial.None;
             // ★★★ 关键: 客户区扩展**必须**走 WindowChrome.GlassFrameThickness,
             //   不能只自己调 DwmExtendFrameIntoClientArea —— 实测(探针 bd-probe-acrylic2):
             //   本工程窗口是 WindowStyle=None + WindowChrome, WindowChromeWorker 会**在**
@@ -325,7 +341,8 @@ public static class DwmInterop
             //   ⇒ 修法在**上层**: FluentWindow 按激活态切换自己的窗口底色(见
             //     FluentWindow.UpdateAcrylicWindowBase)。材质照旧申请, 但失焦时用我们的主题实色
             //     盖住 DWM 那块灰, 让"变灰"变成"看起来像刻意进入的背景态"。
-            return SetAttr(hwnd, DwmwaSystemBackdropType, on ? DwmsbtAcrylic : DwmsbtNone);
+            var value = on ? (int)material : DwmsbtNone;
+            return SetAttr(hwnd, DwmwaSystemBackdropType, value);
         }
         catch
         {

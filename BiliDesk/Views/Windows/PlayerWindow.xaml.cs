@@ -30,6 +30,17 @@ namespace BiliDesk.Views;
 /// </summary>
 public partial class PlayerWindow : FluentWindow
 {
+    /// <summary>
+    /// 播放器**不参与**全局软件缩放(2026-10-06 用户决定)。
+    ///
+    /// ★ 为什么必须豁免: 本窗口有 **3 棵独立可视树**(主窗口 + LibVLC 视频浮层 + 弹幕/控制栏浮层,
+    ///   实测见 `.probes/bd-probe-uiscale-player`), 而视频画面是**原生 HWND** ——
+    ///   WPF 的 LayoutTransform 对它无效(airspace 硬限制)。
+    ///   只缩主树会让"视频原生大小、周围 UI 放大", 两者对不齐; 不如整个窗口保持原尺寸。
+    ///   ★ 设置页的说明文案已写明"播放器的视频画面不受影响"。
+    /// </summary>
+    protected override bool ScalesWithUi => false;
+
     private readonly LibVLC _libVLC;
     private readonly MediaPlayer _mp;
     private readonly DispatcherTimer _progressTimer;

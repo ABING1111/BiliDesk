@@ -254,29 +254,78 @@ public class SettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// 全局亚克力背景(实验性, 默认关)。
-    /// 它不是"换个颜色"那种纯资源替换 —— 要动窗口的原生合成属性, 所以走存储层的
-    /// SetAcrylic(落盘 + 广播), 由每个已打开窗口自己重设背景。
-    /// </summary>
-    public bool AcrylicBackground
+    // ---------------- 窗口背景材质(2026-10-06 合并为四选一) ----------------
+    //
+    // ★★★ 为什么合并: 原来"亚克力背景"是个开关、云母/云母Alt 是它下面的子选项 ——
+    //   这在语义上是错的(云母根本不是亚克力), 而且"关掉开关就选不了云母"很别扭。
+    //   现在四种材质**平级**: 无 / 亚克力 / 云母 / 云母Alt, 选"无"就是关闭。
+    //
+    // ★ 为什么给用户选材质、而不是给"模糊度"滑杆: 系统**没有**改模糊半径的 API
+    //   (模糊是 DWM 写死的内部常量, 唯一办法是注入 dwm.exe hook 私有符号, 普通应用做不到)。
+    //   官方开放的只有"用哪种材质"(DWMWA_SYSTEMBACKDROP_TYPE), 所以把这一层开放出来。
+    //   详见 Models.BackdropMaterial 的说明。
+    //
+    // ★★ 四个 bool 投影的写法照抄"主题色来源"那一组(那里已经踩过坑, 见 MEMORY):
+    //    RadioButton 组切换时 WPF 会先把旧项 IsChecked 写 false, TwoWay 绑定会把 false 也送进
+    //    setter —— 所以 setter **只处理 true**(`if (!value || ...) return;`),
+    //    无条件处理 false 会把刚选中的那一项立刻盖回去(表现为"点了没反应")。
+
+    /// <summary>材质: 无(不用任何材质=关闭)</summary>
+    public bool IsMaterialNone
     {
-        get => Svc.Settings.AcrylicBackground;
-        set
-        {
-            if (value == Svc.Settings.AcrylicBackground) return;
-            Svc.Settings.SetAcrylic(value);
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(AcrylicHint));
-        }
+        get => Svc.Settings.AcrylicMaterial == BackdropMaterial.None;
+        set { if (!value || IsMaterialNone) return; ApplyMaterial(BackdropMaterial.None); }
     }
 
-    /// <summary>亚克力开关的说明文案(跟随开关状态给出不同提示, 用户一眼知道当前处于哪一态)</summary>
-    public string AcrylicHint => Svc.Settings.AcrylicBackground
-        // ★ 失焦会切成主题实色底 —— 这是 DWM 的既定行为(挡不住), 我们在窗口层接管了它,
-        //   所以文案要说清楚, 免得用户以为"失焦后不再是亚克力"是坏了(2026-10-06)。
-        ? "已开启: 聚焦时实时透出桌面内容; 窗口失焦时改用主题底色(系统限制, 无法保持透明)"
-        : "实验性功能: 让窗口背景变成半透明亚克力材质(需要 Windows 11)";
+    /// <summary>材质: 亚克力(半透明磨砂, 实时透出桌面)</summary>
+    public bool IsMaterialAcrylic
+    {
+        get => Svc.Settings.AcrylicMaterial == BackdropMaterial.Acrylic;
+        set { if (!value || IsMaterialAcrylic) return; ApplyMaterial(BackdropMaterial.Acrylic); }
+    }
+
+    /// <summary>材质: 云母(不透明, 只采样壁纸)</summary>
+    public bool IsMaterialMica
+    {
+        get => Svc.Settings.AcrylicMaterial == BackdropMaterial.Mica;
+        set { if (!value || IsMaterialMica) return; ApplyMaterial(BackdropMaterial.Mica); }
+    }
+
+    /// <summary>材质: 云母 Alt / 标签页材质</summary>
+    public bool IsMaterialMicaAlt
+    {
+        get => Svc.Settings.AcrylicMaterial == BackdropMaterial.MicaAlt;
+        set { if (!value || IsMaterialMicaAlt) return; ApplyMaterial(BackdropMaterial.MicaAlt); }
+    }
+
+    /// <summary>
+    /// 当前**是否用到了半透明材质**(亚克力) —— 只有它为 true 时, 下面那两条透明度滑杆才有意义。
+    /// ★ 云母是不透明的(只采样壁纸), 对它调"页面底不透明度"没有实际效果,
+    ///   所以 UI 上要把滑杆折叠掉, 免得用户调了半天发现没反应。
+    /// </summary>
+    public bool IsTransparentMaterial => Svc.Settings.AcrylicMaterial == BackdropMaterial.Acrylic;
+
+    private void ApplyMaterial(BackdropMaterial material)
+    {
+        Svc.Settings.SetAcrylicMaterial(material);
+        // 四个投影都要通知: 组里被取消选中的那一项也得跟着刷新
+        OnPropertyChanged(nameof(IsMaterialNone));
+        OnPropertyChanged(nameof(IsMaterialAcrylic));
+        OnPropertyChanged(nameof(IsMaterialMica));
+        OnPropertyChanged(nameof(IsMaterialMicaAlt));
+        OnPropertyChanged(nameof(AcrylicMaterialHint));
+        // 透明度滑杆的显隐跟着"是不是半透明材质"走
+        OnPropertyChanged(nameof(IsTransparentMaterial));
+    }
+
+    /// <summary>当前材质对应的说明(用户一眼知道这个材质是透还是不透)</summary>
+    public string AcrylicMaterialHint => Svc.Settings.AcrylicMaterial switch
+    {
+        BackdropMaterial.Acrylic => "亚克力: 半透明磨砂, 实时透出桌面内容；窗口失焦时改用主题底色(系统限制)",
+        BackdropMaterial.Mica => "云母: 不透明, 只取壁纸色调 —— 不会透出后面的窗口",
+        BackdropMaterial.MicaAlt => "云母 Alt: 不透明, 层次比云母更平",
+        _ => "不使用材质: 窗口用主题纯色背景"
+    };
 
     /// <summary>
     /// 亚克力透明度——浅色主题(默认 30, 可调 0~50)。数值越小越透明, 越大越不透明。
@@ -324,6 +373,69 @@ public class SettingsViewModel : ObservableObject
     public double AcrylicOpacityDarkMin => SettingsStore.AcrylicOpacityDarkMin;
     /// <summary>深色透明度滑杆上限</summary>
     public double AcrylicOpacityDarkMax => SettingsStore.AcrylicOpacityDarkMax;
+
+    // ---------------- 软件缩放(2026-10-06) ----------------
+    //
+    // ★ 与"系统 DPI 缩放"是两件事: 那个由 Windows 管、作用于所有程序; 这个是本程序自己缩界面。
+    // ★★ 已知边界: **播放器窗口整体不参与缩放**(用户 2026-10-06 决定)。
+    //    原因是它有 3 棵独立可视树、且视频画面是原生 HWND, WPF 变换对它无效(airspace 硬限制)——
+    //    只缩主树会让视频与周围 UI 对不齐。实测证据: .probes/bd-probe-uiscale-player。
+    //    说明文案必须讲清楚, 否则用户会以为"播放器没缩放"是 bug。
+
+    /// <summary>软件缩放百分比(80~150, 默认 100)</summary>
+    public int UiScalePercent
+    {
+        get => Svc.Settings.UiScalePercent;
+        set
+        {
+            if (value == Svc.Settings.UiScalePercent) return;
+            Svc.Settings.SetUiScalePercent(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(UiScaleText));
+        }
+    }
+
+    /// <summary>缩放滑杆下方那行说明</summary>
+    public string UiScaleText => UiScalePercent == 100
+        ? "界面缩放 100%（默认）"
+        : $"界面缩放 {UiScalePercent}%";
+
+    /// <summary>缩放滑杆下限(取自 Helpers.UiScale, 单一来源)</summary>
+    public double UiScaleMin => Helpers.UiScale.MinPercent;
+    /// <summary>缩放滑杆上限</summary>
+    public double UiScaleMax => Helpers.UiScale.MaxPercent;
+
+    // ---------------- 卡片列数(2026-10-06) ----------------
+    //
+    // ★ 0 = 自动(按窗口宽度算, 沿用原有行为); 2~8 = 固定列数。
+    // ★ 作用于**所有**卡片页: 首页/历史/收藏/搜索/分区/稍后再看/关注/个人空间 共用同一套卡片墙。
+
+    /// <summary>卡片页每行显示几列(0 = 自动)</summary>
+    public int CardColumns
+    {
+        get => Svc.Settings.CardColumns;
+        set
+        {
+            if (value == Svc.Settings.CardColumns) return;
+            Svc.Settings.SetCardColumns(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CardColumnsText));
+            OnPropertyChanged(nameof(IsCardColumnsAuto));
+        }
+    }
+
+    /// <summary>列数是"自动"还是"固定几列"</summary>
+    public bool IsCardColumnsAuto => CardColumns <= 0;
+
+    /// <summary>列数滑杆下方那行说明(与其它滑杆同款: 数值写进描述行)</summary>
+    public string CardColumnsText => CardColumns <= 0
+        ? "自动（按窗口宽度排列）"
+        : $"固定每行 {CardColumns} 列";
+
+    /// <summary>列数滑杆下限(0 = 自动)</summary>
+    public double CardColumnsMin => 0;
+    /// <summary>列数滑杆上限(取自 Helpers.CardWall, 单一来源)</summary>
+    public double CardColumnsMax => Helpers.CardWall.FixedColumnsMax;
 
     // ----------------- 推荐算法(已固定为网页版, 不再提供选择) -----------------
     //

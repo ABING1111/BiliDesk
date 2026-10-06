@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -30,6 +31,56 @@ public static class CardWall
 
     /// <summary>一列至少这么宽。低于它就减一列 —— 这个值决定了"窗口多大时是几列"</summary>
     public const double MinItemWidth = 220;
+
+    /// <summary>
+    /// 用户指定的**固定列数**(0 = 自动, 按宽度算)。设置页"首页显示列数"写这里。
+    ///
+    /// ★ 语义: 指定了就**不按宽度算**(也不再走迟滞) —— 用户要的是"就是这几列",
+    ///   而不是"尽量几列"。窗口太窄放不下时由 <see cref="ApplyTo"/> 的槽宽兜底(卡片会被压窄,
+    ///   但列数不变), 这比"悄悄变成别的列数"更符合用户预期。
+    /// ★ 它是**全局静态**的: 所有卡片页共用同一套列数(用户 2026-10-06 选定"所有卡片页统一")。
+    ///   改完必须让所有已存在的墙立刻重算, 见 <see cref="RefreshAll"/>。
+    /// </summary>
+    public static int FixedColumns { get; private set; }
+
+    /// <summary>固定列数的可选范围(设置页滑杆与夹取共用这一处)</summary>
+    public const int FixedColumnsMin = 2;
+    /// <inheritdoc cref="FixedColumnsMin"/>
+    public const int FixedColumnsMax = 8;
+
+    /// <summary>设置固定列数(0 = 恢复自动)。越界值会被夹到 <see cref="FixedColumnsMin"/>~<see cref="FixedColumnsMax"/>。</summary>
+    public static void SetFixedColumns(int columns)
+    {
+        var v = columns <= 0 ? 0 : Math.Clamp(columns, FixedColumnsMin, FixedColumnsMax);
+        if (FixedColumns == v) return;
+        FixedColumns = v;
+        RefreshAll();
+    }
+
+    /// <summary>把所有已挂 Enable 的墙立刻按新列数重算一遍(切列数时要立即看到效果)</summary>
+    public static void RefreshAll()
+    {
+        System.Collections.Generic.List<FrameworkElement> alive;
+        lock (_walls)
+        {
+            // 顺手清掉已经死掉的弱引用, 免得集合随页面切换无限增长
+            _walls.RemoveAll(w => !w.TryGetTarget(out _));
+            alive = _walls
+                .Select(w => w.TryGetTarget(out var t) ? t : null)
+                .Where(t => t != null)
+                .Select(t => t!)
+                .ToList();
+        }
+
+        foreach (var wall in alive)
+        {
+            if (!wall.IsLoaded) continue;
+            RefreshNow(wall);
+        }
+    }
+
+    /// <summary>已挂 Enable 的墙(弱引用集合: 页面会被销毁, 不能把它们钉住)</summary>
+    private static readonly System.Collections.Generic.List<WeakReference<FrameworkElement>> _walls = new();
 
     /// <summary>列数的迟滞死区(折算成卡片宽度)。见类型注释里"滚动条"那段</summary>
     private const double Dead = 24;
@@ -90,8 +141,19 @@ public static class CardWall
     private static void OnEnableChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not FrameworkElement el) return;
-        if ((bool)e.NewValue) el.SizeChanged += OnWallSizeChanged;
-        else el.SizeChanged -= OnWallSizeChanged;
+        if ((bool)e.NewValue)
+        {
+            el.SizeChanged += OnWallSizeChanged;
+            lock (_walls) _walls.Add(new WeakReference<FrameworkElement>(el));
+        }
+        else
+        {
+            el.SizeChanged -= OnWallSizeChanged;
+            lock (_walls)
+            {
+                _walls.RemoveAll(w => !w.TryGetTarget(out var t) || ReferenceEquals(t, el));
+            }
+        }
         Update(el);
     }
 
@@ -234,9 +296,13 @@ public static class CardWall
     /// <summary>
     /// 按可用宽度算列数。带迟滞：先按"当前列数"判，太挤才减、有富余才加，两边各留 <see cref="Dead"/>。
     /// 纯逻辑、无副作用，探针可以直接拿它跑"窗口从最小拖到最大"的整条路径。
+    ///
+    /// ★ 用户指定了固定列数时**直接返回它**, 不参与迟滞 —— 见 <see cref="FixedColumns"/>。
     /// </summary>
     public static int ColumnsFor(double avail, int current)
     {
+        if (FixedColumns > 0) return FixedColumns;
+
         var n = current > 0
             ? current
             : (int)Math.Floor((avail + Gap) / (MinItemWidth + Gap));

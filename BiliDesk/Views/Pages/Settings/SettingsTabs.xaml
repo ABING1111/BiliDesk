@@ -110,44 +110,57 @@
                     </StackPanel>
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
-                    <!-- 全局亚克力(2026-10-05 新增, 实验性): 默认关, 需要用户手动打开。
-                         ★ 放在"外观"卡片里(用户要求): 它改的就是整个应用的背景观感, 与主题/主题色同属一类。
-                         ★ 文案必须点明"实验性": 不同机器/显卡的合成效果有差异, 且多一层 GPU 合成开销,
-                           不能让用户以为是稳定功能然后回来报"偶尔发灰"。 -->
-                    <Grid Style="{StaticResource SettingsRowStyle}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="亚克力背景" Style="{StaticResource SettingsRowTitleStyle}" />
-                                <!-- "实验性"标记: 与标题同一行的浅色小胶囊, 不抢标题的视觉重心 -->
-                                <Border Background="{DynamicResource AccentSoftFillStrongBrush}"
-                                        CornerRadius="6" Padding="6,1" Margin="8,0,0,0"
-                                        VerticalAlignment="Center">
-                                    <TextBlock Text="实验性" FontSize="10.5"
-                                               Foreground="{DynamicResource AccentTextStrongBrush}" />
-                                </Border>
-                            </StackPanel>
-                            <TextBlock Text="{Binding AcrylicHint}"
-                                       Style="{StaticResource SettingsRowDescStyle}" />
+                    <!-- 窗口背景材质(2026-10-06 合并为四选一):
+                         原来"亚克力背景"是个开关、云母/云母Alt 是它下面的子选项 —— 语义是错的
+                         (云母根本不是亚克力), 而且"关掉开关就选不了云母"很别扭。
+                         现在四种材质**平级**: 无 / 亚克力 / 云母 / 云母Alt, 选"无"就是关闭。
+                         ★ 为什么给的是"材质选择"而不是"模糊度"滑杆: 系统没有任何 API 能改模糊半径
+                           (模糊是 DWM 写死的常量), 官方开放的只有"用哪种材质"。详见 BackdropMaterial。
+                         ★ 用与"主题色来源"同款的 SegmentRadioStyle 胶囊组(并列单选),
+                           不另造一套控件语言。 -->
+                    <StackPanel Style="{StaticResource SettingsRowStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="窗口背景材质" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <!-- "实验性"标记: 与标题同一行的浅色小胶囊, 不抢标题的视觉重心 -->
+                            <Border Background="{DynamicResource AccentSoftFillStrongBrush}"
+                                    CornerRadius="6" Padding="6,1" Margin="8,0,0,0"
+                                    VerticalAlignment="Center">
+                                <TextBlock Text="实验性" FontSize="10.5"
+                                           Foreground="{DynamicResource AccentTextStrongBrush}" />
+                            </Border>
                         </StackPanel>
-                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
-                                  VerticalAlignment="Center"
-                                  IsChecked="{Binding AcrylicBackground, Mode=TwoWay}" />
-                    </Grid>
+                        <TextBlock Text="{Binding AcrylicMaterialHint}"
+                                   Style="{StaticResource SettingsRowDescStyle}" />
+                        <Border HorizontalAlignment="Left" Background="{DynamicResource InputBackgroundBrush}"
+                                CornerRadius="9" Padding="3" Margin="0,12,0,0">
+                            <StackPanel Orientation="Horizontal">
+                                <RadioButton GroupName="BackdropMaterialGroup" Style="{StaticResource SegmentRadioStyle}"
+                                             Content="无"
+                                             IsChecked="{Binding IsMaterialNone, Mode=TwoWay}" />
+                                <RadioButton GroupName="BackdropMaterialGroup" Style="{StaticResource SegmentRadioStyle}"
+                                             Content="亚克力" Margin="6,0,0,0"
+                                             IsChecked="{Binding IsMaterialAcrylic, Mode=TwoWay}" />
+                                <RadioButton GroupName="BackdropMaterialGroup" Style="{StaticResource SegmentRadioStyle}"
+                                             Content="云母" Margin="6,0,0,0"
+                                             IsChecked="{Binding IsMaterialMica, Mode=TwoWay}" />
+                                <RadioButton GroupName="BackdropMaterialGroup" Style="{StaticResource SegmentRadioStyle}"
+                                             Content="云母 Alt" Margin="6,0,0,0"
+                                             IsChecked="{Binding IsMaterialMicaAlt, Mode=TwoWay}" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
 
-                    <!-- 分隔线: 与卡片里其它行一致(开关那行与这两条透明度行是"一件事的两层设置")。
-                         ★ 它也要跟滑杆一起只在亚克力开启时出现, 否则关掉亚克力会留下一根悬空的线。 -->
+                    <!-- 亚克力透明度: 只在选中**亚克力**时显示。
+                         ★ 云母是不透明的(只采样壁纸), 对它调"页面底不透明度"没有实际效果 ——
+                           折起来免得用户调半天发现没反应。 -->
                     <Border Style="{StaticResource SettingsRowDivider}"
-                            Visibility="{Binding AcrylicBackground, Converter={StaticResource BoolToVis}}" />
+                            Visibility="{Binding IsTransparentMaterial, Converter={StaticResource BoolToVis}}" />
 
                     <!-- 亚克力透明度调节(浅色主题): 只在亚克力开启时显示。
                          ★ 排版与"弹幕显示区域"那行**保持同款**(用户要求): 说明行里带数值,
                            右侧是固定 240 宽的 SettingsSliderStyle 滑杆 —— 而不是小号默认滑杆 + 右侧百分比。 -->
                     <Grid Style="{StaticResource SettingsRowStyle}"
-                          Visibility="{Binding AcrylicBackground, Converter={StaticResource BoolToVis}}">
+                          Visibility="{Binding IsTransparentMaterial, Converter={StaticResource BoolToVis}}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="240" />
@@ -166,9 +179,9 @@
 
                     <!-- 亚克力透明度调节(深色主题): 同上, 深浅两套值可分别调 -->
                     <Border Style="{StaticResource SettingsRowDivider}"
-                            Visibility="{Binding AcrylicBackground, Converter={StaticResource BoolToVis}}" />
+                            Visibility="{Binding IsTransparentMaterial, Converter={StaticResource BoolToVis}}" />
                     <Grid Style="{StaticResource SettingsRowStyle}"
-                          Visibility="{Binding AcrylicBackground, Converter={StaticResource BoolToVis}}">
+                          Visibility="{Binding IsTransparentMaterial, Converter={StaticResource BoolToVis}}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="240" />
@@ -183,6 +196,56 @@
                                 Minimum="{Binding AcrylicOpacityDarkMin}" Maximum="{Binding AcrylicOpacityDarkMax}"
                                 IsSnapToTickEnabled="True" TickFrequency="5"
                                 Value="{Binding AcrylicOpacityDark, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 软件缩放(2026-10-06 新增): 把整个界面按百分比放大/缩小, 与系统 DPI 无关。
+                         ★ 用 LayoutTransform(见 Helpers/UiScale): 字与控件一起缩, 布局会重新排版。
+                         ★★ 说明文案必须点明"播放器窗口不参与缩放" —— 实测它有 3 棵独立可视树、
+                            视频画面是原生 HWND(WPF 变换对 HwndHost 无效), 只缩主树会让两者对不齐,
+                            所以播放器整体豁免。不讲清楚用户会当 bug(证据见 .probes/bd-probe-uiscale-player)。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="240" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="软件缩放" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding UiScaleText}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                            <TextBlock Text="放大界面文字与控件；播放器窗口不参与缩放"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                Width="240" VerticalAlignment="Center"
+                                Minimum="{Binding UiScaleMin}" Maximum="{Binding UiScaleMax}"
+                                IsSnapToTickEnabled="True" TickFrequency="5"
+                                Value="{Binding UiScalePercent, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 卡片列数(2026-10-06 新增): 0 = 自动(按窗口宽度), 2~8 = 固定列数。
+                         ★ 作用于所有卡片页(首页/历史/收藏/搜索/分区/稍后再看/关注/个人空间) ——
+                           它们共用同一套卡片墙, 且用户选定"所有卡片页统一"。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="240" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="卡片列数" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding CardColumnsText}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                            <TextBlock Text="作用于首页、历史、收藏、搜索等所有卡片页"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                Width="240" VerticalAlignment="Center"
+                                Minimum="{Binding CardColumnsMin}" Maximum="{Binding CardColumnsMax}"
+                                IsSnapToTickEnabled="True" TickFrequency="1"
+                                Value="{Binding CardColumns, Mode=TwoWay}" />
                     </Grid>
                 </StackPanel>
             </Border>

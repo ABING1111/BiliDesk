@@ -963,6 +963,35 @@ public enum AppTheme
 }
 
 /// <summary>
+/// 窗口背景材质变体(2026-10-06 新增)。
+///
+/// ★★★ 为什么做这个而不是"模糊度": 系统**没有**任何 API 能改模糊半径
+///   (模糊半径是 DWM 写死的内部常量, 唯一能改的办法是注入 dwm.exe hook 私有符号, 普通应用做不到)。
+///   而"用哪种材质"是**官方开放**的 —— <c>DWMWA_SYSTEMBACKDROP_TYPE</c> 就是这个选择器。
+///   这是唯一既真实、又观感差异明显的可控项, 所以把这一层开放给用户。
+///
+/// ★ 枚举值**直接等于** DWMWA_SYSTEMBACKDROP_TYPE 的取值(DWMSBT_*), 下发时不做映射 ——
+///   少一层转换就少一处能写错的地方。★ 别改这些数字。
+/// </summary>
+public enum BackdropMaterial
+{
+    /// <summary>无材质: 窗口保持全透明(不申请任何 DWM 材质, 桌面直接透出、不模糊)。</summary>
+    None = 1,
+
+    /// <summary>
+    /// 云母(Mica, 2)。★ 它是**不透明**的: 只采样一次桌面壁纸、且**从不透出后面的窗口**。
+    /// 所以选它等于放弃"透出桌面"这个效果, 换来的是更沉稳的壁纸色调。
+    /// </summary>
+    Mica = 2,
+
+    /// <summary>亚克力(Acrylic, 3) —— 默认。真·半透明磨砂, 实时透出桌面内容。</summary>
+    Acrylic = 3,
+
+    /// <summary>云母 Alt / 标签页材质(Tabbed, 4)。同样是壁纸基调的不透明材质, 层次比云母更平。</summary>
+    MicaAlt = 4
+}
+
+/// <summary>
 /// 首页「推荐」tab 的算法来源。★ 2026-10-03 起这个选择**已取消**, 固定用网页版。
 ///
 /// 保留枚举只是为了让老 settings.json 里存着的值仍能反序列化(删掉枚举会让老配置解析失败,
@@ -1020,21 +1049,53 @@ public class AppSettings
     public AppTheme ThemeMode { get; set; } = AppTheme.System;
 
     /// <summary>
-    /// 全局亚克力背景(实验性, 默认关)。开启后窗口改用 Win11 的 Acrylic 系统材质,
-    /// 详见 Services/SettingsStore.cs 的同名属性与 DwmInterop.SetAcrylicBackdrop。
+    /// 旧字段(仅用于**读取**老配置, 兼容用)。
+    ///
+    /// ★★★ 2026-10-06 起"窗口背景材质"合并成了**一个**选择器(无/亚克力/云母/云母Alt),
+    ///   真正的开关是 <see cref="AcrylicMaterial"/>(None = 关); 这个 bool 已降级为**派生值**
+    ///   (由材质算出来, 落盘时同步写一份, 免得用户回退旧版本时状态丢失)。
+    ///   ⇒ 代码里**别再按它判断开关**, 一律用 AcrylicMaterial。
     /// </summary>
     public bool AcrylicBackground { get; set; }
 
     /// <summary>
-    /// 亚克力背景透明度——浅色主题(0~100, 默认 60)。数值越小越透明, 越大越不透明。
-    /// 只影响"页面底/侧边栏"这两层的透明度, 不影响卡片/浮层等实色块。
+    /// 亚克力背景透明度——浅色主题(默认 30, 可调 0~50, 范围见 SettingsStore.AcrylicOpacityLightMin)。
+    /// 数值越小越透明, 越大越不透明。只影响"页面底/侧边栏"这两层的透明度, 不影响卡片/浮层等实色块。
+    /// ★ 默认值/范围与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
     /// </summary>
-    public int AcrylicOpacityLight { get; set; } = 60;
+    public int AcrylicOpacityLight { get; set; } = 30;
 
     /// <summary>
-    /// 亚克力背景透明度——深色主题(0~100, 默认 75)。深色底本身就更暗, 默认稍不透明一档。
+    /// 亚克力背景透明度——深色主题(默认 50, 可调 30~70, 范围见 SettingsStore.AcrylicOpacityDarkMin)。
+    /// 深色底本身就更暗, 默认稍不透明一档。
     /// </summary>
-    public int AcrylicOpacityDark { get; set; } = 75;
+    public int AcrylicOpacityDark { get; set; } = 50;
+
+    /// <summary>
+    /// **窗口背景材质**(2026-10-06 起是唯一的开关 + 变体选择, 与云母/云母Alt 平级)。
+    ///   · None(1)   = 不用任何材质(普通纯色背景) —— 这就是"关闭"
+    ///   · Mica(2)   = 云母(不透明, 只采样壁纸)
+    ///   · Acrylic(3)= 亚克力(半透明磨砂, 实时透出桌面)
+    ///   · MicaAlt(4)= 云母 Alt
+    ///
+    /// ★★★ 为什么是**可空**的: 老配置里根本没有这个字段, 而枚举默认值恰好是 None ——
+    ///   那样就分不清"老用户(该按旧 bool 推导)"和"新用户显式选了无材质"。
+    ///   可空之后: null = 老配置(缺字段, 走迁移), 有值 = 新配置。
+    /// ★ 枚举值直接等于 DWMSBT_*, 见 <see cref="BackdropMaterial"/>。
+    /// </summary>
+    public BackdropMaterial? AcrylicMaterial { get; set; }
+
+    /// <summary>
+    /// 卡片页每行显示几列(0 = 自动, 按窗口宽度算)。范围见 Helpers/CardWall.FixedColumnsMin/Max。
+    /// ★ 作用于**所有**卡片页(首页/历史/收藏/搜索/分区/稍后再看/关注/个人空间), 它们共用同一套卡片墙。
+    /// </summary>
+    public int CardColumns { get; set; }
+
+    /// <summary>
+    /// 软件缩放百分比(80~150, 默认 100)。把整个界面按比例放大/缩小, 与系统 DPI 无关。
+    /// 范围见 Helpers/UiScale.MinPercent/MaxPercent。
+    /// </summary>
+    public int UiScalePercent { get; set; } = 100;
 
     /// <summary>弹幕开关(全局, 播放器不再提供弹幕按钮)</summary>
     public bool DanmakuEnabled { get; set; } = true;

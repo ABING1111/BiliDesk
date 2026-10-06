@@ -6,6 +6,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
+using BiliDesk.Models;
 using BiliDesk.Services;
 
 namespace BiliDesk.Views;
@@ -27,7 +28,26 @@ public class FluentWindow : Window
         FontFamily = new System.Windows.Media.FontFamily(
             "Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI, Microsoft YaHei");
         SourceInitialized += OnSourceInitialized;
+        // ★ 软件缩放(2026-10-06): 内容一就绪就登记进 UiScale。
+        //   用 Loaded 而不是 SourceInitialized —— 那时 Content 才真正挂上可视树,
+        //   拿到的根元素才是最终会被渲染的那一个。
+        //   ★ 播放器窗口覆写 ScalesWithUi=真实false 把自己排除掉(见该属性的说明)。
+        Loaded += (_, _) =>
+        {
+            if (ScalesWithUi) UiScale.Register(Content as FrameworkElement);
+        };
     }
+
+    /// <summary>
+    /// 本窗口是否参与全局「软件缩放」。
+    ///
+    /// ★★★ 默认为 true; **播放器窗口必须覆写成 false**(2026-10-06 用户决定):
+    ///   实测该窗口有 **3 棵独立可视树**(主窗口 + LibVLC 视频浮层 + 弹幕/控制栏浮层),
+    ///   而且视频画面是**原生 HWND** —— WPF 的 LayoutTransform 对它无效(airspace 硬限制)。
+    ///   给主树加缩放只会让"视频区按原生尺寸、周围 UI 放大", 两者对不上 ⇒ 宁可整个窗口不缩。
+    ///   证据: `.probes/bd-probe-uiscale-player` 实测到 3 个 PresentationSource。
+    /// </summary>
+    protected virtual bool ScalesWithUi => true;
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
@@ -67,6 +87,7 @@ public class FluentWindow : Window
             _hooked = true;
             ThemeService.Instance.ThemeChanged += OnThemeChanged;
             Svc.Settings.AcrylicChanged += OnAcrylicChanged;
+            Svc.Settings.LayoutChanged += OnLayoutChanged;
         }
         ApplyChrome();
     }
@@ -75,6 +96,12 @@ public class FluentWindow : Window
 
     /// <summary>全局亚克力开关变化(来自设置页): 所有已开窗口都要立刻跟着换背景</summary>
     private void OnAcrylicChanged() => ApplyChrome();
+
+    /// <summary>
+    /// 影响布局的设置变化(列数/软件缩放)。列数由 CardWall 自己重算, 这里只管缩放 ——
+    /// 缩放必须由本窗口重新施加一次(LayoutTransform 是**每个根元素各自持有**的, 不是全局资源)。
+    /// </summary>
+    private void OnLayoutChanged() => UiScale.ApplyAll();
 
     // protected: 播放器退出全屏时要主动把窗口底色从"全屏黑"还原成主题色
     protected void ApplyChrome()
@@ -93,7 +120,8 @@ public class FluentWindow : Window
             //   ★ 所以必须**先看返回值再决定窗口底色**: 只有亚克力真的启用了, 才能把窗口背景设成透明
             //     (透明是靠底下的 DWM 合成层兜住的); 失败时一旦也设透明, 客户区就没有任何底色 —— 直接黑。
             var acrylicOn = false;
-            if (Svc.Settings.AcrylicBackground) acrylicOn = DwmInterop.SetAcrylicBackdrop(this, true);
+            if (Svc.Settings.AcrylicBackground)
+                acrylicOn = DwmInterop.SetAcrylicBackdrop(this, Svc.Settings.AcrylicMaterial);
             _acrylicActive = acrylicOn;
 
             if (acrylicOn)
@@ -111,7 +139,7 @@ public class FluentWindow : Window
             else
             {
                 // 没开亚克力 / 该窗口不支持亚克力: 一律回落普通实色背景
-                DwmInterop.SetAcrylicBackdrop(this, false);
+                DwmInterop.SetAcrylicBackdrop(this, BackdropMaterial.None);
                 DwmInterop.DisableMica(this);
                 // ★ 必须先卸掉动画载体: 否则那个笔刷上还挂着 ColorAnimation,
                 //   会在后台继续按旧目标改色(表现是主题切换后底色又自己跳一下)。
@@ -251,6 +279,8 @@ public class FluentWindow : Window
     {
         if (_hooked) ThemeService.Instance.ThemeChanged -= OnThemeChanged;
         Svc.Settings.AcrylicChanged -= OnAcrylicChanged;
+        Svc.Settings.LayoutChanged -= OnLayoutChanged;
+        UiScale.Unregister(Content as FrameworkElement);
         base.OnClosed(e);
     }
 

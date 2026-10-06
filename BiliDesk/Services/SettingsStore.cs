@@ -25,15 +25,26 @@ public class SettingsStore
     public AppTheme ThemeMode { get; set; } = AppTheme.System;
 
     /// <summary>
-    /// 全局亚克力背景(实验性, 默认**关**)。
-    ///
-    /// 开启后所有窗口改用 Win11 的 Acrylic 系统材质做背景(见 DwmInterop.SetAcrylicBackdrop)。
-    /// 默认关的原因: ① 它是实验性观感, 不同机器/显卡上合成效果有差异;
-    /// ② 亚克力要实时采样背后的桌面内容, 比纯色背景多一层 GPU 合成开销;
-    /// ③ 关掉时一切照旧(纯色背景), 不影响任何既有功能。
-    /// 老配置没有这个字段 → 属性初始化值(false)自动生效。
+    /// 窗口背景材质的**可选定值**(设置页那四个胶囊; 顺序就是界面顺序)。
+    /// ★ 把"无"放在第一个: 它等价于以前的"亚克力开关关掉", 用户一眼能找到关闭项。
     /// </summary>
-    public bool AcrylicBackground { get; set; }
+    public static readonly BackdropMaterial[] MaterialChoices =
+    {
+        BackdropMaterial.None, BackdropMaterial.Acrylic, BackdropMaterial.Mica, BackdropMaterial.MicaAlt
+    };
+
+    /// <summary>
+    /// 当前背景材质(2026-10-06 起是**唯一**的开关+变体选择, 四种平级)。
+    /// ★ 是否启用材质 = <c>AcrylicMaterial != None</c>。
+    /// </summary>
+    public BackdropMaterial AcrylicMaterial { get; set; } = BackdropMaterial.None;
+
+    /// <summary>
+    /// 是否启用了背景材质(由材质派生, 不再单独存储)。
+    /// ★ 保留它是因为有多处旧调用点读这个语义; 一律由 <see cref="AcrylicMaterial"/> 算出来,
+    ///   保证两者**不可能**不一致(以前是两个独立字段, 迟早对不上)。
+    /// </summary>
+    public bool AcrylicBackground => AcrylicMaterial != BackdropMaterial.None;
 
     /// <summary>
     /// 亚克力透明度——浅色主题的**可调范围**(用户 2026-10-06 定: 0~50)。
@@ -70,6 +81,23 @@ public class SettingsStore
     /// 深色底不透明度给太低会整片发糊, 给太高又会盖掉壁纸的层次。
     /// </summary>
     public int AcrylicOpacityDark { get; set; } = 50;
+
+    /// <summary>
+    /// 卡片页每行显示几列(0 = 自动, 按窗口宽度算)。
+    ///
+    /// ★ 为什么要给用户定死列数的能力: 自动列数是"按宽度尽量塞", 在宽屏上会一直加到 6~8 列、
+    ///   每张卡很小; 用户可能就想固定 4 列。所以给一个"我就要 N 列"的选项(0 保持原有自动行为)。
+    /// ★ 范围与夹取见 <see cref="Helpers.CardWall.FixedColumnsMin"/> —— 只写在那里一处。
+    /// </summary>
+    public int CardColumns { get; set; }
+
+    /// <summary>
+    /// 软件缩放百分比(默认 100 = 不缩放)。范围见 <see cref="Helpers.UiScale.MinPercent"/>。
+    ///
+    /// ★ 与"系统 DPI 缩放"是两件事: 那个由 Windows 管、作用于所有程序;
+    ///   这个是本程序自己按百分比缩放界面(给"系统 125% 但还想再大一点"这类需求用)。
+    /// </summary>
+    public int UiScalePercent { get; set; } = 100;
 
     /// <summary>弹幕开关(全局)</summary>
     public bool DanmakuEnabled { get; set; } = true;
@@ -212,12 +240,35 @@ public class SettingsStore
                 if (s != null)
                 {
                     ThemeMode = s.ThemeMode;
-                    // 老配置没有这个字段 → 属性初始化值(false)自动生效, 不需要版本兼容。
-                    AcrylicBackground = s.AcrylicBackground;
+                    // ★★★ 材质迁移(2026-10-06: 旧的"亚克力开关 + 材质变体"合并成一个选择器):
+                    //   · 新配置带 AcrylicMaterial(可空) ⇒ 校验合法性后直接用;
+                    //   · **老配置没有这个字段**(null) ⇒ 按旧 boolean 推导:
+                    //       旧 AcrylicBackground=true  → 旧的材质变体(默认 Acrylic)
+                    //       旧 AcrylicBackground=false → None(保持"关着")
+                    //   ★ 少了这条迁移, 老用户会出现两种错: 开着的被关掉, 或没开的被打开。
+                    if (s.AcrylicMaterial is { } m && Enum.IsDefined(typeof(BackdropMaterial), m))
+                    {
+                        AcrylicMaterial = m;
+                    }
+                    else
+                    {
+                        AcrylicMaterial = s.AcrylicBackground
+                            ? BackdropMaterial.Acrylic   // 老配置开着 → 等价于"亚克力"
+                            : BackdropMaterial.None;     // 老配置关着 → 保持关着
+                    }
                     // ★ 必须按**当前范围**夹取: 老配置里可能存在范围外的值(用户实测存着 0%),
                     //   不夹的话滑杆会显示成贴着左端、而实际透明度比下限还透 —— 观感与数值对不上。
                     AcrylicOpacityLight = Math.Clamp(s.AcrylicOpacityLight, AcrylicOpacityLightMin, AcrylicOpacityLightMax);
                     AcrylicOpacityDark = Math.Clamp(s.AcrylicOpacityDark, AcrylicOpacityDarkMin, AcrylicOpacityDarkMax);
+                    // ★ 列数要夹取: 老配置没有(默认 0=自动), 手改过的可能有越界值。
+                    //   0 要保留(它的语义是"自动"), 所以只在 >0 时夹。
+                    CardColumns = s.CardColumns <= 0
+                        ? 0
+                        : Math.Clamp(s.CardColumns, Helpers.CardWall.FixedColumnsMin, Helpers.CardWall.FixedColumnsMax);
+                    // ★ 缩放也要夹取: 老配置没这个字段(默认 100), 手改过的可能有 0/负数/超大值。
+                    //   0 会让整个界面缩成不可见的点, 必须挡住。
+                    UiScalePercent = Helpers.UiScale.ClampPercent(
+                        s.UiScalePercent <= 0 ? 100 : s.UiScalePercent);
                     DanmakuEnabled = s.DanmakuEnabled;
                     DanmakuAreaPercent = Math.Clamp(s.DanmakuAreaPercent, 25, 100);
                     DanmakuSmartFilter = s.DanmakuSmartFilter;
@@ -271,6 +322,12 @@ public class SettingsStore
         {
             ThemeMode = AppTheme.System;
         }
+
+        // ★ 列数要在 Load 的**最后**同步给 CardWall: 它是个全局静态属性, 卡片墙读的是它而不是设置对象。
+        //   漏了这一步的表现是"设置里存着 4 列, 重启后却按宽度自动排" —— 改了像没改。
+        Helpers.CardWall.SetFixedColumns(CardColumns);
+        // 同理: 缩放倍率也是静态的, 启动时要先落到 UiScale 上, 窗口创建时才会按它施加变换。
+        Helpers.UiScale.SetPercent(UiScalePercent);
     }
 
     /// <summary>
@@ -332,6 +389,9 @@ public class SettingsStore
                 AcrylicBackground = AcrylicBackground,
                 AcrylicOpacityLight = AcrylicOpacityLight,
                 AcrylicOpacityDark = AcrylicOpacityDark,
+                AcrylicMaterial = AcrylicMaterial,
+                CardColumns = CardColumns,
+                UiScalePercent = UiScalePercent,
                 DanmakuEnabled = DanmakuEnabled,
                 DanmakuAreaPercent = DanmakuAreaPercent,
                 DanmakuSmartFilter = DanmakuSmartFilter,
@@ -503,19 +563,63 @@ public class SettingsStore
     }
 
     /// <summary>
-    /// 开关"全局亚克力"背景并落盘, 广播给所有已打开的窗口。
-    /// 与主题色那类"纯资源替换"不同: 它要动窗口的原生合成属性(DWM), 必须让每个窗口
-    /// 自己重设一次, 所以走事件而不是只改资源字典。
+    /// 切换**窗口背景材质**并落盘, 广播给所有已打开的窗口。
+    ///
+    /// ★ 2026-10-06 起这一个方法同时承担"开关 + 变体选择"(四种材质平级):
+    ///   传 <see cref="BackdropMaterial.None"/> 就是关闭。
+    ///   ⇒ 原来那个 SetAcrylic(bool) 已删除 —— 两个入口并存迟早出现"开关说开、材质说无"的矛盾。
+    /// ★ 必须走事件(不能只改资源字典): 材质要动窗口的**原生合成属性**(DWM),
+    ///   每个窗口都得自己重下一次。
     /// </summary>
-    public void SetAcrylic(bool on)
+    public void SetAcrylicMaterial(BackdropMaterial material)
     {
-        if (AcrylicBackground == on) return;
-        AcrylicBackground = on;
+        // 非法枚举值挡在这里: 否则会下发一个 DWM 不认识的 DWMSBT, 材质静默不生效
+        if (!Enum.IsDefined(typeof(BackdropMaterial), material)) return;
+        if (AcrylicMaterial == material) return;
+        AcrylicMaterial = material;
         Save();
         AcrylicChanged?.Invoke();
     }
 
-    /// <summary>调节浅色主题亚克力透明度(可调范围见 <see cref="AcrylicOpacityLightMin"/>)并落盘, 广播给所有窗口重设背景</summary>
+    /// <summary>
+    /// 设置卡片页列数(0 = 自动)并落盘, 广播给所有窗口。
+    /// ★ 它不是"改个资源"那种轻量变更: 列数写进 Helpers.CardWall 的静态属性后,
+    ///   所有已存在的卡片墙都要**立刻重算**, 所以这里调 CardWall.SetFixedColumns(它内部会 RefreshAll)。
+    /// </summary>
+    public void SetCardColumns(int columns)
+    {
+        var v = columns <= 0 ? 0 : Math.Clamp(columns, Helpers.CardWall.FixedColumnsMin, Helpers.CardWall.FixedColumnsMax);
+        if (CardColumns == v) return;
+        CardColumns = v;
+        Helpers.CardWall.SetFixedColumns(v);
+        Save();
+        LayoutChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// 设置软件缩放百分比并落盘, 广播给所有窗口。
+    /// ★ 与列数同理: 倍率落在静态的 <see cref="Helpers.UiScale"/> 上, 各窗口的根元素
+    ///   各自持有 LayoutTransform, 所以必须通知每个窗口重新施加一次(见 FluentWindow.OnLayoutChanged)。
+    /// </summary>
+    public void SetUiScalePercent(int percent)
+    {
+        var v = Helpers.UiScale.ClampPercent(percent);
+        if (UiScalePercent == v) return;
+        UiScalePercent = v;
+        Helpers.UiScale.SetPercent(v);
+        Save();
+        LayoutChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// 影响**布局**的设置变化(列数/缩放)。界面据此重新排版 ——
+    /// 与主题那类"换笔刷"不同, 这些必须让可视树重新测量。
+    /// </summary>
+    public event Action? LayoutChanged;
+
+    /// <summary>
+    /// 调节浅色主题亚克力透明度(可调范围见 <see cref="AcrylicOpacityLightMin"/>)并落盘, 广播给所有窗口重设背景
+    /// </summary>
     public void SetAcrylicOpacityLight(int opacity)
     {
         opacity = Math.Clamp(opacity, AcrylicOpacityLightMin, AcrylicOpacityLightMax);
