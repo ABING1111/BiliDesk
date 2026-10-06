@@ -71,7 +71,12 @@ public class TrayService : IDisposable
         }
     }
 
-    private void ShowMainWindow()
+    /// <summary>
+    /// 把主窗口显示到前台(托盘双击 / 用户再次双击 exe 两处共用)。
+    /// ★ 必须是 public: 单实例的"请显形"通知(App.OnStartup 里订阅)也要复用它 ——
+    ///   两处各写一份必然出现"托盘能叫出来、双击 exe 叫不出来"这种不一致。
+    /// </summary>
+    public void ShowMainWindow()
     {
         var app = Application.Current;
         if (app == null) return;

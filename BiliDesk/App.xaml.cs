@@ -33,6 +33,19 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // ★★★ 单实例闸门必须放在**最前面**, 在初始化任何服务之前。
+        //   为什么: 第二个实例一旦跑起来, 它会 Load 同一份 session.json/settings.json,
+        //   再 Save 回去就会覆盖第一个进程刚写的状态(登录态/设置互相打架), 还会多占一份
+        //   LibVLC 原生库。所以"不是第一个"时要把整个启动流程掐掉。
+        //   把已在跑的实例叫到前台这件事由 SingleInstance 自己通过管道转达(见该文件)。
+        if (!SingleInstance.Acquire())
+        {
+            // 不建任何窗口, 直接退出。用 Shutdown() 而不是 Environment.Exit():
+            // 这时还没有窗口/托盘资源, 但走 WPF 的正规退出路径更稳。
+            Shutdown();
+            return;
+        }
+
         // 系统关机/注销: 必须真的退出, 不能因为"关闭到托盘"把注销流程卡住
         SessionEnding += (_, _) => IsExiting = true;
 
@@ -112,6 +125,27 @@ public partial class App : Application
 
         // 系统托盘: 双击回主界面, 右键可退出(失败只记日志, 不影响启动)
         TrayService.Instance.Initialize();
+
+        // ★ 用户**又双击了一次 exe**: 已经在跑的这个实例收到管道通知, 把主窗口叫到前台。
+        //   只挡"不双开"而不做这件事, 用户看到的是"双击图标毫无反应", 会以为程序坏了。
+        //   ShowRequested 在后台线程触发, 这里派发回 UI 线程再碰窗口。
+        SingleInstance.ShowRequested += () =>
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                // 复用托盘那套"显示主窗口"的逻辑(它已经处理了最小化还原 + Show + Activate)
+                TrayService.Instance.ShowMainWindow();
+                // 顺带把主窗口置顶闪一下: 只 Activate 有时会被其它前台窗口压住
+                if (SvcWindow.Main is { } w)
+                {
+                    if (w.WindowState == WindowState.Minimized)
+                        w.WindowState = WindowState.Normal;
+                    w.Show();
+                    w.Activate();
+                    w.Topmost = true;
+                    w.Topmost = false;   // 立刻取消: 只是借它把窗口顶到最前, 不做常驻置顶
+                    w.Focus();
+                }
+            }));
 
         // 自动检查更新: 主界面起来后等 6 秒再查(避开启动高峰, 也别让"检查"和首屏加载抢网络)。
         // 查询本身是匿名请求、失败静默, 细节见 UpdateChecker.AutoCheckAsync。
