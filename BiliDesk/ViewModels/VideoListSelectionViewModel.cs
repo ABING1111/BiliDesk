@@ -41,8 +41,24 @@ public abstract class VideoListSelectionViewModel : ObservableObject
     ///
     /// 走 <see cref="FilterService.Visible{T}"/> 而不是原集合: 被屏蔽掉的条目用户
     /// 根本看不见, 却因为"全选"被一起选中/删除, 是最典型的"我明明没选它"。
+    ///
+    /// ★★ 同一轮通知里只枚举一次(2026-10-07 探针 bd-probe-histfilter):
+    ///   一次 <see cref="RaiseSelection"/> 要报 6 个派生属性, 而它们各自都调
+    ///   <see cref="VisibleItems"/> —— <see cref="AllSelected"/> 内部还要再取
+    ///   TotalCount 与 SelectedCount, 于是**一轮下来会枚举七八次**, 每次都是一遍
+    ///   过滤视图 + 一个新 List。历史页搜索是高频路径(每敲一个字防抖到点就来一次),
+    ///   这点重复乘上去不小。缓存成"每轮一份", 值与原来逐个算出来的完全一致。
     /// </summary>
-    protected List<VideoItem> VisibleItems() => FilterService.Visible(SelectionSource).ToList();
+    protected List<VideoItem> VisibleItems()
+    {
+        // null = 本轮还没算过。RaiseSelection 开头会清掉, 所以缓存只活在一次通知内,
+        // 不会跨状态陈旧(选择态变了、集合变了、过滤变了都会重新算)。
+        if (_visibleCache != null) return _visibleCache;
+        _visibleCache = FilterService.Visible(SelectionSource).ToList();
+        return _visibleCache;
+    }
+
+    private List<VideoItem>? _visibleCache;
 
     /// <summary>可见条数(已叠加全局屏蔽与页面自己的搜索)</summary>
     public int TotalCount => VisibleItems().Count;
@@ -127,6 +143,10 @@ public abstract class VideoListSelectionViewModel : ObservableObject
     /// <summary>刷新选择态相关的全部绑定属性。</summary>
     protected void RaiseSelection()
     {
+        // 本轮的可见项算一次就够(见 VisibleItems 的说明): 下面 6 个派生属性都从它派生,
+        // 而且每次读都是 O(可见数) —— 每轮重新枚举七八遍纯属重复劳动。
+        _visibleCache = null;
+
         OnPropertyChanged(nameof(SelectedCount));
         OnPropertyChanged(nameof(TotalCount));
         OnPropertyChanged(nameof(HasSelection));
@@ -134,6 +154,9 @@ public abstract class VideoListSelectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedText));
         OnPropertyChanged(nameof(SelectAllText));
         RaiseSelectionExtra();
+
+        // 通知发完就丢: 缓存只服务于"这一轮算出来的值要一致", 不该被后续单独读取复用
+        _visibleCache = null;
     }
 
     /// <summary>子类补充自己要通知的属性(搜索命中数、空态提示、顶栏计数等)。默认无。</summary>
