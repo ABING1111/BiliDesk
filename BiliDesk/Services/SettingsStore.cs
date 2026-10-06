@@ -36,15 +36,40 @@ public class SettingsStore
     public bool AcrylicBackground { get; set; }
 
     /// <summary>
-    /// 亚克力背景透明度——浅色主题(0~100, 默认 60)。数值越小越透明, 越大越不透明。
-    /// 只影响"页面底/侧边栏"这两层的透明度, 不影响卡片/浮层等实色块。
+    /// 亚克力透明度——浅色主题的**可调范围**(用户 2026-10-06 定: 0~50)。
+    ///
+    /// ★ 语义: 这就是**页面底的不透明度** —— 0% 等于页面底全透(桌面直接透出来, 文字压在壁纸上),
+    ///   50% 等于一半实色。数值越小越透、亚克力感越强。
+    /// ★ 为什么两端不做成 0~100: 上限 100% 时页面底完全不透明, 亚克力一点都看不见,
+    ///   等于白开了这个开关; 所以上限收到 50, 保证"在任何可调位置都看得出亚克力"。
+    /// ★ 范围只写在这里一处: Load 的兜底、setter 的夹取、设置页滑杆的上下限、默认值
+    ///   **全部**引用它, 免得以后有人只改一处(会出现"滑杆能拉但存不进去", 或默认值落在范围外
+    ///   导致滑杆被顶死在端点)。
     /// </summary>
-    public int AcrylicOpacityLight { get; set; } = 60;
+    public const int AcrylicOpacityLightMin = 0;
+    /// <inheritdoc cref="AcrylicOpacityLightMin"/>
+    public const int AcrylicOpacityLightMax = 50;
 
     /// <summary>
-    /// 亚克力背景透明度——深色主题(0~100, 默认 75)。深色底本身就更暗, 默认稍不透明一档。
+    /// 亚克力透明度——深色主题的可调范围(30~70)。整体比浅色高一档:
+    /// 深色底本来就暗, 压太低会和壁纸糊在一起、分不出层次。
     /// </summary>
-    public int AcrylicOpacityDark { get; set; } = 75;
+    public const int AcrylicOpacityDarkMin = 30;
+    /// <inheritdoc cref="AcrylicOpacityDarkMin"/>
+    public const int AcrylicOpacityDarkMax = 70;
+
+    /// <summary>
+    /// 亚克力背景透明度——浅色主题(默认 30, 可调 0~50)。数值越小越透明, 越大越不透明。
+    /// 只影响"页面底/侧边栏"这两层的透明度, 不影响卡片/浮层等实色块。
+    /// ★ 默认 30 是历史沿用值: 亚克力这套最早写死的就是 0x4D(≈30%), 观感验证过。
+    /// </summary>
+    public int AcrylicOpacityLight { get; set; } = 30;
+
+    /// <summary>
+    /// 亚克力背景透明度——深色主题(默认 50, 可调 30~70)。深色主题取区间中值:
+    /// 深色底不透明度给太低会整片发糊, 给太高又会盖掉壁纸的层次。
+    /// </summary>
+    public int AcrylicOpacityDark { get; set; } = 50;
 
     /// <summary>弹幕开关(全局)</summary>
     public bool DanmakuEnabled { get; set; } = true;
@@ -189,8 +214,10 @@ public class SettingsStore
                     ThemeMode = s.ThemeMode;
                     // 老配置没有这个字段 → 属性初始化值(false)自动生效, 不需要版本兼容。
                     AcrylicBackground = s.AcrylicBackground;
-                    AcrylicOpacityLight = Math.Clamp(s.AcrylicOpacityLight, 0, 100);
-                    AcrylicOpacityDark = Math.Clamp(s.AcrylicOpacityDark, 0, 100);
+                    // ★ 必须按**当前范围**夹取: 老配置里可能存在范围外的值(用户实测存着 0%),
+                    //   不夹的话滑杆会显示成贴着左端、而实际透明度比下限还透 —— 观感与数值对不上。
+                    AcrylicOpacityLight = Math.Clamp(s.AcrylicOpacityLight, AcrylicOpacityLightMin, AcrylicOpacityLightMax);
+                    AcrylicOpacityDark = Math.Clamp(s.AcrylicOpacityDark, AcrylicOpacityDarkMin, AcrylicOpacityDarkMax);
                     DanmakuEnabled = s.DanmakuEnabled;
                     DanmakuAreaPercent = Math.Clamp(s.DanmakuAreaPercent, 25, 100);
                     DanmakuSmartFilter = s.DanmakuSmartFilter;
@@ -488,20 +515,20 @@ public class SettingsStore
         AcrylicChanged?.Invoke();
     }
 
-    /// <summary>调节浅色主题亚克力透明度(0~100)并落盘, 广播给所有窗口重设背景</summary>
+    /// <summary>调节浅色主题亚克力透明度(可调范围见 <see cref="AcrylicOpacityLightMin"/>)并落盘, 广播给所有窗口重设背景</summary>
     public void SetAcrylicOpacityLight(int opacity)
     {
-        opacity = Math.Clamp(opacity, 0, 100);
+        opacity = Math.Clamp(opacity, AcrylicOpacityLightMin, AcrylicOpacityLightMax);
         if (AcrylicOpacityLight == opacity) return;
         AcrylicOpacityLight = opacity;
         Save();
         AcrylicChanged?.Invoke();
     }
 
-    /// <summary>调节深色主题亚克力透明度(0~100)并落盘, 广播给所有窗口重设背景</summary>
+    /// <summary>调节深色主题亚克力透明度(可调范围见 <see cref="AcrylicOpacityDarkMin"/>)并落盘, 广播给所有窗口重设背景</summary>
     public void SetAcrylicOpacityDark(int opacity)
     {
-        opacity = Math.Clamp(opacity, 0, 100);
+        opacity = Math.Clamp(opacity, AcrylicOpacityDarkMin, AcrylicOpacityDarkMax);
         if (AcrylicOpacityDark == opacity) return;
         AcrylicOpacityDark = opacity;
         Save();

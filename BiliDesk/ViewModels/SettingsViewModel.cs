@@ -279,7 +279,7 @@ public class SettingsViewModel : ObservableObject
         : "实验性功能: 让窗口背景变成半透明亚克力材质(需要 Windows 11)";
 
     /// <summary>
-    /// 亚克力透明度——浅色主题(0~100, 默认 60)。数值越小越透明, 越大越不透明。
+    /// 亚克力透明度——浅色主题(默认 30, 可调 0~50)。数值越小越透明, 越大越不透明。
     /// 改透明度与开关一样要走存储层落盘 + 广播, 所有窗口立即重设背景。
     /// </summary>
     public int AcrylicOpacityLight
@@ -297,7 +297,14 @@ public class SettingsViewModel : ObservableObject
     /// <summary>浅色透明度滑杆下方那行说明(与"弹幕显示区域"同款: 数值写进描述行)</summary>
     public string AcrylicOpacityLightText => $"页面底不透明度 {AcrylicOpacityLight}%";
 
-    /// <summary>亚克力透明度——深色主题(0~100, 默认 75)</summary>
+    // ★ 滑杆上下限直接取存储层的常量(单一来源): 以后改范围只动 SettingsStore 一处,
+    //   XAML 不用跟着改 —— 否则"滑杆能拉到 100 但 setter 夹回 70"会让滑杆自己弹回去。
+    /// <summary>浅色透明度滑杆下限</summary>
+    public double AcrylicOpacityLightMin => SettingsStore.AcrylicOpacityLightMin;
+    /// <summary>浅色透明度滑杆上限</summary>
+    public double AcrylicOpacityLightMax => SettingsStore.AcrylicOpacityLightMax;
+
+    /// <summary>亚克力透明度——深色主题(默认 50, 可调 30~70)</summary>
     public int AcrylicOpacityDark
     {
         get => Svc.Settings.AcrylicOpacityDark;
@@ -312,6 +319,11 @@ public class SettingsViewModel : ObservableObject
 
     /// <summary>深色透明度滑杆下方那行说明</summary>
     public string AcrylicOpacityDarkText => $"页面底不透明度 {AcrylicOpacityDark}%";
+
+    /// <summary>深色透明度滑杆下限</summary>
+    public double AcrylicOpacityDarkMin => SettingsStore.AcrylicOpacityDarkMin;
+    /// <summary>深色透明度滑杆上限</summary>
+    public double AcrylicOpacityDarkMax => SettingsStore.AcrylicOpacityDarkMax;
 
     // ----------------- 推荐算法(已固定为网页版, 不再提供选择) -----------------
     //

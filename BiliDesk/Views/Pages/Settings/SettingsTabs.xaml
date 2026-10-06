@@ -159,7 +159,8 @@
                         </StackPanel>
                         <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
                                 Width="240" VerticalAlignment="Center"
-                                Minimum="0" Maximum="100" IsSnapToTickEnabled="True" TickFrequency="5"
+                                Minimum="{Binding AcrylicOpacityLightMin}" Maximum="{Binding AcrylicOpacityLightMax}"
+                                IsSnapToTickEnabled="True" TickFrequency="5"
                                 Value="{Binding AcrylicOpacityLight, Mode=TwoWay}" />
                     </Grid>
 
@@ -179,7 +180,8 @@
                         </StackPanel>
                         <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
                                 Width="240" VerticalAlignment="Center"
-                                Minimum="0" Maximum="100" IsSnapToTickEnabled="True" TickFrequency="5"
+                                Minimum="{Binding AcrylicOpacityDarkMin}" Maximum="{Binding AcrylicOpacityDarkMax}"
+                                IsSnapToTickEnabled="True" TickFrequency="5"
                                 Value="{Binding AcrylicOpacityDark, Mode=TwoWay}" />
                     </Grid>
                 </StackPanel>
