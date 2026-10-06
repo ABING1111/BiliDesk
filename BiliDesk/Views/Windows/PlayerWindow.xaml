@@ -1252,12 +1252,6 @@
                                            所以这里只有一个空心钟, 不再切换到"实心圆+白勾"。
                                            ★ 旧版那两层(实心圆 LaterIconOnFill + 白勾 LaterIconOnCheck)已删除;
                                              它们换来的代价是两个 Path 必须同步显隐, 而用户明确表示不需要勾。 -->
-                                         ★ 图标: 空心钟, 点亮时**只变色**(描边绑 Button.Foreground,
-                                           由 ApplyActionVisual 统一刷成该动作的蓝色)。
-                                         ★ 用户要求(2026-10-06): **不要打勾图案**, 保留时钟图标 + 跳动动画即可,
-                                           所以这里只有一个空心钟, 不再切换到"实心圆+白勾"。
-                                           ★ 旧版那两层(实心圆 LaterIconOnFill + 白勾 LaterIconOnCheck)已删除;
-                                             它们换来的代价是两个 Path 必须同步显隐, 而用户明确表示不需要勾。 -->
                                     <Button x:Name="BtnWatchLater" Style="{StaticResource PlayerActionBtn}"  Grid.Column="0"
                                             Click="OnWatchLaterClick" ToolTip="加入稍后再看">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
