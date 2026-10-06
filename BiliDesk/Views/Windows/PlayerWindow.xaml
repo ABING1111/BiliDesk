@@ -495,9 +495,19 @@
 
         <!-- 计数文字: 所有 TextBlock 都必须显式绑 Foreground —— 全局隐式 TextBlock 样式带
              Foreground setter, 优先级高于继承, 不绑的话变色的只有图标(项目里反复踩的那个坑)。
-             MinWidth 兜住位数变化, 右侧按钮不会被推走。 -->
+             MinWidth 兜住位数变化, 右侧按钮不会被推走。
+
+             ★ 2026-10-06 用户要求"数字与图案隔开一些":
+               Margin 左 6px(图标格 20px 之后的第一道间隙)。之前完全没有左边距, 数字紧贴图标,
+               "282" 那种三位数几乎顶在图标上, 两样东西糊成一团。
+               ★ 为什么靠 Margin 而不是给 IconBox 加 Padding: 图标盒是**六个按钮共用**的排版基线
+                 (固定 20×20, 改它会连带影响所有图标的居中与弹跳基准, 见 ActionIconBox 的注释)。
+                 只在文字这一侧加间隙, 图形那边一动不动。
+               ★ 为什么不用 MinWidth 顶开: MinWidth 只是给文字块留白, 文字默认左对齐,
+                 所以留白落在**右边**(数字右边的空档), 左边的"贴"一点没变。 -->
         <Style x:Key="ActionCountText" TargetType="TextBlock">
             <Setter Property="FontSize" Value="13" />
+            <Setter Property="Margin" Value="6,0,0,0" />
             <Setter Property="MinWidth" Value="20" />
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
