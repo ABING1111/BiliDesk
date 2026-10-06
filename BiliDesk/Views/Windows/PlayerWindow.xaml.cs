@@ -4280,18 +4280,14 @@ public partial class PlayerWindow : FluentWindow
         // ★ 胶囊里原先那 5 根小波条已删除(2026-10-06 用户要求"胶囊里的音频波纹去掉,
         //   只保留视频播放器的"), 所以这里不再有 ListenWavePanel 要切显隐。
         //   聆听态画面里那组大波纹(BigWave1~7)照旧由 _listenWaveTimer 驱动, 不受影响。
-        // 文案两层叠放(宽度由容器取最大值, 不推走邻居): 这里只切透明度
-        if (ListenLabel != null) ListenLabel.Opacity = on ? 0 : 1;
-        if (ListenLabelOn != null)
+        // ★ 2026-10-07: 文案改成**一个 TextBlock**整体写入(见 XAML 的说明)——
+        //   原来这里是两个 TextBlock 叠放 + 切 Opacity, 那套既让待命态的文字被挤在一侧,
+        //   又会在切换瞬间改变胶囊宽度、把顶栏右对齐的按钮推着走。现在只改一个 Text 的值。
+        if (ListenLabelText != null)
         {
-            ListenLabelOn.Opacity = on ? 1 : 0;
-            // 保证按钮宽度**在切换到聆听态之前**就已经是那个更宽的尺寸,
-            // 否则第一次进聆听会有一次可见的宽度跳变。
-            // ★ 占位串必须与 UpdateListenLabel 的**小时以内**格式等宽(分钟两位), 否则
-            //   第一次进聆听还是会跳一下。
-            if (!on) ListenLabelOn.Text = "正在聆听 00:00";
+            ListenLabelText.Text = on ? FormatListenLabel() : "听视频";
+            // 状态提示移进 ToolTip: 胶囊里只有"正在聆听 m:ss", 不再重复写一遍"正在聆听"
         }
-        if (on) UpdateListenLabel();
         if (BtnListen != null)
             BtnListen.ToolTip = on ? "退出听视频" : "听视频 (只播声音, 省流量)";
 
@@ -4308,10 +4304,14 @@ public partial class PlayerWindow : FluentWindow
         }
     }
 
-    /// <summary>聆听中的文案: 「正在聆听 m:ss」。秒数取自播放位置, 每秒由 UpdateListenLabel 刷。</summary>
-    private void UpdateListenLabel()
+    /// <summary>
+    /// 聆听中的完整文案: 「正在聆听 m:ss」。秒数取自播放位置, 每秒由 UpdateListenLabel 刷。
+    ///
+    /// ★ 2026-10-07: 抽成FormatListenLabel(), 因为胶囊现在只有**一个** TextBlock,
+    ///   初次进入与每秒刷新都必须调同一个函数, 否则两处格式会走偏。
+    /// </summary>
+    private string FormatListenLabel()
     {
-        if (ListenLabelOn == null || !_isListenMode) return;
         long ms = 0;
         try { ms = _mp.Time; } catch { /* 播放器未就绪 */ }
         if (ms < 0) ms = 0;
@@ -4319,11 +4319,16 @@ public partial class PlayerWindow : FluentWindow
         // ★ 分钟**补两位**(设计稿写的是 "0:14", 但那样字串长度会在 10 分钟那一刻从 4 位变 5 位,
         //   而按钮在顶栏右对齐的 StackPanel 里 —— 宽度一变右侧那排窗口按钮就整体挪一下,
         //   与「稍后再看」那条"整排被推走"是同一类问题。补零后小时以内长度恒定。
-        //   跨过 1 小时仍会多一段(视频普遍不止一小时, 不再为它牺牲可读性)。
-        var text = t.TotalHours >= 1
+        //跨过 1 小时仍会多一段(视频普遍不止一小时, 不再为它牺牲可读性)。
+        return t.TotalHours >= 1
             ? $"正在聆听 {(int)t.TotalHours}:{t.Minutes:D2}:{t.Seconds:D2}"
             : $"正在聆听 {(int)t.TotalMinutes:D2}:{t.Seconds:D2}";
-        ListenLabelOn.Text = text;
+    }
+
+    private void UpdateListenLabel()
+    {
+        if (ListenLabelText == null || !_isListenMode) return;
+        ListenLabelText.Text = FormatListenLabel();
     }
 
     /// <summary>封面图: 异步取一次(解码宽度按显示尺寸 260 的两倍, 够清晰又不浪费内存)</summary>
