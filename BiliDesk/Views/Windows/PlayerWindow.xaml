@@ -356,6 +356,273 @@
 </Border>
             </DataTemplate>
 
+        <!--
+            ============ 评论区排序入口(热门 / 时间) ============
+
+            用户要求: 入口放在「共 N 条评论」右边; 选中后要**美观的矩形底色**。
+            ★ 2026-10-06 第二次改: 第一版是**纯文字**(只有颜色变化), 用户反馈
+              "热门和时间的可读性比较差, 加入美观的矩形底色" ——
+              纯文字在"共 N 条评论"那行 12px 灰字旁边太弱, 用户看不出那俩词是可点的。
+              现在改成**带矩形底的小胶囊**:
+                · 未选中: 极淡的中性底(ControlFillDefaultBrush) + 次要文字色 ——
+                  "淡淡的底"本身就在说"这是一个可点的东西", 但又不抢选中项的视线;
+                · 选中: 强调色浅底(AccentSoftFillBrush) + 强调色文字 + SemiBold,
+                  与全应用其它"选中态"共用同一套观感(见记忆里的 AccentSoftFill 基准);
+                · 悬停: 比未选中再深一档(ControlFillHoverBrush)。
+              ★ 圆角用 6(不是胶囊的 100): 用户明确说"矩形底色", 且这里字号只有 12,
+                全圆角会显得像个按钮而不像"行内的一个可点词"。
+              ★ 为什么 Tag 驱动选中态而不是 IsChecked: 这里没有互斥组的需求(只有两个), 用
+                Tag="on" + DataTrigger 与 ContentActionTabStyle 同一套写法, 代码里一行就能切。
+                ★★ 绑定必须写 RelativeSource Self —— 2026-10-03 探针实测过, 在 ControlTemplate
+                   的触发器里写 TemplatedParent 或不写 RelativeSource 都**静默失效**。
+        -->
+        <Style x:Key="CommentSortLinkStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="FontSize" Value="12" />
+            <!-- 左右 9 / 上下 3: 矩形底不能太胖, 否则会把这行文字的行高撑开 -->
+            <Setter Property="Padding" Value="9,3" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="6"
+                                Background="{DynamicResource ControlFillDefaultBrush}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"
+                                              HorizontalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ControlFillHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            </Trigger>
+                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="on">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource AccentSoftFillBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </DataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--
+            ============ 播放页操作栏(六个按钮) ============
+            2026-10-06 按设计稿「播放页_v4」重做。要点(每条都对应设计稿里的一节):
+
+            · **每个动作有自己的色相**, 未激活一律是灰 —— 颜色只在用户动过之后才出现。
+              色相是**固定**的(不跟主题强调色走), 与 B 站一致: 红=情绪(点赞)、金=货币(投币)、
+              蓝=收进我的库(收藏/稍后再看)、绿=拿走(下载)。用户把主题色改成绿色时,
+              "点赞"跟着变绿会立刻丢掉这套分工。
+            · **hover 预览**: 鼠标上来就先把色相透出来(见代码 OnActionButtonHover),
+              底色跟着一起染 —— 红色文字压在灰底上很脏, 底色必须同色相。
+            · **弹跳**: 点赞/投币点下去图标弹一下(见 PlayActionPop)。
+            · **文字/图标的双层叠放**: 「稍后再看 ↔ 已添加」两个词的宽度取最大值,
+              切换时只做透明度过渡, **整排按钮不会被推着走**(这是设计稿 v3 的原始 bug)。
+            · **数字不推走邻居**: 计数框给 MinWidth, 位数从 9 变到 10 时右侧按钮不位移。
+
+            ★ 前景色由代码集中设置(见 ApplyActionVisual): hover / 点亮 / 取消后锁定三种态
+              都走那一处。散着在 XAML 触发器里改颜色会和代码打架。
+            ★ 底色用了 `Background="{TemplateBinding Foreground}"` + 低透明度 —— 
+              这样"同色相浅底"是**从前景色推导**出来的, 不必为六个按钮各配一支浅色笔刷。
+        -->
+        <Style x:Key="PlayerActionBtn" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <!-- 左右内边距 8: 按钮看起来才不像挤在一起。
+                 ★ 2026-10-06 改成固定两行后, 每行只有 3 个按钮、宽度远用不完(实测最大行 282 / 可用 351),
+                   所以这里把右外边距从 2 放宽到 6 —— 两行都要排得开一点, 别都贴在一起。 -->
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <!-- hover / 离开统一在代码里处理色相(见 ApplyActionVisual), 所以这里挂样式级事件:
+                 六个按钮各写一遍 Attribute 必然漏掉一两个。 -->
+            <EventSetter Event="MouseEnter" Handler="OnActionButtonHover" />
+            <EventSetter Event="MouseLeave" Handler="OnActionButtonLeave" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <!-- 同色相浅底: 颜色取自前景色, 透明度低到只作为"染色提示" -->
+                            <Border x:Name="Tint" CornerRadius="8"
+                                    Background="{TemplateBinding Foreground}" Opacity="0" />
+                            <Border Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Tint" Property="Opacity" Value="0.10" />
+                            </Trigger>
+                            <!-- 点亮态常驻一层浅底(与 hover 同款), 让"已经点过"一眼可读 -->
+                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="on">
+                                <Setter TargetName="Tint" Property="Opacity" Value="0.10" />
+                            </DataTrigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 操作栏图标(描边画法): 未激活空心, 点亮由子类样式补 Fill -->
+        <Style x:Key="ActionGlyphStroke" TargetType="Path">
+            <Setter Property="Stroke" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+            <Setter Property="Fill" Value="Transparent" />
+            <Setter Property="StrokeThickness" Value="1.85" />
+            <Setter Property="StrokeLineJoin" Value="Round" />
+            <Setter Property="StrokeStartLineCap" Value="Round" />
+            <Setter Property="StrokeEndLineCap" Value="Round" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <!-- 计数文字: 所有 TextBlock 都必须显式绑 Foreground —— 全局隐式 TextBlock 样式带
+             Foreground setter, 优先级高于继承, 不绑的话变色的只有图标(项目里反复踩的那个坑)。
+             MinWidth 兜住位数变化, 右侧按钮不会被推走。 -->
+        <Style x:Key="ActionCountText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Margin" Value="6,0,0,0" />
+            <Setter Property="MinWidth" Value="20" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+        </Style>
+
+        <!-- 操作栏文字标签(稍后再看/分享/下载) -->
+        <Style x:Key="ActionLabelText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Margin" Value="6,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+        </Style>
+
+        <!-- 弹跳: 作用在图标盒子上, 不打断内部图形 -->
+        <!--
+            操作栏图标盒子(弹跳动画的载体)。
+
+            ★★★ 这里**绝不能**在样式里给 RenderTransform 一个共享的 ScaleTransform。
+              WPF 会把样式 Setter 里的 Freezable **冻结**, 而冻结对象挂不了动画 ——
+              调用 BeginAnimation 会当场抛
+                "无法在 System.Windows.Media.ScaleTransform 上激活 ScaleX 属性,
+                 因为该对象已密封或已冻结"
+              表现就是"点一下点赞/投币/收藏/稍后再看就弹错误框"(2026-10-06 实测踩到)。
+              缩放对象由代码在每次播放动画时**新建**一份(见 PlayActionPop), 样式只管
+              尺寸与变换原点。
+        -->
+        <Style x:Key="ActionIconBox" TargetType="Grid">
+            <Setter Property="Width" Value="20" />
+            <Setter Property="Height" Value="20" />
+            <!-- 变换原点是普通 double, 冻结不了, 放在样式里安全 -->
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        </Style>
+
+        <!-- 声波单根(聆听遮罩里的大号, 5px 宽 7 根)。
+             ★ 颜色取**主题强调色**, 不再写死琥珀 —— 用户要求"听视频的颜色跟随全局主题设置"
+               (旧版这颗写死 #F59E0B, 用户换主题色后播放页就剩它还是橙的)。
+               遮罩底是固定深色渐变(它替代的是视频画面, 浅底会像"画面坏了"),
+               所以声波直接用 AccentBrush, 在深底上足够亮。
+             ★ 高度由代码逐帧改(见 UpdateListenWave)。 -->
+        <Style x:Key="ListenBigWaveBar" TargetType="Border">
+            <Setter Property="Width" Value="5" />
+            <Setter Property="Height" Value="10" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+        </Style>
+
+        <!--
+            ============ 「听视频」幽灵按钮(设计稿 听视频.html) ============
+
+            只有一个变体(幽灵)和两种状态(待命 / 聆听中)。要点:
+              · 高度 40 与旁边按钮齐平; 圆角 pill; 图标 18px; 左右内边距 18; 图文间距 9。
+              · **待命**: 透明底 + 1px 描边 + 次要文字色。压在浅色顶栏上就用主题色描边,
+                不需要设计稿里那套"深底换一层皮" —— 本工程的顶栏跟主题走, 不是压在视频上。
+              · **聆听中**: 强调色实心 + 深色文字 + 声波律动。
+              · ★ 声波条不能靠 Storyboard 逐条写: 五根条的延迟/高度各不相同, 在 XAML 里要写
+                 五组 BeginStoryboard。这里改成代码驱动的 DispatcherTimer(见 _listenWaveTimer),
+                 顺带解决"退出聆听后动画还在跑"这个必然会被踩的坑 —— 定时器可以一处停掉。
+            ★ 文案只用「听视频 / 正在聆听 m:ss」: 设计稿第 05 节明确不写"AI"二字,
+              且必须能取消(再点一次回到待命)。
+
+            ★★★ 聆听态用**主题强调色**, 不是设计稿的琥珀。2026-10-06 用户要求
+                 "听视频的颜色跟随全局主题设置" —— 设计稿那版把琥珀写死, 用户在设置页把
+                 主题色改成蓝/绿之后, 这颗按钮会始终是橙的, 和整个应用的主题脱节。
+                 改法: 底色取 AccentBrush、文字取 TextOnAccentBrush(强调色底上的专用前景,
+                 ThemeService 会按强调色亮度自动选白/黑, 见 BrandOnAccent)。
+                 ★ 声波条取 Foreground(即 TextOnAccentBrush) —— 压在强调色实心底上,
+                   跟着文字色走才保证任何主题色下都看得清。
+                 ★ 这三个键都是 ThemeService 用 DynamicResource 注入的, 换主题即时生效。
+        -->
+        <Style x:Key="ListenGhostBtn" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlFillDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Padding" Value="18,0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="20"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <!-- 设计稿: 悬停时墨黑反转。本工程用主题的悬停底色 + 主文字色代替
+                                     (顶栏底色是主题色, 硬写墨黑在深色主题下反而看不见) -->
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ControlFillHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ControlFillPressedBrush}" />
+                            </Trigger>
+                            <!-- 聆听中: 主题强调色实心。文案/图标/声波由代码切换(见 ApplyListenMode) -->
+                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="on">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
+                            </DataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 声波单根(顶栏小按钮用): 宽 2 / 右间距 2 => 4 根正好 16px, 塞得进 18px 的图标格。
+             高度由代码逐帧改(见 UpdateListenWave)。
+             ★ 宽度/间距刻意压到这么小: 5 根 2.5+2.5 就是 25px, 会溢出图标格撞到文字上。
+             ★ 颜色绑按钮 Foreground: 聆听态下它就是 TextOnAccentBrush(压在强调色底上),
+               换主题色时跟着走。 -->
+        <Style x:Key="ListenWaveBar" TargetType="Border">
+            <Setter Property="Width" Value="2" />
+            <Setter Property="Height" Value="4" />
+            <Setter Property="CornerRadius" Value="1" />
+            <Setter Property="Background" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,0,2,0" />
+        </Style>
+
 </views:FluentWindow.Resources>
     <!-- 根底色: 常规状态跟主题走; 全屏时 ApplyFullscreenLayout 会把它切成纯黑
          (窗口自身 Background 在这层网格底下, 被它盖住 —— 只切窗口那一层是不够的,
@@ -382,6 +649,53 @@
                            TextTrimming="CharacterEllipsis" Text="播放器" />
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- 「听视频」入口(2026-10-06 新增, 用户要求放播放器右上角, 设计参考 听视频.html)。
+                         幽灵胶囊: 待命 = 透明底 + 1px 描边 + 耳机图标 + "听视频";
+                         聆听中 = 琥珀实心 + 声波律动 + "正在聆听 m:ss"(由 ApplyListenMode 切换)。
+                         ★ 两段文案的宽度差很多("听视频" 3 字 vs "正在聆听 0:00"), 直接换文案会把右边的
+                           窗口按钮推着走 —— 与「稍后再看」同一个坑。这里用**同一套双层叠放**:
+                           两个 TextBlock 叠在同一格里, 容器宽度自动取两者最大值, 切换只做透明度过渡。
+                         ★ 直播 / 本地文件不给这个入口(见 UpdateListenButtonState): 直播是连续流、
+                           本地文件没有独立音轨, 点了只会失败。 -->
+                    <Button x:Name="BtnListen" Style="{StaticResource ListenGhostBtn}"
+                            Margin="0,0,8,0"
+                            Click="OnListenToggleClick"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <!-- 待命态: 耳机(lucide headphones 的路径, 与设计稿一致)。
+                                 声波五根(聆听态)叠在同一个位置, 显隐由代码切换。 -->
+                            <Grid Width="20" Height="18" VerticalAlignment="Center">
+                                <Path x:Name="ListenHeadIcon" Width="18" Height="18" Stretch="Uniform"
+                                      HorizontalAlignment="Center"
+                                      Fill="Transparent"
+                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="2" StrokeLineJoin="Round"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Data="M3,14 L6,14 A2,2 0 0 1 8,16 L8,19 A2,2 0 0 0 10,21 L11,21 A2,2 0 0 0 13,19 L13,16 A2,2 0 0 1 15,14 L18,14 M21,18 L21,12 A9,9 0 0 0 3,12 L3,18" />
+                                <StackPanel x:Name="ListenWavePanel" Orientation="Horizontal"
+                                            HorizontalAlignment="Center"
+                                            Visibility="Collapsed" VerticalAlignment="Center">
+                                    <Border x:Name="ListenWave1" Style="{StaticResource ListenWaveBar}" />
+                                    <Border x:Name="ListenWave2" Style="{StaticResource ListenWaveBar}" />
+                                    <Border x:Name="ListenWave3" Style="{StaticResource ListenWaveBar}" />
+                                    <Border x:Name="ListenWave4" Style="{StaticResource ListenWaveBar}" />
+                                    <Border x:Name="ListenWave5" Style="{StaticResource ListenWaveBar}" />
+                                </StackPanel>
+                            </Grid>
+                            <!-- 双层文字: 宽度取两者最大值(见上面注释)。
+                                 ★ 聆听那层的秒数用等宽数字: "10:00" 与 "9:59" 宽度不等会把按钮撑得一跳一跳。 -->
+                            <Grid Margin="9,0,0,0" VerticalAlignment="Center">
+                                <TextBlock x:Name="ListenLabel" Text="听视频" FontSize="14"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                <TextBlock x:Name="ListenLabelOn" Text="正在聆听 00:00" FontSize="14" Opacity="0"
+                                           FontFamily="Consolas, Segoe UI"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                            </Grid>
+                        </StackPanel>
+                    </Button>
+
                     <!-- 铺满窗口(2026-10-04 按用户要求把这里原来是"全屏"的功能改成它):
                          点了之后视频铺满**顶栏以下的整个窗口宽度**, 右侧信息栏整个收起
                          (不再占任何显示空间), 窗口尺寸本身完全不变; 再点一次还原。
@@ -446,6 +760,59 @@
                             <!-- 弹幕层 -->
                             <Canvas x:Name="DanmakuCanvas" Background="Transparent" IsHitTestVisible="False"
                                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+
+                            <!-- ===== 「听视频」聆听态画面(2026-10-06 新增) =====
+                                 ★ 为什么必须是**一层盖住视频的浮层**而不是"隐藏 VideoView":
+                                   视频区被两层原生 HWND 占着(见 VideoAreaRoot 的说明), 把
+                                   VideoView.Visibility 藏掉会让那个 vout HWND 露出一块白底
+                                   —— 和 EOF 那条"浅色全屏全白"是同一个现象。盖一层不透明的
+                                   画面最稳, 而且退出时不需要重新协商 vout。
+                                 ★ IsHitTestVisible=False: 手势(单击暂停/双击全屏/长按快进)必须
+                                   照常落到 VideoAreaRoot 上; 这层只是"看"的。
+                                 ★ 层级: 放在弹幕层之后、加载遮罩之前 —— 弹出的是"正在加载"而不是
+                                   垫在它下面。控制栏在它之后声明, 所以仍然压在它上面(可操作)。
+                                 ★ 背景用深色渐变(不跟主题走): 它替代的是视频画面, 浅色主题下
+                                   用浅底会看着像"画面坏了"。 -->
+                            <Grid x:Name="ListenOverlay" Visibility="Collapsed" IsHitTestVisible="False">
+                                <Grid.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0.6,1">
+                                        <GradientStop Color="#1A1A1F" Offset="0" />
+                                        <GradientStop Color="#101013" Offset="0.62" />
+                                        <GradientStop Color="#0B0B0D" Offset="1" />
+                                    </LinearGradientBrush>
+                                </Grid.Background>
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                            MaxWidth="520">
+                                    <!-- 封面: 圆角 + 投影。播封面图进来当视觉锚点, 一眼知道在听什么。
+                                         ★ 用 Image 而不是 Border.Background(ImageBrush): 后者要做
+                                           ImageBrush 的 Stretch 还要处理异步换图, Image 直接吃
+                                           Cover.ImageSource 附加属性(CoverLoader 那条异步链)。 -->
+                                    <Border Width="260" Height="146" CornerRadius="12"
+                                            ClipToBounds="True" HorizontalAlignment="Center"
+                                            Background="#26FFFFFF">
+                                        <Image x:Name="ListenCover" Stretch="UniformToFill" />
+                                    </Border>
+                                    <!-- 声波律动: 比顶栏那颗按钮上的大一号, 是这一屏的主角。 -->
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                                Margin="0,30,0,0" Height="34">
+                                        <Border x:Name="BigWave1" Style="{StaticResource ListenBigWaveBar}" />
+                                        <Border x:Name="BigWave2" Style="{StaticResource ListenBigWaveBar}" />
+                                        <Border x:Name="BigWave3" Style="{StaticResource ListenBigWaveBar}" />
+                                        <Border x:Name="BigWave4" Style="{StaticResource ListenBigWaveBar}" />
+                                        <Border x:Name="BigWave5" Style="{StaticResource ListenBigWaveBar}" />
+                                        <Border x:Name="BigWave6" Style="{StaticResource ListenBigWaveBar}" />
+                                        <Border x:Name="BigWave7" Style="{StaticResource ListenBigWaveBar}" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="ListenOverlayTitle" Text="" FontSize="15"
+                                               Foreground="#E8E8EA" HorizontalAlignment="Center"
+                                               Margin="0,26,0,0" TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                               MaxHeight="46" TextAlignment="Center" LineHeight="23" />
+                                    <!-- 提示行: 明确"再点一次就能退出", 不留死路(设计稿第 05 节) -->
+                                    <TextBlock Text="正在聆听 · 点击右上角「听视频」可退出" FontSize="12"
+                                               Foreground="#8A8A94" HorizontalAlignment="Center"
+                                               Margin="0,10,0,0" />
+                                </StackPanel>
+                            </Grid>
                             <!-- 加载遮罩: 转圈 + 轮换颜文字 + 文案(颜文字由后台定时器驱动, 见 ShowLoading) -->
                             <Border x:Name="LoadingOverlay" Background="Black"
                                     Visibility="Collapsed">
@@ -779,123 +1146,174 @@
                                     </Button>
                                 </Grid>
                             </Border>
-                            <!-- 操作栏(2026-09-26 二次改版): "图标 + 数量"一行(对齐 B 站网页版), 不再是 3x2 的胶囊按钮。
-                                 计数来自 view 接口的 stat; 分享 = 复制链接(图标用 Assets/share.png, 用户指定);
-                                 离线缓存从播放器右下角挪到这里(用户要求)。
-                                 第二行的"UP 主页/复制链接/网页版"三栏已删: UP 入口改成点 UP 头像/名字。 -->
-                            <StackPanel Margin="0,14,0,0">
-                                <StackPanel.Resources>
-                                    <Style x:Key="StatButtonStyle" TargetType="Button">
-                                        <Setter Property="Background" Value="Transparent" />
-                                        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-                                        <Setter Property="BorderThickness" Value="0" />
-                                        <!-- 左右内边距从 10 收到 9: 右侧信息栏只有 400px(去掉 20+20 外边距、
-                                             1px 分隔线、以及可能的纵向滚动条后约 345px), 而这一行现在有 6 个按钮
-                                             (点赞/投币/收藏/稍后再看/分享/缓存)。数字位数一多(如 "12.3万")
-                                             就会顶到边 —— 收 1px 只是小补贴, 真正的兜底是下面那层 WrapPanel。 -->
-                                        <Setter Property="Padding" Value="9,6" />
-                                        <Setter Property="Margin" Value="0,0,4,0" />
-                                        <Setter Property="Cursor" Value="Hand" />
-                                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-                                        <Setter Property="Template">
-                                            <Setter.Value>
-                                                <ControlTemplate TargetType="Button">
-                                                    <Border x:Name="Bd" Background="{TemplateBinding Background}"
-                                                            CornerRadius="6" Padding="{TemplateBinding Padding}">
-                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                                          TextElement.Foreground="{TemplateBinding Foreground}" />
-                                                    </Border>
-                                                    <ControlTemplate.Triggers>
-                                                        <Trigger Property="IsMouseOver" Value="True">
-                                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillHoverBrush}" />
-                                                        </Trigger>
-                                                        <Trigger Property="IsPressed" Value="True">
-                                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillPressedBrush}" />
-                                                        </Trigger>
-                                                        <Trigger Property="IsEnabled" Value="False">
-                                                            <Setter Property="Opacity" Value="0.45" />
-                                                        </Trigger>
-                                                    </ControlTemplate.Triggers>
-                                                </ControlTemplate>
-                                            </Setter.Value>
-                                        </Setter>
-                                    </Style>
-                                </StackPanel.Resources>
+                            <!-- 操作栏(2026-10-06 按设计稿「播放页_v4」重构): "图标 + 数量/文字"一行。
+                                 计数来自 view 接口的 stat; 分享 = 复制链接; 离线缓存复用同一条下载链路。
 
-                                <!-- WrapPanel 而不是 StackPanel: 右侧信息栏只有 400px, 而这一行是 6 个按钮 ——
-                                     数字位数一多("12.3万")就顶到边。横向 StackPanel 溢出的表现是
-                                     **最后一个按钮被裁掉**(不换行也不报错), 用户根本点不到;
-                                     换成 WrapPanel 最差也只是排到第二行, 永远看得见、点得到。 -->
-                                <WrapPanel>
-                                    <!-- 点赞: 点过 = 图标和数字一起变粉(UpdateActionCounts) -->
-                                    <Button x:Name="BtnLike" Style="{StaticResource StatButtonStyle}"
+                                 ★ 按 v4 稿第 07 节分成三组:
+                                     标记这个视频(点赞/投币/收藏/稍后再看) | 传出去(分享) | 拿走(下载)
+                                   组间一条竖线; 下载是低频"取出"类动作, 做得更小更淡。
+                                 ★ 每个动作的色相是**固定**的(见 ApplyActionVisual), 不跟主题强调色走 ——
+                                   红=情绪、金=货币、蓝=收进我的库、绿=拿走。用户把主题色改成绿色时,
+                                   "点赞"跟着变绿会立刻毁掉这套分工。
+                                 ★ 点赞/投币/收藏 沿用 B 站官方 SVG 几何(见文件头注释): 它们是**填充式**
+                                   图形(带挖空), 只能靠 Fill 上色、不能改描边 —— 描边会把挖空部分的
+                                   轮廓也画出来, 整个图标糊掉。所以这三个的激活反馈是"灰 → 该动作色相"。
+                                   稍后再看/分享/下载 是矢量描边图标: 与旁边三个的线宽圆角风格统一,
+                                   也不受字体缺失影响(v4 稿第 05 节的图标结论)。 -->
+                            <!-- ★★★ 固定两行(2026-10-06 方案A, 用户审核通过)。
+                                 以前用 WrapPanel 自动换行, 实测有两个硬伤:
+                                   ① 换行点是"字数/位数"决定的 —— 同一颗按钮在不同视频里会跳到
+                                      另一行(实测: 8 位数计数时「稍后再看」从第 1 行掉到第 2 行),
+                                      用户没法靠肌肉记忆点;
+                                   ② 断点落成 4+2, 第二行只剩两个, 右边空一大片, 看着像没排完。
+                                 改成**写死两行**后断点恒定:
+                                   第 1 行 = 点赞 投币 收藏      (标记这个视频, 三连)
+                                   第 2 行 = 稍后再看 分享 下载   (收起来 / 传出去 / 拿走)
+                                 实测两行各自的最大宽度: 真实计数下 240, 8 位数计数下 282,
+                                 都远小于可用 351 ⇒ 任何视频都不会再换行。
+                                 ★ 两行本身就是分组, 所以原先那两条分组竖线一并删掉
+                                   (它们在第 2 行里会悬在「分享」和「下载」中间, 本来就怪)。 -->
+                            <StackPanel x:Name="ActionBar" Margin="0,14,0,0">
+                                <!-- 第 1 行: 三连(标记这个视频) -->
+                                <Grid x:Name="ActionRowMark">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <!-- 点赞: 点过 = 图标和数字一起变红 -->
+                                    <Button x:Name="BtnLike" Style="{StaticResource PlayerActionBtn}"  Grid.Column="0"
                                             Click="OnLikeClick" ToolTip="点赞 (L)">
                                         <StackPanel Orientation="Horizontal">
-                                            <Path Data="{StaticResource LikeIconGeometry}"
-                                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                                  Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="LikeLabel" Text="--" FontSize="13" Margin="6,0,0,0"
-                                                       VerticalAlignment="Center"
-                                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                            <Grid x:Name="LikeIconBox" Style="{StaticResource ActionIconBox}">
+                                                <Path Data="{StaticResource LikeIconGeometry}"
+                                                      Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                      Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center" />
+                                            </Grid>
+                                            <TextBlock x:Name="LikeLabel" Text="--"
+                                                       Style="{StaticResource ActionCountText}" />
                                         </StackPanel>
                                     </Button>
                                     <!-- 投币 -->
-                                    <Button x:Name="BtnCoin" Style="{StaticResource StatButtonStyle}"
+                                    <Button x:Name="BtnCoin" Style="{StaticResource PlayerActionBtn}"  Grid.Column="1"
                                             Click="OnCoinClick" ToolTip="投币 1 个">
                                         <StackPanel Orientation="Horizontal">
-                                            <Path Data="{StaticResource CoinIconGeometry}"
-                                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                                  Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="CoinLabel" Text="--" FontSize="13" Margin="6,0,0,0"
-                                                       VerticalAlignment="Center"
-                                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                            <Grid x:Name="CoinIconBox" Style="{StaticResource ActionIconBox}">
+                                                <Path Data="{StaticResource CoinIconGeometry}"
+                                                      Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                      Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center" />
+                                            </Grid>
+                                            <TextBlock x:Name="CoinLabel" Text="--"
+                                                       Style="{StaticResource ActionCountText}" />
                                         </StackPanel>
                                     </Button>
                                     <!-- 收藏 -->
-                                    <Button x:Name="BtnFavorite" Style="{StaticResource StatButtonStyle}"
+                                    <Button x:Name="BtnFavorite" Style="{StaticResource PlayerActionBtn}"  Grid.Column="2"
                                             Click="OnFavoriteClick" ToolTip="收藏到云端收藏夹">
                                         <StackPanel Orientation="Horizontal">
-                                            <Path Data="{StaticResource FavoriteIconGeometry}"
-                                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                                  Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="FavLabel" Text="--" FontSize="13" Margin="6,0,0,0"
-                                                       VerticalAlignment="Center"
-                                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                            <Grid x:Name="FavIconBox" Style="{StaticResource ActionIconBox}">
+                                                <Path Data="{StaticResource FavoriteIconGeometry}"
+                                                      Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                      Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center" />
+                                            </Grid>
+                                            <TextBlock x:Name="FavLabel" Text="--"
+                                                       Style="{StaticResource ActionCountText}" />
                                         </StackPanel>
                                     </Button>
-                                    <!-- 稍后再看(2026-09-28 新增): 点一下加入/移出 B 站账号的云端列表。
-                                         已在列表里时图标变强调色(状态由 RefreshWatchLaterStateAsync 查一次);
-                                         与「我的」页那个快捷入口、卡片右键菜单共用同一组接口。
-                                         做成纯图标是为了让这一行在 400px 的信息栏里放得下。 -->
-                                    <Button x:Name="BtnWatchLater" Style="{StaticResource StatButtonStyle}"
+                                </Grid>
+
+                                <!-- 第 2 行: 稍后再看 + 传出去(分享) + 拿走(下载) -->
+                                <Grid x:Name="ActionRowOther" Margin="0,2,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <!-- 稍后再看: 点一下加入/移出 B 站账号的云端列表。
+                                         ★ 文字**双层叠放**(稍后再看 / 已添加 叠在同一格): 宽度自动取两者
+                                           最大值, 切换只做透明度过渡 —— 否则"已添加"比"稍后再看"少一个字,
+                                           宽度一变后面整排按钮全被推着走(v4 稿第 05 节修的就是这个 bug)。
+                                         ★ 图标: 空心钟 → 蓝底白勾。20px 下"钟面被涂满"看不出是钟,
+                                           对勾才是状态本身。勾固定白色(要压在色相实心圆上)。
+                                         ★ 这两层图标与两层文字的显隐统一由 ApplyActionVisual 一处切换,
+                                           不在触发器里各写一份。 -->
+                                    <Button x:Name="BtnWatchLater" Style="{StaticResource PlayerActionBtn}"  Grid.Column="0"
                                             Click="OnWatchLaterClick" ToolTip="加入稍后再看">
-                                        <TextBlock Text="&#xE7C1;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                   FontSize="15" VerticalAlignment="Center"
-                                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                        <StackPanel Orientation="Horizontal">
+                                            <Grid x:Name="LaterIconBox" Style="{StaticResource ActionIconBox}">
+                                                <!-- 用户要求(2026-10-06): **不要打勾图案**, 保留时钟图标 + 跳动动画即可。
+                                                     所以这里只有一个空心钟, 点亮时**只变色**(描边绑 Button.Foreground,
+                                                     由 ApplyActionVisual 统一刷成该动作的蓝色), 不再切换到"实心圆+白勾"。
+                                                     ★ 旧版那两层(实心圆 LaterIconOnFill + 白勾 LaterIconOnCheck)已删除;
+                                                       它们换来的代价是两个 Path 必须同步显隐, 而用户明确表示不需要勾。 -->
+                                                <Path x:Name="LaterIcon" Style="{StaticResource ActionGlyphStroke}"
+                                                      Width="20" Height="20" Stretch="Uniform"
+                                                      Data="M3.4,12 A8.6,8.6 0 1 1 20.6,12 A8.6,8.6 0 1 1 3.4,12 Z M12,7.2 L12,12 L15.1,14" />
+                                            </Grid>
+                                            <Grid Margin="6,0,0,0" VerticalAlignment="Center">
+                                                <TextBlock x:Name="LaterLabelOff" Text="稍后再看"
+                                                           Style="{StaticResource ActionLabelText}" />
+                                                <TextBlock x:Name="LaterLabelOn" Text="已添加" Opacity="0"
+                                                           Style="{StaticResource ActionLabelText}" />
+                                            </Grid>
+                                        </StackPanel>
                                     </Button>
-                                    <!-- 分享(复制链接): 形状对齐用户给的 share-512x512(iOS 风格 方框+上箭头)。
-                                         第一版顶部留缺口, 15px 下缺口糊成一体像把锁(用户截图反馈)。
-                                         定版改"全闭合圆角框 + 箭头直接穿过上沿"(离屏渲染对比过缺口方案):
-                                         框加高留白(8~21)、圆角 2.5、描边 1.6, 箭头顶点抬到 2.2 与框顶拉开,
-                                         小尺寸下"方框 + 上箭头"一眼可读 -->
-                                    <Button x:Name="BtnShare" Style="{StaticResource StatButtonStyle}"
+
+                                    <!-- 分享(复制链接): 几何取自设计稿「播放页_v4.html」的分享按钮,
+                                         用户要求"按参照方案设计"。它由两段组成:
+                                           · 箭头: 竖杆自 y15 上到 3.5, 顶端两撇
+                                           · 托盘: 开口朝上的 U 形(自 y12.5 往下, 圆角 2),
+                                             箭头竖杆伸到 y15 —— 比托盘口低 2.5, 等于"插进托盘里"
+                                         ★★★ 两段必须合并进**同一个 Path**, 不能拆成两个 Path 元素。
+                                           原因(实测验过, .probes/bd-share-real):
+                                           Stretch="Uniform" 是按**该元素自己的几何包围盒**同比缩放的。
+                                           箭头高(10.2)、托盘矮(10.1)却宽窄不同, 拆开后两者
+                                           各自算出不同的缩放比(实测渲染尺寸 13.6x16.8 vs 16.8x13.6),
+                                           结果是箭头被放大到戳穿托盘底部, 整个图标变形。
+                                           合并之后只有一个包围盒, 两段共用同一套比例 ⇒ 严丝合缝。
+                                           合并是安全的: 两段都是**只描边不填充**(Fill 透明)、
+                                           线宽与圆角完全相同, 拆开本来只是为了分组可读。 -->
+                                    <Button x:Name="BtnShare" Style="{StaticResource PlayerActionBtn}"  Grid.Column="1"
                                             Click="OnCopyLinkClick" ToolTip="复制视频链接">
-                                        <Path Width="15" Height="17" Stretch="Uniform" VerticalAlignment="Center"
-                                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                              StrokeThickness="1.6" StrokeLineJoin="Round"
-                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                              Data="M 7.5,8 H 16.5 A 2.5,2.5 0 0 1 19,10.5 V 18.5 A 2.5,2.5 0 0 1 16.5,21 H 7.5 A 2.5,2.5 0 0 1 5,18.5 V 10.5 A 2.5,2.5 0 0 1 7.5,8 M 12,2.2 V 14.5 M 8.2,6 L 12,2.2 L 15.8,6" />
+                                        <StackPanel Orientation="Horizontal">
+                                            <Grid x:Name="ShareIconBox" Style="{StaticResource ActionIconBox}">
+                                                <Path x:Name="ShareGlyph" Width="20" Height="20"
+                                                      Stretch="Uniform" Fill="Transparent"
+                                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                      StrokeThickness="1.7" StrokeLineJoin="Round"
+                                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      Data="M12,15 V3.5 M8.2,7.3 L12,3.5 L15.8,7.3 M4.5,12.5 V18.5 A2,2 0 0 0 6.5,20.5 H17.5 A2,2 0 0 0 19.5,18.5 V12.5" />
+                                            </Grid>
+                                            <TextBlock Text="分享" Style="{StaticResource ActionLabelText}" />
+                                        </StackPanel>
                                     </Button>
-                                    <!-- 离线缓存: 从播放器右下角挪进来(复用同一条下载链路) -->
-                                    <Button x:Name="BtnCache" Style="{StaticResource StatButtonStyle}"
+
+                                    <!-- 离线缓存(下载) -->
+                                    <Button x:Name="BtnCache" Style="{StaticResource PlayerActionBtn}"  Grid.Column="2"
                                             Click="OnCacheClick" ToolTip="离线缓存当前视频">
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                       FontSize="15" VerticalAlignment="Center"
-                                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                            <!-- ★★★ 图标格必须与其它五个按钮**同为 20×20**(ActionIconBox),
+                                                 否则整颗按钮的图文会被压低 —— 这是用户报"6 个按钮没有上下对齐"的根因。
+                                                 (实测: 原来这里写死 Width/Height=18 ⇒ 图标格量成 17.6,
+                                                  图标中心 15.2 而其它五个是 14.8, 差 0.4px 肉眼可辨;
+                                                  文字中心也被推到 15.6。)
+                                                 需要"下载看起来更小一档"时, 应该缩**里面的 Path**(18px),
+                                                 而不是缩外面的 Grid —— 格子尺寸是排版基线, 不是观感参数。
+                                                 ★ 不参与弹跳: 一次性动作, 弹一下反而像"可以反复点"。
+                                                   ScaleTransform 由 PlayActionPop 按需新建(样式里放共享的会被冻结)。 -->
+                                            <Grid x:Name="CacheIconBox" Style="{StaticResource ActionIconBox}">
+                                                <Path Width="18" Height="18" Stretch="Uniform" Fill="Transparent"
+                                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                      StrokeThickness="1.85" StrokeLineJoin="Round"
+                                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      Data="M12,3.5 L12,15 M8.2,11.3 L12,15 L15.8,11.3 M4.5,17 L4.5,19 A2,2 0 0 0 6.5,21 L17.5,21 A2,2 0 0 0 19.5,19 L19.5,17" />
+                                            </Grid>
+                                            <TextBlock Text="下载" Style="{StaticResource ActionLabelText}" />
                                         </StackPanel>
                                     </Button>
-                                </WrapPanel>
+                                </Grid>
                             </StackPanel>
 
                             <!-- Tab 简介/评论 -->
@@ -1006,6 +1424,23 @@
                                         <controls:LoadingRing x:Name="CommentLoadingRing" Width="14" Height="14" Visibility="Collapsed" />
                                         <TextBlock x:Name="CommentHint" Style="{StaticResource MetaTextStyle}"
                                                    Text="加载评论中…" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                        <!-- ===== 排序入口(热门 / 时间) =====
+                                             用户要求: 摆在「共 N 条评论」**右边**, 带**矩形底色**便于识别(见样式注释)。
+                                             ★ 间隔: 与左边那句说明文字留 12px(比两个词之间的 6px 大) ——
+                                               不然"评论"和"热门"的底色会挤在一起看不出是两块。
+                                             ★ 两个词之间只留 6px: 底色本身已经把边界画清楚了,
+                                               再拉宽会显得是两个不相干的东西。
+                                             ★ 只在一开始**加载完成**后才显示(见 UpdateCommentSortUi):
+                                               加载中/失败/没评论时挂两个底色块在"加载评论中…"右边很怪。
+                                             ★ 选中态由代码写 Tag="on"/"off" 驱动(见 UpdateCommentSortUi)。 -->
+                                        <Button x:Name="BtnCommentSortHot" Style="{StaticResource CommentSortLinkStyle}"
+                                                Content="热门" Margin="12,0,0,0"
+                                                Tag="on" Visibility="Collapsed"
+                                                Click="OnCommentSortHotClick" ToolTip="按热度排序" />
+                                        <Button x:Name="BtnCommentSortTime" Style="{StaticResource CommentSortLinkStyle}"
+                                                Content="时间" Margin="6,0,0,0"
+                                                Tag="off" Visibility="Collapsed"
+                                                Click="OnCommentSortTimeClick" ToolTip="按时间排序" />
                                     </StackPanel>
                                     <ItemsControl x:Name="CommentList"
                                                   ItemTemplate="{StaticResource CommentCardTemplate}" />

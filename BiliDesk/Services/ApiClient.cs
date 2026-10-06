@@ -2331,10 +2331,37 @@ public class ApiClient
         }
     }
 
-    /// <summary>点赞/取消点赞视频(现行 web 接口)。like=1 点赞, like=2 取消</summary>
-    public Task<(bool ok, string? err)> LikeVideoAsync(string bvid, bool liked)
+    /// <summary>
+    /// 把服务端的风控文案翻译成**用户能照着做**的提示。
+    ///
+    /// ★ 为什么需要它(2026-10-06 用户报"点赞投币依然报错"):
+    ///   账号被风控时服务端回的是 `-403 账号异常,操作失败` / `-401 非法访问` ——
+    ///   这两句对用户毫无信息量, 他只会反复点、然后以为程序坏了。
+    ///   实测把完整响应打出来后, 真因写在 data.ga_data 里:
+    ///       decisions = ["verify_captcha_level2"]   ← 要求二级人机验证
+    ///   这是 B 站的**风控门**, 客户端绕不过(实测: 换 Referer/Origin/参数/端点/稿件,
+    ///   以及补 b_nut/_uuid/bili_ticket 全部无效)。所以只能把话说清楚, 指引用户去官方
+    ///   渠道完成一次验证 —— 而不是把服务端原文丢给用户。
+    ///
+    /// ★ 只替换**明确是风控**的这几种文案, 其它错误原样透出 —— 不吃掉真实报错。
+    /// </summary>
+    internal static string FriendlyRiskMessage(string? raw)
     {
-        return PostFormAsync(
+        var msg = raw ?? "";
+        // 这三句是同一道人机验证门的不同说法(见 v_voucher 文档的 -352 与实测的 -401/-403)
+        if (msg.Contains("账号异常", StringComparison.Ordinal) ||
+            msg.Contains("非法访问", StringComparison.Ordinal) ||
+            msg.Contains("风控", StringComparison.Ordinal))
+        {
+            return "B 站风控拦截: 请在手机 App 或网页版用同一账号完成一次验证后重试";
+        }
+        return string.IsNullOrEmpty(msg) ? "未知错误" : msg;
+    }
+
+    /// <summary>点赞/取消点赞视频(现行 web 接口)。like=1 点赞, like=2 取消</summary>
+    public async Task<(bool ok, string? err)> LikeVideoAsync(string bvid, bool liked)
+    {
+        var (ok, err) = await PostFormAsync(
             "https://api.bilibili.com/x/web-interface/archive/like",
             new Dictionary<string, string>
             {
@@ -2342,12 +2369,13 @@ public class ApiClient
                 ["like"] = liked ? "1" : "2"
             },
             referer: "https://www.bilibili.com/video/" + bvid);
+        return (ok, ok ? err : FriendlyRiskMessage(err));
     }
 
     /// <summary>投币(现行 web 接口, 需要 aid)。count=1 或 2</summary>
-    public Task<(bool ok, string? err)> CoinVideoAsync(long aid, int count, string bvid)
+    public async Task<(bool ok, string? err)> CoinVideoAsync(long aid, int count, string bvid)
     {
-        return PostFormAsync(
+        var (ok, err) = await PostFormAsync(
             "https://api.bilibili.com/x/web-interface/coin/add",
             new Dictionary<string, string>
             {
@@ -2356,6 +2384,7 @@ public class ApiClient
                 ["select_like"] = "0"
             },
             referer: "https://www.bilibili.com/video/" + bvid);
+        return (ok, ok ? err : FriendlyRiskMessage(err));
     }
 
     /// <summary>
@@ -2398,22 +2427,32 @@ public class ApiClient
     }
 
     /// <summary>
-    /// 视频评论(返回前 N 条热门评论, 并带上每条的内联前几条回复)。
+    /// 视频评论(返回前 N 条评论, 并带上每条的内联前几条回复)。
     ///
     /// ★ 2026-10-01 由裸 <c>Task&lt;List&lt;CommentItem&gt;&gt;</c> 改为 (ok, err, items):
     ///   原来"接口报错"与"这个视频一条评论都没有"都返回**空列表**, 调用方无法区分,
     ///   于是评论区会显示成"还没有人评论" —— 网络失败被伪装成了正常状态。
+    ///
+    /// ★ 2026-10-06 增加 <paramref name="mode"/>(评论区「热门 / 时间」切换)与返回的
+    ///   <c>total</c>(根评论总数)。两个都来自同一个接口, 不需要额外请求:
+    ///     · <c>mode=3</c> 热门 / <c>mode=2</c> 时间 —— 与 B 站网页版同一组参数;
+    ///     · 总数在 <c>data.cursor.all_count</c>。
+    ///   ★ 为什么要把 total 透出来: 以前调用方拿 <c>list.Count</c> 当总数显示"共 N 条评论",
+    ///     而一页只拉 30 条 —— 视频有几千条评论时那句话是**错的**。排序入口就挂在这行文字右边,
+    ///     数字不对会让整个入口看着像坏的。
     /// </summary>
-    public async Task<(bool ok, string? err, List<CommentItem> items)> GetCommentsAsync(long aid, int count = 20)
+    public async Task<(bool ok, string? err, List<CommentItem> items, long total)> GetCommentsAsync(
+        long aid, int count = 20, int mode = 3)
     {
         var result = new List<CommentItem>();
+        var total = 0L;
         try
         {
             var ps = new Dictionary<string, string>
             {
                 ["oid"] = aid.ToString(),
                 ["type"] = "1",
-                ["mode"] = "3",
+                ["mode"] = mode.ToString(),
                 ["ps"] = count.ToString(),
                 ["pn"] = "1"
             };
@@ -2431,7 +2470,12 @@ public class ApiClient
                 "https://api.bilibili.com/x/v2/reply/main", ps,
                 fingerprint: SessionManager.Instance.HasLogin);
             if (code != 0 || data == null)
-                return (false, msg ?? $"获取评论失败 (code {code})", result);
+                return (false, msg ?? $"获取评论失败 (code {code})", result, 0);
+
+            // 根评论总数(不受 ps 分页影响)。缺失时保持 0, 由调用方回落到"本页条数"。
+            if (data.Value.TryGetProperty("cursor", out var cursor) &&
+                cursor.ValueKind == JsonValueKind.Object)
+                total = GetLong(cursor, "all_count");
 
             // 本稿件的 UP 主 mid: 用来给"UP 主自己的评论"打 [UP] 标
             var upperMid = data.Value.TryGetProperty("upper", out var up) &&
@@ -2469,9 +2513,9 @@ public class ApiClient
             // 不能真的"静默": 解析里任何一处异常都会让后面的评论**整批丢掉**,
             // 表现是"评论只出来前几条", 而排查时一点线索都没有。记到日志里。
             App.ReportError(ex);
-            return (false, "解析评论失败: " + ex.Message, result);
+            return (false, "解析评论失败: " + ex.Message, result, 0);
         }
-        return (true, null, result);
+        return (true, null, result, total);
     }
 
     /// <summary>取对象里的某个子对象; 不存在或是 null 时返回 null(置顶评论可能只有 upper 或只有 admin)</summary>

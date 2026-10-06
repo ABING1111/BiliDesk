@@ -292,6 +292,12 @@ public partial class PlayerWindow : FluentWindow
     // 当前视频标题(收藏夹选择窗的副标题用; 窗口 Title 带 " - BiliDesk" 后缀不能直接用)
     private string _videoTitle = "";
 
+    /// <summary>
+    /// 当前视频封面地址。「听视频」聆听态拿它当画面锚点。
+    /// 跟 _videoTitle 一样属于"这一片"的属性, 换片必须清。
+    /// </summary>
+    private string _coverUrl = "";
+
     // --- 视频区手势: 单击播放暂停 / 双击全屏 / 长按 2x 快进 ---
     private DispatcherTimer? _longPressTimer;     // 检测长按 >= 500ms
     private DispatcherTimer? _singleClickTimer;   // 单击延迟执行(给双击留判定窗口)
@@ -443,6 +449,13 @@ public partial class PlayerWindow : FluentWindow
             _fullscreenCoverTimer?.Stop();
             UpdatePlayButton();
             StartControlsHideCountdown();   // 播放中才开始倒计时自动隐藏
+            // 聆听态: 起播后把文案里的秒数对齐到真实位置(切流前后 _mp.Time 会有几十毫秒偏差),
+            // 并确保声波律动已经在跑(切清晰度/换片都会重建 Media, 但定时器是窗口级的, 不会断)。
+            if (_isListenMode)
+            {
+                UpdateListenLabel();
+                StartListenWave();
+            }
             if (_resumeAfterSwitchMs > 0)
             {
                 var resume = _resumeAfterSwitchMs;
@@ -662,6 +675,13 @@ public partial class PlayerWindow : FluentWindow
         _indexInLib = 0;
         // 换片: 音频链路诊断重新记一次(每个片源一条, 见 LogAudioStateOnce)
         _audioStateLogged = false;
+        // 「听视频」的音轨地址属于上一条视频 —— 不清的话换成新片时会拿旧音轨去播。
+        // ★ _isListenMode 本身**不清**(登记在 PersistentFields): 用户切到纯音频连听几集是常态;
+        //   新片的音轨地址在 LoadVideoAsync 里重新快照(见 ApplyListenAudioUrl)。
+        _listenAudioUrl = null;
+        _listenResumeMs = 0;
+        _listenWaveTick = 0;
+        _coverUrl = "";
         // ★ 每个片源开始时都把"要请求的清晰度"快照成设置里的「默认画质」(2026-10-04)。
         //   放在这里而不是只放构造函数里, 是为了让"设置页改完 → 点开下一个视频"立刻生效,
         //   不必重启。
@@ -686,6 +706,12 @@ public partial class PlayerWindow : FluentWindow
         CancelRemuxPrefetch();
         _ownerMid = 0;
         _commentsLoaded = false;
+        // 下载状态属于"上一条视频"(见 UpdateActionCounts 里那个绿色终态)
+        _cacheDownloaded = false;
+        // 评论总数属于"上一条视频" —— 不清的话换了片子那句"共 N 条评论"还挂着旧数字,
+        // 而排序入口的可见性正是跟着它走的。排序**方式**(_commentSort)不清: 那是用户习惯。
+        _commentTotal = 0;
+        UpdateCommentSortUi(visible: false);
         // 换片时把评论详情也收掉(tab 文案与返回链接一并还原),
         // 否则新片子一进来右侧就挂着上一条视频的评论详情页
         if (CommentDetailPanel != null) CloseCommentDetail();
@@ -725,6 +751,10 @@ public partial class PlayerWindow : FluentWindow
         if (ProgressSlider != null) ProgressSlider.IsEnabled = true;
         // 弹幕按钮的可用性取决于 _isLive / _isLocalPlayback, 调用方都已在这之前设好这两个标志
         UpdateDanmakuButton();
+        // 「听视频」的可用性同样取决于那两个标志(直播/本地文件没有独立音轨)。
+        // ★ 必须在 _isListenMode 已经确定之后调: 它内部会在"不支持聆听"时顺手退出聆听态,
+        //   否则聆听遮罩会盖在一个根本没有音轨的本地文件上。
+        UpdateListenButtonState();
         // 「稍后再看」的点亮态属于"上一条视频", 一起清掉。放这里而不是 UpdateUiFromDetail:
         // 直播 / 本地离线缓存那两条路不走详情流程, 不清的话会挂着上一条视频的强调色。
         SetInWatchLater(false);
@@ -800,11 +830,14 @@ public partial class PlayerWindow : FluentWindow
         // 三连 / 关注 / 稍后再看等"上一条视频"的态
         nameof(_isLiked), nameof(_isFollowed), nameof(_isFavorited), nameof(_favBusy),
         nameof(_isInWatchLater), nameof(_watchLaterBusy), nameof(_likeCount),
-        nameof(_coinCount), nameof(_favCount),
+        nameof(_coinCount), nameof(_favCount), nameof(_cacheDownloaded),
         // 播放源标识
         nameof(_isLocalPlayback), nameof(_isLive), nameof(_liveRoomId), nameof(_currentCid),
         nameof(_aid), nameof(_ownerMid), nameof(_ownerName), nameof(_ownerFace),
         nameof(_videoTitle), nameof(_currentQn), nameof(_currentBvid),
+        nameof(_coverUrl),           // 封面属于"这一片"(聆听态的画面锚点)
+        // 「听视频」的音轨地址与恢复进度: 换片后要重新取, 留着上一条的会播错东西
+        nameof(_listenAudioUrl), nameof(_listenResumeMs), nameof(_listenWaveTick),
         nameof(_lastPlayUrl), nameof(_lastAudioUrl),   // 出错诊断日志要打"当时正在播的地址"
         // 进度 / 时长 / EOF 自救
         nameof(_totalMs), nameof(_lastKnownMs), nameof(_eofResumeCount), nameof(_lastEofResumeMs),
@@ -824,6 +857,7 @@ public partial class PlayerWindow : FluentWindow
         // 界面交互态
         nameof(_switchingQuality), nameof(_fillingQualityMenu), nameof(_updatingSlider),
         nameof(_commentsLoaded), nameof(_postingComment), nameof(_longPressFired),
+        nameof(_commentTotal),
         nameof(_suppressSingleClick), nameof(_controlsHidden), nameof(_isFullscreen),
         // 合集: 「这个视频有没有合集」属于"这一片"的属性, 换片必须重算。
         // 不清的话换了普通视频入口还挂着, 点开是个空面板。
@@ -848,6 +882,10 @@ public partial class PlayerWindow : FluentWindow
         nameof(_playerRegistered),   // 注册计数, 生命周期是窗口而非片源
         nameof(_seasonOpen),         // 合集面板的展开态: 用户开着面板连看几集是常态, 换片收起它很烦
         nameof(_isFillWindow),       // 「铺满窗口」是窗口级的显示模式(同 _isFullscreen), 换片不该把它弹回去
+        nameof(_commentSort),        // 评论排序是用户看评论的习惯(同 _seasonOpen): 选过一次就一直是那个顺序
+        nameof(_isListenMode),       // 「听视频」是窗口级的播放模式(同 _isFullscreen): 换片不该把它弹回视频
+        // hover 预览锁是"上一次操作的瞬时反馈"(750ms 自己过期, 与片源无关), 不属于任何一片
+        nameof(_actionHoverLockUntil),
     };
 
     /// <summary>
@@ -942,6 +980,14 @@ public partial class PlayerWindow : FluentWindow
         // 「铺满窗口」按钮的字形初值: XAML 里写的是"进入前"那个字形(E9A6), 这里按实际状态
         // 再同步一次 —— 窗口是复用的, 复用到一个"上次已铺满"的窗口时不能显示成未铺满。
         UpdateFillWindowButton();
+        // ★ 这条路径(带 bvid 直接 new 出窗口)**不走 ResetForNewMedia**(与 ApplyPreferredQuality
+        //   当年踩的是同一个坑), 所以「听视频」按钮的可用性也要在这里同步一次。
+        //   位置在 LoadVideoAsync **之前**: UpdateListenButtonState 依赖 _isLive/_isLocalPlayback,
+        //   而这两个标志由调用方在构造后、Show 前就已设好。
+        UpdateListenButtonState();
+        // 聆听态是跨窗口复用的窗口级模式: 复用一个"上次停在聆听态"的窗口时,
+        // 顶栏按钮与遮罩都要还原成聆听态(否则按钮说"听视频"、实际播的是音轨)
+        if (_isListenMode) ApplyListenMode(true);
         // 覆盖层窗口(VideoView 的 ForegroundWindow)这时才建出来 —— 把键盘处理也挂上去,
         // 否则点过一次视频/控制栏之后快捷键就全哑了(见 HookOverlayKeyboard 的说明)
         HookOverlayKeyboard();
@@ -1036,6 +1082,15 @@ public partial class PlayerWindow : FluentWindow
             // 记录要播放的 URL(诊断 + 重播时重建 Media 用)
             _lastPlayUrl = url;
             _lastAudioUrl = playAudio;
+            // ★★★ 「听视频」存的必须是 **DASH 音轨地址(audioUrl)**, 不能存 playAudio。
+            //   两者的区别正是"三分钟以下视频点听视频说没有音轨"的根因:
+            //     短视频走**本地合流文件**那条路时 playAudio 是 null(单文件源不能挂 input-slave),
+            //     但接口给的 DASH 音轨地址依然是好的、依然能单独播。
+            //     以前这里写成 `= playAudio` ⇒ 短视频的 _listenAudioUrl 恒为 null ⇒
+            //     点「听视频」直接报"这条视频没有可用的音轨"(2026-10-06 用户实测)。
+            //   存 audioUrl 之后: 聆听态播纯音轨(省流量), 退出时用 _lastPlayUrl(本地文件)
+            //   原样拼回 —— 两条路各用各的地址, 互不干扰。
+            _listenAudioUrl = audioUrl;
             WriteLibVLCDebug(
                 $"\n[LoadVideo] bvid={_currentBvid} cid={_currentCid} qn={actualQn} url={url} audio={playAudio}\n");
 
@@ -1045,8 +1100,27 @@ public partial class PlayerWindow : FluentWindow
             if (_closing) return;
 
             // B站 CDN 对 Referer 和 User-Agent 有校验, 必须通过 Media 选项告诉 LibVLC;
-            // DASH 流音视频分离, 用 input-slave 把音轨挂到视频流上一起播放
-            PlayMedia(BuildMedia(url, playAudio));
+            // DASH 流音视频分离, 用 input-slave 把音轨挂到视频流上一起播放。
+            // ★ 「听视频」开着时(user 开着聆听态点了下一条视频)要直接起播**音轨单流** ——
+            //   否则会先起视频流再被 EnterListenMode 切一次, 白拉一段视频数据、还多闪一次画面。
+            if (_isListenMode && !string.IsNullOrEmpty(_listenAudioUrl))
+            {
+                _listenResumeMs = 0;
+                ShowLoading("正在切换到听视频…");
+                PlayMedia(BuildMedia(_listenAudioUrl!, null));
+            }
+            else
+            {
+                // ★ 聆听态开着但这一片**取不到独立音轨**(本地合流是单文件源): 退回整路播放,
+                //   并把聆听态收掉 —— 否则遮罩会说"正在聆听"而实际在播视频, 自相矛盾。
+                if (_isListenMode)
+                {
+                    _isListenMode = false;
+                    ApplyListenMode(false);
+                }
+                PlayMedia(BuildMedia(url, playAudio));
+            }
+            UpdateListenButtonState();
             // 加载弹幕 + 查询点赞/关注/收藏状态(用于按钮状态切换)
             _ = LoadDanmakuAsync(_currentCid);
             _ = RefreshLikeStateAsync();
@@ -1221,6 +1295,14 @@ public partial class PlayerWindow : FluentWindow
         // UP 主头像优先用 owner.face(之前误用了视频封面)
         _ownerFace = detail.OwnerFace ?? "";
         _ = LoadUpAvatarAsync(_ownerFace);
+        // 视频封面: 「听视频」聆听态要拿它当视觉锚点(一眼知道在听什么)。
+        // 顺手记下来, 不必等用户点了聆听再去请求详情接口。
+        _coverUrl = detail.Pic ?? "";
+        if (_isListenMode)
+        {
+            if (ListenOverlayTitle != null) ListenOverlayTitle.Text = detail.Title;
+            LoadListenCover(_coverUrl);
+        }
 
         // 本机观看历史已移除, 这里不再写本地记录。
         // 观看记录仍然会上报到云端 —— 见下方的 Svc.HistorySync。ReportAsync。
@@ -1434,7 +1516,11 @@ public partial class PlayerWindow : FluentWindow
                 // 没有提示的话用户会以为"点了没反应"(这正是之前那版的观感)。
                 // 遮罩由 Playing 事件负责收起。
                 ShowLoading("正在重新播放…");
-                PlayMedia(BuildMedia(url, _lastAudioUrl));
+                // ★ 聆听态下重播仍然只拉音轨: 重播是"再听一遍", 不该突然开始下视频。
+                if (_isListenMode && !string.IsNullOrEmpty(_listenAudioUrl))
+                    PlayMedia(BuildMedia(_listenAudioUrl!, null));
+                else
+                    PlayMedia(BuildMedia(url, _lastAudioUrl));
             }
 
             MarkSeekIssued(0);
@@ -2293,10 +2379,20 @@ public partial class PlayerWindow : FluentWindow
             _lastPlayUrl = url;
             // 本地合流是单文件源: 不能带 input-slave, 否则等于给同一个文件再挂一条音轨
             _lastAudioUrl = local != null ? null : audioUrl;
+            // 「听视频」的音轨地址跟着新档位更新 —— 不清的话切完清晰度再进出聆听态,
+            // 用的还是旧档那条音轨(可能码率不同、甚至已过期)。
+            // ★ 必须取 **audioUrl** 而不是 _lastAudioUrl: 后者在本地合流那条路上是 null
+            //   (单文件源不挂 input-slave), 而音轨本身是好的。理由同 LoadVideoAsync 里那段。
+            _listenAudioUrl = audioUrl;
             // 必须先 Stop: LibVLC 3 里已有 input 在播时 play() 会被**直接忽略**,
             // 不 Stop 的话新 Media 根本不会起播 —— 这就是"切换清晰度没反应"
             try { _mp.Stop(); } catch { }
-            PlayMedia(BuildMedia(url!, _lastAudioUrl));
+            // ★ 聆听态下切清晰度: 仍然只播音轨(用户此刻要的是声音, 不该突然出画面再切回去)。
+            //   没有可用音轨时退回整路播放, 至少不会什么都不播。
+            if (_isListenMode && !string.IsNullOrEmpty(_listenAudioUrl))
+                PlayMedia(BuildMedia(_listenAudioUrl!, null));
+            else
+                PlayMedia(BuildMedia(url!, _lastAudioUrl));
             UpdatePlayButton();
         }
         catch (Exception ex)
@@ -2655,8 +2751,41 @@ public partial class PlayerWindow : FluentWindow
     private void OnCacheClick(object sender, RoutedEventArgs e)
     {
         if (_closing || string.IsNullOrEmpty(_currentBvid)) return;
-        // 与卡片右键"下载视频"同一条链路: 弹独立的下载进度对话框
-        _ = VideoDownloader.DownloadAsync(_currentBvid, VideoTitleText.Text, this);
+        // 与卡片右键"下载视频"同一条链路: 弹独立的下载进度对话框。
+        // ★ 下载是**一次性**动作(不像点赞可来回切), 所以这里等结果、成功后把按钮染成绿色
+        //   并换成"已下载" —— 设计稿 v4 第 07 节把下载归为"拿走"这一组, 色相是绿。
+        //   失败/取消不动按钮(保持中性), 有对话框自己的提示兜底。
+        var bvid = _currentBvid;
+        _ = DownloadFromPlayerAsync(bvid);
+    }
+
+    /// <summary>下载并收尾按钮状态(见 OnCacheClick)。</summary>
+    private async Task DownloadFromPlayerAsync(string bvid)
+    {
+        try
+        {
+            var saved = await VideoDownloader.DownloadAsync(bvid, VideoTitleText.Text, this);
+            if (_closing) return;
+            // 期间用户可能已经换片: 只给"还是当前这条"的按钮点绿
+            if (saved != null && string.Equals(bvid, _currentBvid, StringComparison.Ordinal))
+                MarkCacheDownloaded();
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+        }
+    }
+
+    /// <summary>
+    /// 把下载按钮标成"已下载"(绿)。
+    /// ★ 走 UpdateActionCounts 收口, 不在这里自己刷颜色 —— 否则"绿色"会有两个出口,
+    ///   迟早出现"这里绿了那里又灰回去"。
+    /// </summary>
+    private void MarkCacheDownloaded()
+    {
+        _cacheDownloaded = true;
+        UpdateActionCounts();
+        if (BtnCache != null) BtnCache.ToolTip = "已下载";
     }
 
     // ------------------------------------------------------------ 弹幕
@@ -3704,11 +3833,20 @@ public partial class PlayerWindow : FluentWindow
             _isLiked = !_isLiked;
             _likeCount = Math.Max(0, _likeCount + (_isLiked ? 1 : -1));
             UpdateActionCounts();
+            // 弹一下(设计稿 v4: 点赞是全栏最高频的动作, 反馈比别的按钮重一档)
+            PlayActionPop(LikeIconBox);
+            // 取消点赞后锁住 hover 预览: 否则鼠标还停在按钮上, 它会当场又变红
+            if (!_isLiked) LockActionHoverPreview();
             Svc.Toast.Show(_isLiked ? "点赞成功" : "已取消点赞");
         }
         else
         {
-            Svc.Toast.Show("操作失败: " + (err ?? "未知错误"));
+            // ★ 风控提示已经是一整句可照做的指引(见 ApiClient.FriendlyRiskMessage),
+            //   再套一层"操作失败: "只会把话拉长、把重点埋掉。这里按前缀判断, 只在
+            //   普通错误上加动作名。
+            var m = err ?? "未知错误";
+            Svc.Toast.Show(m.StartsWith("B 站风控", StringComparison.Ordinal)
+                ? m : "操作失败: " + m);
         }
     }
 
@@ -3722,19 +3860,29 @@ public partial class PlayerWindow : FluentWindow
             // 同一个视频最多投 2 枚, 本地不精确记状态(下次进来以详情接口为准), 只把数字 +1
             _coinCount += 1;
             UpdateActionCounts();
+            PlayActionPop(CoinIconBox);
             Svc.Toast.Show("投币成功");
         }
         else
         {
-            Svc.Toast.Show("投币失败: " + (err ?? "未知错误"));
+            // 同上: 风控提示自成一句, 不再套"投币失败: "前缀
+            var m = err ?? "未知错误";
+            Svc.Toast.Show(m.StartsWith("B 站风控", StringComparison.Ordinal)
+                ? m : "投币失败: " + m);
         }
     }
 
     /// <summary>
-    /// 操作栏的"图标 + 数量"刷新。
-    /// 点过赞/收藏过的状态用**强调色**标出来(图标和数字一起变粉), 比"已点赞"三个字更接近 B 站的观感。
-    /// ★ 数字 TextBlock 的 Foreground 必须**显式绑**到按钮的 Foreground: 全局那个隐式 TextBlock 样式
-    ///   带 Foreground setter, 优先级高于继承, 不绑的话变粉只发生在图标上(和卡片标题同一个坑)。
+    /// 操作栏的"图标 + 数量/文字"刷新。**唯一决定这六个按钮颜色与图标形态的地方。**
+    ///
+    /// 2026-10-06 按设计稿「播放页_v4」重构, 规则:
+    ///   · **未激活一律是灰**(TextSecondaryBrush), 颜色只在用户动过之后才出现;
+    ///   · 每个动作有**固定色相**, 不跟主题强调色走(红=情绪 / 金=货币 / 蓝=收进我的库 / 绿=拿走)。
+    ///     用户把主题色改成绿时, "点赞"跟着变绿会立刻毁掉这套分工 —— 所以色值写死在这里。
+    ///   · 数字与文字 TextBlock 的前景**必须显式绑**到按钮 Foreground: 全局隐式 TextBlock 样式
+    ///     带 Foreground setter(优先级高于继承), 不绑的话变色的只有图标(项目里反复踩的坑)。
+    ///   · 「稍后再看」的两层图标/两层文字在这里一处切换 —— 散在触发器里改必然出现
+    ///     "图标点亮了文字没换"这种半状态。
     /// </summary>
     private void UpdateActionCounts()
     {
@@ -3742,10 +3890,414 @@ public partial class PlayerWindow : FluentWindow
         LikeLabel.Text = VideoItem.FormatCount(_likeCount);
         CoinLabel.Text = VideoItem.FormatCount(_coinCount);
         FavLabel.Text = VideoItem.FormatCount(_favCount);
-        BtnLike.Foreground = _isLiked ? (Brush)FindResource("AccentTextBrush") : (Brush)FindResource("TextSecondaryBrush");
-        BtnFavorite.Foreground = _isFavorited ? (Brush)FindResource("AccentTextBrush") : (Brush)FindResource("TextSecondaryBrush");
-        if (BtnWatchLater != null)
-            BtnWatchLater.Foreground = _isInWatchLater ? (Brush)FindResource("AccentTextBrush") : (Brush)FindResource("TextSecondaryBrush");
+        ApplyActionVisual(BtnLike, _isLiked, ActionLikeColor);
+        ApplyActionVisual(BtnFavorite, _isFavorited, ActionSaveColor);
+        ApplyActionVisual(BtnWatchLater, _isInWatchLater, ActionSaveColor);
+        // 「稍后再看」的两层文字随点亮态互换(宽度由 XAML 里的双层叠放兜住, 不会推走整排)。
+        // ★ 图标只剩一个空心钟了(2026-10-06 用户要求"不要打勾图案, 保留跳动动画即可"),
+        //   点亮时由上面的 ApplyActionVisual 把它染成蓝色即可, 不再切换图标层次。
+        if (LaterLabelOff != null)
+        {
+            LaterLabelOff.Opacity = _isInWatchLater ? 0 : 1;
+            LaterLabelOn.Opacity = _isInWatchLater ? 1 : 0;
+        }
+        // 未点过的三个按钮也要走一次: 换片后要把上一次残留的色相清回灰。
+        // ★ 下载的绿色终态由 _cacheDownloaded 决定(它只在换片时复位, 见 ResetForNewMedia)——
+        //   不能在这里无条件刷成灰: 本方法会被点赞/收藏等**同一片内**的操作反复调用,
+        //   那样用户一下载完、随手点个赞, 绿色就没了。
+        ApplyActionVisual(BtnCoin, false, ActionCoinColor);
+        ApplyActionVisual(BtnShare, false, ActionNeutralColor);
+        ApplyActionVisual(BtnCache, _cacheDownloaded, ActionDownloadColor);
+    }
+
+    /// <summary>当前这条视频是否已下载完成(只用于下载按钮的绿色终态)</summary>
+    private bool _cacheDownloaded;
+
+    // ---- 操作栏色相(设计稿 v4: 固定色, 不跟主题强调色) ----
+
+    /// <summary>点赞红(情绪)</summary>
+    private static readonly Color ActionLikeColor = Color.FromRgb(0xF4, 0x3F, 0x5E);
+    /// <summary>投币琥珀(货币)</summary>
+    private static readonly Color ActionCoinColor = Color.FromRgb(0xF5, 0x9E, 0x0B);
+    /// <summary>收藏 / 稍后再看蓝(收进我的库, 两者同族同色)</summary>
+    private static readonly Color ActionSaveColor = Color.FromRgb(0x0E, 0xA5, 0xE9);
+    /// <summary>下载绿(拿走)。只在"已下载"这一个终态出现, 不像其它色相有"未点亮/点亮"两态</summary>
+    private static readonly Color ActionDownloadColor = Color.FromRgb(0x10, 0xB9, 0x81);
+    /// <summary>中性(分享 / 下载): 走主题的次要文字色, 不做色相区分</summary>
+    private static readonly Color? ActionNeutralColor = null;
+
+    /// <summary>
+    /// 把一个操作按钮刷成"点亮(用该动作的色相)"或"未点亮(灰)"。
+    ///
+    /// ★ 这里**直接操作控件**而不是靠 Style 触发器: hover 预览(.v4)需要在鼠标悬停时
+    ///   临时借用色相, 而"取消点赞后鼠标还悬停着 → 按钮当场又变红"这个坑(v4 稿第 04 节)
+    ///   要求"取消后短暂锁住 hover"。这套时序逃不出代码, 所以统一放在这里。
+    /// </summary>
+    private void ApplyActionVisual(Button? btn, bool on, Color? accent)
+    {
+        if (btn == null) return;
+        btn.Foreground = on && accent.HasValue
+            ? new SolidColorBrush(accent.Value)
+            : (Brush)FindResource("TextSecondaryBrush");
+        // Tag 驱动模板里的常驻浅底(见 PlayerActionBtn 的 DataTrigger)
+        btn.Tag = on ? "on" : "off";
+        if (!on) return;
+        // 冻结笔刷: 这几个色相是常量, 冻结后 WPF 渲染时可以少走一次可变检查
+        if (btn.Foreground is SolidColorBrush scb && scb.CanFreeze) scb.Freeze();
+    }
+
+    /// <summary>该动作的色相(按名字取, 点亮/hover 预览共用一套来源)</summary>
+    private Color? ActionAccentOf(Button btn)
+    {
+        if (ReferenceEquals(btn, BtnLike)) return ActionLikeColor;
+        if (ReferenceEquals(btn, BtnCoin)) return ActionCoinColor;
+        if (ReferenceEquals(btn, BtnFavorite) || ReferenceEquals(btn, BtnWatchLater)) return ActionSaveColor;
+        // 下载: 只有"已下载"这一个终态是绿的, 没有"未点亮→点亮"的来回切换
+        if (ReferenceEquals(btn, BtnCache)) return ActionDownloadColor;
+        return ActionNeutralColor;
+    }
+
+    /// <summary>
+    /// 这个按钮有没有"hover 预览"。
+    /// ★ 下载(和分享)没有: 下载的结果是**一次性**的, 鼠标扫过去就预先把按钮染绿等于
+    ///   谎报"已经下载好了"。设计稿 v4 里 .act.dl 也刻意没有 hover 预览。
+    /// </summary>
+    private bool HasHoverPreview(Button btn)
+        => !ReferenceEquals(btn, BtnCache) && !ReferenceEquals(btn, BtnShare);
+
+    /// <summary>该按钮当前是不是"已点亮"态(取消后要用它判断该不该回灰)</summary>
+    private bool IsActionOn(Button btn)
+    {
+        if (ReferenceEquals(btn, BtnLike)) return _isLiked;
+        if (ReferenceEquals(btn, BtnFavorite)) return _isFavorited;
+        if (ReferenceEquals(btn, BtnWatchLater)) return _isInWatchLater;
+        // 下载的"已下载"也是终态, 有它就说明不该回灰
+        if (ReferenceEquals(btn, BtnCache)) return _cacheDownloaded;
+        return false;
+    }
+
+    /// <summary>
+    /// 操作按钮的 hover 预览(设计稿 v4 第 03 节): 鼠标上来先把该动作的色相透出来,
+    /// 让用户"不用点就知道点了会怎样"; 底色由模板的 DataTrigger 负责(同色相浅底)。
+    ///
+    /// ★ 已在点亮态的按钮不需要预览 —— 它本来就是那个颜色, 变过去等于没变。
+    /// ★★ 取消后 750ms 内不预览(hover 锁, 见 _actionHoverLockUntil): 取消的那一刻鼠标
+    ///    必然还停在这个按钮上, 不给锁的话按钮会当场又变回红色, 用户以为自己没取消成功,
+    ///    于是再点一次(这就是设计稿里 v3 的那个隐藏 bug)。
+    /// </summary>
+    private void OnActionButtonHover(object sender, MouseEventArgs e)
+    {
+        if (_closing || sender is not Button btn) return;
+        if (DateTime.UtcNow < _actionHoverLockUntil) return;
+        if (!HasHoverPreview(btn)) return;
+        var accent = ActionAccentOf(btn);
+        if (accent.HasValue && !IsActionOn(btn))
+            btn.Foreground = new SolidColorBrush(accent.Value);
+    }
+
+    /// <summary>鼠标离开: 回到该按钮的"真实态"颜色(点亮保持色相, 未点亮回灰)</summary>
+    private void OnActionButtonLeave(object sender, MouseEventArgs e)
+    {
+        if (_closing || sender is not Button btn) return;
+        ApplyActionVisual(btn, IsActionOn(btn), ActionAccentOf(btn));
+    }
+
+    /// <summary>取消操作后锁住 hover 预览到这个时刻(UTC)。750ms 与设计稿一致。</summary>
+    private DateTime _actionHoverLockUntil = DateTime.MinValue;
+
+    /// <summary>锁住 hover 预览 750ms(取消点赞/收藏/稍后再看之后调)</summary>
+    private void LockActionHoverPreview() => _actionHoverLockUntil = DateTime.UtcNow.AddMilliseconds(750);
+
+    /// <summary>
+    /// 给一个操作按钮播"弹一下"的反馈(设计稿 v4 第 03 节②)。
+    /// 作用在图标盒子上而不是内部 Path: Path 自身没有 ScaleTransform, 直接缩放会和
+    /// 别的动画/布局打架; 图标盒子是纯容器, 缩放它最干净。
+    ///
+    /// ★★★ 每次都必须**新建** ScaleTransform, 不能复用现有的那一个。
+    ///   原因见 XAML 里 ActionIconBox 的注释: 样式 Setter 里的 Freezable 会被 WPF **冻结**,
+    ///   对冻结对象 BeginAnimation 会直接抛
+    ///     "无法在 System.Windows.Media.ScaleTransform 上激活 ScaleX 属性, 因为该对象已密封或已冻结"
+    ///   —— 用户看到的就是"点一下点赞就弹错误框"(2026-10-06 实测踩到)。
+    ///   新建一个 ScaleTransform 的开销可以忽略(一次点击一次), 而它从根上避开了冻不冻的问题。
+    /// </summary>
+    private void PlayActionPop(Grid? iconBox)
+    {
+        if (iconBox == null || _closing) return;
+        var scale = new ScaleTransform(1, 1);
+        iconBox.RenderTransform = scale;
+        // 关键帧: 1 → 1.3 → 1(与设计稿的 40% 处 1.3 一致), 总时长 420ms
+        var anim = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(420) };
+        anim.KeyFrames.Add(new LinearDoubleKeyFrame(1.0, KeyTime.FromPercent(0)));
+        anim.KeyFrames.Add(new EasingDoubleKeyFrame(1.3, KeyTime.FromPercent(0.4))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        });
+        anim.KeyFrames.Add(new EasingDoubleKeyFrame(1.0, KeyTime.FromPercent(1))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
+        });
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, anim);
+        scale.BeginAnimation(ScaleTransform.ScaleYProperty, anim);
+    }
+
+    // ------------------------------------------------------------ 「听视频」纯音频模式
+
+    /// <summary>
+    /// 是否处于「听视频」纯音频模式。
+    /// 登记在 <see cref="PersistentFields"/>: 它是**窗口级的播放模式**(同 _isFillWindow),
+    /// 用户切到纯音频连听几集是常态, 换片不该把它弹回视频。
+    /// </summary>
+    private bool _isListenMode;
+
+    /// <summary>
+    /// 「听视频」用的 DASH 音轨地址(与 _lastAudioUrl 分开存)。
+    ///
+    /// ★ 为什么不能复用 _lastAudioUrl: 那个字段的语义是"当前 Media 的 input-slave",
+    ///   退出聆听态要用它重建**原视频组合**。聆听态期间它会被改成音轨单流,
+    ///   退出时就再也拼不回视频了。
+    /// </summary>
+    private string? _listenAudioUrl;
+
+    /// <summary>进入聆听态前记下的进度(切流后恢复, 与切清晰度同一套机制)</summary>
+    private long _listenResumeMs;
+
+    /// <summary>声波律动定时器(顶栏小 5 根 + 画面区大 7 根共用这一个)</summary>
+    private DispatcherTimer? _listenWaveTimer;
+    private int _listenWaveTick;
+
+    /// <summary>声波每根条的相位延迟(设计稿 .11s 一档), 单位是 tick</summary>
+    private static readonly double[] ListenWavePhase = { 0, 0.11, 0.22, 0.33, 0.44, 0.55, 0.66 };
+
+    /// <summary>
+    /// 「听视频」入口的可用性。
+    /// 直播是连续流(没有"音轨地址"这种可单取的东西), 本地文件也没有独立音轨 ——
+    /// 点了必然失败, 所以整颗按钮收起来而不是让它点了报错(设计稿第 05 节"无音轨就别给")。
+    /// </summary>
+    private void UpdateListenButtonState()
+    {
+        if (BtnListen == null) return;
+        var usable = !_isLive && !_isLocalPlayback;
+        BtnListen.Visibility = usable ? Visibility.Visible : Visibility.Collapsed;
+        // 切到不支持的模式(换成直播/本地文件)时必须把聆听态收掉 —— 否则聆听遮罩会盖在
+        // 一个根本没有独立音轨的片源上(用户看到"正在聆听", 实际播的是视频)。
+        // ★ 这里只做**状态与视觉**的收尾, 绝不去重建 Media: 本方法是在 ResetForNewMedia
+        //   里被调的, 那时 _lastPlayUrl 还是**上一条视频**的地址 —— 让 ExitListenMode 跑
+        //   完整流程会用旧地址重新起播一次, 而调用方紧接着就要播新片源了。
+        if (!usable && _isListenMode)
+        {
+            _isListenMode = false;
+            ApplyListenMode(false);
+        }
+    }
+
+    private void OnListenToggleClick(object sender, RoutedEventArgs e)
+    {
+        if (_closing) return;
+        if (_isListenMode) ExitListenMode();
+        else EnterListenMode();
+    }
+
+    /// <summary>
+    /// 进入「听视频」: 切到 DASH 音轨单流播放, 画面区盖上聆听视觉。
+    ///
+    /// ★ 为什么真的换流(而不是只给 Media 加 :no-video):
+    ///   加 :no-video 只是让 LibVLC 不解码画面, **视频流照样在下载** —— 该省的流量一点没省,
+    ///   而"听视频"这个功能的全部价值恰恰是省流量(以及省电/让笔记本安静)。
+    ///   所以我们改播 playurl 里那条音频地址(input-slave 用的同一条), 视频流一个字节都不拉。
+    ///
+    /// ★ 起播必然要重建 Media, 所以进度必须自己接上: 走 _resumeAfterSwitchMs 那套
+    ///   (Playing 事件里恢复), 与切清晰度完全同一条路 —— 别在这里再写一份恢复逻辑。
+    /// </summary>
+    private void EnterListenMode()
+    {
+        if (_closing || _isListenMode) return;
+        if (_isLive || _isLocalPlayback) return;
+        if (string.IsNullOrEmpty(_listenAudioUrl))
+        {
+            Svc.Toast.Show("这条视频没有可用的音轨");
+            return;
+        }
+
+        _isListenMode = true;
+        // 先在暂停/播到一半时也能接上: 用当前播放位置(拿不到就从 0 开始)
+        try { _listenResumeMs = _mp.Time; } catch { _listenResumeMs = 0; }
+        if (_listenResumeMs < 0) _listenResumeMs = 0;
+
+        ApplyListenMode(true);
+        // 音轨是单流: audioUrl 传 null, 否则等于给音频文件再挂一条音频
+        ShowLoading("正在切换到听视频…");
+        _resumeAfterSwitchMs = _listenResumeMs;
+        try { _mp.Stop(); } catch { /* 已停/未起播 */ }
+        PlayMedia(BuildMedia(_listenAudioUrl!, null));
+    }
+
+    /// <summary>
+    /// 退出「听视频」: 用原来的视频 + 音轨组合重建 Media(进度同样接回来), 收掉聆听视觉。
+    ///
+    /// ★ 退出时**不能**直接 _mp.Stop() 就完事: 那样视频就再也不播了。
+    ///   必须用 _lastPlayUrl/_lastAudioUrl 把"进入之前那条组合"原样拼回去 ——
+    ///   这正是这两个字段必须原封不动保留的原因(见 _listenAudioUrl 的说明)。
+    /// </summary>
+    private void ExitListenMode()
+    {
+        if (_closing || !_isListenMode) return;
+        _isListenMode = false;
+
+        try { _listenResumeMs = _mp.Time; } catch { _listenResumeMs = 0; }
+        if (_listenResumeMs < 0) _listenResumeMs = 0;
+
+        ApplyListenMode(false);
+
+        // 直播/本地最后走到了这里也没关系: _lastPlayUrl 就是它们的源, 原样重播
+        var url = _lastPlayUrl;
+        if (string.IsNullOrEmpty(url))
+        {
+            // 没有可回溯的源: 只能停下(比播着一个不知道是什么的流强)
+            try { _mp.Stop(); } catch { }
+            HideLoading();
+            return;
+        }
+        ShowLoading("正在恢复视频…");
+        _resumeAfterSwitchMs = _listenResumeMs;
+        try { _mp.Stop(); } catch { /* 已停 */ }
+        // 本地文件是单文件源, 不能带 input-slave
+        PlayMedia(BuildMedia(url, _isLocalPlayback ? null : _lastAudioUrl));
+    }
+
+    /// <summary>
+    /// 聆听态的视觉开关(**唯一改 ListenOverlay / 顶栏按钮形态的地方**)。
+    /// 收在一个方法里: 顶栏按钮有 4 个部件(耳机/声波/文案/底色)要跟着状态换,
+    /// 散着写必然出现"按钮点亮了但遮罩没出来"这种半状态。
+    /// </summary>
+    private void ApplyListenMode(bool on)
+    {
+        if (ListenOverlay != null)
+            ListenOverlay.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        if (BtnListen != null)
+            BtnListen.Tag = on ? "on" : "off";   // 驱动 ListenGhostBtn 的琥珀 DataTrigger
+        if (ListenHeadIcon != null)
+            ListenHeadIcon.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
+        if (ListenWavePanel != null)
+            ListenWavePanel.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        // 文案两层叠放(宽度由容器取最大值, 不推走邻居): 这里只切透明度
+        if (ListenLabel != null) ListenLabel.Opacity = on ? 0 : 1;
+        if (ListenLabelOn != null)
+        {
+            ListenLabelOn.Opacity = on ? 1 : 0;
+            // 保证按钮宽度**在切换到聆听态之前**就已经是那个更宽的尺寸,
+            // 否则第一次进聆听会有一次可见的宽度跳变。
+            // ★ 占位串必须与 UpdateListenLabel 的**小时以内**格式等宽(分钟两位), 否则
+            //   第一次进聆听还是会跳一下。
+            if (!on) ListenLabelOn.Text = "正在聆听 00:00";
+        }
+        if (on) UpdateListenLabel();
+        if (BtnListen != null)
+            BtnListen.ToolTip = on ? "退出听视频" : "听视频 (只播声音, 省流量)";
+
+        if (on)
+        {
+            // 封面 + 标题: 让"在听什么"一眼可读
+            if (ListenOverlayTitle != null) ListenOverlayTitle.Text = _videoTitle;
+            LoadListenCover(_coverUrl);
+            StartListenWave();
+        }
+        else
+        {
+            StopListenWave();
+        }
+    }
+
+    /// <summary>聆听中的文案: 「正在聆听 m:ss」。秒数取自播放位置, 每秒由 UpdateListenLabel 刷。</summary>
+    private void UpdateListenLabel()
+    {
+        if (ListenLabelOn == null || !_isListenMode) return;
+        long ms = 0;
+        try { ms = _mp.Time; } catch { /* 播放器未就绪 */ }
+        if (ms < 0) ms = 0;
+        var t = TimeSpan.FromMilliseconds(ms);
+        // ★ 分钟**补两位**(设计稿写的是 "0:14", 但那样字串长度会在 10 分钟那一刻从 4 位变 5 位,
+        //   而按钮在顶栏右对齐的 StackPanel 里 —— 宽度一变右侧那排窗口按钮就整体挪一下,
+        //   与「稍后再看」那条"整排被推走"是同一类问题。补零后小时以内长度恒定。
+        //   跨过 1 小时仍会多一段(视频普遍不止一小时, 不再为它牺牲可读性)。
+        var text = t.TotalHours >= 1
+            ? $"正在聆听 {(int)t.TotalHours}:{t.Minutes:D2}:{t.Seconds:D2}"
+            : $"正在聆听 {(int)t.TotalMinutes:D2}:{t.Seconds:D2}";
+        ListenLabelOn.Text = text;
+    }
+
+    /// <summary>封面图: 异步取一次(解码宽度按显示尺寸 260 的两倍, 够清晰又不浪费内存)</summary>
+    private void LoadListenCover(string? url)
+    {
+        if (string.IsNullOrEmpty(url) || ListenCover == null) return;
+        _ = LoadListenCoverAsync(url);
+    }
+
+    private async Task LoadListenCoverAsync(string url)
+    {
+        var img = await CoverLoader.LoadAsync(url, 520);
+        if (img == null || _closing) return;
+        await Dispatcher.InvokeAsync(() =>
+        {
+            if (_closing || ListenCover == null) return;
+            ListenCover.Source = img;
+        });
+    }
+
+    /// <summary>
+    /// 启动声波律动。★ 用 DispatcherTimer 而不是 XAML Storyboard:
+    ///   ① 五根/七根条各有各的相位与高度, Storyboard 要写十几组 BeginStoryboard;
+    ///   ② 更重要的是**退出聆听必须能一处停掉** —— Storyboard 挂在模板上时,
+    ///      遮罩收起了动画还在跑, 白烧 CPU(项目里"关掉还在跑"的坑不止一个)。
+    /// 33ms ≈ 30fps: 声波是随机的律动, 不需要 60fps, 省一半 CPU。
+    /// </summary>
+    private void StartListenWave()
+    {
+        _listenWaveTick = 0;
+        if (_listenWaveTimer == null)
+        {
+            _listenWaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+            _listenWaveTimer.Tick += (_, _) =>
+            {
+                if (_closing || !_isListenMode) { StopListenWave(); return; }
+                _listenWaveTick++;
+                UpdateListenWave();
+                // 文案里的秒数也挂在这个心跳上: 另开一个 1 秒定时器纯属多余
+                if (_listenWaveTick % 30 == 0) UpdateListenLabel();
+            };
+        }
+        _listenWaveTimer.Start();
+        UpdateListenWave();
+    }
+
+    private void StopListenWave() => _listenWaveTimer?.Stop();
+
+    /// <summary>
+    /// 逐帧算声波高度。每根条 = 相位偏移的正弦 + 一点点随机抖动,
+    /// 比纯随机更像"随声音起伏"(纯随机会跳得没有节奏感)。
+    /// </summary>
+    private void UpdateListenWave()
+    {
+        // tick 到相位: 0.82s 一个周期 ≈ 25 tick(33ms 一 tick)
+        const double periodTicks = 25.0;
+        var t = _listenWaveTick;
+
+        var small = new[] { ListenWave1, ListenWave2, ListenWave3, ListenWave4, ListenWave5 };
+        for (var i = 0; i < small.Length; i++)
+            SetWaveHeight(small[i], t, periodTicks, ListenWavePhase[i], min: 5, max: 14);
+
+        var big = new[] { BigWave1, BigWave2, BigWave3, BigWave4, BigWave5, BigWave6, BigWave7 };
+        for (var i = 0; i < big.Length; i++)
+            SetWaveHeight(big[i], t, periodTicks, ListenWavePhase[i], min: 10, max: 32);
+    }
+
+    /// <summary>按相位算一根声波条的高度(0.5 + 0.5*sin 映射到 [min,max])</summary>
+    private static void SetWaveHeight(Border? bar, int tick, double periodTicks, double phaseTicks,
+        double min, double max)
+    {
+        if (bar == null) return;
+        var phase = (tick + phaseTicks * periodTicks) / periodTicks * Math.PI * 2;
+        var k = 0.5 + 0.5 * Math.Sin(phase);
+        bar.Height = min + (max - min) * k;
     }
 
     /// <summary>
@@ -3814,6 +4366,8 @@ public partial class PlayerWindow : FluentWindow
                 return;
             }
             SetInWatchLater(target);
+            PlayActionPop(LaterIconBox);
+            if (!target) LockActionHoverPreview();   // 移出后锁 hover 预览(同点赞的坑)
             Svc.Toast.Show(target ? "已加入稍后再看" : "已从稍后再看移出");
         }
         finally
@@ -3867,6 +4421,9 @@ public partial class PlayerWindow : FluentWindow
             // 高亮与提示跟最终勾选走(至少在一个夹里就算"已收藏")
             var final = picker.FinalCheckedIds;
             SetFavorited(final.Count > 0);
+            PlayActionPop(FavIconBox);
+            // 取消收藏后同样要锁 hover 预览(与取消点赞同一个坑)
+            if (final.Count == 0) LockActionHoverPreview();
             Svc.Toast.Show(final.Count > 0 ? $"已收藏到 {final.Count} 个收藏夹" : "已取消收藏");
         }
         finally
@@ -3972,33 +4529,54 @@ public partial class PlayerWindow : FluentWindow
     }
 
     private bool _commentsLoaded;
+
+    /// <summary>
+    /// 评论区排序: 3 = 热门, 2 = 时间(与 B 站接口的 mode 同值)。
+    /// ★ 初值 3 与接口默认一致 —— 用户第一次进评论区看到的顺序不能因为这次改动而变。
+    /// </summary>
+    private int _commentSort = 3;
+
+    /// <summary>当前视频的根评论总数(来自接口 cursor.all_count, 不是本页条数)</summary>
+    private long _commentTotal;
+
     private async Task LoadCommentsAsync(bool force = false)
     {
         if (_closing) return;
         // force: 刚发表完评论要重新拉一次(rpid/楼层/审核状态本地编不出来)。
         // 但"看过就不再拉"这个短路必须保留 —— 切 Tab 会反复调到这里, 不短路就是白刷接口。
+        // ★ 切换排序必须走 force=true: 它要的就是"同一份数据换个顺序重拉"。
         if (force) CloseCommentDetail();
         if (_commentsLoaded && !force) { CommentHint.Text = "已加载"; return; }
         if (_aid <= 0)
         {
             CommentHint.Text = _isLocalPlayback ? "本地文件没有评论" : "未获取到视频 aid";
+            UpdateCommentSortUi(visible: false);
             return;
         }
         CommentLoadingRing.Visibility = Visibility.Visible;
         CommentHint.Text = force ? "正在刷新评论…" : "加载评论中…";
+        // 重拉期间先把两个词收起来: 否则"正在刷新评论…"右边还挂着可点的排序词, 会出现
+        // "点一下又刷新一次"的连点窗口期。
+        UpdateCommentSortUi(visible: false);
         try
         {
-            var (cmtOk, cmtErr, list) = await Svc.Api.GetCommentsAsync(_aid, 30);
+            var (cmtOk, cmtErr, list, total) = await Svc.Api.GetCommentsAsync(_aid, 30, _commentSort);
             await Dispatcher.InvokeAsync(() =>
             {
                 if (_closing) return;
                 CommentList.ItemsSource = list;
                 _commentsLoaded = true;
+                _commentTotal = total;
                 CommentLoadingRing.Visibility = Visibility.Collapsed;
                 // ★ 原来"接口失败"和"这视频真的一条评论都没有"都显示"暂无评论" ——
                 //   网络失败被伪装成了正常状态。现在失败时说清原因。
+                // ★ 条数用接口给的**总数**(_commentTotal), 不再拿 list.Count —— 一页只拉 30 条,
+                //   拿它当总数的话几千条评论的视频会显示成"共 30 条评论"。总数缺失(0)时才回落到本页条数。
                 CommentHint.Text = !cmtOk ? (cmtErr ?? "评论加载失败")
-                    : list.Count == 0 ? "暂无评论" : $"共 {list.Count} 条评论";
+                    : list.Count == 0 ? "暂无评论"
+                    : $"共 {VideoItem.FormatCount(total > 0 ? total : list.Count)} 条评论";
+                // 只有真的加载成功且有评论, 排序入口才出现
+                UpdateCommentSortUi(visible: cmtOk && list.Count > 0);
             });
         }
         catch
@@ -4006,7 +4584,45 @@ public partial class PlayerWindow : FluentWindow
             if (_closing) return;
             CommentLoadingRing.Visibility = Visibility.Collapsed;
             CommentHint.Text = "评论加载失败";
+            UpdateCommentSortUi(visible: false);
         }
+    }
+
+    /// <summary>
+    /// 同步排序入口的可见性与选中态。
+    ///
+    /// ★ 选中态只在这里写 Tag(与 ContentActionTabStyle 同一套约定: 字符串 "on"/"off")。
+    ///   分散着改两个按钮的 Tag 必然出现"两边都亮"或"两边都不亮"。
+    /// </summary>
+    private void UpdateCommentSortUi(bool visible)
+    {
+        var vis = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (BtnCommentSortHot != null)
+        {
+            BtnCommentSortHot.Visibility = vis;
+            BtnCommentSortHot.Tag = _commentSort == 3 ? "on" : "off";
+        }
+        if (BtnCommentSortTime != null)
+        {
+            BtnCommentSortTime.Visibility = vis;
+            BtnCommentSortTime.Tag = _commentSort == 2 ? "on" : "off";
+        }
+    }
+
+    private void OnCommentSortHotClick(object sender, RoutedEventArgs e) => SetCommentSort(3);
+
+    private void OnCommentSortTimeClick(object sender, RoutedEventArgs e) => SetCommentSort(2);
+
+    /// <summary>
+    /// 切换评论排序。已经是当前排序就直接返回 —— 否则点一下会白刷一次接口,
+    /// 而重拉期间入口是收起的, 用户看到的是"点了闪一下什么都没有"。
+    /// </summary>
+    private void SetCommentSort(int mode)
+    {
+        if (_closing || _commentSort == mode) return;
+        _commentSort = mode;
+        UpdateCommentSortUi(visible: true);
+        _ = LoadCommentsAsync(force: true);
     }
 
     /// <summary>
