@@ -437,28 +437,17 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
             <Setter Property="BorderThickness" Value="0" />
-            <!-- ★★ 2026-10-06 单行后重算过内边距: 六个按钮挤在右栏 400px(去掉外边距可用 ~392px)里。
-                 宽度账(按钮宽 = Padding 左右 + 图标 20 + 文字左外边距 + 数字 + Margin 右):
-                   · 前三个带数字(三位数如 "282")≈ 3+3+20+4+28+14 = 72px, 三个 ≈ 216px
-                   · 后三个纯图标 ≈ 3+3+20+4+14 = 44px, 三个 ≈ 132px
-                   · 合计 ≈ 348px, 可用 392px ⇒ 余量 ≈ 44px
-                 ★★ **垂直内边距 7 是硬约束, 不能压**(2026-10-06 用户反馈"点击后图标被遮挡"):
-                   点击时 PlayActionPop 会把图标盒放大到 **1.3 倍**(见 PlayActionPop),
-                   20px 的盒子峰值 26px ⇒ 上下各溢出 3px。垂直内边距小于 3px 时,
-                   溢出的部分就顶到按钮模板的 Tint(Border)边缘被裁 —— 观感就是
-                   "稍后再看的钟被切掉一圈"。7px 上下各留 7px, 3px 溢出量完全容得下。
-                   ★ 水平方向反而可以小(Padding 3): 左右溢出量由 Margin 14px 隔开,
-                     不会碰到相邻按钮。
-                 ★ Margin 右 14(原 10, 用户反馈"10px 偏紧"):
-                   六个按钮的图标盒之间要留够弹跳余量 —— 只留 10px 时, 弹跳峰值 26px 的图标
-                   与相邻按钮的视觉距离不足, 看着挤。14px 配合余量 44px 刚好够分。
+            <!-- ★★ 两行布局下每行只有三个按钮, 每个能用 ~130px(实测最宽的「稍后再看」约 90px),
+                 宽度富余 —— 所以 Padding/Margin 可以给得宽松一些, 排版才松快。
+                   · Padding 4,6: 垂直 6px 容纳点击时 PlayActionPop 的 1.3 倍弹跳
+                     (20px 盒 → 26px, 上下各溢出 3px), 不像单行那样几乎顶到边缘;
+                   · Margin 右 8: 行内三个之间留 8px, 比单行时的 14px 略紧是合理的
+                     —— 单行挤六个才需要 14, 两行三个用 8 就够。
                  ★ 为什么改小而不是让 Grid 换行: 用户要求"单行显示", 换行就违背了。
-                 ★ ActionCountText 的 MinWidth 从 20 收到 16(见该样式): 两位数(10~99)实测
-                   13px 字号下宽约 16~18px, 给 16 已够; 三位数及以上按内容自然撑开,
-                   那一档本来就会触发 UpdateActionCounts 里的缩写(如 "1.2万"), 不会真的溢出。
-                   ★ 即便数字涨到四位数(三个各多约 10px ⇒ 合计多 30px), 44px 余量也够, 不会挤爆换行。 -->
-            <Setter Property="Padding" Value="3,7" />
-            <Setter Property="Margin" Value="0,0,14,0" />
+                 ★ ActionCountText 的 MinWidth 20(原值): 两位数(10~99)在 13px 字号下
+                   宽约 16~18px, 给 20 有余量, 切到三位数时也不会推走右侧按钮。 -->
+            <Setter Property="Padding" Value="4,6" />
+            <Setter Property="Margin" Value="0,0,8,0" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <!-- hover / 离开统一在代码里处理色相(见 ApplyActionVisual), 所以这里挂样式级事件:
@@ -509,11 +498,18 @@
              MinWidth 兜住位数变化, 右侧按钮不会被推走。 -->
         <Style x:Key="ActionCountText" TargetType="TextBlock">
             <Setter Property="FontSize" Value="13" />
-            <!-- ★ 左边距 6→4: 单行六列的宽度预算里每一px 都要算(见 PlayerActionBtn 的说明) -->
-            <Setter Property="Margin" Value="4,0,0,0" />
-            <!-- ★ MinWidth 20→16: 两位数在 13px 字号下宽约 16~18px, 给 16 已够;
-                 三位数走 UpdateActionCounts 的缩写(如 "1.2万"), 按内容自然撑开。 -->
-            <Setter Property="MinWidth" Value="16" />
+            <Setter Property="MinWidth" Value="20" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+        </Style>
+
+        <!-- 操作栏文字标签(稍后再看/已添加/分享/下载)。
+             ★ 图标与文字的**上下对齐**靠这条样式的 VerticalAlignment="Center"
+               加上 ActionIconBox 的固定 20×20: 两者等高居中, 一排六个图标的基线才一致。
+               (用户报过"6 个按钮没有上下对齐", 根因是当时下载图标格写了 18 而其余是 20。) -->
+        <Style x:Key="ActionLabelText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Margin" Value="6,0,0,0" />
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
         </Style>
@@ -1193,40 +1189,27 @@
                                  ★ 两行本身就是分组, 所以原先那两条分组竖线一并删掉
                                    (它们在第 2 行里会悬在「分享」和「下载」中间, 本来就怪)。 -->
                             <StackPanel x:Name="ActionBar" Margin="0,14,0,0">
-                                <!-- ★★ 2026-10-06: 六个动作改成**单行**(点赞 投币 收藏 稍后再看 分享 下载)。
-                                     原来写死两行(第 1 行三连 / 第 2 行收起来·传出去·拿走),
-                                     两行各有一次折行风险, 8 位数计数时还会把「稍后再看」挤到第二行、
-                                     断点落成 4+2 右边空一大片。现在一行六列, 断点恒定, 顺序恒定。
+                                <!-- ★★ 2026-10-06 改回**两行**(点赞 投币 收藏 / 稍后再看 分享 下载)。
+                                     一行六列试过, 两个问题都出在"只有一行"上:
+                                       ① 六个挤在 392px 里, 每个只剩 ~62px, 数字(三位数)几乎顶到边缘;
+                                       ② 点击时 PlayActionPop 放大到 1.3 倍(20px 盒 → 26px),
+                                          单行时水平方向没有富余, 弹跳溢出量会碰到相邻按钮。
+                                     两行每行只有三个 ⇒ 每个能用 90px 以上, 图标与文字都松快。
 
-                                     ★★ 下面那排(稍后再看/分享/下载)**去掉文字、只留图标**:
-                                       图标已经能表意(钟=稍后再看, 上箭头=分享出去, 下箭头=拿走),
-                                       文字挤在 351px 的信息栏里既占宽又把六个按钮排得松散。
-                                       含义靠 ToolTip 保留(鼠标停上去仍有说明), 不丢可发现性。 -->
+                                     ★★ 图标**上下对齐**(2026-10-06 用户要求): 图标盒与文字格都设
+                                        VerticalAlignment="Center", 两者等高居中对齐。
+                                        ActionIconBox 固定 20×20, 所以一排里六个图标的基线也一致
+                                        —— 与 XAML 里"图标格必须同为 20×20"是同一个道理。 -->
                                 <Grid x:Name="ActionRowMark" VerticalAlignment="Center">
-                                    <!-- ★★ 六列宽度全部按内容(Auto), **末尾另加一个空的 * 列**吃掉剩余空间。
-                                           为什么不用六个 "*" 均分: 均分时每列固定 ~65px, 而按钮内容
-                                           (边距 4 + 图标 20 + 文字边距 4 + 数字 16 + 右边距 4 = 48px)
-                                           之外还要留 Padding; 一旦某列数字变宽(比如从 "0" 变成 "1.2万"),
-                                           均分会把内容溢出到列外被裁掉 —— 这正是用户截图里
-                                           "点赞/投币/收藏的数字被切"的原因。
-
-                                           ★★ 为什么是"**六列 Auto + 一个空 * 列**"而不是"五列 Auto + 末列 *"
-                                           (2026-10-06 用户反馈"稍后再看和分享靠得太近/分享和下载裂开一大段"):
-                                           末列如果是按钮本身(下载), 那个 * 就会把它**推到行尾**,
-                                           于是「分享」与「下载」之间裂开一大段空白, 而前五个挤在左边 ——
-                                           正是那张截图的样子。把 * 单独给一个**空的第 7 列**,
-                                           余量就全部落在六个按钮**右侧之外**, 六个按钮紧贴排开、间距一致。
-
-                                           ★ 同理也不能六个都 Auto 而不加列: 那会让整排**靠左**,
-                                             右栏剩下的 100 多 px 空白全在右边, 视觉上同样偏。 -->
+                                    <!-- 三列等分: 每行三个按钮, 每个可用 ~130px, 远用不完
+                                         (实测最宽的「稍后再看」约 90px) ⇒ 数字与文字都不会被裁,
+                                         也不必再靠调 Padding/Margin 去抠宽度。
+                                         ★ 列宽用 "*" 而不是 Auto 是因为**文字会变**:
+                                           「稍后再看」↔「已添加」宽度不同, Auto 会让某一列
+                                           跟着变宽、把整排推着走; 等分则每列固定, 谁也不动谁。 -->
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <!-- 余量缓冲列: 没有按钮, 只负责吃掉剩余宽度 -->
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <!-- 点赞: 点过 = 图标和数字一起变红 -->
@@ -1268,16 +1251,30 @@
                                                        Style="{StaticResource ActionCountText}" />
                                         </StackPanel>
                                     </Button>
+                                </Grid>
+
+                                <!-- ===== 第 2 行: 稍后再看 + 传出去(分享) + 拿走(下载) ===== -->
+                                <Grid x:Name="ActionRowOther" Margin="0,2,0,0" VerticalAlignment="Center">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
 
                                 <!-- 稍后再看: 点一下加入/移出 B 站账号的云端列表。
-                                         ★ 单行后**去掉文字**, 只留空心钟 —— 含义靠 ToolTip("加入稍后再看")。
                                          ★ 图标: 空心钟, 点亮时**只变色**(描边绑 Button.Foreground,
                                            由 ApplyActionVisual 统一刷成该动作的蓝色)。
                                          ★ 用户要求(2026-10-06): **不要打勾图案**, 保留时钟图标 + 跳动动画即可,
                                            所以这里只有一个空心钟, 不再切换到"实心圆+白勾"。
                                            ★ 旧版那两层(实心圆 LaterIconOnFill + 白勾 LaterIconOnCheck)已删除;
                                              它们换来的代价是两个 Path 必须同步显隐, 而用户明确表示不需要勾。 -->
-                                    <Button x:Name="BtnWatchLater" Style="{StaticResource PlayerActionBtn}"  Grid.Column="3"
+                                         ★ 图标: 空心钟, 点亮时**只变色**(描边绑 Button.Foreground,
+                                           由 ApplyActionVisual 统一刷成该动作的蓝色)。
+                                         ★ 用户要求(2026-10-06): **不要打勾图案**, 保留时钟图标 + 跳动动画即可,
+                                           所以这里只有一个空心钟, 不再切换到"实心圆+白勾"。
+                                           ★ 旧版那两层(实心圆 LaterIconOnFill + 白勾 LaterIconOnCheck)已删除;
+                                             它们换来的代价是两个 Path 必须同步显隐, 而用户明确表示不需要勾。 -->
+                                    <Button x:Name="BtnWatchLater" Style="{StaticResource PlayerActionBtn}"  Grid.Column="0"
                                             Click="OnWatchLaterClick" ToolTip="加入稍后再看">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Grid x:Name="LaterIconBox" Style="{StaticResource ActionIconBox}">
@@ -1285,9 +1282,16 @@
                                                       Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center"
                                                       Data="M3.4,12 A8.6,8.6 0 1 1 20.6,12 A8.6,8.6 0 1 1 3.4,12 Z M12,7.2 L12,12 L15.1,14" />
                                             </Grid>
-                                            <!-- ★ LaterLabelOff / LaterLabelOn 已删: 单行布局不再需要
-                                                 "两行文字叠放取最大宽度"那套(那是两行时代为防宽度跳变才做的)。
-                                                 状态改由图标变色表达, 文字留着只会把六颗按钮挤散。 -->
+                                            <!-- 文字**双层叠放**(稍后再看 / 已添加 叠在同一格): 宽度自动取两者
+                                                 最大值, 切换只做透明度过渡 —— 否则"已添加"比"稍后再看"少一个字,
+                                                 宽度一变后面整排按钮全被推着走(设计稿 v4 第 05 节修的就是这个 bug)。
+                                                 ★ 这对两层在两行布局下是必需的(2026-10-06 改回两行时恢复)。 -->
+                                            <Grid Margin="6,0,0,0" VerticalAlignment="Center">
+                                                <TextBlock x:Name="LaterLabelOff" Text="稍后再看"
+                                                           Style="{StaticResource ActionLabelText}" />
+                                                <TextBlock x:Name="LaterLabelOn" Text="已添加" Opacity="0"
+                                                           Style="{StaticResource ActionLabelText}" />
+                                            </Grid>
                                         </StackPanel>
                                     </Button>
 
@@ -1307,7 +1311,7 @@
                                             线宽与圆角完全相同, 拆开本来只是为了分组可读。
                                             ★ 尺寸 18×18(与「下载」一致): 分享和下载是同一排的
                                               "传出去/拿走"动作, 图标大小必须对齐(2026-10-06 用户要求)。 -->
-                                    <Button x:Name="BtnShare" Style="{StaticResource PlayerActionBtn}"  Grid.Column="4"
+                                    <Button x:Name="BtnShare" Style="{StaticResource PlayerActionBtn}"  Grid.Column="1"
                                             Click="OnCopyLinkClick" ToolTip="复制视频链接">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Grid x:Name="ShareIconBox" Style="{StaticResource ActionIconBox}">
@@ -1319,12 +1323,12 @@
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       Data="M12,15 V3.5 M8.2,7.3 L12,3.5 L15.8,7.3 M4.5,12.5 V18.5 A2,2 0 0 0 6.5,20.5 H17.5 A2,2 0 0 0 19.5,18.5 V12.5" />
                                             </Grid>
-                                            <!-- ★ "分享"二字已去掉(2026-10-06 单行布局), 含义靠 ToolTip。 -->
+                                            <TextBlock Text="分享" Style="{StaticResource ActionLabelText}" />
                                         </StackPanel>
                                     </Button>
 
                                     <!-- 离线缓存(下载) -->
-                                    <Button x:Name="BtnCache" Style="{StaticResource PlayerActionBtn}"  Grid.Column="5"
+                                    <Button x:Name="BtnCache" Style="{StaticResource PlayerActionBtn}"  Grid.Column="2"
                                             Click="OnCacheClick" ToolTip="离线缓存当前视频">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <!-- ★★★ 图标格必须与其它五个按钮**同为 20×20**(ActionIconBox),
@@ -1344,7 +1348,7 @@
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       Data="M12,3.5 L12,15 M8.2,11.3 L12,15 L15.8,11.3 M4.5,17 L4.5,19 A2,2 0 0 0 6.5,21 L17.5,21 A2,2 0 0 0 19.5,19 L19.5,17" />
                                             </Grid>
-                                            <!-- ★ "下载"二字已去掉(2026-10-06 单行布局), 含义靠 ToolTip。 -->
+                                            <TextBlock Text="下载" Style="{StaticResource ActionLabelText}" />
                                         </StackPanel>
                                     </Button>
                                 </Grid>
