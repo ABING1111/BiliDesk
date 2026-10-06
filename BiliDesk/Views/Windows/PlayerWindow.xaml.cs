@@ -4277,8 +4277,9 @@ public partial class PlayerWindow : FluentWindow
             BtnListen.Tag = on ? "on" : "off";   // 驱动 ListenGhostBtn 的琥珀 DataTrigger
         if (ListenHeadIcon != null)
             ListenHeadIcon.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
-        if (ListenWavePanel != null)
-            ListenWavePanel.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        // ★ 胶囊里原先那 5 根小波条已删除(2026-10-06 用户要求"胶囊里的音频波纹去掉,
+        //   只保留视频播放器的"), 所以这里不再有 ListenWavePanel 要切显隐。
+        //   聆听态画面里那组大波纹(BigWave1~7)照旧由 _listenWaveTimer 驱动, 不受影响。
         // 文案两层叠放(宽度由容器取最大值, 不推走邻居): 这里只切透明度
         if (ListenLabel != null) ListenLabel.Opacity = on ? 0 : 1;
         if (ListenLabelOn != null)
@@ -4345,10 +4346,11 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 启动声波律动。★ 用 DispatcherTimer 而不是 XAML Storyboard:
-    ///   ① 五根/七根条各有各的相位与高度, Storyboard 要写十几组 BeginStoryboard;
+    ///   ① 七根条各有各的相位与高度, Storyboard 要写十几组 BeginStoryboard;
     ///   ② 更重要的是**退出聆听必须能一处停掉** —— Storyboard 挂在模板上时,
     ///      遮罩收起了动画还在跑, 白烧 CPU(项目里"关掉还在跑"的坑不止一个)。
     /// 33ms ≈ 30fps: 声波是随机的律动, 不需要 60fps, 省一半 CPU。
+    /// ★ 现在只驱动聆听态画面里的 7 根大波纹(胶囊里那 5 根小波条已删除)。
     /// </summary>
     private void StartListenWave()
     {
@@ -4374,16 +4376,15 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 逐帧算声波高度。每根条 = 相位偏移的正弦 + 一点点随机抖动,
     /// 比纯随机更像"随声音起伏"(纯随机会跳得没有节奏感)。
+    ///
+    /// ★ 2026-10-06: 胶囊里那 5 根小波条已按用户要求删除, 现在只驱动**聆听态画面**里的
+    ///   大波纹(BigWave1~7)。胶囊待命/聆听都只显示耳机图标, 状态靠琥珀底色与文案区分。
     /// </summary>
     private void UpdateListenWave()
     {
         // tick 到相位: 0.82s 一个周期 ≈ 25 tick(33ms 一 tick)
         const double periodTicks = 25.0;
         var t = _listenWaveTick;
-
-        var small = new[] { ListenWave1, ListenWave2, ListenWave3, ListenWave4, ListenWave5 };
-        for (var i = 0; i < small.Length; i++)
-            SetWaveHeight(small[i], t, periodTicks, ListenWavePhase[i], min: 5, max: 14);
 
         var big = new[] { BigWave1, BigWave2, BigWave3, BigWave4, BigWave5, BigWave6, BigWave7 };
         for (var i = 0; i < big.Length; i++)

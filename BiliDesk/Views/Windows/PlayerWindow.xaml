@@ -616,19 +616,6 @@
             </Setter>
         </Style>
 
-        <!-- 声波单根(顶栏小按钮用): 宽 2 / 右间距 2 => 4 根正好 16px, 塞得进 18px 的图标格。
-             高度由代码逐帧改(见 UpdateListenWave)。
-             ★ 宽度/间距刻意压到这么小: 5 根 2.5+2.5 就是 25px, 会溢出图标格撞到文字上。
-             ★ 颜色绑按钮 Foreground: 聆听态下它就是 TextOnAccentBrush(压在强调色底上),
-               换主题色时跟着走。 -->
-        <Style x:Key="ListenWaveBar" TargetType="Border">
-            <Setter Property="Width" Value="2" />
-            <Setter Property="Height" Value="4" />
-            <Setter Property="CornerRadius" Value="1" />
-            <Setter Property="Background" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-            <Setter Property="Margin" Value="0,0,2,0" />
-        </Style>
 
 </views:FluentWindow.Resources>
     <!-- 根底色: 常规状态跟主题走; 全屏时 ApplyFullscreenLayout 会把它切成纯黑
@@ -658,7 +645,9 @@
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <!-- 「听视频」入口(2026-10-06 新增, 用户要求放播放器右上角, 设计参考 听视频.html)。
                          幽灵胶囊: 待命 = 透明底 + 1px 描边 + 耳机图标 + "听视频";
-                         聆听中 = 琥珀实心 + 声波律动 + "正在聆听 m:ss"(由 ApplyListenMode 切换)。
+                         聆听中 = 琥珀实心 + "正在聆听 m:ss"(由 ApplyListenMode 切换)。
+                         ★ 2026-10-06 用户要求"胶囊里的音频波纹去掉, 只保留视频播放器的":
+                           胶囊内原先叠了 5 根小波条(现已删除), 聆听态画面里那组大波纹保留。
                          ★ 两段文案的宽度差很多("听视频" 3 字 vs "正在聆听 0:00"), 直接换文案会把右边的
                            窗口按钮推着走 —— 与「稍后再看」同一个坑。这里用**同一套双层叠放**:
                            两个 TextBlock 叠在同一格里, 容器宽度自动取两者最大值, 切换只做透明度过渡。
@@ -669,8 +658,12 @@
                             Click="OnListenToggleClick"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <!-- 待命态: 耳机(lucide headphones 的路径, 与设计稿一致)。
-                                 声波五根(聆听态)叠在同一个位置, 显隐由代码切换。 -->
+                            <!-- 待命/聆听态都用这一个耳机图标(lucide headphones 路径, 与设计稿一致)。
+                                 ★ 2026-10-06 用户要求"去掉胶囊里的音频波纹, 只保留视频播放器的":
+                                   这里原来还叠了一个 ListenWavePanel(5 根小波条), 与耳机图标同位切换 ——
+                                   5 根 20px 高的细条挤在 20×18 的格子里, 既看不清又和耳机图标打架。
+                                   现在胶囊里只有耳机图标; 聆听态画面里那组大波纹
+                                   (BigWave1~7, 见下方聆听态区)保留不动。 -->
                             <Grid Width="20" Height="18" VerticalAlignment="Center">
                                 <Path x:Name="ListenHeadIcon" Width="18" Height="18" Stretch="Uniform"
                                       HorizontalAlignment="Center"
@@ -679,15 +672,6 @@
                                       StrokeThickness="2" StrokeLineJoin="Round"
                                       StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                       Data="M3,14 L6,14 A2,2 0 0 1 8,16 L8,19 A2,2 0 0 0 10,21 L11,21 A2,2 0 0 0 13,19 L13,16 A2,2 0 0 1 15,14 L18,14 M21,18 L21,12 A9,9 0 0 0 3,12 L3,18" />
-                                <StackPanel x:Name="ListenWavePanel" Orientation="Horizontal"
-                                            HorizontalAlignment="Center"
-                                            Visibility="Collapsed" VerticalAlignment="Center">
-                                    <Border x:Name="ListenWave1" Style="{StaticResource ListenWaveBar}" />
-                                    <Border x:Name="ListenWave2" Style="{StaticResource ListenWaveBar}" />
-                                    <Border x:Name="ListenWave3" Style="{StaticResource ListenWaveBar}" />
-                                    <Border x:Name="ListenWave4" Style="{StaticResource ListenWaveBar}" />
-                                    <Border x:Name="ListenWave5" Style="{StaticResource ListenWaveBar}" />
-                                </StackPanel>
                             </Grid>
                             <!-- 双层文字: 宽度取两者最大值(见上面注释)。
                                  ★ 聆听那层的秒数用等宽数字: "10:00" 与 "9:59" 宽度不等会把按钮撑得一跳一跳。 -->
