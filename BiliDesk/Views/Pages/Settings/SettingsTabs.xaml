@@ -202,9 +202,10 @@
 
                     <!-- 软件缩放(2026-10-06 新增): 把整个界面按百分比放大/缩小, 与系统 DPI 无关。
                          ★ 用 LayoutTransform(见 Helpers/UiScale): 字与控件一起缩, 布局会重新排版。
-                         ★★ 说明文案必须点明"播放器窗口不参与缩放" —— 实测它有 3 棵独立可视树、
-                            视频画面是原生 HWND(WPF 变换对 HwndHost 无效), 只缩主树会让两者对不齐,
-                            所以播放器整体豁免。不讲清楚用户会当 bug(证据见 .probes/bd-probe-uiscale-player)。 -->
+                         ★★ 说明文案必须点明播放器的缩放范围 —— 只有右侧信息栏(含评论区)跟着缩,
+                            视频画面与顶栏保持原尺寸。不能连视频区一起缩: LibVLCSharp.WPF 3.8.0 把
+                            控制栏/弹幕层放在独立浮层窗口里, 那层不认祖先缩放, 会与视频区错开
+                            195×186px(实测见 .probes/bd-probe-uiscale-player)。不讲清楚用户会当 bug。 -->
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -214,7 +215,7 @@
                             <TextBlock Text="软件缩放" Style="{StaticResource SettingsRowTitleStyle}" />
                             <TextBlock Text="{Binding UiScaleText}"
                                        Style="{StaticResource SettingsRowDescStyle}" />
-                            <TextBlock Text="放大界面文字与控件；播放器窗口不参与缩放"
+                            <TextBlock Text="放大界面文字与控件；播放器只缩放右侧信息栏"
                                        Style="{StaticResource SettingsRowDescStyle}" />
                         </StackPanel>
                         <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"

@@ -15,10 +15,16 @@ namespace BiliDesk.Helpers;
 ///     再整体缩放到实际尺寸。效果等同浏览器 Ctrl+加号: 字与控件一起变大, 可见内容变少。
 ///   · RenderTransform —— 只影响绘制, 不影响测量 ⇒ 放大后控件互相重叠, 是错的。
 ///
-/// ## 已知边界: 原生 HWND(HwndHost)不受 WPF 变换影响
-/// 播放器的视频区是 LibVLC 的原生 HWND, **WPF 无法对它做变换** —— 这是 airspace 的硬限制,
-/// 不是本类能绕过的。所以缩放播放器时, 视频画面本身不会被放大(它按 VideoView 拿到的布局尺寸
-/// 自己渲染), 而周围的 UI(顶栏/信息栏/控制栏)会放大。见 PlayerWindow 里的说明。
+/// ## 播放器只缩右侧信息栏(2026-10-06)
+/// 视频区**不能**和周围 UI 一起缩 —— 但原因**不是**"原生 HWND 不受 WPF 变换影响"(这条实测是错的:
+/// 视频子 HWND 其实是跟着 LayoutTransform 走的, 偏差 0px)。真正的原因在 LibVLCSharp.WPF:
+/// 它把 `VideoView.Content`(控制栏 + 弹幕层)搬进一棵**独立的顶层浮层窗口**, 而该库 3.8.0 的
+/// `ForegroundWindow` 是按**局部坐标** `ActualWidth/Height` 定尺寸的, 不认祖先的缩放 ——
+/// 实测整窗缩到 125% 时那层浮层会小掉整整一个 1/1.25, 与视频区错开 195×186px(控制栏会跑偏)。
+/// 该库 3.8.1 才补上"识别缩放并同步放大浮层内容"(`AlignWithBackground`/`ScaleWindowContent`)。
+/// ⇒ 所以 <see cref="Views.PlayerWindow"/> 覆写 ScaleRoot 只返回右侧信息栏: 那一列里是
+///   标题/UP 主卡/操作栏/简介与评论 Tab/评论列表, 以及盖在它上面的合集面板与浮层 Toast。
+///   证据: `.probes/bd-probe-uiscale-player`(100%↔125% 逐项比对, 见该探针的判据)。
 ///
 /// ## 为什么要"注册"而不是每次遍历所有窗口
 /// 窗口会被反复创建/销毁(播放器、图片预览、各种对话框), 靠遍历拿不到"刚创建还没显示"的窗口,

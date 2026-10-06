@@ -31,15 +31,19 @@ namespace BiliDesk.Views;
 public partial class PlayerWindow : FluentWindow
 {
     /// <summary>
-    /// 播放器**不参与**全局软件缩放(2026-10-06 用户决定)。
+    /// 播放器**只让右侧信息栏参与**全局软件缩放(2026-10-06 用户决定): 视频画面与顶栏都保持原尺寸。
     ///
-    /// ★ 为什么必须豁免: 本窗口有 **3 棵独立可视树**(主窗口 + LibVLC 视频浮层 + 弹幕/控制栏浮层,
-    ///   实测见 `.probes/bd-probe-uiscale-player`), 而视频画面是**原生 HWND** ——
-    ///   WPF 的 LayoutTransform 对它无效(airspace 硬限制)。
-    ///   只缩主树会让"视频原生大小、周围 UI 放大", 两者对不齐; 不如整个窗口保持原尺寸。
-    ///   ★ 设置页的说明文案已写明"播放器的视频画面不受影响"。
+    /// ★ 为什么不能缩整窗: 本窗口的**视频区是原生 HWND**(HwndHost), 而 LibVLCSharp.WPF 还会把
+    ///   `VideoView.Content`(控制栏 + 弹幕层)**搬进一棵独立的顶层浮层可视树**。整窗加 LayoutTransform
+    ///   时那棵浮层树跟不上, 实测会与视频区错位 195×186px(还正好差一个系统 DPI 的 1/1.25):
+    ///   `.probes/bd-probe-uiscale-player`。视频 HWND 本身其实是**跟得上**变换的(实测 0px 偏差),
+    ///   出问题的只有浮层 —— 但浮层里有控制栏, 错位不可接受。
+    /// ★ 所以缩放的落点是 <see cref="InfoPanel"/>: 右侧那 400px 一列(标题/UP 主卡/操作栏/
+    ///   简介与评论 Tab/评论列表, 以及盖在它上面的合集面板与 Toast)全在它里面。
+    ///   宽度仍是父容器给的 400(固定), LayoutTransform 只把内部按 1/倍率 排版再放大 ⇒
+    ///   字与控件变大、可见内容变少, 视频区尺寸一点不受影响。
     /// </summary>
-    protected override bool ScalesWithUi => false;
+    protected override FrameworkElement? ScaleRoot => InfoPanel;
 
     private readonly LibVLC _libVLC;
     private readonly MediaPlayer _mp;

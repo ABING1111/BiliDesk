@@ -31,23 +31,24 @@ public class FluentWindow : Window
         // ★ 软件缩放(2026-10-06): 内容一就绪就登记进 UiScale。
         //   用 Loaded 而不是 SourceInitialized —— 那时 Content 才真正挂上可视树,
         //   拿到的根元素才是最终会被渲染的那一个。
-        //   ★ 播放器窗口覆写 ScalesWithUi=真实false 把自己排除掉(见该属性的说明)。
+        //   ★ 具体缩哪棵子树由 ScaleRoot 决定(播放器只缩右侧信息栏, 见该属性的说明)。
         Loaded += (_, _) =>
         {
-            if (ScalesWithUi) UiScale.Register(Content as FrameworkElement);
+            var root = ScaleRoot;
+            if (root != null) UiScale.Register(root);
         };
     }
 
     /// <summary>
-    /// 本窗口是否参与全局「软件缩放」。
+    /// 本窗口参与全局「软件缩放」的根元素。**返回 null = 本窗口整体不参与缩放。**
     ///
-    /// ★★★ 默认为 true; **播放器窗口必须覆写成 false**(2026-10-06 用户决定):
-    ///   实测该窗口有 **3 棵独立可视树**(主窗口 + LibVLC 视频浮层 + 弹幕/控制栏浮层),
-    ///   而且视频画面是**原生 HWND** —— WPF 的 LayoutTransform 对它无效(airspace 硬限制)。
-    ///   给主树加缩放只会让"视频区按原生尺寸、周围 UI 放大", 两者对不上 ⇒ 宁可整个窗口不缩。
-    ///   证据: `.probes/bd-probe-uiscale-player` 实测到 3 个 PresentationSource。
+    /// ★ 默认是**整窗内容**(Content)。
+    /// ★★★ 播放器覆写成**只返回右侧信息栏**(见 PlayerWindow.ScaleRoot 的实测说明):
+    ///   那个窗口的 LibVLC 把控制栏/弹幕层搬进了**一棵独立浮层可视树**, 而它用的 LibVLCSharp.WPF
+    ///   3.8.0 不会跟着祖先缩放一起放大那层 ⇒ 整窗缩会让控制栏与视频区错开。
+    ///   只缩信息栏(简介/操作栏/评论区/合集面板都在它里面)既满足"放大右栏"的需求, 又完全不碰视频。
     /// </summary>
-    protected virtual bool ScalesWithUi => true;
+    protected virtual FrameworkElement? ScaleRoot => Content as FrameworkElement;
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
@@ -280,7 +281,7 @@ public class FluentWindow : Window
         if (_hooked) ThemeService.Instance.ThemeChanged -= OnThemeChanged;
         Svc.Settings.AcrylicChanged -= OnAcrylicChanged;
         Svc.Settings.LayoutChanged -= OnLayoutChanged;
-        UiScale.Unregister(Content as FrameworkElement);
+        UiScale.Unregister(ScaleRoot);
         base.OnClosed(e);
     }
 
