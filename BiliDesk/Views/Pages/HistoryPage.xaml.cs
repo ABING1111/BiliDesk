@@ -3,7 +3,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.ViewModels;
@@ -11,11 +10,15 @@ using BiliDesk.ViewModels;
 namespace BiliDesk.Views.Pages;
 
 /// <summary>
-/// 历史记录页: 云端历史(封面 + 标题 + UP 主 + 时长), 版式与首页一致 —— 卡片墙 + 右下角浮动工具列。
+/// 历史记录页: 云端历史(封面 + 标题 + UP 主 + 时长), 版式与首页一致 —— 卡片墙 + 右上角操作组。
 /// 本机历史和时间轴都已移除, 所以这里没有模式切换、也没有滚动同步之类的逻辑。
 ///
 /// 2026-09-30 改版: 内容从"一条一行"的虚拟化 ListBox 换成与首页同构的卡片墙。
 /// 点击行为也交给卡片自己(点封面/标题播放, 点 UP 主进主页), 页面不再自己处理行点击。
+///
+/// 2026-10-06 改版: 撤掉右下角浮动工具列, 搜索/刷新/编辑/返回「我的」挪到标题行右上角,
+/// 与收藏页、稍后再看页同一套写法。搜索面板改从按钮**下方**弹出(原先从工具列往左弹)。
+/// 「回到顶部」按钮随工具列一起去掉 —— 右上角那排是操作而不是导航, 不塞它。
 /// </summary>
 public partial class HistoryPage : UserControl
 {
@@ -68,46 +71,18 @@ public partial class HistoryPage : UserControl
         if (Vm.Entries.Count == 0) await Vm.LoadAsync(reset: true);
     }
 
-    // ------------------------------------------------------------ 滚动: 自动翻页 + 回到顶部
+    // ------------------------------------------------------------ 滚动: 自动翻页
 
-    /// <summary>下滑超过这个距离才把「回到顶部」亮出来(与首页同值)</summary>
-    private const double BackToTopThreshold = 400;
-
-    private bool _backToTopShown;
-
-    /// <summary>滚动到接近底部就自动加载下一页; 顺带维护「回到顶部」的显隐</summary>
+    /// <summary>滚动到接近底部就自动加载下一页</summary>
     private async void OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        UpdateBackToTop(sender as ScrollViewer);
-
         if (e.ExtentHeight <= 0 || e.ViewportHeight <= 0) return;
         if (e.VerticalOffset < e.ExtentHeight - e.ViewportHeight - 240) return;
         if (Vm is { HasMore: true, Loading: false, LoadingMore: false } vm)
             await vm.LoadAsync(reset: false);
     }
 
-    /// <summary>
-    /// 按当前滚动位置点亮/熄灭「回到顶部」。
-    /// 只切 Opacity 与 IsHitTestVisible, **不用 Visibility** —— 它在工具列最上面,
-    /// 用 Collapsed 的话下面几个按钮每过一次阈值就会上下跳一下。
-    /// </summary>
-    private void UpdateBackToTop(ScrollViewer? sv)
-    {
-        var show = sv is { VerticalOffset: > BackToTopThreshold };
-        if (show == _backToTopShown) return;
-        _backToTopShown = show;
-
-        BtnTop.IsHitTestVisible = show;
-        BtnTop.BeginAnimation(OpacityProperty,
-            new DoubleAnimation(BtnTop.Opacity, show ? 1 : 0, TimeSpan.FromMilliseconds(160))
-            {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            });
-    }
-
-    private void OnBackToTopClick(object sender, RoutedEventArgs e) => ListScroll?.ScrollToTop();
-
-    // ------------------------------------------------------------ 搜索(入口 = 右下角工具列里的放大镜按钮)
+    // ------------------------------------------------------------ 搜索(入口 = 右上角的放大镜按钮)
 
     /// <summary>点搜索按钮: 开合面板; 打开时把光标放进输入框</summary>
     private void OnSearchClick(object sender, RoutedEventArgs e)

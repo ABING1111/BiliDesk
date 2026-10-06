@@ -12,12 +12,14 @@
           · 内容 = 与首页同一套卡片墙(ItemsControl + WrapPanel + CardWall + VideoCard),
             连"卡片随窗口宽度自己变宽变窄"也一并继承;
           · 标题行 = 首页那套(PageTitleStyle + Margin 36,20,36,0);
-          · 操作 = 与首页一致的**右下角浮动工具列**(搜索 / 刷新 / 编辑 / 返回「我的」/ 回到顶部)。
+          · 操作 = 标题行**右上角**(搜索 / 刷新 / 编辑 / 返回「我的」), 与收藏页、稍后再看页
+            同一套写法(IconButtonStyle + VerticalAlignment="Bottom")。
 
-        ★ 2026-09-30 再改一次: 搜索框原来单独挂在**右上角**, 用户要求"集成进右下角按钮里" ——
-          现在搜索的唯一入口就是工具列最上面那个放大镜按钮, 点开在工具列**上方**弹出面板,
-          输入框在面板里。行为一个没少: 实时过滤、Esc 清空并收面板、清空按钮、无匹配空状态、
-          过滤生效时按钮变强调色(不然关掉面板就看不出来列表是被筛过的)。
+        ★ 2026-10-06 再改一次: 搜索框从右下角浮动工具列**搬回右上角**, 工具列整个撤掉。
+          起因是右下角那套是"浮在内容上"的, 搜索面板从那儿往左弹出, 会盖住卡片墙一角;
+          而右上角与其它页面位置一致, 且不遮挡内容。
+          行为一个没少: 实时过滤、Esc 清空并收面板、清空按钮、无匹配空状态、
+          过滤生效时按钮变强调色(不然关掉面板后就看不出列表是被筛过的)。
 
         ★ 虚拟化的取舍: 原来那个 ListBox 是虚拟化的, 换成 WrapPanel 之后就**没有虚拟化**了
           (WrapPanel 不实现 IScrollPosInfo, 挂上去等于关掉)。这是"与首页一致"的必然代价,
@@ -80,8 +82,91 @@
                            Visibility="{Binding BusyText, Converter={StaticResource StrToVis}}" />
             </StackPanel>
 
-            <!-- [ 编辑模式 ] 全选 / 删除所选 / 清空全部 / 退出。
-                 普通模式的三个操作已经挪到右下角浮动工具列, 与首页一致, 所以这里只有编辑态。 -->
+            <!-- [ 普通模式 ] 右上角操作: 搜索 / 刷新 / 编辑 / 返回「我的」。
+                 ★ 2026-10-06 从右下角浮动工具列搬到这里(与收藏页、稍后再看页同一套写法):
+                   IconButtonStyle + VerticalAlignment="Bottom", 位置和其余页面一致。
+                   放右上角的另一个好处是**不遮挡内容** —— 右下角那套是浮在卡片墙上的。 -->
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                        VerticalAlignment="Bottom"
+                        Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
+
+                <!-- 搜索: 本页搜索的**唯一入口**。点开在按钮下方弹出面板, 输入框在面板里
+                     —— 见下面的 SearchPopup。有过滤条件时按钮变强调色,
+                     否则收起面板后就看不出列表是被筛过的。 -->
+                <Button x:Name="BtnSearch" Style="{StaticResource IconButtonStyle}" Margin="0,0,8,0"
+                        Click="OnSearchClick" ToolTip="搜索历史记录">
+                    <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                </Button>
+
+                <Button Style="{StaticResource IconButtonStyle}" Margin="0,0,8,0"
+                        Command="{Binding ReloadCommand}" ToolTip="重新同步云端历史">
+                    <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                </Button>
+                <Button Style="{StaticResource IconButtonStyle}" Margin="0,0,8,0"
+                        Command="{Binding ToggleEditCommand}" ToolTip="批量删除观看记录">
+                    <TextBlock Text="&#xE70F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                </Button>
+                <!-- 返回「我的」页: 历史/收藏/缓存的入口都在「我的」页, 统一给一条回去的路 -->
+                <Button Style="{StaticResource IconButtonStyle}"
+                        Click="OnBackToMineClick" ToolTip="返回「我的」">
+                    <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                </Button>
+
+                <!-- 搜索面板: 弹在搜索按钮**下方**(与右上角这个位置匹配;
+                     StaysOpen=False 点到别处就收起, 但关键词**保留**, 列表继续按它过滤)。 -->
+                <Popup x:Name="SearchPopup" PlacementTarget="{Binding ElementName=BtnSearch}"
+                       Placement="Bottom" HorizontalOffset="-8" VerticalOffset="6"
+                       StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
+                    <Border Background="{DynamicResource FlyoutBackgroundBrush}" CornerRadius="10"
+                            BorderBrush="{DynamicResource FlyoutBorderBrush}" BorderThickness="1"
+                            Padding="14" Width="300">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.3"
+                                              Direction="270" Color="#000000" />
+                        </Border.Effect>
+                        <StackPanel>
+                            <TextBlock Text="搜索历史记录" FontSize="14" FontWeight="SemiBold" />
+
+                            <!-- 输入框: 与原来右上角那个**同一套样式与内边距**(Height 44 是
+                                 SearchTextBoxStyle 自带的高度, 这里必须跟着写 44 否则会溢出/压扁)。
+
+                                 ★ 这里**不再套**原来那层"灰底圆角矩形"Border(2026-10-01 用户要求去掉
+                                   "粉色描边外的灰色小矩形边框"): SearchTextBoxStyle 是**胶囊形**
+                                   (CornerRadius 22), 而外层灰底框是 10 —— 两个圆角对不齐, 灰底的四个角
+                                   会从粉色描边**外面**露出来(探针像素实测: 框左上角内 3px 处是 #F4F4F4,
+                                   而框内是 #FCFCFC), 看着就像描边外还套着一个灰色圆角矩形。
+                                   直接不要那层, 输入框就只剩自己这一层 —— 描边(聚焦时变粉)即最外轮廓。 -->
+                            <Grid Margin="0,12,0,0" Height="44">
+                                <TextBox x:Name="HistorySearchBox" Style="{StaticResource SearchTextBoxStyle}"
+                                         Text="{Binding SearchKeyword, UpdateSourceTrigger=PropertyChanged}"
+                                         KeyDown="OnSearchKeyDown" />
+                                <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="14" Foreground="{DynamicResource TextSecondaryBrush}"
+                                           VerticalAlignment="Center" Margin="16,0,0,0" IsHitTestVisible="False" />
+                                <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                        FontSize="13" Style="{StaticResource IconButtonStyle}"
+                                        Width="24" Height="24" HorizontalAlignment="Right"
+                                        VerticalAlignment="Center" Margin="0,0,8,0"
+                                        Foreground="{DynamicResource TextSecondaryBrush}"
+                                        Visibility="{Binding SearchKeyword, Converter={StaticResource StrToVis}}"
+                                        Click="OnClearSearchClick" ToolTip="清空搜索" />
+                            </Grid>
+
+                            <Grid Margin="0,12,0,0">
+                                <TextBlock Text="{Binding SearchHintText}" FontSize="11" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis" MaxWidth="185"
+                                           HorizontalAlignment="Left"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                                <Button Content="完成" Style="{StaticResource SubtleButtonStyle}"
+                                        HorizontalAlignment="Right" Padding="12,4" FontSize="12"
+                                        Click="OnCloseSearchClick" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+            </StackPanel>
+
+            <!-- [ 编辑模式 ] 全选 / 删除所选 / 清空全部 / 退出。 -->
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                         VerticalAlignment="Bottom"
                         Visibility="{Binding IsEditMode, Converter={StaticResource BoolToVis}}">
@@ -104,106 +189,6 @@
                 </Button>
             </StackPanel>
         </Grid>
-
-        <!-- ===== 右下角浮动工具列(与首页同一套: 浮在内容上、避开滚动条、编辑态整体收起) =====
-             ★ 按钮用 `FloatingIconButtonStyle`: 它的常态/悬停/按下三种底色都是**不透明**的。
-               默认的 IconButtonStyle 是 4% 黑, 浮在卡片封面上等于没有底, 图标会糊进图片里
-               (用户截图反馈)。
-             ★★ 外面**不加**任何底板/边框 —— 用户明确要求"每个按钮外面不要加边框,
-               保留原来的样子", 所以这里就是最朴素的"一列按钮"。
-               (2026-10-01 起按钮自带柔和投影, 在 FloatingIconButtonStyle 模板的 ShadowBd 层。)
-             ★ 「回到顶部」始终占位、只切透明度与命中测试 —— 用 Visibility 会让下面几个按钮上下跳。
-             ★ 内容末尾留了 250px 下边距, 滚到底时最后一行卡片能整行露在按钮上方。 -->
-        <StackPanel x:Name="ToolBar" Grid.Row="0" Grid.RowSpan="2" Panel.ZIndex="20"
-                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                    Margin="0,0,16,20"
-                    Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
-
-            <!-- 回到顶部: 下滑之后才亮起来(见 HistoryPage.xaml.cs 的 UpdateBackToTop)。E70E = ChevronUp。 -->
-            <Button x:Name="BtnTop" Style="{StaticResource FloatingIconButtonStyle}"
-                    Opacity="0" IsHitTestVisible="False"
-                    Click="OnBackToTopClick" ToolTip="回到顶部">
-                <TextBlock Text="&#xE70E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-            </Button>
-
-            <!-- 搜索: 本页搜索的**唯一入口**(原来那个右上角输入框已收进这里)。
-                 点开在工具列上方弹出面板, 输入框在面板里 —— 见下面的 SearchPopup。
-                 有过滤条件时按钮变强调色, 否则收起面板后就看不出列表是被筛过的。 -->
-            <Button x:Name="BtnSearch" Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
-                    Click="OnSearchClick" ToolTip="搜索历史记录">
-                <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-            </Button>
-
-            <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
-                    Command="{Binding ReloadCommand}" ToolTip="重新同步云端历史">
-                <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-            </Button>
-            <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
-                    Command="{Binding ToggleEditCommand}" ToolTip="批量删除观看记录">
-                <TextBlock Text="&#xE70F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-            </Button>
-            <!-- 返回「我的」页: 历史/收藏/缓存的入口都在「我的」页, 统一给一条回去的路 -->
-            <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
-                    Click="OnBackToMineClick" ToolTip="返回「我的」">
-                <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-            </Button>
-
-            <!-- 搜索面板: 弹在工具列**左边**(用户指定: 搜索历史放在右下角工具列左边)。
-                 ★ 锚到**搜索按钮**而不是整条工具列: Placement=Left 时面板右缘贴着按钮左缘,
-                   纵向与按钮对齐 —— 正好在工具列那一列的旁边, 既不盖住其它按钮、也不压到卡片墙。
-                 ★ HorizontalOffset 取负给一点缝隙; StaysOpen=False 点到别处就收起,
-                   但关键词**保留**(列表继续按它过滤)。 -->
-            <Popup x:Name="SearchPopup" PlacementTarget="{Binding ElementName=BtnSearch}"
-                   Placement="Left" HorizontalOffset="-8" VerticalOffset="-4"
-                   StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
-                <Border Background="{DynamicResource FlyoutBackgroundBrush}" CornerRadius="10"
-                        BorderBrush="{DynamicResource FlyoutBorderBrush}" BorderThickness="1"
-                        Padding="14" Width="300">
-                    <Border.Effect>
-                        <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.3"
-                                          Direction="270" Color="#000000" />
-                    </Border.Effect>
-                    <StackPanel>
-                        <TextBlock Text="搜索历史记录" FontSize="14" FontWeight="SemiBold" />
-
-                        <!-- 输入框: 与原来右上角那个**同一套样式与内边距**(Height 44 是
-                             SearchTextBoxStyle 自带的高度, 这里必须跟着写 44 否则会溢出/压扁)。
-
-                             ★ 这里**不再套**原来那层"灰底圆角矩形"Border(2026-10-01 用户要求去掉
-                               "粉色描边外的灰色小矩形边框"): SearchTextBoxStyle 是**胶囊形**
-                               (CornerRadius 22), 而外层灰底框是 10 —— 两个圆角对不齐, 灰底的四个角
-                               会从粉色描边**外面**露出来(探针像素实测: 框左上角内 3px 处是 #F4F4F4,
-                               而框内是 #FCFCFC), 看着就像描边外还套着一个灰色圆角矩形。
-                               直接不要那层, 输入框就只剩自己这一层 —— 描边(聚焦时变粉)即最外轮廓。 -->
-                        <Grid Margin="0,12,0,0" Height="44">
-                            <TextBox x:Name="HistorySearchBox" Style="{StaticResource SearchTextBoxStyle}"
-                                     Text="{Binding SearchKeyword, UpdateSourceTrigger=PropertyChanged}"
-                                     KeyDown="OnSearchKeyDown" />
-                            <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                       FontSize="14" Foreground="{DynamicResource TextSecondaryBrush}"
-                                       VerticalAlignment="Center" Margin="16,0,0,0" IsHitTestVisible="False" />
-                            <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                    FontSize="13" Style="{StaticResource IconButtonStyle}"
-                                    Width="24" Height="24" HorizontalAlignment="Right"
-                                    VerticalAlignment="Center" Margin="0,0,8,0"
-                                    Foreground="{DynamicResource TextSecondaryBrush}"
-                                    Visibility="{Binding SearchKeyword, Converter={StaticResource StrToVis}}"
-                                    Click="OnClearSearchClick" ToolTip="清空搜索" />
-                        </Grid>
-
-                        <Grid Margin="0,12,0,0">
-                            <TextBlock Text="{Binding SearchHintText}" FontSize="11" VerticalAlignment="Center"
-                                       TextTrimming="CharacterEllipsis" MaxWidth="185"
-                                       HorizontalAlignment="Left"
-                                       Foreground="{DynamicResource TextTertiaryBrush}" />
-                            <Button Content="完成" Style="{StaticResource SubtleButtonStyle}"
-                                    HorizontalAlignment="Right" Padding="12,4" FontSize="12"
-                                    Click="OnCloseSearchClick" />
-                        </Grid>
-                    </StackPanel>
-                </Border>
-            </Popup>
-        </StackPanel>
 
         <!-- ===== 内容 ===== -->
         <Grid Grid.Row="1" Margin="0,12,0,0">
