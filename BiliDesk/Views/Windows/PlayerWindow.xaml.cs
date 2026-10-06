@@ -3702,16 +3702,85 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 拖动期间**按住**遮罩(2026-10-05 修"拖边缘 resize 闪白"的真正修法)。
     /// 见 <see cref="ArmResizeCover"/> 的说明。</summary>
-    protected override void OnModalResizeStarted() => ArmResizeCover();
+    protected override void OnModalResizeStarted()
+    {
+        // ★★ 2026-10-06 修"拖动窗口**移动位置**时黑屏":
+        //   这对钩子 WM_ENTERSIZEMOVE/EXITSIZEMOVE 对"移动"和"改大小"一视同仁, 但两者对视频
+        //   的意义完全不同 ——
+        //     · 改大小: 客户区尺寸每帧都变 ⇒ LibVLC 反复重协商 vout ⇒ 会露白底, **需要**压罩;
+        //     · 纯移动: 窗口尺寸**一点没变** ⇒ LibVLC 根本不重协商 vout ⇒ 没有任何东西会露白底,
+        //       此时压黑纯属多余, 而它的伤害是实的(见 OnModalResizeEnded 里"撤不掉"那条)。
+        //   原先不分两者 ⇒ 拖完位置黑屏一直不撤。
+        //
+        // ★★ 为什么**不能**在 ENTER 时就判断"这次是不是改大小"(第一版这么写, 已否掉):
+        //   ENTER 发在拖动**开始之前**, 那一刻尺寸当然还没变 ⇒ 任何"现在比一下"的判断都会
+        //   把"斜向拖边缘"(位置和尺寸同时变)误判成纯移动 ⇒ 不压罩 ⇒ 闪白回归。
+        //   所以改成**延迟判定**: ENTER 只记下矩形, 之后由尺寸真的变了再补压(见 StartModalResizeSizeWatch)。
+        _lastModalRect = new Rect(Left, Top, Width, Height);
+        _fullscreenCoverArmed = false;
+        _resizeHold = false;
+        // 不排计时器: 纯移动压根不该压罩, 计时器留给真正压上之后做兜底。
+        StartModalResizeSizeWatch();
+    }
+
+    /// <summary>
+    /// 拖动期间盯住"尺寸真的开始变了吗"。变了才补压遮罩(斜向拖边缘的场景)。
+    /// 用 <see cref="CompositionTarget"/> 的 Rendering 回调而不是 DispatcherTimer:
+    /// 它跟着渲染帧走, 每帧一次, 拖动结束自然停。
+    /// </summary>
+    private void StartModalResizeSizeWatch()
+    {
+        if (_modalSizeWatchAttached) return;
+        _modalSizeWatchAttached = true;
+        CompositionTarget.Rendering += OnModalResizeRendering;
+    }
+
+    private void OnModalResizeRendering(object? sender, EventArgs e)
+    {
+        if (_closing)
+        {
+            StopModalResizeSizeWatch();
+            return;
+        }
+
+        // 尺寸确实变了 ⇒ 这次是"改大小"(可能同时在移动), 按住遮罩
+        if (!_fullscreenCoverArmed &&
+            (Math.Abs(Width - _lastModalRect.Width) > 0.5 ||
+             Math.Abs(Height - _lastModalRect.Height) > 0.5))
+        {
+            ArmResizeCover();
+        }
+
+        // 一旦压上就不再需要盯了(遮罩要一直按住到 EXIT)
+        if (_fullscreenCoverArmed) StopModalResizeSizeWatch();
+    }
+
+    private void StopModalResizeSizeWatch()
+    {
+        if (!_modalSizeWatchAttached) return;
+        _modalSizeWatchAttached = false;
+        CompositionTarget.Rendering -= OnModalResizeRendering;
+    }
+
+    /// <summary>这次模态拖动开始时记下的窗口矩形, 用来判断尺寸有没有变过</summary>
+    private Rect _lastModalRect;
+    private bool _modalSizeWatchAttached;
 
     /// <summary>
     /// 拖动结束才撤遮罩 —— 不是靠"新帧到达"(那样会在拖动中途被反复放行, 闪白依旧)。
+    ///
+    /// ★★ 2026-10-06: 纯移动(尺寸未变)根本没压过遮罩, 这里必须**无条件**把底色还原 ——
+    ///   不能"只在压过时才撤": 用户拖完位置看到的黑屏, 恰恰是遮罩**已经撤不掉**的那一类
+    ///   (靠 TimeChanged 等新帧恢复, 而移动时视频尺寸没变、LibVLC 不出新帧; 暂停时更是完全不发)。
     /// </summary>
     protected override void OnModalResizeEnded()
     {
+        StopModalResizeSizeWatch();
         ReleaseResizeHold();
-        // 撤闸后立刻尝试恢复正常底色: 此时若已经收到过新帧就会立刻还原;
-        // 若还没出帧, 由 TimeChanged/Playing 稍后撤 —— 两种情况都不会留下黑屏。
+        // ★★ 2026-10-06 纯移动(尺寸未变)时压根没压过遮罩, 但底色**必须**还原 ——
+        //   这正是"拖完位置黑屏"的那一类: 遮罩一旦压上就只能等 TimeChanged 等新帧来撤,
+        //   而移动时窗口尺寸没变、LibVLC 不出新帧, 暂停时更是完全不发 ⇒ 撤不掉。
+        //   这里无条件走一次撤罩, 无论压没压过。
         ReleaseFullscreenCover();
     }
     /// <summary>当前是否处于全屏(顶栏已收起、右侧信息栏已收成 0 宽)</summary>
@@ -5811,6 +5880,11 @@ public partial class PlayerWindow : FluentWindow
                 _ = Svc.HistorySync.ReportNowAsync(finalAid, finalCid, finalProgress);
 
             _closing = true;
+
+            // 拖动尺寸监听订阅的是 CompositionTarget.Rendering —— 它是**静态**事件、不随窗口销毁,
+            // 所以必须显式解绑(OnModalResizeRendering 里的 _closing 分支只是兜底:
+            // 窗口真关闭时渲染循环可能已经停摆, 根本走不到那里)。
+            StopModalResizeSizeWatch();
 
             // ★ 立刻停掉声音 —— 这是"窗口关了但声音还响半秒"的修法。
             //
