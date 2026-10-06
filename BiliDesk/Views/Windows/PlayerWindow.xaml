@@ -683,15 +683,23 @@
                                       StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                       Data="M3,14 L6,14 A2,2 0 0 1 8,16 L8,19 A2,2 0 0 0 10,21 L11,21 A2,2 0 0 0 13,19 L13,16 A2,2 0 0 1 15,14 L18,14 M21,18 L21,12 A9,9 0 0 0 3,12 L3,18" />
                             </Grid>
-                            <!-- 双层文字: 宽度取两者最大值(见上面注释)。
-                                 ★ 聆听那层的秒数用等宽数字: "10:00" 与 "9:59" 宽度不等会把按钮撑得一跳一跳。 -->
-                            <Grid Margin="9,0,0,0" VerticalAlignment="Center">
+                            <!-- 双层文字: 宽度取两者最大值(见上面注释), 两层都**居中**。
+                                 ★ 2026-10-06 用户报"正在聆听以及右边的数字没有居中":
+                                   根因是两层文字的**字体宽度差很大** ——
+                                   「听视频」是普通字体(约 42px), 「正在聆听 00:00」用 Consolas
+                                   等宽字体(约 88px)。Grid 宽度取最大值(88), 但普通字体那层
+                                   文字短、在宽 Grid 里左对齐 ⇒ 看起来"文字和数字全挤在右边"。
+                                 ★ 修法: 两层都 HorizontalAlignment="Center"、Grid 自身也
+                                   HorizontalAlignment="Center" —— 短的那层同样在宽 Grid 里居中,
+                                   两层切换时文字始终落在同一个视觉位置, 不会左右跳。 -->
+                            <Grid Margin="9,0,0,0" VerticalAlignment="Center"
+                                  HorizontalAlignment="Center">
                                 <TextBlock x:Name="ListenLabel" Text="听视频" FontSize="14"
-                                           HorizontalAlignment="Center"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
                                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                                 <TextBlock x:Name="ListenLabelOn" Text="正在聆听 00:00" FontSize="14" Opacity="0"
                                            FontFamily="Consolas, Segoe UI"
-                                           HorizontalAlignment="Center"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
                                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                             </Grid>
                         </StackPanel>
