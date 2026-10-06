@@ -546,8 +546,9 @@
 
             只有一个变体(幽灵)和两种状态(待命 / 聆听中)。要点:
               · 高度 40 与旁边按钮齐平; 圆角 pill; 图标 18px; 左右内边距 18; 图文间距 9。
-              · **待命**: 透明底 + 1px 描边 + 次要文字色。压在浅色顶栏上就用主题色描边,
-                不需要设计稿里那套"深底换一层皮" —— 本工程的顶栏跟主题走, 不是压在视频上。
+              · **待命**: 透明底 + 次要文字色。**无边框**(2026-10-06 用户要求去除
+                "隐约可见的胶囊边缘" —— 原来 1px 描边在顶栏底色上有对比度, 形成
+                可见的胶囊轮廓; 现在 BorderThickness=0, 只在悬停/按下/聆听时给底色)。
               · **聆听中**: 强调色实心 + 深色文字 + 声波律动。
               · ★ 声波条不能靠 Storyboard 逐条写: 五根条的延迟/高度各不相同, 在 XAML 里要写
                  五组 BeginStoryboard。这里改成代码驱动的 DispatcherTimer(见 _listenWaveTimer),
@@ -567,8 +568,7 @@
         <Style x:Key="ListenGhostBtn" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource ControlFillDefaultBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Height" Value="40" />
             <Setter Property="Padding" Value="18,0" />
             <Setter Property="Cursor" Value="Hand" />
@@ -579,7 +579,6 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Bd" CornerRadius="20"
                                 Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 Padding="{TemplateBinding Padding}">
                             <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Center"
@@ -600,7 +599,6 @@
                             <!-- 聆听中: 主题强调色实心。文案/图标/声波由代码切换(见 ApplyListenMode) -->
                             <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="on">
                                 <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentBrush}" />
-                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
                                 <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
                             </DataTrigger>
                         </ControlTemplate.Triggers>
@@ -786,11 +784,19 @@
                                     <!-- 封面: 圆角 + 投影。播封面图进来当视觉锚点, 一眼知道在听什么。
                                          ★ 用 Image 而不是 Border.Background(ImageBrush): 后者要做
                                            ImageBrush 的 Stretch 还要处理异步换图, Image 直接吃
-                                           Cover.ImageSource 附加属性(CoverLoader 那条异步链)。 -->
+                                           Cover.ImageSource 附加属性(CoverLoader 那条异步链)。
+                                         ★★★ 圆角裁剪: Border.CornerRadius + ClipToBounds **不会**把
+                                           子元素裁成圆角(WPF 的 ClipToBounds 是矩形裁剪) ——
+                                           必须显式设 Image.Clip = RectangleGeometry(圆角矩形),
+                                           否则封面图四角是直角戳出 Border 外(2026-10-06 用户反馈)。 -->
                                     <Border Width="260" Height="146" CornerRadius="12"
-                                            ClipToBounds="True" HorizontalAlignment="Center"
+                                            HorizontalAlignment="Center"
                                             Background="#26FFFFFF">
-                                        <Image x:Name="ListenCover" Stretch="UniformToFill" />
+                                        <Image x:Name="ListenCover" Stretch="UniformToFill">
+                                            <Image.Clip>
+                                                <RectangleGeometry Rect="0,0,260,146" RadiusX="12" RadiusY="12" />
+                                            </Image.Clip>
+                                        </Image>
                                     </Border>
                                     <!-- 声波律动: 比顶栏那颗按钮上的大一号, 是这一屏的主角。 -->
                                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
@@ -1272,12 +1278,14 @@
                                            结果是箭头被放大到戳穿托盘底部, 整个图标变形。
                                            合并之后只有一个包围盒, 两段共用同一套比例 ⇒ 严丝合缝。
                                            合并是安全的: 两段都是**只描边不填充**(Fill 透明)、
-                                           线宽与圆角完全相同, 拆开本来只是为了分组可读。 -->
+                                            线宽与圆角完全相同, 拆开本来只是为了分组可读。
+                                            ★ 尺寸 18×18(与「下载」一致): 分享和下载是同一排的
+                                              "传出去/拿走"动作, 图标大小必须对齐(2026-10-06 用户要求)。 -->
                                     <Button x:Name="BtnShare" Style="{StaticResource PlayerActionBtn}"  Grid.Column="1"
                                             Click="OnCopyLinkClick" ToolTip="复制视频链接">
                                         <StackPanel Orientation="Horizontal">
                                             <Grid x:Name="ShareIconBox" Style="{StaticResource ActionIconBox}">
-                                                <Path x:Name="ShareGlyph" Width="20" Height="20"
+                                                <Path x:Name="ShareGlyph" Width="18" Height="18"
                                                       Stretch="Uniform" Fill="Transparent"
                                                       Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                                       StrokeThickness="1.7" StrokeLineJoin="Round"
