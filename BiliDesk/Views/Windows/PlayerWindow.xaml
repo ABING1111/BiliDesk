@@ -437,11 +437,19 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
             <Setter Property="BorderThickness" Value="0" />
-            <!-- 左右内边距 8: 按钮看起来才不像挤在一起。
-                 ★ 2026-10-06 改成固定两行后, 每行只有 3 个按钮、宽度远用不完(实测最大行 282 / 可用 351),
-                   所以这里把右外边距从 2 放宽到 6 —— 两行都要排得开一点, 别都贴在一起。 -->
-            <Setter Property="Padding" Value="8,5" />
-            <Setter Property="Margin" Value="0,0,6,0" />
+            <!-- ★★ 2026-10-06 单行后重算过内边距: 六个按钮挤在右栏 400px(去掉外边距可用 ~392px)里,
+                 每列只有 ~65px。而一个按钮的内容宽度 = 左边距 6 + 图标格 20 + 文字左边距 6 +
+                 数字 MinWidth 20 + 右边距 6 = 58px, 再加 Padding 左右各 X。
+                   · Padding 8+8=16 ⇒ 需 74px/个, 六列 444px **放不下**(用户截图里数字被切掉就是这个),
+                   · Padding 4+4=8  ⇒ 需 66px/个, 六列 396px, 刚好卡在 392 边上, 余量太小,
+                   · Padding 3+3=6  ⇒ 需 64px/个, 六列 384px, 留 8px 余量 —— 取这个。
+                 ★ 为什么改小而不是让 Grid 换行: 用户要求"单行显示", 换行就违背了。
+                   数字被切的根因是**可用宽度不够**, 只能从内边距和计数框上挤。
+                 ★ ActionCountText 的 MinWidth 也从 20 收到 16(见该样式): 两位数(10~99)实测
+                   13px 字号下宽约 16~18px, 给 16 已够; 三位数及以上按内容自然撑开,
+                   那一档本来就会触发 UpdateActionCounts 里的缩写(如 "1.2万"), 不会真的溢出。 -->
+            <Setter Property="Padding" Value="3,5" />
+            <Setter Property="Margin" Value="0,0,4,0" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <!-- hover / 离开统一在代码里处理色相(见 ApplyActionVisual), 所以这里挂样式级事件:
@@ -492,8 +500,11 @@
              MinWidth 兜住位数变化, 右侧按钮不会被推走。 -->
         <Style x:Key="ActionCountText" TargetType="TextBlock">
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="Margin" Value="6,0,0,0" />
-            <Setter Property="MinWidth" Value="20" />
+            <!-- ★ 左边距 6→4: 单行六列的宽度预算里每一px 都要算(见 PlayerActionBtn 的说明) -->
+            <Setter Property="Margin" Value="4,0,0,0" />
+            <!-- ★ MinWidth 20→16: 两位数在 13px 字号下宽约 16~18px, 给 16 已够;
+                 三位数走 UpdateActionCounts 的缩写(如 "1.2万"), 按内容自然撑开。 -->
+            <Setter Property="MinWidth" Value="16" />
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
         </Style>
@@ -1183,12 +1194,21 @@
                                        文字挤在 351px 的信息栏里既占宽又把六个按钮排得松散。
                                        含义靠 ToolTip 保留(鼠标停上去仍有说明), 不丢可发现性。 -->
                                 <Grid x:Name="ActionRowMark" VerticalAlignment="Center">
+                                    <!-- ★ 六列宽度: 前三列(带数字)按内容 Auto, 后三列(纯图标)也 Auto,
+                                           最后一列吃掉剩余空间。
+                                           为什么不用六个 "*" 均分: 均分时每列固定 ~65px, 而按钮内容
+                                           (边距 4 + 图标 20 + 文字边距 4 + 数字 16 + 右边距 4 = 48px)
+                                           之外还要留 Padding; 一旦某列数字变宽(比如从 "0" 变成 "1.2万"),
+                                           均分会把内容溢出到列外被裁掉 —— 这正是用户截图里
+                                           "点赞/投币/收藏的数字被切"的原因。
+                                           Auto + 末列吸收剩余 ⇒ 数字再宽也不会被裁,
+                                           多出来的空间落在最后��空列上, 视觉上还是均匀排开。 -->
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <!-- 点赞: 点过 = 图标和数字一起变红 -->
