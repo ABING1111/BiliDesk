@@ -79,13 +79,11 @@ public static class CoverLoader
         Http.DefaultRequestHeaders.UserAgent.ParseAdd(HttpDefaults.UserAgent);
     }
 
-    public static string Normalize(string? url) => UrlUtil.Normalize(url);
-
     /// <summary>加载图片。decodeWidth>0 时按目标像素宽解码(大幅降低内存),
     /// 0 表示按原图解码。不同档位的结果分别缓存</summary>
     public static Task<BitmapImage?> LoadAsync(string? url, int decodeWidth = 0)
     {
-        url = Normalize(url);
+        url = UrlUtil.Normalize(url);
         if (url.Length == 0) return Task.FromResult<BitmapImage?>(null);
 
         var w = Quantize(decodeWidth);
@@ -122,7 +120,7 @@ public static class CoverLoader
     /// </summary>
     public static bool TryGetCached(string? url, int decodeWidth, out BitmapImage? img)
     {
-        url = Normalize(url);
+        url = UrlUtil.Normalize(url);
         if (url.Length == 0) { img = null; return false; }
 
         var w = Quantize(decodeWidth);

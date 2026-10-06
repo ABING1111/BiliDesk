@@ -144,14 +144,14 @@ public class SettingsStore
     public int PreferredQualityQn { get; set; } = QualityPreference.DefaultQn;
 
     /// <summary>
-    /// 首页「推荐」用哪套算法。★ 2026-10-03 起**固定为网页版**, 字段只为兼容老配置保留。
+    /// 首页「推荐」用哪套算法。★ 2026-10-03 起**固定为网页版**, 该字段仅为兼容老配置保留 ——
+    /// 读取时丢弃、写入时固定写 Web, 代码里没有任何地方按它分支。
     ///
     /// 历史: 这里原来是"App 官方 / 浏览器网页版"二选一, 默认 App。
     ///   但实测 App 端接口(app.bilibili.com/x/v2/feed/index)对第三方客户端**不提供个性化** ——
     ///   即使拿到有效 access_key, 返回的仍是全站通用热门池(100 条里命中关注的 UP 只有 1~2 个,
     ///   平均播放量 66~103 万); 网页 rcmd 平均只有 17 万、内容明显更垂直。
-    ///   所以选择项与 App 令牌机制整体删除, 默认值也改成 Web —— 老配置里存着 App 的用户
-    ///   在启动时会被下面的迁移逻辑纠正。
+    ///   所以选择项与 App 令牌机制整体删除(原因详见 ApiClient.GetRecommendAsync)。
     /// </summary>
     public RecommendSource RecommendSource { get; set; } = RecommendSource.Web;
 
@@ -219,12 +219,6 @@ public class SettingsStore
     public event Action? AcrylicChanged;
 
     /// <summary>
-    /// 推荐算法来源变更。首页据此清掉旧列表并按新来源重新拉一次 ——
-    /// 不通知的话用户切完算法还得自己去点刷新才生效, 看起来像"改了没用"。
-    /// </summary>
-    public event Action? RecommendSourceChanged;
-
-    /// <summary>
     /// SponsorBlock 开关 / 类别变更。播放器据此重算"当前该跳哪些片段" ——
     /// 关掉要立刻停跳, 改类别要立刻生效, 否则用户会以为开关是坏的。
     /// </summary>
@@ -237,85 +231,7 @@ public class SettingsStore
             if (File.Exists(FilePath))
             {
                 var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), JsonOpts);
-                if (s != null)
-                {
-                    ThemeMode = s.ThemeMode;
-                    // ★★★ 材质迁移(2026-10-06: 旧的"亚克力开关 + 材质变体"合并成一个选择器):
-                    //   · 新配置带 AcrylicMaterial(可空) ⇒ 校验合法性后直接用;
-                    //   · **老配置没有这个字段**(null) ⇒ 按旧 boolean 推导:
-                    //       旧 AcrylicBackground=true  → 旧的材质变体(默认 Acrylic)
-                    //       旧 AcrylicBackground=false → None(保持"关着")
-                    //   ★ 少了这条迁移, 老用户会出现两种错: 开着的被关掉, 或没开的被打开。
-                    if (s.AcrylicMaterial is { } m && Enum.IsDefined(typeof(BackdropMaterial), m))
-                    {
-                        AcrylicMaterial = m;
-                    }
-                    else
-                    {
-                        AcrylicMaterial = s.AcrylicBackground
-                            ? BackdropMaterial.Acrylic   // 老配置开着 → 等价于"亚克力"
-                            : BackdropMaterial.None;     // 老配置关着 → 保持关着
-                    }
-                    // ★ 必须按**当前范围**夹取: 老配置里可能存在范围外的值(用户实测存着 0%),
-                    //   不夹的话滑杆会显示成贴着左端、而实际透明度比下限还透 —— 观感与数值对不上。
-                    AcrylicOpacityLight = Math.Clamp(s.AcrylicOpacityLight, AcrylicOpacityLightMin, AcrylicOpacityLightMax);
-                    AcrylicOpacityDark = Math.Clamp(s.AcrylicOpacityDark, AcrylicOpacityDarkMin, AcrylicOpacityDarkMax);
-                    // ★ 列数要夹取: 老配置没有(默认 0=自动), 手改过的可能有越界值。
-                    //   0 要保留(它的语义是"自动"), 所以只在 >0 时夹。
-                    CardColumns = s.CardColumns <= 0
-                        ? 0
-                        : Math.Clamp(s.CardColumns, Helpers.CardWall.FixedColumnsMin, Helpers.CardWall.FixedColumnsMax);
-                    // ★ 缩放也要夹取: 老配置没这个字段(默认 100), 手改过的可能有 0/负数/超大值。
-                    //   0 会让整个界面缩成不可见的点, 必须挡住。
-                    UiScalePercent = Helpers.UiScale.ClampPercent(
-                        s.UiScalePercent <= 0 ? 100 : s.UiScalePercent);
-                    DanmakuEnabled = s.DanmakuEnabled;
-                    DanmakuAreaPercent = Math.Clamp(s.DanmakuAreaPercent, 25, 100);
-                    DanmakuSmartFilter = s.DanmakuSmartFilter;
-                    // 老配置同样靠"属性初始化值"拿到默认 true
-                    DanmakuColorful = s.DanmakuColorful;
-                    DanmakuBlockKeywords = s.DanmakuBlockKeywords ?? "";
-                    // 弹幕类型过滤: 老配置没有这四个字段 → 属性初始化值(true)自动生效, 不需要版本兼容。
-                    DanmakuFilterScroll = s.DanmakuFilterScroll;
-                    DanmakuFilterFixed = s.DanmakuFilterFixed;
-                    DanmakuFilterColorful = s.DanmakuFilterColorful;
-                    DanmakuFilterAdvanced = s.DanmakuFilterAdvanced;
-                    // ★ 默认画质要 Normalize: 手改过的配置可能有 0 / 已下线的档位 / 串到别处
-                    //   的值, 直接流进取流请求会变成一个谁也不认识的 qn(表现为画质莫名其妙)。
-                    PreferredQualityQn = QualityPreference.Normalize(s.PreferredQualityQn);
-                    // ★ 算法选择已删除(2026-10-03): 一律落到网页版。
-                    //   老配置里存着 App 的会被这里纠正 —— 那一档实测对第三方客户端
-                    //   不提供个性化(通用热门池), 让它继续生效就是让用户看一屏热门。
-                    RecommendSource = RecommendSource.Web;
-                    // 主题色: 老配置没有这个字段(空串) → 保持默认的 B 站粉
-                    AccentColor = s.AccentColor ?? "";
-                    // 同理: 老配置的 SponsorBlockEnabled 保持 false(默认关), 类别保持默认的 sponsor。
-                    // 类别串要 Sanitize 一下: 配置里可能留着本应用不做的 interaction, 或被手改坏 ——
-                    // 不清掉就会出现"界面上一个都没勾、后台却还在按旧类别跳"的矛盾。
-                    SponsorBlockEnabled = s.SponsorBlockEnabled;
-                    SponsorBlockCategories = SponsorCategories.Sanitize(s.SponsorBlockCategories);
-                    // 老配置里可能残留 StartupPage 字段 —— 启动页设置已删除, 这里不再读它
-                    // (留着旧值无害: 反序列化比手写的多认字段, 序列化时不再写出去)。
-                    // 老配置的 JSON 里没有这个字段 —— 属性初始化默认值是 true, 反序列化时
-                    // "缺失的字段保持初始化值", 所以老配置会自动拿到"默认打开", 不需要版本号兼容。
-                    CloseToTray = s.CloseToTray;
-                    // 老配置没有这两个字段 —— 属性初始化默认值(true / 空串)自动生效, 不需要版本号兼容。
-                    AutoCheckUpdate = s.AutoCheckUpdate;
-                    SkippedVersion = s.SkippedVersion ?? "";
-                    // 老配置没有这个字段 —— 属性初始化默认值(true)自动生效, 不需要版本号兼容。
-                    NoLogin1080P = s.NoLogin1080P;
-                    // CDN 设置: 同样靠属性初始化值兜底(自动测速 / 空 / 屏蔽 PCDN 打开)。
-                    // ★ CdnManualId 要校验: 老配置里的 Id 可能已从候选表下线,
-                    //   留着它会让"手动模式"指到一条不存在的线路(见 CdnService.SelectUrlAsync)。
-                    CdnMode = s.CdnMode;
-                    CdnManualId = CdnOption.ById(s.CdnManualId)?.Id ?? "";
-                    BlockPcdn = s.BlockPcdn;
-                    // 老配置里只有 DisclaimerAccepted(bool)、没有版本号。
-                    // 那时用户同意的是第 1 版声明, 所以按 1 记 —— 这一版改动后仍会正常再问一次。
-                    AcceptedDisclaimerVersion = s.DisclaimerVersion > 0
-                        ? s.DisclaimerVersion
-                        : (s.DisclaimerAccepted ? 1 : 0);
-                }
+                if (s != null) ApplySanitized(s);
             }
         }
         catch
@@ -329,6 +245,137 @@ public class SettingsStore
         // 同理: 缩放倍率也是静态的, 启动时要先落到 UiScale 上, 窗口创建时才会按它施加变换。
         Helpers.UiScale.SetPercent(UiScalePercent);
     }
+
+    /// <summary>
+    /// 把一份(多半来自磁盘的)配置**规范化**后灌进本实例。
+    ///
+    /// ★ 这里是"读配置"与"写配置"之间**唯一的契约**: 写出去用 <see cref="Snapshot"/>,
+    ///   读进来用本方法, 两者的字段清单必须一一对应。以前 Load 与 BuildJson 各手写一遍
+    ///   ~30 个字段, 加一个设置项就得记得改两处 —— 漏一处就是"改了存得下、重启却读不回来"。
+    ///
+    /// ★ 为什么需要"规范化"而不是直接赋值: 磁盘上的 JSON 是**用户可改**的, 也可能是
+    ///   更老/更新版本写下的。越界的数字(0% 透明度、0 倍缩放)、已下线的枚举 Id、
+    ///   坏掉的转义都会在下游变成难以定位的现象。这里一次性收口。
+    /// </summary>
+    private void ApplySanitized(AppSettings s)
+    {
+        ThemeMode = s.ThemeMode;
+
+        // ★★★ 材质迁移(2026-10-06: 旧的"亚克力开关 + 材质变体"合并成一个选择器):
+        //   · 新配置带 AcrylicMaterial(可空) ⇒ 校验合法性后直接用;
+        //   · **老配置没有这个字段**(null) ⇒ 按旧 boolean 推导:
+        //       旧 AcrylicBackground=true  → 旧的材质变体(默认 Acrylic)
+        //       旧 AcrylicBackground=false → None(保持"关着")
+        //   ★ 少了这条迁移, 老用户会出现两种错: 开着的被关掉, 或没开的被打开。
+        AcrylicMaterial = s.AcrylicMaterial is { } m && Enum.IsDefined(typeof(BackdropMaterial), m)
+            ? m
+            : (s.AcrylicBackground ? BackdropMaterial.Acrylic : BackdropMaterial.None);
+
+        // ★ 必须按**当前范围**夹取: 老配置里可能存在范围外的值(用户实测存着 0%),
+        //   不夹的话滑杆会显示成贴着左端、而实际透明度比下限还透 —— 观感与数值对不上。
+        AcrylicOpacityLight = Math.Clamp(s.AcrylicOpacityLight, AcrylicOpacityLightMin, AcrylicOpacityLightMax);
+        AcrylicOpacityDark = Math.Clamp(s.AcrylicOpacityDark, AcrylicOpacityDarkMin, AcrylicOpacityDarkMax);
+
+        // ★ 列数要夹取: 老配置没有(默认 0=自动), 手改过的可能有越界值。
+        //   0 要保留(它的语义是"自动"), 所以只在 >0 时夹。
+        CardColumns = s.CardColumns <= 0
+            ? 0
+            : Math.Clamp(s.CardColumns, Helpers.CardWall.FixedColumnsMin, Helpers.CardWall.FixedColumnsMax);
+
+        // ★ 缩放也要夹取: 老配置没这个字段(默认 100), 手改过的可能有 0/负数/超大值。
+        //   0 会让整个界面缩成不可见的点, 必须挡住。
+        UiScalePercent = Helpers.UiScale.ClampPercent(s.UiScalePercent <= 0 ? 100 : s.UiScalePercent);
+
+        // 弹幕各项: 老配置缺字段时靠属性初始化值拿到默认(true / 25), 不需要版本兼容。
+        DanmakuEnabled = s.DanmakuEnabled;
+        DanmakuAreaPercent = Math.Clamp(s.DanmakuAreaPercent, 25, 100);
+        DanmakuSmartFilter = s.DanmakuSmartFilter;
+        DanmakuColorful = s.DanmakuColorful;
+        DanmakuBlockKeywords = s.DanmakuBlockKeywords ?? "";
+        DanmakuFilterScroll = s.DanmakuFilterScroll;
+        DanmakuFilterFixed = s.DanmakuFilterFixed;
+        DanmakuFilterColorful = s.DanmakuFilterColorful;
+        DanmakuFilterAdvanced = s.DanmakuFilterAdvanced;
+
+        // ★ 默认画质要 Normalize: 手改过的配置可能有 0 / 已下线的档位 / 串到别处
+        //   的值, 直接流进取流请求会变成一个谁也不认识的 qn(表现为画质莫名其妙)。
+        PreferredQualityQn = QualityPreference.Normalize(s.PreferredQualityQn);
+
+        // ★ 算法选择已删除(2026-10-03): 固定网页版, 不再从配置读 ——
+        //   老配置里存着 App 的会被纠正(那一档实测对第三方客户端不提供个性化),
+        //   继续"尊重"旧值就是让用户看一屏通用热门。
+        RecommendSource = RecommendSource.Web;
+
+        // 主题色: 老配置没有这个字段(空串) → 保持默认的 B 站粉
+        AccentColor = s.AccentColor ?? "";
+
+        // 类别串要 Sanitize: 配置里可能留着本应用不做的 interaction, 或被手改坏 ——
+        // 不清掉就会出现"界面上一个都没勾、后台却还在按旧类别跳"的矛盾。
+        SponsorBlockEnabled = s.SponsorBlockEnabled;
+        SponsorBlockCategories = SponsorCategories.Sanitize(s.SponsorBlockCategories);
+
+        // 以下几项老配置都缺字段, 靠属性初始化值兜底(true / 空串), 不需要版本号兼容。
+        CloseToTray = s.CloseToTray;
+        AutoCheckUpdate = s.AutoCheckUpdate;
+        SkippedVersion = s.SkippedVersion ?? "";
+        NoLogin1080P = s.NoLogin1080P;
+
+        // ★ CdnManualId 要校验: 老配置里的 Id 可能已从候选表下线,
+        //   留着它会让"手动模式"指到一条不存在的线路(见 CdnService.SelectUrlAsync)。
+        CdnMode = s.CdnMode;
+        CdnManualId = CdnOption.ById(s.CdnManualId)?.Id ?? "";
+        BlockPcdn = s.BlockPcdn;
+
+        // 老配置里只有 DisclaimerAccepted(bool)、没有版本号。
+        // 那时用户同意的是第 1 版声明, 所以按 1 记 —— 这一版改动后仍会正常再问一次。
+        AcceptedDisclaimerVersion = s.DisclaimerVersion > 0
+            ? s.DisclaimerVersion
+            : (s.DisclaimerAccepted ? 1 : 0);
+    }
+
+    /// <summary>
+    /// 把当前设置拍成一份待落盘的 <see cref="AppSettings"/> 快照(纯内存操作, 微秒级)。
+    ///
+    /// ★ 与 <see cref="ApplySanitized"/> 成对: 那一边定义"怎么读", 这一边定义"怎么写"。
+    ///   新增设置项时两处都要加 —— 这是本类唯一需要成对维护的地方, 所以刻意把两个方法
+    ///   挨在一起、字段顺序也保持一致, 便于逐行对照。
+    ///
+    /// ★ AcrylicBackground 是**派生值**(由 AcrylicMaterial 算出来), 落盘时同步写一份,
+    ///   只是为了让用户回退到旧版本时状态不丢; 代码里别再按它判断(见 AppSettings 的说明)。
+    /// </summary>
+    private AppSettings Snapshot() => new()
+    {
+        ThemeMode = ThemeMode,
+        AcrylicMaterial = AcrylicMaterial,
+        AcrylicBackground = AcrylicBackground,
+        AcrylicOpacityLight = AcrylicOpacityLight,
+        AcrylicOpacityDark = AcrylicOpacityDark,
+        CardColumns = CardColumns,
+        UiScalePercent = UiScalePercent,
+        DanmakuEnabled = DanmakuEnabled,
+        DanmakuAreaPercent = DanmakuAreaPercent,
+        DanmakuSmartFilter = DanmakuSmartFilter,
+        DanmakuColorful = DanmakuColorful,
+        DanmakuBlockKeywords = DanmakuBlockKeywords,
+        DanmakuFilterScroll = DanmakuFilterScroll,
+        DanmakuFilterFixed = DanmakuFilterFixed,
+        DanmakuFilterColorful = DanmakuFilterColorful,
+        DanmakuFilterAdvanced = DanmakuFilterAdvanced,
+        PreferredQualityQn = PreferredQualityQn,
+        RecommendSource = RecommendSource,
+        AccentColor = AccentColor,
+        SponsorBlockEnabled = SponsorBlockEnabled,
+        SponsorBlockCategories = SponsorBlockCategories,
+        CloseToTray = CloseToTray,
+        AutoCheckUpdate = AutoCheckUpdate,
+        SkippedVersion = SkippedVersion,
+        NoLogin1080P = NoLogin1080P,
+        CdnMode = CdnMode,
+        CdnManualId = CdnManualId,
+        BlockPcdn = BlockPcdn,
+        DisclaimerAccepted = DisclaimerAccepted,
+        DisclaimerVersion = AcceptedDisclaimerVersion
+    };
 
     /// <summary>
     /// 保存设置。**异步落盘, 合并写入**。
@@ -383,39 +430,7 @@ public class SettingsStore
     {
         try
         {
-            return JsonSerializer.Serialize(new AppSettings
-            {
-                ThemeMode = ThemeMode,
-                AcrylicBackground = AcrylicBackground,
-                AcrylicOpacityLight = AcrylicOpacityLight,
-                AcrylicOpacityDark = AcrylicOpacityDark,
-                AcrylicMaterial = AcrylicMaterial,
-                CardColumns = CardColumns,
-                UiScalePercent = UiScalePercent,
-                DanmakuEnabled = DanmakuEnabled,
-                DanmakuAreaPercent = DanmakuAreaPercent,
-                DanmakuSmartFilter = DanmakuSmartFilter,
-                DanmakuColorful = DanmakuColorful,
-                DanmakuBlockKeywords = DanmakuBlockKeywords,
-                DanmakuFilterScroll = DanmakuFilterScroll,
-                DanmakuFilterFixed = DanmakuFilterFixed,
-                DanmakuFilterColorful = DanmakuFilterColorful,
-                DanmakuFilterAdvanced = DanmakuFilterAdvanced,
-                PreferredQualityQn = PreferredQualityQn,
-                RecommendSource = RecommendSource,
-                AccentColor = AccentColor,
-                SponsorBlockEnabled = SponsorBlockEnabled,
-                SponsorBlockCategories = SponsorBlockCategories,
-                CloseToTray = CloseToTray,
-                AutoCheckUpdate = AutoCheckUpdate,
-                SkippedVersion = SkippedVersion,
-                NoLogin1080P = NoLogin1080P,
-                CdnMode = CdnMode,
-                CdnManualId = CdnManualId,
-                BlockPcdn = BlockPcdn,
-                DisclaimerAccepted = DisclaimerAccepted,
-                DisclaimerVersion = AcceptedDisclaimerVersion
-            }, JsonOpts);
+            return JsonSerializer.Serialize(Snapshot(), JsonOpts);
         }
         catch
         {
@@ -478,18 +493,6 @@ public class SettingsStore
         }
         if (json == null) return;
         try { File.WriteAllText(FilePath, json); } catch { /* 退出阶段忽略 */ }
-    }
-
-    /// <summary>
-    /// 改"首页推荐用哪套算法"并落盘。
-    /// 变了才广播 RecommendSourceChanged —— 重复选中同一项不该触发首页重拉一遍。
-    /// </summary>
-    public void SetRecommendSource(RecommendSource value)
-    {
-        if (RecommendSource == value) return;
-        RecommendSource = value;
-        Save();
-        RecommendSourceChanged?.Invoke();
     }
 
     /// <summary>

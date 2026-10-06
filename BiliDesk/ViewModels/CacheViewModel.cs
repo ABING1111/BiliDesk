@@ -207,11 +207,5 @@ public class CacheViewModel : ObservableObject
         }
     }
 
-    private static string FormatSize(long bytes)
-    {
-        if (bytes >= 1024L * 1024 * 1024) return (bytes / 1024.0 / 1024 / 1024).ToString("0.##") + " GB";
-        if (bytes >= 1024 * 1024) return (bytes / 1024.0 / 1024).ToString("0.#") + " MB";
-        if (bytes >= 1024) return (bytes / 1024.0).ToString("0.#") + " KB";
-        return bytes + " B";
-    }
+    private static string FormatSize(long bytes) => ByteSize.Format(bytes);
 }

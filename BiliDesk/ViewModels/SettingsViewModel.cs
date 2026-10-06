@@ -1083,13 +1083,7 @@ public class SettingsViewModel : ObservableObject
         });
     }
 
-    private static string FormatBytes(long bytes)
-    {
-        if (bytes >= 1 << 30) return (bytes / 1073741824.0).ToString("0.00") + " GB";
-        if (bytes >= 1 << 20) return (bytes / 1048576.0).ToString("0.0") + " MB";
-        if (bytes >= 1 << 10) return (bytes / 1024.0).ToString("0") + " KB";
-        return bytes + " B";
-    }
+    private static string FormatBytes(long bytes) => ByteSize.Format(bytes);
 
     public async System.Threading.Tasks.Task RefreshUserAsync()
     {

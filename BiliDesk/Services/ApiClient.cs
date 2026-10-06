@@ -280,17 +280,12 @@ public class ApiClient
             new Dictionary<string, string> { ["ps"] = "20", ["pn"] = pn.ToString() });
     }
 
-    /// <summary>全站排行榜</summary>
-    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRankingAsync()
-    {
-        return await GetVideoListAsync(
-            "https://api.bilibili.com/x/web-interface/ranking/v2",
-            new Dictionary<string, string> { ["rid"] = "0", ["type"] = "all" },
-            jsonProp: "list");
-    }
+    /// <summary>全站排行榜(rid=0 = 全站, 与分区榜同一个接口)</summary>
+    public Task<(bool ok, string? err, List<VideoItem>? items)> GetRankingAsync() => GetRegionRankAsync(0);
 
     /// <summary>
-    /// 分区排行榜。ranking/v2 支持 rid 参数, 返回该分区的 Top 榜(60~95 条, 带 stat 全套计数)。
+    /// 排行榜。ranking/v2 的 rid 参数决定范围: 0 = 全站, 其余是分区 id。
+    /// 返回该范围 Top 榜(60~95 条, 带 stat 全套计数)。
     /// ★ 不是所有 rid 都被接受: 实测 番剧(13)/国创(167)/VLOG(65559) 这类 PGC/虚拟分区会返回 -400,
     ///   所以分区面板里只放了实测可用的那些(见 PartitionCatalog 的生成说明)。
     /// </summary>
