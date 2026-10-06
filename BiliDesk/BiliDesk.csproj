@@ -13,7 +13,7 @@
     <AssemblyName>BiliDesk</AssemblyName>
     <AssemblyTitle>BiliDesk</AssemblyTitle>
     <Product>BiliDesk</Product>
-    <Version>1.2.4</Version>
+    <Version>1.2.5</Version>
     <PlatformTarget>x64</PlatformTarget>
     <!--
       RollForward=Major: 妗嗘灦渚濊禆鐗?瀹夎鍣?鍦ㄦ満鍣ㄤ笂娌℃湁 .NET 8 妗岄潰杩愯鏃躲€佷絾瑁呬簡鏇撮珮澶х増鏈?      (濡?.NET 10)鏃? 鍏佽鐩存帴璺戝湪涓婇潰, 涓嶅啀寮?缂?.NET Desktop Runtime 8"銆傝浜?8 灏变粛鐢?8

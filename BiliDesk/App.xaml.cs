@@ -16,7 +16,7 @@ public partial class App : Application
     /// 同步点(漏一个就会出现"关于页写 1.2.3、安装包文件名还是 1.2.2"这种不一致):
     ///   BiliDesk.csproj 的 &lt;Version&gt;、Publish\installer.iss 的 MyAppVersion、发布.ps1 的默认 $Version。
     /// </summary>
-    public const string AppVersion = "1.2.4";
+    public const string AppVersion = "1.2.5";
 
     public static MainViewModel MainVm { get; } = new();
 
