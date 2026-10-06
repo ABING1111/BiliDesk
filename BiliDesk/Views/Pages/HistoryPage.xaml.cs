@@ -36,22 +36,12 @@ public partial class HistoryPage : UserControl
             if (e.NewValue is not HistoryViewModel vm) return;
             // 历史列表也纳入全局屏蔽(命中关键词的记录会被隐藏), 见 FilterService
             FilterService.Instance.Attach(vm.Entries);
-            // 过滤条件一变就让搜索按钮更新"已筛选中"的外观。
-            // 只在这里订阅、不解绑: 本页实例被 MainWindow 长期缓存, 生命周期等同于应用
-            // (与 HomePage 订阅 ThemeChanged / FilterService 是同一套理由), 不存在泄漏。
-            vm.PropertyChanged += OnVmPropertyChanged;
-            // 立刻同步一次: 页面与 VM 都是常驻缓存的, 上次留下的关键词可能还在
-            // (切走再回来若不刷新, 按钮会是常态色, 但列表其实还筛着)。
-            RefreshSearchButton();
+            // ★ 这里原来还订阅 vm.PropertyChanged 去刷搜索按钮的"已筛选中"外观,
+            //   2026-10-06 搜索功能整体移除后已无必要, 连同 OnVmPropertyChanged 一起删除。
         };
     }
 
-    private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(HistoryViewModel.SearchKeyword)) RefreshSearchButton();
-    }
-
-    /// <summary>右下角浮动工具列里的返回按钮: 历史/收藏/缓存的入口都在「我的」页, 统一回那里</summary>
+    /// <summary>右上角操作组里的返回按钮: 历史/收藏/缓存的入口都在「我的」页, 统一回那里</summary>
     private void OnBackToMineClick(object sender, RoutedEventArgs e)
         => App.MainVm.Navigate(PageKey.Mine);
 
@@ -82,61 +72,4 @@ public partial class HistoryPage : UserControl
             await vm.LoadAsync(reset: false);
     }
 
-    // ------------------------------------------------------------ 搜索(入口 = 右上角的放大镜按钮)
-
-    /// <summary>点搜索按钮: 开合面板; 打开时把光标放进输入框</summary>
-    private void OnSearchClick(object sender, RoutedEventArgs e)
-    {
-        SearchPopup.IsOpen = !SearchPopup.IsOpen;
-        if (!SearchPopup.IsOpen) return;
-
-        // 弹出层的内容要等一帧才真正建好, 当场 Focus() 会落空(与"失焦判断要放到
-        // BeginInvoke(Input) 之后"是同一类时序问题)。SelectAll: 再次打开时直接改关键词。
-        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
-        {
-            HistorySearchBox.Focus();
-            HistorySearchBox.SelectAll();
-        }));
-    }
-
-    /// <summary>面板上的「完成」: 只收面板, **不清关键词**(还得继续看筛选后的列表)</summary>
-    private void OnCloseSearchClick(object sender, RoutedEventArgs e) => SearchPopup.IsOpen = false;
-
-    /// <summary>有过滤条件时搜索按钮变强调色 —— 否则收起面板之后就看不出来列表是被筛过的</summary>
-    private void RefreshSearchButton()
-    {
-        if (BtnSearch == null) return;
-        var keyword = Vm?.SearchKeyword;
-        var on = !string.IsNullOrWhiteSpace(keyword);
-        BtnSearch.Foreground = on
-            ? (Brush)FindResource("AccentTextBrush")
-            : (Brush)FindResource("TextPrimaryBrush");
-        BtnSearch.ToolTip = on ? $"搜索历史记录(筛选中): {keyword}" : "搜索历史记录";
-    }
-
-    /// <summary>
-    /// Esc: 清空并**收起面板**(和浏览器里按 Esc 关搜索框一个习惯)。
-    /// Enter 只吃掉 —— 过滤是随输入实时生效的, 回车没有额外动作;
-    /// 不吃掉的话某些容器会把它当成"默认按钮"去响应。
-    /// </summary>
-    private void OnSearchKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Escape)
-        {
-            Vm?.ClearSearch();
-            SearchPopup.IsOpen = false;
-            Keyboard.ClearFocus();
-            e.Handled = true;
-        }
-        else if (e.Key == Key.Enter)
-        {
-            e.Handled = true;
-        }
-    }
-
-    private void OnClearSearchClick(object sender, RoutedEventArgs e)
-    {
-        Vm?.ClearSearch();
-        HistorySearchBox.Focus();   // 清空后把光标留在框里, 方便接着输
-    }
 }

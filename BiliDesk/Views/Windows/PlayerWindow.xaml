@@ -498,13 +498,6 @@
             <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
         </Style>
 
-        <!-- 操作栏文字标签(稍后再看/分享/下载) -->
-        <Style x:Key="ActionLabelText" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="13" />
-            <Setter Property="Margin" Value="6,0,0,0" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-            <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
-        </Style>
 
         <!-- 弹跳: 作用在图标盒子上, 不打断内部图形 -->
         <!--
@@ -1180,9 +1173,20 @@
                                  ★ 两行本身就是分组, 所以原先那两条分组竖线一并删掉
                                    (它们在第 2 行里会悬在「分享」和「下载」中间, 本来就怪)。 -->
                             <StackPanel x:Name="ActionBar" Margin="0,14,0,0">
-                                <!-- 第 1 行: 三连(标记这个视频) -->
+                                <!-- ★★ 2026-10-06: 六个动作改成**单行**(点赞 投币 收藏 稍后再看 分享 下载)。
+                                     原来写死两行(第 1 行三连 / 第 2 行收起来·传出去·拿走),
+                                     两行各有一次折行风险, 8 位数计数时还会把「稍后再看」挤到第二行、
+                                     断点落成 4+2 右边空一大片。现在一行六列, 断点恒定, 顺序恒定。
+
+                                     ★★ 下面那排(稍后再看/分享/下载)**去掉文字、只留图标**:
+                                       图标已经能表意(钟=稍后再看, 上箭头=分享出去, 下箭头=拿走),
+                                       文字挤在 351px 的信息栏里既占宽又把六个按钮排得松散。
+                                       含义靠 ToolTip 保留(鼠标停上去仍有说明), 不丢可发现性。 -->
                                 <Grid x:Name="ActionRowMark" VerticalAlignment="Center">
                                     <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
@@ -1226,42 +1230,26 @@
                                                        Style="{StaticResource ActionCountText}" />
                                         </StackPanel>
                                     </Button>
-                                </Grid>
 
-                                <!-- 第 2 行: 稍后再看 + 传出去(分享) + 拿走(下载) -->
-                                <Grid x:Name="ActionRowOther" Margin="0,2,0,0" VerticalAlignment="Center">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <!-- 稍后再看: 点一下加入/移出 B 站账号的云端列表。
-                                         ★ 文字**双层叠放**(稍后再看 / 已添加 叠在同一格): 宽度自动取两者
-                                           最大值, 切换只做透明度过渡 —— 否则"已添加"比"稍后再看"少一个字,
-                                           宽度一变后面整排按钮全被推着走(v4 稿第 05 节修的就是这个 bug)。
-                                         ★ 图标: 空心钟 → 蓝底白勾。20px 下"钟面被涂满"看不出是钟,
-                                           对勾才是状态本身。勾固定白色(要压在色相实心圆上)。
-                                         ★ 这两层图标与两层文字的显隐统一由 ApplyActionVisual 一处切换,
-                                           不在触发器里各写一份。 -->
-                                    <Button x:Name="BtnWatchLater" Style="{StaticResource PlayerActionBtn}"  Grid.Column="0"
+                                <!-- 稍后再看: 点一下加入/移出 B 站账号的云端列表。
+                                         ★ 单行后**去掉文字**, 只留空心钟 —— 含义靠 ToolTip("加入稍后再看")。
+                                         ★ 图标: 空心钟, 点亮时**只变色**(描边绑 Button.Foreground,
+                                           由 ApplyActionVisual 统一刷成该动作的蓝色)。
+                                         ★ 用户要求(2026-10-06): **不要打勾图案**, 保留时钟图标 + 跳动动画即可,
+                                           所以这里只有一个空心钟, 不再切换到"实心圆+白勾"。
+                                           ★ 旧版那两层(实心圆 LaterIconOnFill + 白勾 LaterIconOnCheck)已删除;
+                                             它们换来的代价是两个 Path 必须同步显隐, 而用户明确表示不需要勾。 -->
+                                    <Button x:Name="BtnWatchLater" Style="{StaticResource PlayerActionBtn}"  Grid.Column="3"
                                             Click="OnWatchLaterClick" ToolTip="加入稍后再看">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Grid x:Name="LaterIconBox" Style="{StaticResource ActionIconBox}">
-                                                <!-- 用户要求(2026-10-06): **不要打勾图案**, 保留时钟图标 + 跳动动画即可。
-                                                     所以这里只有一个空心钟, 点亮时**只变色**(描边绑 Button.Foreground,
-                                                     由 ApplyActionVisual 统一刷成该动作的蓝色), 不再切换到"实心圆+白勾"。
-                                                     ★ 旧版那两层(实心圆 LaterIconOnFill + 白勾 LaterIconOnCheck)已删除;
-                                                       它们换来的代价是两个 Path 必须同步显隐, 而用户明确表示不需要勾。 -->
                                                 <Path x:Name="LaterIcon" Style="{StaticResource ActionGlyphStroke}"
                                                       Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center"
                                                       Data="M3.4,12 A8.6,8.6 0 1 1 20.6,12 A8.6,8.6 0 1 1 3.4,12 Z M12,7.2 L12,12 L15.1,14" />
                                             </Grid>
-                                            <Grid Margin="6,0,0,0" VerticalAlignment="Center">
-                                                <TextBlock x:Name="LaterLabelOff" Text="稍后再看"
-                                                           Style="{StaticResource ActionLabelText}" />
-                                                <TextBlock x:Name="LaterLabelOn" Text="已添加" Opacity="0"
-                                                           Style="{StaticResource ActionLabelText}" />
-                                            </Grid>
+                                            <!-- ★ LaterLabelOff / LaterLabelOn 已删: 单行布局不再需要
+                                                 "两行文字叠放取最大宽度"那套(那是两行时代为防宽度跳变才做的)。
+                                                 状态改由图标变色表达, 文字留着只会把六颗按钮挤散。 -->
                                         </StackPanel>
                                     </Button>
 
@@ -1281,7 +1269,7 @@
                                             线宽与圆角完全相同, 拆开本来只是为了分组可读。
                                             ★ 尺寸 18×18(与「下载」一致): 分享和下载是同一排的
                                               "传出去/拿走"动作, 图标大小必须对齐(2026-10-06 用户要求)。 -->
-                                    <Button x:Name="BtnShare" Style="{StaticResource PlayerActionBtn}"  Grid.Column="1"
+                                    <Button x:Name="BtnShare" Style="{StaticResource PlayerActionBtn}"  Grid.Column="4"
                                             Click="OnCopyLinkClick" ToolTip="复制视频链接">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Grid x:Name="ShareIconBox" Style="{StaticResource ActionIconBox}">
@@ -1293,12 +1281,12 @@
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       Data="M12,15 V3.5 M8.2,7.3 L12,3.5 L15.8,7.3 M4.5,12.5 V18.5 A2,2 0 0 0 6.5,20.5 H17.5 A2,2 0 0 0 19.5,18.5 V12.5" />
                                             </Grid>
-                                            <TextBlock Text="分享" Style="{StaticResource ActionLabelText}" />
+                                            <!-- ★ "分享"二字已去掉(2026-10-06 单行布局), 含义靠 ToolTip。 -->
                                         </StackPanel>
                                     </Button>
 
                                     <!-- 离线缓存(下载) -->
-                                    <Button x:Name="BtnCache" Style="{StaticResource PlayerActionBtn}"  Grid.Column="2"
+                                    <Button x:Name="BtnCache" Style="{StaticResource PlayerActionBtn}"  Grid.Column="5"
                                             Click="OnCacheClick" ToolTip="离线缓存当前视频">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <!-- ★★★ 图标格必须与其它五个按钮**同为 20×20**(ActionIconBox),
@@ -1318,7 +1306,7 @@
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       Data="M12,3.5 L12,15 M8.2,11.3 L12,15 L15.8,11.3 M4.5,17 L4.5,19 A2,2 0 0 0 6.5,21 L17.5,21 A2,2 0 0 0 19.5,19 L19.5,17" />
                                             </Grid>
-                                            <TextBlock Text="下载" Style="{StaticResource ActionLabelText}" />
+                                            <!-- ★ "下载"二字已去掉(2026-10-06 单行布局), 含义靠 ToolTip。 -->
                                         </StackPanel>
                                     </Button>
                                 </Grid>

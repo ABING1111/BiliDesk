@@ -3909,10 +3909,10 @@ public partial class PlayerWindow : FluentWindow
     ///   · **未激活一律是灰**(TextSecondaryBrush), 颜色只在用户动过之后才出现;
     ///   · 每个动作有**固定色相**, 不跟主题强调色走(红=情绪 / 金=货币 / 蓝=收进我的库 / 绿=拿走)。
     ///     用户把主题色改成绿时, "点赞"跟着变绿会立刻毁掉这套分工 —— 所以色值写死在这里。
-    ///   · 数字与文字 TextBlock 的前景**必须显式绑**到按钮 Foreground: 全局隐式 TextBlock 样式
+    ///   · 数字 TextBlock 的前景**必须显式绑**到按钮 Foreground: 全局隐式 TextBlock 样式
     ///     带 Foreground setter(优先级高于继承), 不绑的话变色的只有图标(项目里反复踩的坑)。
-    ///   · 「稍后再看」的两层图标/两层文字在这里一处切换 —— 散在触发器里改必然出现
-    ///     "图标点亮了文字没换"这种半状态。
+    ///   · 六个按钮 2026-10-06 起是**单行**且后三个**不带文字**, 状态一律靠图标变色表达
+    ///     (原来「稍后再看」有两层文字要在这里互换, 单行后已删除)。
     /// </summary>
     private void UpdateActionCounts()
     {
@@ -3923,14 +3923,10 @@ public partial class PlayerWindow : FluentWindow
         ApplyActionVisual(BtnLike, _isLiked, ActionLikeColor);
         ApplyActionVisual(BtnFavorite, _isFavorited, ActionSaveColor);
         ApplyActionVisual(BtnWatchLater, _isInWatchLater, ActionSaveColor);
-        // 「稍后再看」的两层文字随点亮态互换(宽度由 XAML 里的双层叠放兜住, 不会推走整排)。
-        // ★ 图标只剩一个空心钟了(2026-10-06 用户要求"不要打勾图案, 保留跳动动画即可"),
-        //   点亮时由上面的 ApplyActionVisual 把它染成蓝色即可, 不再切换图标层次。
-        if (LaterLabelOff != null)
-        {
-            LaterLabelOff.Opacity = _isInWatchLater ? 0 : 1;
-            LaterLabelOn.Opacity = _isInWatchLater ? 1 : 0;
-        }
+        // ★ 「稍后再看」的两层文字(LaterLabelOff / LaterLabelOn)已随单行布局删掉(2026-10-06):
+        //   六个按钮现在只排一行, 文字会把它们挤散, 状态完全由图标变色表达。
+        //   图标本身也只剩一个空心钟(用户要求"不要打勾图案, 保留跳动动画即可"),
+        //   点亮时由上面的 ApplyActionVisual 把它染成蓝色即可, 没有图标层次可切。
         // 未点过的三个按钮也要走一次: 换片后要把上一次残留的色相清回灰。
         // ★ 下载的绿色终态由 _cacheDownloaded 决定(它只在换片时复位, 见 ResetForNewMedia)——
         //   不能在这里无条件刷成灰: 本方法会被点赞/收藏等**同一片内**的操作反复调用,

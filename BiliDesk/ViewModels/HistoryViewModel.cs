@@ -39,7 +39,6 @@ public class HistoryViewModel : VideoListSelectionViewModel
     private bool _isEditMode;
     private bool _busy;
     private string _busyText = "";
-    private string _searchKeyword = "";
 
     // ------------------------------------------------------------ 类别(视频 / 直播间)
 
@@ -63,7 +62,6 @@ public class HistoryViewModel : VideoListSelectionViewModel
             OnPropertyChanged(nameof(IsVideoKind));
             OnPropertyChanged(nameof(IsLiveKind));
             OnPropertyChanged(nameof(EmptyText));
-            OnPropertyChanged(nameof(SearchHintText));
             // 换类别 = 换一整套数据: 清掉旧类别的内容重新加载。
             // 编辑模式一并退出 —— 勾选状态属于"上一批记录", 留着会让"删除所选"删错东西。
             IsEditMode = false;
@@ -108,17 +106,6 @@ public class HistoryViewModel : VideoListSelectionViewModel
     /// <summary>把当前代次 +1, 让在途的加载结果作废</summary>
     private void BumpGeneration() => _generation++;
 
-    /// <summary>
-    /// 搜索输入的防抖定时器(220ms) —— **和 FilterService 里屏蔽词那套是同一个坑、同一个参数**。
-    ///
-    /// 为什么必须有: 输入框是 UpdateSourceTrigger=PropertyChanged, 每敲一个字符都会走到
-    /// ApplySearch → CollectionView.Refresh(); 而 Refresh 会让卡片墙的容器**整墙重建**
-    /// (本页是无虚拟化的 WrapPanel 卡片墙, 每张 VideoCard 还带封面加载与 360ms 入场动画)。
-    /// 历史一次能滚出几百条, 键盘按住不放时每敲一下重建一遍 ⇒ 明显卡顿。
-    /// 攒 220ms 只刷一次, 手感上依然是"边打边变"; 清空(空词)不走防抖, 见 ScheduleSearch。
-    /// (全局屏蔽词那边早就有这个防抖 —— 见 FilterService 构造函数, 本页自己的搜索当时漏了。)
-    /// </summary>
-    private readonly DispatcherTimer _searchDebounce;
 
     /// <summary>云端历史条目(接口顺序, 新的在前)。分页追加。</summary>
     public ObservableCollection<VideoItem> Entries { get; } = new();
@@ -153,79 +140,6 @@ public class HistoryViewModel : VideoListSelectionViewModel
     /// <summary>操作进度文案(如"正在删除 3/10…")</summary>
     public string BusyText { get => _busyText; private set => SetProperty(ref _busyText, value); }
 
-    // ------------------------------------------------------------ 搜索
-
-    /// <summary>
-    /// 按标题 / UP 主在当前已加载的云端历史里筛选。
-    ///
-    /// 注意它和"全局屏蔽"是**两回事**, 两者都要生效:
-    ///   - 全局屏蔽是黑名单(命中就隐藏), 装在所有列表上, 入口在首页右上角;
-    ///   - 这里是本页的搜索(命中才显示)。
-    /// 一个 CollectionView 只能有一个 Filter 谓词, 所以这里**不**自己去设 `view.Filter`,
-    /// 而是通过 `FilterService.SetScopeFilter` 把条件交给它, 由它合并成一个谓词。
-    /// 直接设会把全局屏蔽顶掉(反过来也一样)。
-    ///
-    /// 只筛已加载的内容 —— 云端历史是分页拉的, 没拉到的页面自然搜不到,
-    /// 所以界面上会明确写出"在已加载的 N 条里搜索"。
-    /// </summary>
-    public string SearchKeyword
-    {
-        get => _searchKeyword;
-        set
-        {
-            if (!SetProperty(ref _searchKeyword, value ?? "")) return;
-            OnPropertyChanged(nameof(HasSearch));
-            OnPropertyChanged(nameof(SearchHintText));
-            ScheduleSearch();
-        }
-    }
-
-    public bool HasSearch => _searchKeyword.Trim().Length > 0;
-
-    public string SearchHintText => HasSearch
-        ? $"在已加载的 {Entries.Count} 条记录里匹配「{_searchKeyword.Trim()}」"
-        : "只搜索已加载的记录";
-
-    /// <summary>搜索把内容全筛掉了 —— 和"云端本来就没记录"要区分开, 提示语不一样</summary>
-    public bool ShowNoMatch => HasSearch && TotalCount == 0;
-
-    /// <summary>
-    /// 排一次过滤。**空词立刻生效** —— 点「清空」/按 Esc/把最后一个字符删掉时, 用户期待的是
-    /// 马上看到全部内容(与 FilterService.Clear 的取舍一致); 非空词走 220ms 防抖, 理由见
-    /// <see cref="_searchDebounce"/>。顺手把已排期的那一次取消掉, 免得防抖到点又白刷一遍。
-    /// </summary>
-    private void ScheduleSearch()
-    {
-        _searchDebounce.Stop();
-        if (_searchKeyword.Trim().Length == 0)
-        {
-            ApplySearch();
-            return;
-        }
-        _searchDebounce.Start();
-    }
-
-    /// <summary>
-    /// 搜索词变化时重挂本页自己的过滤条件(走 FilterService, 别直接赋 view.Filter ——
-    /// 一个视图只能有一个谓词, 直接赋值会把全局屏蔽顶掉)。
-    /// </summary>
-    private void ApplySearch()
-    {
-        var kw = _searchKeyword.Trim();
-        FilterService.Instance.SetScopeFilter(Entries,
-            kw.Length == 0 ? null : item => MatchKeyword(item, kw));
-        RaiseSelection();
-        OnPropertyChanged(nameof(ShowNoMatch));
-    }
-
-    private static bool MatchKeyword(object? item, string keyword)
-    {
-        if (item is not VideoItem v) return true;
-        return v.Title.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0
-            || v.Author.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0;
-    }
-
-    public void ClearSearch() => SearchKeyword = "";
 
     // ------------------------------------------------------------ 选择状态
     // 选中态派生属性(SelectedCount / TotalCount / HasSelection / AllSelected /
@@ -236,13 +150,6 @@ public class HistoryViewModel : VideoListSelectionViewModel
     // (都等于 VisibleItems().Count()), 而 XAML 只绑 TotalCount —— 已合并掉。
 
     protected override ObservableCollection<VideoItem> SelectionSource => Entries;
-
-    /// <summary>历史页特有的绑定: 搜索提示语与"搜不到"空态</summary>
-    protected override void RaiseSelectionExtra()
-    {
-        OnPropertyChanged(nameof(ShowNoMatch));
-        OnPropertyChanged(nameof(SearchHintText));
-    }
 
     // ------------------------------------------------------------ 加载
 
@@ -279,18 +186,6 @@ public class HistoryViewModel : VideoListSelectionViewModel
         // 条数变化要同步到界面上的计数与"全选"按钮文案。
         // 只能监听**增删**, IsSelected 的变化得逐条监听 —— 集合本身不会因此收到通知。
         HookSelectionSource();
-
-        // 搜索防抖: 参数(220ms / Background 优先级)与 FilterService 里屏蔽词那套完全一致 ——
-        // 两处做的是同一件事(改过滤条件 → 整墙重建), 手感和代价都该一样。
-        _searchDebounce = new DispatcherTimer(DispatcherPriority.Background)
-        {
-            Interval = TimeSpan.FromMilliseconds(220)
-        };
-        _searchDebounce.Tick += (_, _) =>
-        {
-            _searchDebounce.Stop();
-            ApplySearch();
-        };
     }
 
     // ------------------------------------------------------------ 加载

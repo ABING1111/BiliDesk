@@ -12,14 +12,16 @@
           · 内容 = 与首页同一套卡片墙(ItemsControl + WrapPanel + CardWall + VideoCard),
             连"卡片随窗口宽度自己变宽变窄"也一并继承;
           · 标题行 = 首页那套(PageTitleStyle + Margin 36,20,36,0);
-          · 操作 = 标题行**右上角**(搜索 / 刷新 / 编辑 / 返回「我的」), 与收藏页、稍后再看页
+          · 操作 = 标题行**右上角**(刷新 / 编辑 / 返回「我的」), 与收藏页、稍后再看页
             同一套写法(IconButtonStyle + VerticalAlignment="Bottom")。
 
-        ★ 2026-10-06 再改一次: 搜索框从右下角浮动工具列**搬回右上角**, 工具列整个撤掉。
-          起因是右下角那套是"浮在内容上"的, 搜索面板从那儿往左弹出, 会盖住卡片墙一角;
-          而右上角与其它页面位置一致, 且不遮挡内容。
-          行为一个没少: 实时过滤、Esc 清空并收面板、清空按钮、无匹配空状态、
-          过滤生效时按钮变强调色(不然关掉面板后就看不出列表是被筛过的)。
+        ★★ 2026-10-06: 搜索历史记录功能**整体移除**(用户要求)。
+          起因是它每次过滤都要 view.Refresh() ⇒ 非虚拟化卡片墙**整墙重建**:
+          实测 2000 条时一次清空冻结 UI 线程 24.7 秒、内存涨到 1.37GB(探针
+          .probes/bd-probe-clearfilter, 反复 20 轮不单调上涨 ⇒ 不是泄漏, 是活着的卡片太重)。
+          入口按钮、弹出面板、输入框、防抖、匹配谓词、空态提示一并删除,
+          HistoryViewModel 上的 SearchKeyword / HasSearch / ShowNoMatch / SearchHintText
+          / ClearSearch 也全部移除。列表只剩"加载更多"这一种增长方式。
 
         ★ 虚拟化的取舍: 原来那个 ListBox 是虚拟化的, 换成 WrapPanel 之后就**没有虚拟化**了
           (WrapPanel 不实现 IScrollPosInfo, 挂上去等于关掉)。这是"与首页一致"的必然代价,
@@ -82,21 +84,14 @@
                            Visibility="{Binding BusyText, Converter={StaticResource StrToVis}}" />
             </StackPanel>
 
-            <!-- [ 普通模式 ] 右上角操作: 搜索 / 刷新 / 编辑 / 返回「我的」。
-                 ★ 2026-10-06 从右下角浮动工具列搬到这里(与收藏页、稍后再看页同一套写法):
+            <!-- [ 普通模式 ] 右上角操作: 刷新 / 编辑 / 返回「我的」。
+                   2026-10-06 从右下角浮动工具列搬到这里(与收藏页、稍后再看页同一套写法):
                    IconButtonStyle + VerticalAlignment="Bottom", 位置和其余页面一致。
                    放右上角的另一个好处是**不遮挡内容** —— 右下角那套是浮在卡片墙上的。 -->
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                         VerticalAlignment="Bottom"
                         Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
 
-                <!-- 搜索: 本页搜索的**唯一入口**。点开在按钮下方弹出面板, 输入框在面板里
-                     —— 见下面的 SearchPopup。有过滤条件时按钮变强调色,
-                     否则收起面板后就看不出列表是被筛过的。 -->
-                <Button x:Name="BtnSearch" Style="{StaticResource IconButtonStyle}" Margin="0,0,8,0"
-                        Click="OnSearchClick" ToolTip="搜索历史记录">
-                    <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-                </Button>
 
                 <Button Style="{StaticResource IconButtonStyle}" Margin="0,0,8,0"
                         Command="{Binding ReloadCommand}" ToolTip="重新同步云端历史">
@@ -112,58 +107,6 @@
                     <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
                 </Button>
 
-                <!-- 搜索面板: 弹在搜索按钮**下方**(与右上角这个位置匹配;
-                     StaysOpen=False 点到别处就收起, 但关键词**保留**, 列表继续按它过滤)。 -->
-                <Popup x:Name="SearchPopup" PlacementTarget="{Binding ElementName=BtnSearch}"
-                       Placement="Bottom" HorizontalOffset="-8" VerticalOffset="6"
-                       StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
-                    <Border Background="{DynamicResource FlyoutBackgroundBrush}" CornerRadius="10"
-                            BorderBrush="{DynamicResource FlyoutBorderBrush}" BorderThickness="1"
-                            Padding="14" Width="300">
-                        <Border.Effect>
-                            <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.3"
-                                              Direction="270" Color="#000000" />
-                        </Border.Effect>
-                        <StackPanel>
-                            <TextBlock Text="搜索历史记录" FontSize="14" FontWeight="SemiBold" />
-
-                            <!-- 输入框: 与原来右上角那个**同一套样式与内边距**(Height 44 是
-                                 SearchTextBoxStyle 自带的高度, 这里必须跟着写 44 否则会溢出/压扁)。
-
-                                 ★ 这里**不再套**原来那层"灰底圆角矩形"Border(2026-10-01 用户要求去掉
-                                   "粉色描边外的灰色小矩形边框"): SearchTextBoxStyle 是**胶囊形**
-                                   (CornerRadius 22), 而外层灰底框是 10 —— 两个圆角对不齐, 灰底的四个角
-                                   会从粉色描边**外面**露出来(探针像素实测: 框左上角内 3px 处是 #F4F4F4,
-                                   而框内是 #FCFCFC), 看着就像描边外还套着一个灰色圆角矩形。
-                                   直接不要那层, 输入框就只剩自己这一层 —— 描边(聚焦时变粉)即最外轮廓。 -->
-                            <Grid Margin="0,12,0,0" Height="44">
-                                <TextBox x:Name="HistorySearchBox" Style="{StaticResource SearchTextBoxStyle}"
-                                         Text="{Binding SearchKeyword, UpdateSourceTrigger=PropertyChanged}"
-                                         KeyDown="OnSearchKeyDown" />
-                                <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                           FontSize="14" Foreground="{DynamicResource TextSecondaryBrush}"
-                                           VerticalAlignment="Center" Margin="16,0,0,0" IsHitTestVisible="False" />
-                                <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                        FontSize="13" Style="{StaticResource IconButtonStyle}"
-                                        Width="24" Height="24" HorizontalAlignment="Right"
-                                        VerticalAlignment="Center" Margin="0,0,8,0"
-                                        Foreground="{DynamicResource TextSecondaryBrush}"
-                                        Visibility="{Binding SearchKeyword, Converter={StaticResource StrToVis}}"
-                                        Click="OnClearSearchClick" ToolTip="清空搜索" />
-                            </Grid>
-
-                            <Grid Margin="0,12,0,0">
-                                <TextBlock Text="{Binding SearchHintText}" FontSize="11" VerticalAlignment="Center"
-                                           TextTrimming="CharacterEllipsis" MaxWidth="185"
-                                           HorizontalAlignment="Left"
-                                           Foreground="{DynamicResource TextTertiaryBrush}" />
-                                <Button Content="完成" Style="{StaticResource SubtleButtonStyle}"
-                                        HorizontalAlignment="Right" Padding="12,4" FontSize="12"
-                                        Click="OnCloseSearchClick" />
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-                </Popup>
             </StackPanel>
 
             <!-- [ 编辑模式 ] 全选 / 删除所选 / 清空全部 / 退出。 -->
@@ -211,20 +154,6 @@
                         Command="{Binding ReloadCommand}"
                         Visibility="{Binding Loading, Converter={StaticResource InvBoolToVis}}" />            </StackPanel>
 
-            <!-- 搜索没有匹配项。和上面对"云端本来就没记录"(Error)区分开:
-                 一个该提示"换个词试试", 另一个该提示"登录/同步"。 -->
-            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
-                        Visibility="{Binding ShowNoMatch, Converter={StaticResource BoolToVis}}">
-                <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                           FontSize="30" Foreground="{DynamicResource TextTertiaryBrush}"
-                           HorizontalAlignment="Center" />
-                <TextBlock Text="没有匹配的记录" Style="{StaticResource MetaTextStyle}"
-                           Margin="0,12,0,0" HorizontalAlignment="Center" />
-                <TextBlock Text="只会搜索已加载的记录, 可以下拉加载更多再试"
-                           Style="{StaticResource MetaTextStyle}" Margin="0,6,0,0"
-                           Foreground="{DynamicResource TextTertiaryBrush}"
-                           HorizontalAlignment="Center" />
-            </StackPanel>
 
             <!-- 卡片墙(与首页同构: ScrollViewer → StackPanel → ItemsControl + WrapPanel + CardWall)
                  ★ 滚轮手感与首页一致(2026-10-02 用户要求): 之前这里挂了 SmoothScroll(270px/160ms 的
@@ -233,8 +162,9 @@
             <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto"
                           Margin="0,0,0,0"
                           ScrollChanged="OnScrollChanged">
-                <!-- 底部 250px = 右下角浮动工具列的高度, 留在滚动内容之外, 滚到底时最后一行能整行露出来 -->
-                <StackPanel Margin="0,0,0,250">
+                <!-- 底部留白: 原来给右下角浮动工具列腾位置, 工具列已于 2026-10-06 撤掉,
+                     这里只留一点常规呼吸空间, 不再需要 250px 那么多。 -->
+                <StackPanel Margin="0,0,0,24">
                     <ItemsControl ItemsSource="{Binding Entries}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
