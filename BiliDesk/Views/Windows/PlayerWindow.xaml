@@ -1181,7 +1181,7 @@
                                    (它们在第 2 行里会悬在「分享」和「下载」中间, 本来就怪)。 -->
                             <StackPanel x:Name="ActionBar" Margin="0,14,0,0">
                                 <!-- 第 1 行: 三连(标记这个视频) -->
-                                <Grid x:Name="ActionRowMark">
+                                <Grid x:Name="ActionRowMark" VerticalAlignment="Center">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
@@ -1190,7 +1190,7 @@
                                     <!-- 点赞: 点过 = 图标和数字一起变红 -->
                                     <Button x:Name="BtnLike" Style="{StaticResource PlayerActionBtn}"  Grid.Column="0"
                                             Click="OnLikeClick" ToolTip="点赞 (L)">
-                                        <StackPanel Orientation="Horizontal">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Grid x:Name="LikeIconBox" Style="{StaticResource ActionIconBox}">
                                                 <Path Data="{StaticResource LikeIconGeometry}"
                                                       Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
@@ -1203,7 +1203,7 @@
                                     <!-- 投币 -->
                                     <Button x:Name="BtnCoin" Style="{StaticResource PlayerActionBtn}"  Grid.Column="1"
                                             Click="OnCoinClick" ToolTip="投币 1 个">
-                                        <StackPanel Orientation="Horizontal">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Grid x:Name="CoinIconBox" Style="{StaticResource ActionIconBox}">
                                                 <Path Data="{StaticResource CoinIconGeometry}"
                                                       Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
@@ -1216,7 +1216,7 @@
                                     <!-- 收藏 -->
                                     <Button x:Name="BtnFavorite" Style="{StaticResource PlayerActionBtn}"  Grid.Column="2"
                                             Click="OnFavoriteClick" ToolTip="收藏到云端收藏夹">
-                                        <StackPanel Orientation="Horizontal">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Grid x:Name="FavIconBox" Style="{StaticResource ActionIconBox}">
                                                 <Path Data="{StaticResource FavoriteIconGeometry}"
                                                       Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
@@ -1229,7 +1229,7 @@
                                 </Grid>
 
                                 <!-- 第 2 行: 稍后再看 + 传出去(分享) + 拿走(下载) -->
-                                <Grid x:Name="ActionRowOther" Margin="0,2,0,0">
+                                <Grid x:Name="ActionRowOther" Margin="0,2,0,0" VerticalAlignment="Center">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
@@ -1245,7 +1245,7 @@
                                            不在触发器里各写一份。 -->
                                     <Button x:Name="BtnWatchLater" Style="{StaticResource PlayerActionBtn}"  Grid.Column="0"
                                             Click="OnWatchLaterClick" ToolTip="加入稍后再看">
-                                        <StackPanel Orientation="Horizontal">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Grid x:Name="LaterIconBox" Style="{StaticResource ActionIconBox}">
                                                 <!-- 用户要求(2026-10-06): **不要打勾图案**, 保留时钟图标 + 跳动动画即可。
                                                      所以这里只有一个空心钟, 点亮时**只变色**(描边绑 Button.Foreground,
@@ -1253,7 +1253,7 @@
                                                      ★ 旧版那两层(实心圆 LaterIconOnFill + 白勾 LaterIconOnCheck)已删除;
                                                        它们换来的代价是两个 Path 必须同步显隐, 而用户明确表示不需要勾。 -->
                                                 <Path x:Name="LaterIcon" Style="{StaticResource ActionGlyphStroke}"
-                                                      Width="20" Height="20" Stretch="Uniform"
+                                                      Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center"
                                                       Data="M3.4,12 A8.6,8.6 0 1 1 20.6,12 A8.6,8.6 0 1 1 3.4,12 Z M12,7.2 L12,12 L15.1,14" />
                                             </Grid>
                                             <Grid Margin="6,0,0,0" VerticalAlignment="Center">
@@ -1283,7 +1283,7 @@
                                               "传出去/拿走"动作, 图标大小必须对齐(2026-10-06 用户要求)。 -->
                                     <Button x:Name="BtnShare" Style="{StaticResource PlayerActionBtn}"  Grid.Column="1"
                                             Click="OnCopyLinkClick" ToolTip="复制视频链接">
-                                        <StackPanel Orientation="Horizontal">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Grid x:Name="ShareIconBox" Style="{StaticResource ActionIconBox}">
                                                 <Path x:Name="ShareGlyph" Width="18" Height="18"
                                                       Stretch="Uniform" Fill="Transparent"
@@ -1300,7 +1300,7 @@
                                     <!-- 离线缓存(下载) -->
                                     <Button x:Name="BtnCache" Style="{StaticResource PlayerActionBtn}"  Grid.Column="2"
                                             Click="OnCacheClick" ToolTip="离线缓存当前视频">
-                                        <StackPanel Orientation="Horizontal">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <!-- ★★★ 图标格必须与其它五个按钮**同为 20×20**(ActionIconBox),
                                                  否则整颗按钮的图文会被压低 —— 这是用户报"6 个按钮没有上下对齐"的根因。
                                                  (实测: 原来这里写死 Width/Height=18 ⇒ 图标格量成 17.6,

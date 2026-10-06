@@ -137,6 +137,51 @@
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding AcrylicBackground, Mode=TwoWay}" />
                     </Grid>
+
+                    <!-- 分隔线: 与卡片里其它行一致(开关那行与这两条透明度行是"一件事的两层设置")。
+                         ★ 它也要跟滑杆一起只在亚克力开启时出现, 否则关掉亚克力会留下一根悬空的线。 -->
+                    <Border Style="{StaticResource SettingsRowDivider}"
+                            Visibility="{Binding AcrylicBackground, Converter={StaticResource BoolToVis}}" />
+
+                    <!-- 亚克力透明度调节(浅色主题): 只在亚克力开启时显示。
+                         ★ 排版与"弹幕显示区域"那行**保持同款**(用户要求): 说明行里带数值,
+                           右侧是固定 240 宽的 SettingsSliderStyle 滑杆 —— 而不是小号默认滑杆 + 右侧百分比。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}"
+                          Visibility="{Binding AcrylicBackground, Converter={StaticResource BoolToVis}}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="240" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="亚克力透明度 · 浅色" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding AcrylicOpacityLightText}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                Width="240" VerticalAlignment="Center"
+                                Minimum="0" Maximum="100" IsSnapToTickEnabled="True" TickFrequency="5"
+                                Value="{Binding AcrylicOpacityLight, Mode=TwoWay}" />
+                    </Grid>
+
+                    <!-- 亚克力透明度调节(深色主题): 同上, 深浅两套值可分别调 -->
+                    <Border Style="{StaticResource SettingsRowDivider}"
+                            Visibility="{Binding AcrylicBackground, Converter={StaticResource BoolToVis}}" />
+                    <Grid Style="{StaticResource SettingsRowStyle}"
+                          Visibility="{Binding AcrylicBackground, Converter={StaticResource BoolToVis}}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="240" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="亚克力透明度 · 深色" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding AcrylicOpacityDarkText}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                Width="240" VerticalAlignment="Center"
+                                Minimum="0" Maximum="100" IsSnapToTickEnabled="True" TickFrequency="5"
+                                Value="{Binding AcrylicOpacityDark, Mode=TwoWay}" />
+                    </Grid>
                 </StackPanel>
             </Border>
 

@@ -282,6 +282,9 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>当前视频是否已在「稍后再看」里(用于按钮的点亮态)</summary>
     private bool _isInWatchLater;
 
+    /// <summary>当前视频是否已投过币(用于投币按钮的点亮态)</summary>
+    private bool _isCoined;
+
     /// <summary>稍后再看的加入/移出进行中, 防止连点把 add/del 交叉发出去</summary>
     private bool _watchLaterBusy;
     /// <summary>操作栏计数(2026-09-26 起操作栏是"图标 + 数量", 不再是"点赞/投币/收藏"三个字)</summary>
@@ -829,8 +832,8 @@ public partial class PlayerWindow : FluentWindow
     {
         // 三连 / 关注 / 稍后再看等"上一条视频"的态
         nameof(_isLiked), nameof(_isFollowed), nameof(_isFavorited), nameof(_favBusy),
-        nameof(_isInWatchLater), nameof(_watchLaterBusy), nameof(_likeCount),
-        nameof(_coinCount), nameof(_favCount), nameof(_cacheDownloaded),
+        nameof(_isInWatchLater), nameof(_watchLaterBusy), nameof(_isCoined),
+        nameof(_likeCount), nameof(_coinCount), nameof(_favCount), nameof(_cacheDownloaded),
         // 播放源标识
         nameof(_isLocalPlayback), nameof(_isLive), nameof(_liveRoomId), nameof(_currentCid),
         nameof(_aid), nameof(_ownerMid), nameof(_ownerName), nameof(_ownerFace),
@@ -1283,6 +1286,7 @@ public partial class PlayerWindow : FluentWindow
         // 切换视频时重置各操作按钮状态(随后的异步查询会刷新为真实值)
         _isLiked = false;
         _isFollowed = false;
+        _isCoined = detail.HasCoined;
         // 计数直接来自详情(view 接口的 stat), 比旧的"点赞/投币/收藏"三个字信息量大
         _likeCount = detail.LikeCount;
         _coinCount = detail.CoinCount;
@@ -3488,6 +3492,13 @@ public partial class PlayerWindow : FluentWindow
     {
         if (on)
         {
+            // ★ 全屏期间**禁止**"失焦换窗口底色"那套处理接管(2026-10-06):
+            //   全屏要求所有缝隙纯黑(紧接着那两处赋 Black), 而全屏途中一旦点到别的窗口,
+            //   失焦逻辑会把 Background 改成主题实色 ⇒ 视频周围露出浅色缝。
+            //   ★ 必须放在**赋 Black 之前**: 放在后面的话, 这中间的失焦回调仍有可能插进来。
+            //   退出全屏时在下面把它放开。
+            SuppressAcrylicActivationSwap = true;
+
             // ★ 第一步必须是它: 底色先黑, 后面收缩/放大暴露出来的区域才不会是主题色。
             //   ★★ 要切的是**两层**—— 窗口 Background 只是最底下那层, 上面还压着根网格
             //   RootGrid 的 AppBackgroundBrush(浅色主题 = 白), 它不被一起切掉,
@@ -3530,6 +3541,9 @@ public partial class PlayerWindow : FluentWindow
             // 先改外观再改几何: 窗口在缩回去的过程中露出来的边角就是正确的主题色,
             // 而不是刚才那块"全屏黑"。(FluentWindow 按深浅主题挑 WindowSolid*)
             MaximizeCoversTaskbar = false;
+            // 放开"失焦换底色"的闸门: ApplyChrome 紧接着会按当前激活态重新给出正确的窗口底色
+            // (全屏期间它被上面那行拦住了, 现在要还给这套机制)。
+            SuppressAcrylicActivationSwap = false;
             ApplyChrome();
             // ★★ 不要在这里补 WS_CAPTION: 它由下面对"窗口状态还原之后"那次
             //   SyncCaptionForAcrylic 统一补(那时 WindowState 已回到 Normal, 才补得回来) ——
@@ -3857,7 +3871,8 @@ public partial class PlayerWindow : FluentWindow
         var (ok, err) = await Svc.Api.CoinVideoAsync(_aid, 1, _currentBvid);
         if (ok)
         {
-            // 同一个视频最多投 2 枚, 本地不精确记状态(下次进来以详情接口为准), 只把数字 +1
+            // 同一个视频最多投 2 枚, 本地只记"已投过"的点亮态(下次进来以详情接口为准)
+            _isCoined = true;
             _coinCount += 1;
             UpdateActionCounts();
             PlayActionPop(CoinIconBox);
@@ -3905,7 +3920,7 @@ public partial class PlayerWindow : FluentWindow
         // ★ 下载的绿色终态由 _cacheDownloaded 决定(它只在换片时复位, 见 ResetForNewMedia)——
         //   不能在这里无条件刷成灰: 本方法会被点赞/收藏等**同一片内**的操作反复调用,
         //   那样用户一下载完、随手点个赞, 绿色就没了。
-        ApplyActionVisual(BtnCoin, false, ActionCoinColor);
+        ApplyActionVisual(BtnCoin, _isCoined, ActionCoinColor);
         ApplyActionVisual(BtnShare, false, ActionNeutralColor);
         ApplyActionVisual(BtnCache, _cacheDownloaded, ActionDownloadColor);
     }
@@ -3971,6 +3986,7 @@ public partial class PlayerWindow : FluentWindow
         if (ReferenceEquals(btn, BtnLike)) return _isLiked;
         if (ReferenceEquals(btn, BtnFavorite)) return _isFavorited;
         if (ReferenceEquals(btn, BtnWatchLater)) return _isInWatchLater;
+        if (ReferenceEquals(btn, BtnCoin)) return _isCoined;
         // 下载的"已下载"也是终态, 有它就说明不该回灰
         if (ReferenceEquals(btn, BtnCache)) return _cacheDownloaded;
         return false;

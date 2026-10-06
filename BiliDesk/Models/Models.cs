@@ -154,6 +154,8 @@ public class VideoDetail
     public long CoinCount { get; set; }
     public long FavoriteCount { get; set; }
     public long ShareCount { get; set; }
+    /// <summary>当前登录用户是否已对该视频投过币(view 接口的 coin 字段, 登录后才有意义)</summary>
+    public bool HasCoined { get; set; }
     public long Pubdate { get; set; }
     public long Aid { get; set; }
     public long Cid { get; set; }
@@ -1022,6 +1024,17 @@ public class AppSettings
     /// 详见 Services/SettingsStore.cs 的同名属性与 DwmInterop.SetAcrylicBackdrop。
     /// </summary>
     public bool AcrylicBackground { get; set; }
+
+    /// <summary>
+    /// 亚克力背景透明度——浅色主题(0~100, 默认 60)。数值越小越透明, 越大越不透明。
+    /// 只影响"页面底/侧边栏"这两层的透明度, 不影响卡片/浮层等实色块。
+    /// </summary>
+    public int AcrylicOpacityLight { get; set; } = 60;
+
+    /// <summary>
+    /// 亚克力背景透明度——深色主题(0~100, 默认 75)。深色底本身就更暗, 默认稍不透明一档。
+    /// </summary>
+    public int AcrylicOpacityDark { get; set; } = 75;
 
     /// <summary>弹幕开关(全局, 播放器不再提供弹幕按钮)</summary>
     public bool DanmakuEnabled { get; set; } = true;

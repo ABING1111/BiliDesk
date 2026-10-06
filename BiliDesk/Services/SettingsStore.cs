@@ -35,6 +35,17 @@ public class SettingsStore
     /// </summary>
     public bool AcrylicBackground { get; set; }
 
+    /// <summary>
+    /// 亚克力背景透明度——浅色主题(0~100, 默认 60)。数值越小越透明, 越大越不透明。
+    /// 只影响"页面底/侧边栏"这两层的透明度, 不影响卡片/浮层等实色块。
+    /// </summary>
+    public int AcrylicOpacityLight { get; set; } = 60;
+
+    /// <summary>
+    /// 亚克力背景透明度——深色主题(0~100, 默认 75)。深色底本身就更暗, 默认稍不透明一档。
+    /// </summary>
+    public int AcrylicOpacityDark { get; set; } = 75;
+
     /// <summary>弹幕开关(全局)</summary>
     public bool DanmakuEnabled { get; set; } = true;
 
@@ -178,6 +189,8 @@ public class SettingsStore
                     ThemeMode = s.ThemeMode;
                     // 老配置没有这个字段 → 属性初始化值(false)自动生效, 不需要版本兼容。
                     AcrylicBackground = s.AcrylicBackground;
+                    AcrylicOpacityLight = Math.Clamp(s.AcrylicOpacityLight, 0, 100);
+                    AcrylicOpacityDark = Math.Clamp(s.AcrylicOpacityDark, 0, 100);
                     DanmakuEnabled = s.DanmakuEnabled;
                     DanmakuAreaPercent = Math.Clamp(s.DanmakuAreaPercent, 25, 100);
                     DanmakuSmartFilter = s.DanmakuSmartFilter;
@@ -290,6 +303,8 @@ public class SettingsStore
             {
                 ThemeMode = ThemeMode,
                 AcrylicBackground = AcrylicBackground,
+                AcrylicOpacityLight = AcrylicOpacityLight,
+                AcrylicOpacityDark = AcrylicOpacityDark,
                 DanmakuEnabled = DanmakuEnabled,
                 DanmakuAreaPercent = DanmakuAreaPercent,
                 DanmakuSmartFilter = DanmakuSmartFilter,
@@ -469,6 +484,26 @@ public class SettingsStore
     {
         if (AcrylicBackground == on) return;
         AcrylicBackground = on;
+        Save();
+        AcrylicChanged?.Invoke();
+    }
+
+    /// <summary>调节浅色主题亚克力透明度(0~100)并落盘, 广播给所有窗口重设背景</summary>
+    public void SetAcrylicOpacityLight(int opacity)
+    {
+        opacity = Math.Clamp(opacity, 0, 100);
+        if (AcrylicOpacityLight == opacity) return;
+        AcrylicOpacityLight = opacity;
+        Save();
+        AcrylicChanged?.Invoke();
+    }
+
+    /// <summary>调节深色主题亚克力透明度(0~100)并落盘, 广播给所有窗口重设背景</summary>
+    public void SetAcrylicOpacityDark(int opacity)
+    {
+        opacity = Math.Clamp(opacity, 0, 100);
+        if (AcrylicOpacityDark == opacity) return;
+        AcrylicOpacityDark = opacity;
         Save();
         AcrylicChanged?.Invoke();
     }

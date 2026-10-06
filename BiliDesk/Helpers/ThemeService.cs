@@ -496,12 +496,17 @@ public class ThemeService
 
         // 开: 页面底压到很低的透明度(让亚克力质感透出来);
         // 实色块压暗一档 —— 深色主题压得更狠(深色底本来就暗, 不压会和页面底糊在一起)。
+        // ★ 透明度可由用户在设置里分开调节浅色/深色(0~100), 侧边栏比页面底更透明一档。
+        var opacity = Math.Clamp(IsDark ? Svc.Settings.AcrylicOpacityDark : Svc.Settings.AcrylicOpacityLight, 0, 100);
+        var alpha = (byte)(opacity * 255 / 100);
+        var sidebarAlpha = (byte)(alpha * 0.7);
+
         app.Resources["AppBackgroundBrush"] = IsDark
-            ? Frozen(Color.FromArgb(0x4D, 0x20, 0x20, 0x20))
-            : Frozen(Color.FromArgb(0x4D, 0xEC, 0xED, 0xEF));
+            ? Frozen(Color.FromArgb(alpha, 0x20, 0x20, 0x20))
+            : Frozen(Color.FromArgb(alpha, 0xEC, 0xED, 0xEF));
         app.Resources["SideBarBackgroundBrush"] = IsDark
-            ? Frozen(Color.FromArgb(0x33, 0x20, 0x20, 0x20))
-            : Frozen(Color.FromArgb(0x33, 0xEC, 0xED, 0xEF));
+            ? Frozen(Color.FromArgb(sidebarAlpha, 0x20, 0x20, 0x20))
+            : Frozen(Color.FromArgb(sidebarAlpha, 0xEC, 0xED, 0xEF));
 
         // 卡片/提示条: 比纯色模式的 #F0F1F3 再压 6 阶(→ 约 234)
         app.Resources["CardBackgroundBrush"] = Frozen(IsDark

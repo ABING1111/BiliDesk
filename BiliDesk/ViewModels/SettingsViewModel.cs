@@ -273,8 +273,45 @@ public class SettingsViewModel : ObservableObject
 
     /// <summary>亚克力开关的说明文案(跟随开关状态给出不同提示, 用户一眼知道当前处于哪一态)</summary>
     public string AcrylicHint => Svc.Settings.AcrylicBackground
-        ? "已开启: 窗口背景使用系统亚克力材质, 会实时透出桌面内容"
+        // ★ 失焦会切成主题实色底 —— 这是 DWM 的既定行为(挡不住), 我们在窗口层接管了它,
+        //   所以文案要说清楚, 免得用户以为"失焦后不再是亚克力"是坏了(2026-10-06)。
+        ? "已开启: 聚焦时实时透出桌面内容; 窗口失焦时改用主题底色(系统限制, 无法保持透明)"
         : "实验性功能: 让窗口背景变成半透明亚克力材质(需要 Windows 11)";
+
+    /// <summary>
+    /// 亚克力透明度——浅色主题(0~100, 默认 60)。数值越小越透明, 越大越不透明。
+    /// 改透明度与开关一样要走存储层落盘 + 广播, 所有窗口立即重设背景。
+    /// </summary>
+    public int AcrylicOpacityLight
+    {
+        get => Svc.Settings.AcrylicOpacityLight;
+        set
+        {
+            if (value == Svc.Settings.AcrylicOpacityLight) return;
+            Svc.Settings.SetAcrylicOpacityLight(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(AcrylicOpacityLightText));
+        }
+    }
+
+    /// <summary>浅色透明度滑杆下方那行说明(与"弹幕显示区域"同款: 数值写进描述行)</summary>
+    public string AcrylicOpacityLightText => $"页面底不透明度 {AcrylicOpacityLight}%";
+
+    /// <summary>亚克力透明度——深色主题(0~100, 默认 75)</summary>
+    public int AcrylicOpacityDark
+    {
+        get => Svc.Settings.AcrylicOpacityDark;
+        set
+        {
+            if (value == Svc.Settings.AcrylicOpacityDark) return;
+            Svc.Settings.SetAcrylicOpacityDark(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(AcrylicOpacityDarkText));
+        }
+    }
+
+    /// <summary>深色透明度滑杆下方那行说明</summary>
+    public string AcrylicOpacityDarkText => $"页面底不透明度 {AcrylicOpacityDark}%";
 
     // ----------------- 推荐算法(已固定为网页版, 不再提供选择) -----------------
     //

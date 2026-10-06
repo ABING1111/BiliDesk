@@ -15,6 +15,9 @@ public static class DwmInterop
     private const int DwmNcrpUseWindowStyle = 0;   // DWMNCRP_USEWINDOWSTYLE(默认)
     private const int DwmNcrpDisabled = 1;         // DWMNCRP_DISABLED
     private const int DwmwaWindowCornerPreference = 33;
+    // ★ DWMWA_USE_HOSTBACKDROPBRUSH(17) 的常量已删除(2026-10-06): 它曾被误当成"失焦防回落"的开关,
+    //   探针 A/B 证明它与失焦行为**完全无关**(是"让我自己用 Composition 画 host backdrop"的开关)。
+    //   别再为"失焦变灰"把它加回来 —— 那个问题在上层窗口底色里解决(见 SetAcrylicBackdrop 的说明)。
 
     // DWMSBT 值: 1=None 2=Mica 3=Acrylic 4=Tabbed
     private const int DwmWcpRound = 2;         // 圆角窗口
@@ -303,6 +306,25 @@ public static class DwmInterop
             //   ★ 做法: 去掉 **WS_SYSMENU**(见 SyncCaptionForAcrylic) —— **不要**动 WS_CAPTION,
             //     那是 DWM 播窗口过渡动画的依据, 摘了会让最小化/最大化/全屏都没动画。
             SyncCaptionForAcrylic(window);
+
+            // ★★★ "失焦变灰"在这个函数里**修不了**, 别再往这里加代码(2026-10-06 第三次确认):
+            //   现象: 窗口失焦后亚克力消失、整窗变灰(221,222,223)。
+            //   根因: DWM 的 Background Acrylic 材质**在窗口失焦时会被替换成实色** —— 这是
+            //         微软的**设计行为**, 不是 bug, 也没有 API 能关掉。文档原话(见下面的链接):
+            //           "only background acrylic will replace its translucency and texture with a
+            //            solid color: When an app window on desktop deactivates."
+            //         (https://learn.microsoft.com/en-us/windows/apps/design/style/acrylic)
+            //   ★ 试过但**实测无效**、别再试:
+            //     · DWMWA_USE_HOSTBACKDROPBRUSH(17)=1 —— 探针 bd-probe-acrylic-inactive 做了
+            //       A/B(同一窗口先 1 后 0): **两种状态画面完全一样** ⇒ 它是"让我自己用
+            //       Composition 画 host backdrop"的**开关**, 不是"阻止失焦回落"的开关, 加了等于没加。
+            //     · 失焦时重新下发 DWMWA_SYSTEMBACKDROP_TYPE —— 读回仍是 3, 画面仍灰(属空操作:
+            //       这个属性只决定"用哪种材质", 失焦回落是材质自身行为, 与属性值无关)。
+            //     · 换成云母 DWMSBT_MAINWINDOW(2) —— 云母文档同样写明会回落, 且它**本身不透明**
+            //       (只采样一次壁纸、从不透出后面的窗口), 换过去连"透"都没有了。
+            //   ⇒ 修法在**上层**: FluentWindow 按激活态切换自己的窗口底色(见
+            //     FluentWindow.UpdateAcrylicWindowBase)。材质照旧申请, 但失焦时用我们的主题实色
+            //     盖住 DWM 那块灰, 让"变灰"变成"看起来像刻意进入的背景态"。
             return SetAttr(hwnd, DwmwaSystemBackdropType, on ? DwmsbtAcrylic : DwmsbtNone);
         }
         catch

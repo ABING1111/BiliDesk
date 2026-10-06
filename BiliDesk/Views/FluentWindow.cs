@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Services;
@@ -93,18 +94,28 @@ public class FluentWindow : Window
             //     (透明是靠底下的 DWM 合成层兜住的); 失败时一旦也设透明, 客户区就没有任何底色 —— 直接黑。
             var acrylicOn = false;
             if (Svc.Settings.AcrylicBackground) acrylicOn = DwmInterop.SetAcrylicBackdrop(this, true);
+            _acrylicActive = acrylicOn;
 
             if (acrylicOn)
             {
-                // 亚克力生效的前提是窗口背景能透出合成层: 用**全透明**的窗口底色,
+                // 亚克力生效的前提是窗口背景能透出合成层: **聚焦时**用全透明的窗口底色,
                 // 页面那层半透明 AppBackgroundBrush 再叠上去(见 Colors.*.xaml 的说明)。
-                Background = Brushes.Transparent;
+                // ★ 失焦时不能还透明 —— 理由见 UpdateAcrylicWindowBase。
+                // ★ 窗口还**没显示**时按"激活"处理: ApplyChrome 跑在 SourceInitialized(Show 之前),
+                //   那一刻 IsActive 还是 false, 照它给底色会让"刚打开就被自己涂成实色",
+                //   等 OnActivated 再变回透明 —— 观感是窗口亮起来时闪一下实色底。
+                //   真实显示之后由 OnActivated/OnDeactivated 接管, 不会漏。
+                // ★ 这里**不做淡入**(animate: false): 它是主题/开关变化与启动路径, 要即时到位。
+                UpdateAcrylicWindowBase(IsVisible ? IsActive : true, animate: false);
             }
             else
             {
                 // 没开亚克力 / 该窗口不支持亚克力: 一律回落普通实色背景
                 DwmInterop.SetAcrylicBackdrop(this, false);
                 DwmInterop.DisableMica(this);
+                // ★ 必须先卸掉动画载体: 否则那个笔刷上还挂着 ColorAnimation,
+                //   会在后台继续按旧目标改色(表现是主题切换后底色又自己跳一下)。
+                StopAcrylicBaseAnimation();
                 // 统一纯色背景, 深浅主题用各自的 WindowSolid* 资源
                 Background = dark
                     ? (Brush)FindResource("WindowSolidDarkBrush")
@@ -115,6 +126,125 @@ public class FluentWindow : Window
         {
             // 忽略主题应用异常
         }
+    }
+
+    /// <summary>本窗口当前是否**真的**启用了亚克力(即 SetAcrylicBackdrop 返回 true)</summary>
+    private bool _acrylicActive;
+
+    /// <summary>
+    /// 亚克力窗口底色的可变动画笔(动画载体)。
+    ///
+    /// ★ 为什么要单独持有它、而不是每次赋 <c>Brushes.Transparent</c>/资源笔刷:
+    ///   要淡入就得**改 Color** —— 而 <c>Brushes.Transparent</c> 与色板里的笔刷都是**冻结**的,
+    ///   冻结对象挂不了动画(BeginAnimation 会当场抛)。所以这里自己 new 一个可变的。
+    /// </summary>
+    private SolidColorBrush? _acrylicBaseBrush;
+
+    /// <summary>底色淡入时长。150ms: 与设置页开关的 120ms 同量级, 够顺滑又不拖。</summary>
+    private static readonly Duration AcrylicBaseFadeDuration = new(TimeSpan.FromMilliseconds(150));
+
+    /// <summary>
+    /// 亚克力窗口的"窗口底色"按**激活态**给。
+    ///
+    /// ★★★ 为什么需要它(2026-10-06, 用户第三次报"点别的窗口后变灰"的最终修法):
+    ///   DWM 的 **Background Acrylic 材质在窗口失焦时会被自己替换成实色**, 这是**设计行为**,
+    ///   不是 bug, 也没有任何 API 能阻止。微软文档原话([Acrylic material]):
+    ///     "only background acrylic will replace its translucency and texture with a solid color:
+    ///      When an app window on desktop deactivates."
+    ///   ⇒ 结论: **挡不住就接管** —— 失焦时我们自己给一块**主题实色底**,
+    ///     从而"变灰"变成"看起来像刻意进入的背景态"。聚焦时照旧全透明, 毛玻璃质感不变。
+    ///
+    /// ★ 实测证据(.probes/bd-probe-acrylic-inactive, build 26200, 每变体 2 轮, redcheck 全红):
+    ///     backdrop=3(亚克力)        聚焦/失焦**都**读回 3, 但画面都是灰(221,222,223)
+    ///     backdrop=3 + HOSTBACKDROPBRUSH=1   与不加**完全一样** ⇒ 上一轮那个"缓解方案"是**空操作**
+    ///     backdrop=2(云母)          同样回落(文档也写明了) ⇒ 换云母解决不了
+    ///   ⇒ 所以这里不再去 DWM/DWMWA 上找开关(找不到), 只改我们自己的窗口底色。
+    ///
+    /// ★ 为什么换窗口底色就能盖住: DWM 的材质画在窗口内容**之下**,
+    ///   窗口 Background 一旦不透明, 材质就被内容盖住 —— 用户看到的是我们的主题色, 不是 DWM 的灰。
+    /// </summary>
+    /// <param name="active">窗口当前是否处于激活(前台)态</param>
+    /// <param name="animate">是否用 150ms 淡入过渡(仅焦点变化时用; 主题/开关变化要即时到位)</param>
+    private void UpdateAcrylicWindowBase(bool active, bool animate)
+    {
+        // 播放器全屏时窗口底色必须保持纯黑(见 SuppressAcrylicActivationSwap), 不许被这里改掉
+        if (SuppressAcrylicActivationSwap) return;
+        try
+        {
+            var solid = ThemeWindowSolidColor();
+
+            // ★ 只动 **Alpha**, RGB 始终是主题实色的 RGB —— 这样淡入是一次干净的"透明度过渡";
+            //   若直接用 Transparent(0,0,0,0) 去插值, RGB 会一起从黑拉到主题色,
+            //   中途会泛出一层灰黑(比"生硬切换"更难看)。
+            var target = active
+                ? Color.FromArgb(0x00, solid.R, solid.G, solid.B)     // 全透明(alpha=0)
+                : Color.FromArgb(0xFF, solid.R, solid.G, solid.B);    // 主题实色
+
+            // 首次调用 / 不要求动画: 直接给到位, 不建动画
+            if (_acrylicBaseBrush == null || !animate)
+            {
+                StopAcrylicBaseAnimation();
+                _acrylicBaseBrush = new SolidColorBrush(target);
+                Background = _acrylicBaseBrush;
+                return;
+            }
+
+            // 动画路径: 从**当前有效色**(含上一段动画的当前帧)插值到目标色。
+            // ★★★ 必须显式给 From, 且**不要**先 BeginAnimation(null):
+            //   先清动画会让属性立刻回落到"建笔刷时那个基准色", 而不是停在屏幕上正在显示的色,
+            //   于是"实色 → 透明"会变成生硬跳变(而不是淡出)。
+            //   带 From/To 的新动画直接替换旧动画, 不依赖基准值 —— 这正是 WPF 的 snapshot-and-replace 用法。
+            var from = _acrylicBaseBrush.Color;   // 有动画时读到的就是当前帧的插值结果
+            _acrylicBaseBrush.BeginAnimation(SolidColorBrush.ColorProperty,
+                new ColorAnimation(from, target, AcrylicBaseFadeDuration)
+                {
+                    FillBehavior = FillBehavior.HoldEnd,
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                });
+        }
+        catch
+        {
+            // 取不到资源/挂不上动画都不致命: 顶多这次不做过渡
+        }
+    }
+
+    /// <summary>卸掉底色笔刷上的动画并清空载体(关亚克力、或要走"直接给底色"那条路时调)</summary>
+    private void StopAcrylicBaseAnimation()
+    {
+        if (_acrylicBaseBrush == null) return;
+        _acrylicBaseBrush.BeginAnimation(SolidColorBrush.ColorProperty, null);
+        _acrylicBaseBrush = null;
+    }
+
+    /// <summary>当前主题的窗口实色底(单一样本来处: 色板里的 WindowSolid*Brush)</summary>
+    private Color ThemeWindowSolidColor()
+        => FindResource(ThemeService.Instance.IsDark ? "WindowSolidDarkBrush" : "WindowSolidLightBrush")
+           is SolidColorBrush scb
+            ? scb.Color
+            : (ThemeService.Instance.IsDark
+                ? Color.FromRgb(0x20, 0x20, 0x20)     // 兜底值, 与 Colors.Dark.xaml 一致
+                : Color.FromRgb(0xF3, 0xF3, 0xF3));   // 兜底值, 与 Colors.Light.xaml 一致
+
+    /// <summary>
+    /// 置 true 可让"失焦换底色"这套处理停手。
+    ///
+    /// ★ 播放器**全屏**时必须是 true: 全屏画面之外的所有缝隙都要求是纯黑
+    ///   (见 PlayerWindow.ApplyFullscreenLayout 里对 Background / RootGrid 的赋值),
+    ///   而全屏途中窗口失焦(比如点到别的显示器)会被失焦逻辑改成主题色 ⇒ 缝隙一片浅色。
+    /// </summary>
+    protected bool SuppressAcrylicActivationSwap { get; set; }
+
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        // animate: true —— 焦点变化走 150ms 淡入(用户要求的"更平滑")
+        if (_acrylicActive) UpdateAcrylicWindowBase(true, animate: true);
+    }
+
+    protected override void OnDeactivated(EventArgs e)
+    {
+        base.OnDeactivated(e);
+        if (_acrylicActive) UpdateAcrylicWindowBase(false, animate: true);
     }
 
     protected override void OnClosed(EventArgs e)

@@ -576,6 +576,8 @@ public class ApiClient
                 detail.FavoriteCount = GetLong(st, "favorite");
                 detail.ShareCount = GetLong(st, "share");
             }
+            // 用户互动状态(登录后才有): 是否已投币
+            detail.HasCoined = GetInt(d, "coin") == 1;
             detail.Aid = GetLong(d, "aid");
             detail.Pubdate = GetLong(d, "pubdate");
 
