@@ -160,6 +160,10 @@
                 <!-- 直播放在排行榜右侧, 顺序就是需求要的"排行榜右侧" -->
                 <RadioButton x:Name="LiveTab" Style="{StaticResource UnderlineTabStyle}"
                              Content="直播" Margin="4,0,0,0" />
+                <!-- 追番放最后(与参考图里"直播 推荐 热门 追番 影视"把追番排在热门之后的次序一致;
+                     影视那栏需要影视(追剧)数据源, 本页只做了番剧, 没有占一个点不动的标签) -->
+                <RadioButton x:Name="BangumiTab" Style="{StaticResource UnderlineTabStyle}"
+                             Content="追番" Margin="4,0,0,0" />
             </StackPanel>
 
             <!-- 选中下划线: 固定 20x3 的圆角短线。宽度写死有两个好处: 与参考图里"线比文字短"的比例一致,
@@ -494,7 +498,135 @@
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
+
+            <!-- ===== 追番 =====
+                 与其它四个 tab 的结构不同: 这里是**三段分区**(我的追番 / 番剧推荐 / 国创推荐),
+                 不是一条一拉到底的列表。所以它不接 DeferredFill 那套单列表分帧填充
+                 (三段各自有 ItemsControl, 没有"一个列表"可填), 但下划线、滚动定位、
+                 刷新滚回顶部仍按 tab 统一处理(见 HomePage.xaml.cs 的 HomeTabKind.Bangumi)。
+
+                 海报是**竖版 3:4**, 所以三面墙都挂 Aspect="0.75" —— 卡片只读 CoverHeight,
+                 高度由 CardWall 按这个比例算(见 Helpers/CardWall.cs 的 Aspect)。 -->
+            <ScrollViewer x:Name="BangumiScroll" VerticalScrollBarVisibility="Auto"
+                          ScrollChanged="BangumiScroll_OnScrollChanged"
+                          Visibility="{Binding IsBangumiTab, Converter={StaticResource BoolToVis}}">
+                <StackPanel Margin="0,0,0,250">
+
+                    <Border Margin="20,4,20,0" Padding="14,10" CornerRadius="8"
+                            Background="{DynamicResource InfoBarBackgroundBrush}"
+                            BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"
+                            Visibility="{Binding Error, Converter={StaticResource StrToVis}}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE7BA;" Foreground="{DynamicResource AccentTextBrush}"
+                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="14" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding Error}" Margin="10,0,0,0"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
+                                    Margin="16,0,0,0" Padding="10,4"
+                                    Click="OnRefreshClick" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ===== 我的追番 =====
+                         ★ 右边原先有个「我的追番 ›」按钮(跳 B 站网页版), 已按用户要求删除:
+                           跳出原生体验。列表本身走滚动加载, 不需要"查看全部"这种出口。 -->
+                    <!-- 标题 + 当前条数。条数不是装饰: 用户报"一直往下滑都在重复"时, 最难排的
+                         就是"到底加载了没有" —— 把数字摆在标题旁边, 一眼就能看出加载更多生没生效。
+                         MyBangumiCountText 是计算属性, 集合一变就 OnPropertyChanged, 无需手动同步。 -->
+                    <StackPanel Orientation="Horizontal" Margin="20,18,20,0">
+                        <TextBlock Text="我的追番" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock Text="{Binding MyBangumiCountText}" Margin="8,0,0,0"
+                                   VerticalAlignment="Bottom" FontSize="13" Opacity="0.6"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </StackPanel>
+
+                    <!-- 没登录 / 一部都没追: 说清楚为什么是空的, 而不是留一片白 -->
+                    <TextBlock Text="{Binding MyBangumiHint}" Margin="20,12,0,0"
+                               FontSize="12" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               Visibility="{Binding MyBangumiHint, Converter={StaticResource StrToVis}}" />
+
+                    <ItemsControl x:Name="MyBangumiList" ItemsSource="{Binding MyBangumi}"
+                                  Visibility="{Binding HasMyBangumi, Converter={StaticResource BoolToVis}}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <helpers:CardWallPanel helpers:CardWall.Enable="True"
+                                                        helpers:CardWall.Aspect="0.75" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <controls:BangumiCard />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- ===== 番剧推荐 ===== -->
+                    <StackPanel Orientation="Horizontal" Margin="20,28,20,0">
+                        <TextBlock Text="番剧推荐" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock Text="{Binding BangumiRecommendCountText}" Margin="8,0,0,0"
+                                   VerticalAlignment="Bottom" FontSize="13" Opacity="0.6"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </StackPanel>
+
+                    <ItemsControl x:Name="BangumiRecommendList" ItemsSource="{Binding BangumiRecommend}"
+                                  Visibility="{Binding HasBangumiRecommend, Converter={StaticResource BoolToVis}}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <helpers:CardWallPanel helpers:CardWall.Enable="True"
+                                                        helpers:CardWall.Aspect="0.75" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <controls:BangumiCard />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- ===== 国创推荐 ===== -->
+                    <StackPanel Orientation="Horizontal" Margin="20,28,20,0">
+                        <TextBlock Text="国创推荐" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock Text="{Binding GuochuangRecommendCountText}" Margin="8,0,0,0"
+                                   VerticalAlignment="Bottom" FontSize="13" Opacity="0.6"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </StackPanel>
+
+                    <ItemsControl x:Name="GuochuangRecommendList" ItemsSource="{Binding GuochuangRecommend}"
+                                  Visibility="{Binding HasGuochuangRecommend, Converter={StaticResource BoolToVis}}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <helpers:CardWallPanel helpers:CardWall.Enable="True"
+                                                        helpers:CardWall.Aspect="0.75" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <controls:BangumiCard />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <StackPanel Margin="0,18,0,28" HorizontalAlignment="Center">
+                        <StackPanel Orientation="Horizontal"
+                                    Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
+                            <controls:LoadingRing Width="18" Height="18" />
+                            <TextBlock Text="加载中…" Margin="8,0,0,0"
+                                       VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
+                        </StackPanel>
+                        <!-- 手动加载更多。与热门 tab 同款按钮, 但显隐绑 BangumiHasMore:
+                             翻完了就换「已经到底啦」, 免得用户对着一个点了没反应的按钮干等。 -->
+                        <Button Content="加载更多" Style="{StaticResource SubtleButtonStyle}"
+                                Command="{Binding LoadMoreCommand}"
+                                Visibility="{Binding BangumiHasMore, Converter={StaticResource BoolToVis}}" />
+                        <TextBlock Text="已经到底啦" Style="{StaticResource MetaTextStyle}"
+                                   Visibility="{Binding BangumiHasMore, Converter={StaticResource InvBoolToVis}}" />
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
+
 
         <!-- ===== 搜索遮罩 =====
              展开期间它把整页盖住: 点页面上任何地方(而不是输入框 / 词条)都算"点外面", 收起卡片。

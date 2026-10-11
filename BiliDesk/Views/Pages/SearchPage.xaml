@@ -6,11 +6,12 @@
              Background="{DynamicResource AppBackgroundBrush}"
              PreviewMouseDown="OnPagePreviewMouseDown">
     <Grid>
-        <!-- ===== 搜索类别(视频 / 直播间): 左上角常驻 =====
+        <!-- ===== 搜索类别(视频 / 直播间 / 番剧): 左上角常驻 =====
              2026-10-03 用户要求把它从搜索卡内部挪到页面左上角 —— 搜索框聚焦才展开,
              类别不该藏在里面。白椭圆底 + 投影, 与收藏页夹子条同一形态。
-             两类内容来自**完全不同的接口**(search_type=video / live_room),
-             切换时必须重搜一次 —— 由 VM 的 Kind setter 负责。 -->
+             三类内容来自**完全不同的接口**(search_type=video / live_room / bangumi),
+             切换时必须重搜一次 —— 由 VM 的 Kind setter 负责。
+             ★ 番剧这一档是 2026-10-11 用户要求加的。 -->
         <Border HorizontalAlignment="Left" VerticalAlignment="Top"
                 Margin="36,24,0,0" Panel.ZIndex="5"
                 Background="{DynamicResource CardBackgroundBrush}"
@@ -25,6 +26,9 @@
                 <RadioButton GroupName="SearchKind" Style="{StaticResource SettingsTabStyle}"
                              Content="直播间" Margin="2,0,0,0"
                              IsChecked="{Binding IsLiveKind, Mode=TwoWay}" />
+                <RadioButton GroupName="SearchKind" Style="{StaticResource SettingsTabStyle}"
+                             Content="番剧" Margin="2,0,0,0"
+                             IsChecked="{Binding IsBangumiKind, Mode=TwoWay}" />
             </StackPanel>
         </Border>
 
@@ -85,7 +89,9 @@
                 <ScrollViewer x:Name="ResultScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
                               ScrollChanged="OnResultScrollChanged">
                     <StackPanel>
-                        <ItemsControl ItemsSource="{Binding Results}">
+                        <!-- 视频 / 直播间结果 -->
+                        <ItemsControl ItemsSource="{Binding Results}"
+                                      Visibility="{Binding IsBangumiSearch, Converter={StaticResource InvBoolToVis}}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <helpers:CardWallPanel helpers:CardWall.Enable="True" />
@@ -94,6 +100,26 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <controls:VideoCard />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!-- 番剧结果(2026-10-11 新增)。
+                             ★ 用**海报卡 + Aspect=0.75**: 番剧封面是竖版, 套 16:9 的视频卡会被压扁。
+                             ★ 与上面那个列表是**两个 ItemsControl** 而不是靠模板切换 ——
+                               两者的 DataContext 类型就不同(BangumiItem vs VideoItem),
+                               一个 ItemTemplate 没法同时伺候两种。 -->
+                        <ItemsControl ItemsSource="{Binding BangumiResults}"
+                                      Visibility="{Binding IsBangumiSearch, Converter={StaticResource BoolToVis}}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <helpers:CardWallPanel helpers:CardWall.Enable="True"
+                                                            helpers:CardWall.Aspect="0.75" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <controls:BangumiCard />
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>

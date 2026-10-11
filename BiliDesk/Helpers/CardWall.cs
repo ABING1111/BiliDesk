@@ -124,6 +124,25 @@ public static class CardWall
 
     public static double GetCoverHeight(DependencyObject d) => (double)d.GetValue(CoverHeightProperty);
 
+    /// <summary>
+    /// 墙的**内容宽高比**(宽 ÷ 高)。默认 16/9 —— 视频封面是横的。
+    ///
+    /// 番剧海报是竖的(3/4), 所以那面墙挂 <c>Aspect="0.75"</c>:
+    /// <see cref="ApplyTo"/> 里的封面高度是按这个比算出来的, 卡片只管读 CoverHeight。
+    ///
+    /// ★ 为什么把它做成墙上的附加属性, 而不是让海报卡自己按宽度算高度:
+    ///   海报卡在 XAML 里拿不到"我这一列有多宽"(那是 WrapPanel 算完才写下的继承属性),
+    ///   而 CoverHeight 正是为此存在的继承属性。多一个 Aspect 只是把同一个算式参数化,
+    ///   两类卡片共用同一套"按宽度铺满"的逻辑, 不用各写一份。
+    /// </summary>
+    public static readonly DependencyProperty AspectProperty =
+        DependencyProperty.RegisterAttached(
+            "Aspect", typeof(double), typeof(CardWall),
+            new PropertyMetadata(16.0 / 9.0));
+
+    public static double GetAspect(DependencyObject d) => (double)d.GetValue(AspectProperty);
+    public static void SetAspect(DependencyObject d, double value) => d.SetValue(AspectProperty, value);
+
     /// <summary>上次算出来的列数(迟滞要用它当起点; 0 = 还没算过)</summary>
     private static readonly DependencyProperty ColumnsProperty =
         DependencyProperty.RegisterAttached("Columns", typeof(int), typeof(CardWall),
@@ -225,7 +244,12 @@ public static class CardWall
         // 所以按**每列 1 DIP** 预留: 最多损失 cols 个 DIP(肉眼不可辨), 换"算几列就真的排几列"。
         var slot = Math.Floor((avail - cols * RoundSlack) / cols);
         var item = Math.Max(80.0, slot - Gap);
-        var cover = Math.Round(item * 9.0 / 16.0);
+
+        // 封面高度 = 槽宽 ÷ 内容宽高比。默认 16/9 得到历史上的 132; 番剧海报墙传 0.75 得到 3:4。
+        // 比值非法(0 / 负数 / NaN)时退回 16/9 —— 封面高度 0 会让整排卡片塌成一条线。
+        var aspect = GetAspect(wall);
+        if (double.IsNaN(aspect) || aspect <= 0.01) aspect = 16.0 / 9.0;
+        var cover = Math.Round(item / aspect);
 
         // 值真的变了才写。拖动窗口时 SizeChanged 每帧都进来，而宽度大部分时候没变到"跨过整数像素"，
         // 无条件 SetValue 会让这个可继承属性每帧都广播一次子树。

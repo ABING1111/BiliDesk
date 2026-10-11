@@ -131,6 +131,42 @@ public class NavigationDispatcher
     }
 
     /// <summary>
+    /// 打开番剧选集页。
+    ///
+    /// 与 <see cref="OpenUserSpace"/> 同款做法: 在**主窗口内容区里内嵌打开**(盖一层带返回
+    /// 按钮的页面), 而不是另开独立窗口 —— 追番页点进来就是"在当前上下文里看这一季的选集",
+    /// 另开窗口会让人失去"我正在看追番列表"的方位感。
+    ///
+    /// 主窗口不可用时(应用正在退出的边缘场景)退回新开窗口, 与 OpenUserSpace 一致。
+    /// </summary>
+    public void OpenBangumi(BiliDesk.Models.BangumiItem item)
+    {
+        if (item == null || item.SeasonId <= 0) return;
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            var page = new BangumiPage(item);
+
+            var main = SvcWindow.Main;
+            if (main != null && main.IsLoaded)
+            {
+                main.ShowEmbeddedPage(page, item.Title);
+                return;
+            }
+
+            var host = new Window
+            {
+                Title = item.Title,
+                Width = 980,
+                Height = 720,
+                Background = ThemeBackground(),
+                Content = page
+            };
+            host.Owner = _owner;
+            host.Show();
+        });
+    }
+
+    /// <summary>
     /// 取当前主题对应的窗口底色。
     /// 这两个宿主窗口原先写死 WindowSolidLightBrush, 深色模式下会闪出一块白色底。
     /// </summary>

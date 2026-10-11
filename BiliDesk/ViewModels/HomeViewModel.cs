@@ -9,15 +9,16 @@ using BiliDesk.Services;
 
 namespace BiliDesk.ViewModels;
 
-/// <summary>首页 ViewModel: 推荐 + 热门 + 排行榜 + 直播 四个 tab</summary>
+/// <summary>首页 ViewModel: 推荐 + 热门 + 排行榜 + 直播 + 追番 五个 tab</summary>
 public class HomeViewModel : ObservableObject
 {
-    // 默认 tab 是「推荐」, 四个可见性标志的初值必须与之一致 ——
+    // 默认 tab 是「推荐」, 五个可见性标志的初值必须与之一致 ——
     // 否则首帧会先把「热门」的空列表显示出来, 再被 RadioButton 的默认选中切走。
     private bool _isPopularTab;
     private bool _isRecommendTab = true;
     private bool _isRankingTab;
     private bool _isLiveTab;
+    private bool _isBangumiTab;
     private bool _loading;
     private bool _loadingMore;
     private bool _rankingBlocked;
@@ -34,6 +35,7 @@ public class HomeViewModel : ObservableObject
     public bool IsRecommendTab { get => _isRecommendTab; set => SetProperty(ref _isRecommendTab, value); }
     public bool IsRankingTab { get => _isRankingTab; set => SetProperty(ref _isRankingTab, value); }
     public bool IsLiveTab { get => _isLiveTab; set => SetProperty(ref _isLiveTab, value); }
+    public bool IsBangumiTab { get => _isBangumiTab; set => SetProperty(ref _isBangumiTab, value); }
     public bool Loading { get => _loading; private set => SetProperty(ref _loading, value); }
     public bool LoadingMore { get => _loadingMore; private set => SetProperty(ref _loadingMore, value); }
     public bool RankingBlocked { get => _rankingBlocked; private set => SetProperty(ref _rankingBlocked, value); }
@@ -54,6 +56,12 @@ public class HomeViewModel : ObservableObject
     public ICommand RefreshCommand { get; }
     public ICommand LoadMoreCommand { get; }
     public ICommand OpenRankingWebCommand { get; }
+
+    // ★ 原先这里有 OpenMyBangumiWebCommand / OpenBangumiWebCommand(跳 B 站网页版的
+    //   「我的追番」「番剧分区」「国创分区」), 已按用户要求删除(2026-10-11):
+    //   把用户从原生体验里拽出去, 影响观感。追番页三个区块改为纯标题 + 滚动加载,
+    //   不再需要"查看全部"这种出口。排行榜那个网页版回退入口**保留** ——
+    //   它是接口被风控拦掉(-352)时的**唯一**出路, 不是"锦上添花的跳转"。
 
     public HomeViewModel()
     {
@@ -85,6 +93,18 @@ public class HomeViewModel : ObservableObject
         // 网页版"算法时清空重拉。算法选择已整体删除(固定网页版), 订阅自然也没了意义。
 
         RefreshGreeting();
+
+        // 登录状态变了, 「我的追番」那一栏的可用性也跟着变 —— 已经拉到的列表要清掉,
+        // 否则退出登录后首页还挂着上一个账号的追番。切回追番页时会重新拉。
+        Svc.Session.Changed += OnSessionChanged;
+    }
+
+    private void OnSessionChanged()
+    {
+        MyBangumi.Clear();
+        BangumiHint = "";
+        OnPropertyChanged(nameof(HasMyBangumi));
+        OnPropertyChanged(nameof(MyBangumiHint));
     }
 
     // ----------------- 问候语 -----------------
@@ -169,6 +189,12 @@ public class HomeViewModel : ObservableObject
             LiveHasMore = true;
             await LoadLiveAsync(reset: true);
         }
+        else if (IsBangumiTab)
+        {
+            _bangumiPage = 1;
+            _bangumiHasMore = true;
+            await LoadBangumiAsync(reset: true);
+        }
     }
 
     /// <summary>切到热门 tab</summary>
@@ -206,7 +232,245 @@ public class HomeViewModel : ObservableObject
         await LoadLiveAsync(reset: true);
     }
 
-    private enum PageTab { Recommend, Popular, Ranking, Live }
+    // ----------------- 追番 -----------------
+
+    /// <summary>「我的追番」。没登录时为空 —— 界面上换成"登录后查看", 不假装有内容。</summary>
+    public ObservableCollection<BangumiItem> MyBangumi { get; } = new();
+
+    /// <summary>番剧推荐(season_type = 1)</summary>
+    public ObservableCollection<BangumiItem> BangumiRecommend { get; } = new();
+
+    /// <summary>国创推荐(season_type = 4)</summary>
+    public ObservableCollection<BangumiItem> GuochuangRecommend { get; } = new();
+
+    public bool HasMyBangumi => MyBangumi.Count > 0;
+    public bool HasBangumiRecommend => BangumiRecommend.Count > 0;
+    public bool HasGuochuangRecommend => GuochuangRecommend.Count > 0;
+
+    /// <summary>未登录时「我的追番」那一栏显示的提示</summary>
+    public string MyBangumiHint
+    {
+        get
+        {
+            if (Svc.Session.HasLogin)
+                return MyBangumi.Count > 0 ? "" : "还没有追过番, 去 B 站追几部吧";
+            return "登录 B 站账号即可查看「我的追番」";
+        }
+    }
+
+    private bool _bangumiLoading;
+    private int _bangumiPage = 1;
+    private bool _bangumiHasMore = true;
+
+    /// <summary>切到追番 tab</summary>
+    public async Task SwitchToBangumiAsync()
+    {
+        SetTab(PageTab.Bangumi);
+        Error = "";
+        // ★★ 不再"每次切回来都从头重拉"(2026-10-11 用户报"一直往下滑都在重复"后改的)。
+        //
+        //   原策略照搬了直播的"实时内容每次重拉", 但推荐番剧不是实时内容, 而且重拉会
+        //   **Clear 掉已经翻到的页**, 用户滚了半天再切一下回来又看到最开头那 25 部 ——
+        //   观感就是"一直在重复同样的几部"。
+        //
+        //   现在: 首次进来才拉; 之后切回来直接用已加载的内容。真正要更新内容用工具栏的
+        //   「刷新」(那条路仍然走 reset:true)。
+        if (BangumiRecommend.Count > 0 || GuochuangRecommend.Count > 0) return;
+        _bangumiPage = 1;
+        _bangumiHasMore = true;
+        await LoadBangumiAsync(reset: true);
+    }
+
+    /// <summary>
+    /// 追番页当前**用户看得见的那一段**(由 HomePage 在滚动时写入)。
+    ///
+    /// ★★★ 这是修"往下滑只能刷新国番 / 页面会往上跳"的根因(2026-11):
+    ///   番剧推荐排国创推荐**上方**, 而接口一页返回的是番剧+国创的**混合**数据,
+    ///   按 season_type 分流后两栏同时追加 —— 于是往下滑(视口在国创栏)时, 新增的番剧卡
+    ///   被插到**视口上方**: 用户看不见番剧栏增长(观感"只能刷新国番"), 同时 ScrollViewer
+    ///   的偏移不变而内容在上方变长, 视口被顶回**已经看过的**位置(观感"页面往上移动")。
+    ///   ⇒ 同一个根因, 两个现象。
+    ///
+    /// ⇒ 规则: **只往用户当前看得见的那一段追加**, 另一段冻结。
+    ///   追加位置因此永远在视口下方, 既看得见增长, 也不会把视口顶回去。
+    /// </summary>
+    public enum BangumiSection
+    {
+        /// <summary>还没进入任何一段(刚进页面)。按"番剧推荐"处理</summary>
+        None,
+        /// <summary>「我的追番」—— 固定内容, 不翻页; 滚到底后目标自动顺延到「番剧推荐」</summary>
+        My,
+        /// <summary>「番剧推荐」(season_type != 4)</summary>
+        Recommend,
+        /// <summary>「国创推荐」(season_type == 4)</summary>
+        Guochuang,
+    }
+
+    private BangumiSection _bangumiActiveSection = BangumiSection.None;
+
+    /// <summary>
+    /// 追番页当前正在看的那一段。滚动时由 code-behind 更新, <see cref="LoadMoreAsync"/>
+    /// 据此决定往哪一栏追加。**不参与任何 UI 绑定**, 所以更新它不会引起界面重算。
+    /// </summary>
+    public BangumiSection ActiveBangumiSection
+    {
+        get => _bangumiActiveSection;
+        set => SetProperty(ref _bangumiActiveSection, value);
+    }
+
+    /// <summary>
+    /// 「加载更多」实际要往哪一栏追加。
+    ///
+    /// ★ 「我的追番」那一栏是固定的(接口有 pn/ps, 但这一页没有"看更多"的诉求),
+    ///   停在它上面时不能什么都不做 —— 用户会以为到底了。顺延到「番剧推荐」。
+    /// ★ 「国创推荐」是最后一栏, 也是默认的目标(初始加载就是它先长起来)。
+    /// </summary>
+    private BangumiSection LoadTargetSection =>
+        _bangumiActiveSection == BangumiSection.Guochuang
+            ? BangumiSection.Guochuang
+            : BangumiSection.Recommend;
+
+    /// <summary>追番页是否还有下一页可加载(供「加载更多」按钮显隐)</summary>
+    public bool BangumiHasMore => _bangumiHasMore;
+
+    /// <summary>
+    /// 三栏标题旁的条数(空集合时为空串, 界面据此把这一段藏掉)。
+    ///
+    /// ★ 这是**可观测性**, 不是装饰: 2026-10-11 用户报"往下滑一直在重复",
+    ///   而接口/集合/布局三层探针全查过都是干净的 —— 当时缺的就是一个能让用户
+    ///   一眼看出"加载到底生效没有"的信号。数字直接摆在标题旁边。
+    /// </summary>
+    public string MyBangumiCountText => MyBangumi.Count > 0 ? $"({MyBangumi.Count})" : "";
+    public string BangumiRecommendCountText => BangumiRecommend.Count > 0 ? $"({BangumiRecommend.Count})" : "";
+    public string GuochuangRecommendCountText => GuochuangRecommend.Count > 0 ? $"({GuochuangRecommend.Count})" : "";
+
+    /// <summary>
+    /// 拉追番页的三块内容。
+    ///
+    /// ★ 三块是**两次请求**: 「我的追番」要 vmid(登录才知道), 番剧/国创推荐是一个不筛分类的
+    ///   混合接口。推荐那一次拉回来后按 season_type 就地分进两个集合。
+    ///
+    /// ★ 分栏**必须**在客户端做: 推荐接口的 season_type 参数实测不生效(传 1 和传 4
+    ///   返回同一批), 真正的分类在每一项自己的 season_type 里。见 ApiClient.GetBangumiRecommendAsync。
+    /// </summary>
+    private async Task LoadBangumiAsync(bool reset = false)
+    {
+        if (_bangumiLoading) return;
+        _bangumiLoading = true;
+        Loading = true;
+        Error = "";
+        if (reset) BangumiHint = "";
+        try
+        {
+            // ---- 我的追番(失败不牵连推荐: 推荐是公开接口, 不该被一个登录态问题拖掉) ----
+            if (reset && MyBangumi.Count == 0)
+            {
+                var mid = await CurrentMidAsync();
+                if (mid > 0)
+                {
+                    var (mOk, mErr, mine) = await Svc.Api.GetMyBangumiAsync(mid);
+                    if (!mOk && !string.IsNullOrEmpty(mErr))
+                        // 追番失败只在该栏提示, 不设全局 Error —— 否则整页盖一条红条,
+                        // 而下面的推荐其实是好的
+                        BangumiHint = mErr;
+                    if (mine != null)
+                    {
+                        MyBangumi.Clear();
+                        foreach (var it in mine) MyBangumi.Add(it);
+                    }
+                }
+            }
+
+            // ---- 番剧 / 国创推荐(一次请求, 就地分流) ----
+            var (ok, err, items, hasNext) =
+                await Svc.Api.GetBangumiRecommendAsync(_bangumiPage);
+
+            // ★★ **只在翻页追加时**才往目标栏追加, 另一栏的数据整批丢弃
+            //   (2026-11 修"往下滑只能刷新国番")。原因见 ActiveBangumiSection 的说明:
+            //   两栏同时追加会把番剧卡插到视口**上方**, 看不见增长 + 视口被顶回已看过的位置。
+            //   丢掉的那些不是真丢: 接口每页都有十几条目标类型的数据, 翻几页就攒够了。
+            //
+            // ★ reset(首拉/刷新)**不分流**: 那时整页重建, 视口本来就在最上方,
+            //   不存在"插到视口上方"的问题; 而且用户期望一进来三段都有内容。
+            var target = reset ? BangumiSection.None : LoadTargetSection;
+            var wantGuochuang = target == BangumiSection.Guochuang;
+            var onlyOneSection = target != BangumiSection.None;
+
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                Loading = false;
+                if (!ok || items == null)
+                {
+                    Error = err ?? "加载番剧推荐失败";
+                    return;
+                }
+
+                if (reset)
+                {
+                    BangumiRecommend.Clear();
+                    GuochuangRecommend.Clear();
+                }
+                foreach (var it in items)
+                {
+                    // 翻页时才按目标栏过滤; reset 时两栏都收(见上面 target 的说明)
+                    if (onlyOneSection && it.IsGuochuang != wantGuochuang) continue;
+                    // 去重: 翻页时同一季可能重复出现(接口不保证唯一)
+                    if (it.IsGuochuang) AddDistinct(GuochuangRecommend, it);
+                    else AddDistinct(BangumiRecommend, it);
+                }
+                _bangumiHasMore = hasNext;
+
+                OnPropertyChanged(nameof(HasMyBangumi));
+                OnPropertyChanged(nameof(HasBangumiRecommend));
+                OnPropertyChanged(nameof(HasGuochuangRecommend));
+                OnPropertyChanged(nameof(MyBangumiHint));
+                OnPropertyChanged(nameof(BangumiHasMore));
+                // 每栏标题旁的条数: 让"加载更多有没有生效"**看得见**。
+                // 用户报"一直重复"时最难排的就是"到底加载了没有" —— 有个数字就一目了然。
+                OnPropertyChanged(nameof(MyBangumiCountText));
+                OnPropertyChanged(nameof(BangumiRecommendCountText));
+                OnPropertyChanged(nameof(GuochuangRecommendCountText));
+            });
+        }
+        catch (Exception ex)
+        {
+            Loading = false;
+            Error = ex.Message;
+        }
+        finally
+        {
+            _bangumiLoading = false;
+        }
+    }
+
+    private string _bangumiHint = "";
+    /// <summary>「我的追番」那一栏自己的一条小提示(如隐私设置/拉取失败)</summary>
+    public string BangumiHint
+    {
+        get => _bangumiHint;
+        private set
+        {
+            if (SetProperty(ref _bangumiHint, value))
+                OnPropertyChanged(nameof(MyBangumiHint));
+        }
+    }
+
+    private static void AddDistinct(ObservableCollection<BangumiItem> target, BangumiItem item)
+    {
+        foreach (var existing in target)
+            if (existing.SeasonId == item.SeasonId) return;
+        target.Add(item);
+    }
+
+    /// <summary>当前登录用户的 uid(取不到就是 0 = 未登录)。追番接口要 vmid。</summary>
+    private async Task<long> CurrentMidAsync()
+    {
+        if (!Svc.Session.HasLogin) return 0;
+        var (_, _, user) = await Svc.Api.GetUserStateAsync();
+        return user is { IsLogin: true } ? user.Mid : 0;
+    }
+
+    private enum PageTab { Recommend, Popular, Ranking, Live, Bangumi }
 
     private void SetTab(PageTab tab)
     {
@@ -214,6 +478,7 @@ public class HomeViewModel : ObservableObject
         IsPopularTab = tab == PageTab.Popular;
         IsRankingTab = tab == PageTab.Ranking;
         IsLiveTab = tab == PageTab.Live;
+        IsBangumiTab = tab == PageTab.Bangumi;
     }
 
     // ----------------- 直播 -----------------
@@ -369,6 +634,19 @@ public class HomeViewModel : ObservableObject
             if (!LiveHasMore) return;
             _livePage++;
             await LoadLiveAsync(reset: false);
+            return;
+        }
+
+        // 追番也是独立一条: 它的下一页判定是 _bangumiHasMore, 且 resume 语义是"追加到推荐两栏"。
+        // LoadingMore 必须在这里自己置位/复位: 它在走到下面的通用分支**之前**就 return 了,
+        // 而追番区底部那个"加载中…"转圈绑的就是 LoadingMore —— 不置位就永远看不见反馈。
+        if (IsBangumiTab)
+        {
+            if (!_bangumiHasMore) return;
+            _bangumiPage++;
+            LoadingMore = true;
+            try { await LoadBangumiAsync(reset: false); }
+            finally { LoadingMore = false; }
             return;
         }
 

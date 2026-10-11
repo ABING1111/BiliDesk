@@ -80,6 +80,49 @@ public class InverseBoolToCollapsedConverter : IValueConverter
 }
 
 /// <summary>
+/// 十六进制颜色字符串 => SolidColorBrush(番剧角标: 大会员粉 #FB7299 / 出品蓝 #00C0FF …)。
+///
+/// ★ 为什么不用 XAML 里的 <c>{Binding BadgeColor}</c> 直接喂给 Background:
+///   Brush 可以用类型转换器从 "#FB7299" 这样的字符串构造, 但**转换失败时抛的是
+///   运行时异常而不是绑定错误**, 而且是空值时才炸 —— 角标底色恰好经常是空的
+///   (接口有时只给 badge 文字不给 badge_info), 于是整个列表渲染直接崩掉。
+///   转换器把"解析不了"降级成 fallback 颜色, 比让绑定去抛异常稳得多。
+///
+/// 参数写法: <c>"#FB7299"</c> 作为参数给回退色; 解析不了就用它, 也不给就用参数里的默认值。
+/// </summary>
+public class HexToBrushConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        var fallback = (parameter as string) ?? "#FB7299";
+        var s = value as string;
+        if (string.IsNullOrWhiteSpace(s)) s = fallback;
+        try
+        {
+            var c = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(s.Trim());
+            // 冻结构造, 不然每张卡片每次刷新都会新建一个 Brush 实例
+            return new System.Windows.Media.SolidColorBrush(c);
+        }
+        catch
+        {
+            try
+            {
+                var c = (System.Windows.Media.Color)System.Windows.Media.ColorConverter
+                    .ConvertFromString(fallback);
+                return new System.Windows.Media.SolidColorBrush(c);
+            }
+            catch
+            {
+                return System.Windows.Media.Brushes.Gray;
+            }
+        }
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
+/// <summary>
 /// 按"档位"取一个值，供**非动画**用途（典型是 <c>UniformGrid.Columns</c>）。
 ///
 /// 参数写法：<c>"Compact=2|4"</c> —— 前半段是"当值等于 Compact 时用 2"，`|` 后面是其余档位的值。

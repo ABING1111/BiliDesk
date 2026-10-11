@@ -32,6 +32,9 @@ public class SearchViewModel : ObservableObject
 
     public ObservableCollection<VideoItem> Results { get; } = new();
 
+    /// <summary>番剧结果(2026-10-11 新增)。与 <see cref="Results"/> 互斥, 见 <see cref="ContentKind.Bangumi"/>。</summary>
+    public ObservableCollection<BangumiItem> BangumiResults { get; } = new();
+
     /// <summary>关键词。清空输入框时要顺带决定"要不要显示搜索历史", 所以这里是自定义 setter。</summary>
     public string Keyword
     {
@@ -47,9 +50,10 @@ public class SearchViewModel : ObservableObject
     public bool Blocked { get => _blocked; private set => SetProperty(ref _blocked, value); }
     public bool HasMore { get => _hasMore; private set => SetProperty(ref _hasMore, value); }
     public string Error { get => _error; private set => SetProperty(ref _error, value); }
-    public int ResultCount => Results.Count;
+    // ★ ResultCount 的定义在下面"搜索类别"一节里(它要按类别取不同的集合),
+    //   这里**不要**再写一个只看 Results 的版本, 否则会把它遮住。
 
-    // ---------------- 搜索类别(视频 / 直播间) ----------------
+    // ---------------- 搜索类别(视频 / 直播间 / 番剧) ----------------
 
     private ContentKind _kind = ContentKind.Video;
 
@@ -65,11 +69,13 @@ public class SearchViewModel : ObservableObject
             if (!SetProperty(ref _kind, value)) return;
             OnPropertyChanged(nameof(IsVideoKind));
             OnPropertyChanged(nameof(IsLiveKind));
+            OnPropertyChanged(nameof(IsBangumiKind));
             OnPropertyChanged(nameof(IdleHint));
+            OnPropertyChanged(nameof(ResultCount));
             // 换类别 = 换一套结果: 清空旧结果并重搜(没搜过关键词就只是清一下)
             _generation++;          // 让在途请求的结果作废, 免得旧类别的响应灌进新列表
             Results.Clear();
-            OnPropertyChanged(nameof(ResultCount));
+            BangumiResults.Clear(); // ★ 番剧也要清 —— 否则切回视频/直播时海报还挂在那儿
             Error = "";
             Blocked = false;
             HasMore = false;
@@ -78,7 +84,7 @@ public class SearchViewModel : ObservableObject
         }
     }
 
-    /// <summary>XAML 里两个 RadioButton 的绑定(IsChecked 只支持 bool, 所以给两个派生属性)</summary>
+    /// <summary>XAML 里三个 RadioButton 的绑定(IsChecked 只支持 bool, 所以给三个派生属性)</summary>
     public bool IsVideoKind
     {
         get => _kind == ContentKind.Video;
@@ -91,11 +97,50 @@ public class SearchViewModel : ObservableObject
         set { if (value) Kind = ContentKind.Live; }
     }
 
-    /// <summary>空状态提示语跟着类别走 —— "搜索你想看的视频"在直播类别下就说不通了</summary>
-    public string IdleHint => _kind == ContentKind.Live ? "输入关键词, 搜索你想看的直播间" : "输入关键词, 搜索你想看的视频";
+    /// <summary>番剧类别(2026-10-11 新增)</summary>
+    public bool IsBangumiKind
+    {
+        get => _kind == ContentKind.Bangumi;
+        set { if (value) Kind = ContentKind.Bangumi; }
+    }
+
+    /// <summary>当前类别是不是"结果走另一个集合"的番剧 —— 页面据此切列表</summary>
+    public bool IsBangumiSearch => _kind == ContentKind.Bangumi;
+
+    /// <summary>空状态提示语跟着类别走 —— "搜索你想看的视频"在直播/番剧类别下就说不通了</summary>
+    public string IdleHint => _kind switch
+    {
+        ContentKind.Live => "输入关键词, 搜索你想看的直播间",
+        ContentKind.Bangumi => "输入关键词, 搜索你想看的番剧",
+        _ => "输入关键词, 搜索你想看的视频"
+    };
+
+    /// <summary>番剧结果条数: 跟着类别取对应的集合, 否则番剧类别永远显示 0 条</summary>
+    public int ResultCount => IsBangumiSearch ? BangumiResults.Count : Results.Count;
+
+    /// <summary>
+    /// 番剧结果去重追加。
+    ///
+    /// ★ 不能直接用 <c>VideoList.AppendDistinct</c> —— 那个是按 <c>Bvid</c> 去重的,
+    ///   而番剧**没有 bvid**(它按 season_id 寻址), 拿 Bvid 去比会把每一条都当成"新的",
+    ///   等于完全没去重。所以这里按 season_id 自己写一份。
+    /// </summary>
+    private static void AppendBangumiDistinct(
+        ObservableCollection<BangumiItem> target, System.Collections.Generic.IEnumerable<BangumiItem> items)
+    {
+        foreach (var it in items)
+        {
+            var dup = false;
+            foreach (var existing in target)
+            {
+                if (existing.SeasonId == it.SeasonId) { dup = true; break; }
+            }
+            if (!dup) target.Add(it);
+        }
+    }
 
     /// <summary>是否为初始空状态(未搜索过)</summary>
-    public bool IsIdle => !Searching && _lastKeyword == null && Results.Count == 0;
+    public bool IsIdle => !Searching && _lastKeyword == null && Results.Count == 0 && BangumiResults.Count == 0;
 
     // ---------------- 搜索历史 ----------------
 
@@ -134,10 +179,13 @@ public class SearchViewModel : ObservableObject
         RetryCommand = new AsyncRelayCommand(SearchAsync);
         OpenWebSearchCommand = new RelayCommand(() =>
             Svc.Navigate?.OpenWebViewWindow(
-                // 网页版的搜索类型也分视频/直播, 跟着当前类别走才对得上
-                (_kind == ContentKind.Live
-                    ? "https://search.bilibili.com/live?keyword="
-                    : "https://search.bilibili.com/all?keyword=") + Uri.EscapeDataString(_lastKeyword ?? ""),
+                // 网页版的搜索类型也分视频/直播/番剧, 跟着当前类别走才对得上
+                (_kind switch
+                 {
+                     ContentKind.Live => "https://search.bilibili.com/live?keyword=",
+                     ContentKind.Bangumi => "https://search.bilibili.com/bangumi?keyword=",
+                     _ => "https://search.bilibili.com/all?keyword="
+                 }) + Uri.EscapeDataString(_lastKeyword ?? ""),
                 "搜索 - 网页版"));
 
         // 点历史标签 = 填回关键词再搜一次
@@ -190,7 +238,11 @@ public class SearchViewModel : ObservableObject
                 if (gen != _generation) return;   // 已经有更新的一次搜索接管了, 这份结果作废
                 Searching = false;
                 Results.Clear();
-                VideoList.AppendDistinct(Results, data.Items);
+                BangumiResults.Clear();
+                // ★ 两套集合按类别分流: 番剧结果在 data.BangumiItems, 不在 data.Items。
+                //   都往 Results 灌的话, 番剧那一类会是空的(点开又播不了, 本来也不该走播放)。
+                if (IsBangumiSearch) AppendBangumiDistinct(BangumiResults, data.BangumiItems);
+                else VideoList.AppendDistinct(Results, data.Items);
                 HasMore = data.HasMore;
                 Blocked = data.Blocked;
                 Error = data.Error ?? "";
@@ -237,7 +289,9 @@ public class SearchViewModel : ObservableObject
                     return;
                 }
                 _page = next;
-                VideoList.AppendDistinct(Results, data.Items);   // ★ 去重: 搜索排序会变, 同一稿件可能又给一遍
+                // ★ 同样按类别分流(见 SearchAsync 里那条注释): 翻页追加的也是各自那个集合。
+                if (IsBangumiSearch) AppendBangumiDistinct(BangumiResults, data.BangumiItems);
+                else VideoList.AppendDistinct(Results, data.Items);   // ★ 去重: 搜索排序会变, 同一稿件可能又给一遍
                 HasMore = data.HasMore;
                 OnPropertyChanged(nameof(ResultCount));
             });

@@ -1,0 +1,136 @@
+<UserControl x:Class="BiliDesk.Views.Controls.BangumiCard"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:behaviors="clr-namespace:BiliDesk.Helpers"
+             Width="{Binding (behaviors:CardWall.ItemWidth), RelativeSource={RelativeSource Self}}"
+             Margin="8,10"
+             Background="Transparent" Focusable="False"
+             MouseEnter="OnMouseEnter" MouseLeave="OnMouseLeave">
+    <!--
+        番剧海报卡(竖版 3:4), 与 VideoCard 是两个独立控件而不是同一个的变体:
+        两者除了比例不同, 角标语义也不同 —— 视频卡角标是播放量/时长, 番剧卡是
+        「独播 / 出品 / 大会员」+「全 N 话」。硬塞进 VideoItem 会把一堆只在
+        一边有意义的字段变成"另一边永远是 null"的可空属性。
+
+        宽度仍然继承自卡片墙(CardWall.ItemWidth), 高度读 CoverHeight —— 海报墙
+        挂 Aspect="0.75" 时那个高度就是按 3:4 算出来的(见 CardWall.Aspect)。
+    -->
+    <UserControl.Resources>
+        <!-- 角标随整卡悬停淡出, 与 VideoCard 的 CoverBadgeFadeStyle 同一套做法:
+             悬停时海报会放大, 压在上面的一排角标会挡住画面。 -->
+        <Style x:Key="PosterBadgeFade" TargetType="FrameworkElement">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                             Value="True">
+                    <DataTrigger.EnterActions>
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                 To="0" Duration="0:0:0.12" />
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </DataTrigger.EnterActions>
+                    <DataTrigger.ExitActions>
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                 To="1" Duration="0:0:0.18" />
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </DataTrigger.ExitActions>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="PosterTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True">
+                    <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="PosterSubStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+    </UserControl.Resources>
+
+    <UserControl.ContextMenu>
+        <ContextMenu>
+            <MenuItem Header="下载封面到本地" Click="OnDownloadCover">
+                <MenuItem.Icon>
+                    <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="13" VerticalAlignment="Center" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <!-- ★ 原先这里有「在浏览器中打开番剧主页」(走内置 WebView2), 已按用户要求删除:
+                 跳出去看网页版会把用户从原生体验里拽出来, 与"首页那三个查看全部"同一条去路。 -->
+        </ContextMenu>
+    </UserControl.ContextMenu>
+
+    <StackPanel x:Name="Root">
+        <!-- ===== 海报 =====
+             四个角标位与参考图一致:
+               右上 = 独播 / 出品 / 大会员(B 站自带色, 接口给)
+               左下 = 番剧 / 国创(分类)
+               右下 = 全 N 话 / 更新至 N 话
+             全部贴边, 悬停时和视频卡一样让角标淡出, 免得压在放大的画面上。 -->
+        <Border x:Name="CoverCard" CornerRadius="8" ClipToBounds="True"
+                Height="{Binding (behaviors:CardWall.CoverHeight),
+                                 RelativeSource={RelativeSource AncestorType=UserControl}}"
+                Background="{DynamicResource PlaceholderBrush}"
+                Cursor="Hand" MouseLeftButtonUp="OnClick">
+            <Grid>
+                <Border x:Name="CoverBox" CornerRadius="8" behaviors:Cover.Source="{Binding Cover}" />
+
+                <!-- 右上角标。角标底色来自接口(BadgeColor), 转不出来的退回大会员粉。 -->
+                <Border HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Margin="0,6,6,0" CornerRadius="4" Padding="5,2"
+                        Background="{Binding BadgeColor, Converter={StaticResource HexToBrush},
+                                    ConverterParameter=#FB7299}"
+                        Visibility="{Binding Badge, Converter={StaticResource StrToVis}}"
+                        Style="{StaticResource PosterBadgeFade}">
+                    <TextBlock Text="{Binding Badge}" FontSize="10" Foreground="White" />
+                </Border>
+
+                <!-- 左下: 分类(番剧 / 国创) -->
+                <Border HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                        Margin="6,0,0,6" CornerRadius="4" Padding="5,2"
+                        Background="#99000000"
+                        Style="{StaticResource PosterBadgeFade}">
+                    <TextBlock Text="{Binding SeasonTypeText}" FontSize="10" Foreground="#F2FFFFFF" />
+                </Border>
+
+                <!-- 右下: 更新进度 -->
+                <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                        Margin="0,0,6,6" CornerRadius="4" Padding="5,2"
+                        Background="#66000000"
+                        Visibility="{Binding CardSubText, Converter={StaticResource StrToVis}}"
+                        Style="{StaticResource PosterBadgeFade}">
+                    <TextBlock Text="{Binding CardSubText}" FontSize="10" Foreground="#F2FFFFFF" />
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- ===== 文字区: 标题 + 副标题(观看进度 / 更新进度) ===== -->
+        <StackPanel Margin="2,8,2,0">
+            <TextBlock x:Name="TitleText" Text="{Binding Title}"
+                       Style="{StaticResource PosterTitleStyle}"
+                       Cursor="Hand" MouseLeftButtonUp="OnClick"
+                       ToolTip="{Binding Title, Mode=OneWay}" />
+            <!-- 副标题优先显示"看到第 N 话"(用户最关心自己看到哪了), 空时退回"全 N 话"。
+                 ★ 上面右下角角标已经带了进度, 这里重复一次是刻意的: 参考图就是
+                   标题下面再写一行("看到第 12 话"), 角标那行是给扫视时用的。 -->
+            <TextBlock Text="{Binding Subtitle}" Style="{StaticResource PosterSubStyle}"
+                       Margin="0,6,0,0"
+                       Visibility="{Binding Subtitle, Converter={StaticResource StrToVis}}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

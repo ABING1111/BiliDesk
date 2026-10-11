@@ -488,6 +488,13 @@ public partial class PlayerWindow : FluentWindow
         _mp.Paused += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
         {
             if (_closing) return;
+            // ★ 弹幕时钟跟着视频冻结/解冻(用户要求"视频暂停时弹幕不动")。
+            //   ★ LibVLCSharp 的 `Paused` 事件签名是 **EventHandler<EventArgs>**(参数里没有
+            //     "新的暂停态"), 而 `MediaPlayer` 也**没有** `IsPaused` 属性 —— 只有 `IsPlaying`。
+            //     播完(EndReached)时 IsPlaying 同样为 false, 顺带把弹幕也停了, 正合需要。
+            //     这里的一次原生调用没问题 —— 暂停是低频事件, 与逐帧路径(必须零原生调用)
+            //     不在一条路上。
+            try { SetDanmakuClockRunning(_mp.IsPlaying); } catch { /* 原生对象可能已失效 */ }
             UpdatePlayButton();
             ShowControls();   // 暂停时控制栏常显(没有"遮挡内容"的问题, 且用户多半要操作)
         }));
@@ -795,6 +802,14 @@ public partial class PlayerWindow : FluentWindow
             if (SeasonLoadingRing != null) SeasonLoadingRing.Visibility = Visibility.Visible;
         }
         UpdateSeasonButtonState();
+
+        // 分P: 与合集同款处理 —— 换片先把上一片的分P 列表整个丢掉, 入口按钮也收起来,
+        // 等新详情到了由 ApplyPages 重新决定要不要露出来。
+        // 弹层强制关掉: 分P 弹层是 Popup(独立 HWND), 不关的话它会**浮在下一条视频上面**,
+        // 里面还是上一条的分P 列表 —— 而合集面板是窗口内的 Grid, 收起就跟着一起没了。
+        _pages = new List<VideoPage>();
+        _hasPages = false;
+        ClosePagesPopup();
     }
 
     /// <summary>
@@ -882,6 +897,8 @@ public partial class PlayerWindow : FluentWindow
         // (_currentSeasonEpisode / _season 是引用类型, 自检只审值类型与 string, 不在清单里;
         //  但它们在 ResetForNewMedia 里同样被清了 —— 清单只负责"别漏", 不负责穷举。)
         nameof(_hasSeason), nameof(_switchingSeasonEpisode),
+        // 分P 与合集是一对: 同样是"每片重算 + 换片闸门"。别只加一个漏一个。
+        nameof(_hasPages), nameof(_switchingPage),
     };
 
     /// <summary>
@@ -1014,7 +1031,14 @@ public partial class PlayerWindow : FluentWindow
 
     // ------------------------------------------------------------ 加载流程
 
-    private async Task LoadVideoAsync()
+    /// <summary>
+    /// 拉详情 → 取流 → 播放。
+    ///
+    /// ★ <paramref name="cid"/>: 指定要播的**分P**。0 = 走默认(pages[0])。
+    ///   分P 是同一个 bvid 切成几段, 换段只换 cid(见 SwitchToPageAsync),
+    ///   所以这里用参数传, 不去改 _currentBvid —— 改了会把弹幕/历史/三连的归属整个搞错。
+    /// </summary>
+    private async Task LoadVideoAsync(long cid = 0)
     {
         if (string.IsNullOrEmpty(_currentBvid)) return;
         ShowLoading("正在获取视频信息…");
@@ -1030,7 +1054,10 @@ public partial class PlayerWindow : FluentWindow
                 ShowFail(detailErr ?? "获取视频信息失败, 可能视频已删除或不可用");
                 return;
             }
-            _currentCid = detail.Cid;
+            // ★ cid 优先级: 调用方指定的分P > pages[0]。
+            //   合集换片那条路不传 cid(它是"换 bvid", 落回 pages[0] 与原行为完全一致),
+            //   分P 换段那条路传具体 cid。
+            _currentCid = cid > 0 ? cid : detail.Cid;
             _aid = detail.Aid;
             _ownerMid = detail.OwnerMid;
             _ownerName = detail.Owner;
@@ -1038,6 +1065,8 @@ public partial class PlayerWindow : FluentWindow
             // 合集数据在详情里就已经解析好了(见 ApiClient.GetVideoAsync), 这里零额外请求。
             // 放在 UpdateUiFromDetail 之后: 它要用刚设好的 _currentCid/_aid 来定位"当前是第几集"。
             ApplySeason(detail.Season);
+            // 分P 同理, 零额外请求。放在 ApplySeason 之后: 两者抢的是同一块信息栏, 后写的赢。
+            ApplyPages(detail.Pages);
 
             if (_currentCid <= 0)
             {
@@ -1071,8 +1100,16 @@ public partial class PlayerWindow : FluentWindow
 
             // ---- 短视频: 先合流成本地文件再播(它同时给到 1080P / 快跳转 / 完整结尾) ----
             // 顺序: 已缓存 -> 直接播本地; 没缓存 -> 就地下完再播(带进度); 下不动 -> 回落远端 DASH
-            var local = ShortVideoCache.TryGet(_currentBvid, actualQn);
-            if (local == null && ShortVideoCache.WorthCaching(remux))
+            //
+            // ★ 只在播**第一个 P** 时才碰本地缓存(2026-10-11 加分P时补的):
+            //   ShortVideoCache 的键只有 bvid, 不含 cid。多P 的短视频(每段都小于 150MB 上限,
+            //   比如一个视频切成几段 vlog)切到 P2 时会命中 P1 落盘的文件 —— 表现为
+            //   "换了集还是上一段的内容"。长视频(纪录片那种 90 分钟)本来就超预算走不到这里,
+            //   所以这个坑平时碰不到, 但短视频多P 一做分P 就会踩。
+            //   与其给缓存 API 加 cid 参数(要动文件命名/清理/落盘三处), 不如认准"只缓存首 P"。
+            var isFirstPage = cid <= 0 || cid == detail.Cid;
+            var local = isFirstPage ? ShortVideoCache.TryGet(_currentBvid, actualQn) : null;
+            if (local == null && isFirstPage && ShortVideoCache.WorthCaching(remux))
                 local = await PrepareShortVideoAsync(remux!, actualQn);
             if (_closing) return;
 
@@ -1282,12 +1319,34 @@ public partial class PlayerWindow : FluentWindow
         _remuxCts = null;
     }
 
+    /// <summary>
+    /// 当前分P 挂在标题后面的后缀, 如 <c>" - P12 S05E08 收获"</c>。
+    /// 不是多P 视频、或当前 cid 在 pages 里定位不上, 都返回空串(标题一个字不动)。
+    /// </summary>
+    private string CurrentPageSuffix(VideoDetail detail)
+    {
+        if (detail.Pages.Count <= 1 || _currentCid <= 0) return "";
+        foreach (var p in detail.Pages)
+            if (p.Cid == _currentCid)
+                return $" - P{p.Page} {p.DisplayTitle}";
+        return "";
+    }
+
     private void UpdateUiFromDetail(VideoDetail detail)
     {
-        TitleText.Text = detail.Title;
-        Title = detail.Title + " - BiliDesk";
+        // ★ 多P 时标题后面挂上"当前这一段"(2026-10-11):
+        //   40 段的纪录片每段标题都一样("克拉克son's农场 1-5季"), 不标出来用户根本分不清
+        //   自己在第几段, 切窗口(Alt-Tab)回来也是一脸茫然。官方网页版同样在标题里带 part。
+        //   单P 视频一个字符都不多写。
+        var pageSuffix = CurrentPageSuffix(detail);
+        var displayTitle = detail.Title + pageSuffix;
+
+        TitleText.Text = displayTitle;
+        Title = displayTitle + " - BiliDesk";
+        // ★ _videoTitle 保持**不含分P**: 它是要往历史/上报里写的视频名, 那是稿件的标题,
+        //   不是"我现在看到第几段"。混进去会让同一稿件在历史里出现几十条重名记录。
         _videoTitle = detail.Title;
-        VideoTitleText.Text = detail.Title;
+        VideoTitleText.Text = displayTitle;
         ViewCountText.Text = VideoItem.FormatCount(detail.ViewCount);
         DanmakuCountText.Text = VideoItem.FormatCount(detail.DanmakuCount);
         PubDateText.Text = detail.Pubdate > 0
@@ -2815,7 +2874,7 @@ public partial class PlayerWindow : FluentWindow
     // 现在把显示区域切成固定高度的"泳道"(lane), 每条滚动弹幕占据一条泳道;
     // 分配时选择"最早可用"的泳道, 并校验与同泳道前一条弹幕的间距,
     // 保证同一泳道里后一条不会追上(追尾)前一条。
-    private double _laneHeight = 28;               // 单条泳道高度(随字号联动)
+    private double _laneHeight = DanmakuFontSize * DanmakuLaneRatio;   // 单条泳道高度(随字号联动)
     private double[]? _laneFreeAt;                 // 每条泳道的"可用时间点"(秒, 播放时间轴)
     private double[]? _laneLastWidth;              // 每条泳道最后一条弹幕的宽度
     private double _lastLaneCalcWidth;             // 上次计算泳道时的画布宽度(尺寸变化时重算)
@@ -2827,6 +2886,110 @@ public partial class PlayerWindow : FluentWindow
     private const int MaxOnScreenDanmaku = 80;
     // 顶部/底部固定弹幕的停留时长
     private const double DanmakuFixedSeconds = 4.0;
+
+    /// <summary>
+    /// 弹幕字号(2026-10-11 用户要求"弹幕字体调大一些": 18 → 24)。
+    ///
+    /// 原来这个值直接写在 AddDanmaku 里, 而泳道高 _laneHeight 又另写了一个 28 ——
+    /// 两个数没有任何关联, 调字号必得漏掉泳道, 于是弹幕上下压在一起。现在两者都由
+    /// <see cref="DanmakuLaneRatio"/> 推出来, 改字号只需要改这一处。
+    /// </summary>
+    private const double DanmakuFontSize = 24;
+
+    /// <summary>泳道高 = 字号 × 该系数(留出上下各约四分之一行距, 密集时才不会糊成一片)</summary>
+    private const double DanmakuLaneRatio = 1.5;
+
+    // ---- 在飞的弹幕(位移由**视频时钟**驱动, 不再用 WPF 动画) ----
+    //
+    // ★★★ 2026-10-11 用户报"视频暂停时弹幕不动"——原话是"视频暂停时弹幕不动"(即要停),
+    //   根因是原来用 DoubleAnimation 起滚动: WPF 动画走合成线程 + 墙钟, 与播放器状态无关。
+    //
+    //   为什么没有用"暂停动画"来修(这的路子全都实测堵死, 见 .probes/bd-probe-animfreeze):
+    //     · Animation / AnimationStorage / AnimationClock 全是 internal, 外部拿不到;
+    //     · SpeedRatio 只在 AnimationTimeline 上, 而 CreateClock() 返回的基类时钟上没有它
+    //       ⇒ "begin 之后再回来改 SpeedRatio"在公开 API 里根本走不通;
+    //     · 唯一公开的暂停入口 Storyboard.Pause, 在"动画挂在 Border 的 RenderTransform 上"
+    //       这种写法下实测**静默无效**(GetCurrentTime 直接报"Storyboard 未应用到该对象")。
+    //
+    //   所以改成: 每帧从 _mp.Time 取真实媒体时间, 自己算该到哪儿。
+    //   这样"暂停"根本不是一个需要处理的状态 —— 媒体时间不前进, 弹幕自然就不动;
+    //   顺带还白送了 seek(清表重建)与拖进度条时的正确重同步。
+    private readonly List<FlyingDanmaku> _flying = new();
+    private bool _danmakuClockAttached;
+
+    // ---- 弹幕时钟: Stopwatch 走时 + 低频校准(2026-11 修"弹幕滑动很卡, 几帧几帧地跳") ----
+    //
+    // ★★★ 第一版是**每帧**直接读 `_mp.Time`(还多读了一次 `_mp.Length` 判断有没有媒体)。
+    //   那是两次**跨语言边界的原生调用 × 每帧 60 次** = 每秒 120 次 P/Invoke,
+    //   足以把渲染回调拖慢 ⇒ 用户看到的就是"弹幕几帧几帧地跳"。
+    //   ★ 教训: `CompositionTarget.Rendering` 里**一次原生调用都不能有**。
+    //     判"是不是还在放媒体"这类检查更不能放这里 —— 它每帧都跑, 哪怕它自己认为很便宜。
+    //   ⇒ 改成: 用 `Stopwatch` 自己走时(纯本地), 只在 `_mp.TimeChanged`(约 4Hz)校准一次,
+    //     暂停/恢复由 `_mp.Paused` 冻结/解冻。既零 P/Invoke, 又跟得上真实媒体时间
+    //     (seek 会在下一个 TimeChanged 立刻纠偏)。
+    private readonly Stopwatch _dmWatch = Stopwatch.StartNew();
+    /// <summary>上次校准到的媒体时间(秒)</summary>
+    private double _dmClockMedia;
+    /// <summary>校准那一刻 <see cref="_dmWatch"/> 的毫秒读数 —— 走时的起点</summary>
+    private long _dmClockStamp;
+    /// <summary>是否在走时。暂停/未播放时为 false, 此时弹幕时钟就是 _dmClockMedia</summary>
+    private bool _dmClockRunning;
+
+    /// <summary>
+    /// 当前弹幕时钟(媒体秒)。每帧调用, **零原生调用** —— 只做一次 Stopwatch 读数 + 一次加法。
+    /// </summary>
+    private double DanmakuClock() => _dmClockRunning
+        ? _dmClockMedia + (_dmWatch.ElapsedMilliseconds - _dmClockStamp) / 1000.0
+        : _dmClockMedia;
+
+    /// <summary>
+    /// 用播放器推来的真实媒体时间校准一次(顺带把走时起点重置到"现在")。
+    /// 只在 <c>_mp.TimeChanged</c> 里调 —— 那是约 4Hz 的低频事件, 一帧一次的原生调用在这里不心疼。
+    /// </summary>
+    private void CalibrateDanmakuClock(double mediaSeconds)
+    {
+        _dmClockMedia = mediaSeconds;
+        _dmClockStamp = _dmWatch.ElapsedMilliseconds;
+        _dmClockRunning = true;
+    }
+
+    /// <summary>
+    /// 暂停/恢复时冻结/解冻弹幕时钟。
+    ///
+    /// ★★★ **暂停时必须冻结在"当前外推值", 不能直接读 `_mp.Time`**(2026-11-11 用户报
+    ///   "暂停时弹幕会突然向后移动一点"): 校准是约 4Hz 的 TimeChanged 驱动的, 两次校准之间
+    ///   弹幕钟按墙钟外推; 若外推快于实际播放(缓冲/掉帧时 TimeChanged 间隔被拉长), 冻结那一刻
+    ///   `_mp.Time` 就落后于外推值 ⇒ 弹幕整体回跳一小段。冻结语义应当是"停在此刻所见",
+    ///   即当前的 DanmakuClock() 读数, 而不是重新取一次媒体时间。
+    /// ★ 恢复时**也**以暂停时的冻结值为基准直接续跑, 不重新读 `_mp.Time`:
+    ///   暂停没 seek 的话两者本就几乎相等, 而读 `_mp.Time` 若略小于冻结值,
+    ///   恢复瞬间弹幕又会回跳一次(与暂停回跳同机理)。真正需要纠偏的场景(seek)
+    ///   由 TimeChanged → CalibrateDanmakuClock 在 250ms 内自然收敛, 不必抢这一帧。
+    /// </summary>
+    private void SetDanmakuClockRunning(bool running)
+    {
+        if (running == _dmClockRunning || _closing || _mp == null) return;
+        // 两侧都不额外取媒体时间: 冻结取"此刻所见", 恢复从"冻结处"续跑。
+        // 基准重置到"现在"是必须的 —— Stopwatch 一直在走, 不重置恢复瞬间会前跳一大段。
+        _dmClockMedia = DanmakuClock();
+        _dmClockStamp = _dmWatch.ElapsedMilliseconds;
+        _dmClockRunning = running;
+    }
+
+    /// <summary>屏幕上正在飞的一条弹幕</summary>
+    private sealed class FlyingDanmaku
+    {
+        public Border Element = null!;
+        public TranslateTransform Translate = null!;
+        /// <summary>上屏那一刻的媒体时间(秒)。位移 = f(当前媒体时间 - 它)</summary>
+        public double SpawnClock;
+        /// <summary>滚动: 横穿总时长。固定: 停留总时长。</summary>
+        public double TotalSeconds;
+        /// <summary>滚动弹幕自身宽度(用于算"完全离开左侧"的位置)</summary>
+        public double Width;
+        /// <summary>true = 顶部/底部固定弹幕(不动横向, 只按时间淡出)</summary>
+        public bool IsFixed;
+    }
 
     // 顶部/底部固定弹幕的占用时间表(避免固定在同一个位置互相压住)
     private readonly List<(double until, int slot)> _topSlots = new();
@@ -2999,6 +3162,9 @@ public partial class PlayerWindow : FluentWindow
     {
         if (!_danmakuOn || _closing || _mp == null || _mp.Length <= 0) return;
         var currentSeconds = _mp.Time / 1000.0;
+        // ★ 校准弹幕时钟: 逐帧推进只读本地 Stopwatch, 靠这里(约 4Hz)把它拉回真实媒体时间。
+        //   拖进度条/seek 之后, 下一个 TimeChanged 就会纠偏, 弹幕不会继续按旧位置飞。
+        CalibrateDanmakuClock(currentSeconds);
 
         // 游标与播放位置必须同步, 否则下面的 while 会在一帧里把跨越的整段弹幕全发出来(刷屏)。
         // 往回跳、往前跳、以及"弹幕加载完成时播放已经过去一段时间"这三种失配都在这里收敛,
@@ -3041,6 +3207,15 @@ public partial class PlayerWindow : FluentWindow
         _laneLastWidth = null;   // 与 _laneFreeAt 同生共死, 避免留下长度不匹配的残影数据
         _lastLaneCalcWidth = 0;
         _lastLaneCalcHeight = 0;
+        // ★ 在飞的弹幕一并收掉(2026-10-11): 跳转之后旧的弹幕必须立刻消失, 否则它们的
+        //   SpawnClock 还停在跳转前的位置, elapsed 会变成负数/极大值 —— 前者被钳成 0
+        //   (满屏弹幕突然全挤在右边缘), 后者直接被判定为"已飞完"集体闪没。
+        //   收掉之后 DispatchDanmaku 会按新位置重新派发, 这才是"跳过去就该看到那边的弹幕"。
+        if (_flying.Count > 0)
+        {
+            foreach (var f in _flying) DanmakuCanvas?.Children.Remove(f.Element);
+            _flying.Clear();
+        }
     }
 
     /// <summary>
@@ -3173,7 +3348,11 @@ public partial class PlayerWindow : FluentWindow
         // 屏幕弹幕上限, 防止高弹幕量视频把内存和渲染拖垮
         if (DanmakuCanvas.Children.Count >= MaxOnScreenDanmaku) return;
 
-        var currentSeconds = _mp?.Time / 1000.0 ?? time;
+        // ★ 用弹幕时钟(已被 DispatchDanmaku 校准过), 不再读 `_mp.Time`:
+        //   这里虽是低频路径, 但它与逐帧推进必须是**同一个时间源**, 否则新弹幕的出生点
+        //   和在飞弹幕算 elapsed 的基准会差一次 Stopwatch 走时, 表现为"新弹幕进场位置偏一点"。
+        var currentSeconds = DanmakuClock();
+        if (currentSeconds <= 0) currentSeconds = time;   // 还没起播(极少见): 退回这条弹幕自带的时间
 
         // ★★★ 只留文字, 不要长方形底衬(2026-10-07 用户要求"弹幕文字有长方形背景阴影, 移除它")。
         //   原先这里给了 Background = 60% 黑 + CornerRadius=3, 屏幕上每条弹幕都压着一块
@@ -3194,7 +3373,7 @@ public partial class PlayerWindow : FluentWindow
             {
                 Text = text,
                 Foreground = DanmakuBrush(color),
-                FontSize = 18
+                FontSize = DanmakuFontSize
             }
         };
 
@@ -3254,7 +3433,12 @@ public partial class PlayerWindow : FluentWindow
         return b;
     }
 
-    /// <summary>滚动弹幕: 分泳道 + 横向滚动(动 TranslateTransform, 不动布局)</summary>
+    /// <summary>
+    /// 滚动弹幕: 分泳道 + 横向滚动。
+    ///
+    /// ★ 这里**不起任何 WPF 动画**, 只把这条弹幕登记进 <see cref="_flying"/>,
+    ///   位置由 <see cref="OnDanmakuRendering"/> 按视频时钟每帧算。理由见 _flying 的说明。
+    /// </summary>
     private void RenderRolling(Border border, double width, double currentSeconds)
     {
         var lane = AllocateRollingLane(width, currentSeconds);
@@ -3272,22 +3456,21 @@ public partial class PlayerWindow : FluentWindow
         Canvas.SetTop(border, 6 + lane * _laneHeight);
 
         var canvasWidth = DanmakuCanvas.ActualWidth;
-        // 从画面右侧外进场, 走到完全离开左侧为止; 位移全部落在 TranslateTransform 上。
-        // 动画 From 必须写 canvasWidth —— BeginAnimation 接管属性后, 动画当前值(即 From)
-        // 会立刻覆盖上面预置的初始位置; 写成 From=0 弹幕第一帧就跳到左边缘再往左滑出
-        // (表现成"弹幕靠左出现直接消失")。To=-width 恰好是弹幕右边缘完全离开左侧的位置。
-        border.RenderTransform = new TranslateTransform(canvasWidth, 0);
-        var translate = (TranslateTransform)border.RenderTransform;
-        var anim = new DoubleAnimation(canvasWidth, -width, TimeSpan.FromSeconds(DanmakuScrollSeconds))
+        // 预置到"刚好在画面右侧外", 第一帧就是进场位置(下方每帧会立刻覆盖成精确值)
+        var translate = new TranslateTransform(canvasWidth, 0);
+        border.RenderTransform = translate;
+
+        TrackFlying(new FlyingDanmaku
         {
-            // 匀速: 弹幕必须线性运动, 缓动会看起来忽快忽慢
-            EasingFunction = null
-        };
-        anim.Completed += (_, _) => DanmakuCanvas.Children.Remove(border);
-        translate.BeginAnimation(TranslateTransform.XProperty, anim);
+            Element = border,
+            Translate = translate,
+            SpawnClock = currentSeconds,
+            TotalSeconds = DanmakuScrollSeconds,
+            Width = width,
+        });
     }
 
-    /// <summary>顶部/底部固定弹幕: 居中停留数秒后淡出</summary>
+    /// <summary>顶部/底部固定弹幕: 居中停留数秒后淡出(透明度同样由视频时钟算, 不用动画)</summary>
     private void RenderFixed(Border border, int mode, double currentSeconds)
     {
         var canvasWidth = DanmakuCanvas.ActualWidth;
@@ -3312,13 +3495,89 @@ public partial class PlayerWindow : FluentWindow
             : Math.Max(6, canvasHeight - 6 - (slot + 1) * _laneHeight);
         Canvas.SetTop(border, top);
 
-        // 停留 DanmakuFixedSeconds 后淡出并移除
-        var hold = new DoubleAnimation(1, 0, TimeSpan.FromSeconds(DanmakuFixedSeconds))
+        // 横向不需要位移, 但 TranslateTransform 仍要挂一个: 逐帧代码按同一套逻辑处理两种弹幕
+        var translate = new TranslateTransform(0, 0);
+        border.RenderTransform = translate;
+        border.Opacity = 1;
+
+        TrackFlying(new FlyingDanmaku
         {
-            BeginTime = TimeSpan.FromSeconds(Math.Max(0, DanmakuFixedSeconds - 0.6))
-        };
-        hold.Completed += (_, _) => DanmakuCanvas.Children.Remove(border);
-        border.BeginAnimation(OpacityProperty, hold);
+            Element = border,
+            Translate = translate,
+            SpawnClock = currentSeconds,
+            TotalSeconds = DanmakuFixedSeconds,
+            IsFixed = true,
+        });
+    }
+
+    /// <summary>登记一条在飞的弹幕, 并确保逐帧推进器已经挂上</summary>
+    private void TrackFlying(FlyingDanmaku f)
+    {
+        _flying.Add(f);
+        StartDanmakuClock();
+    }
+
+    /// <summary>挂上逐帧推进器。CompositionTarget.Rendering 是**静态**事件, 必须在关窗时解绑</summary>
+    private void StartDanmakuClock()
+    {
+        if (_danmakuClockAttached || _closing) return;
+        _danmakuClockAttached = true;
+        CompositionTarget.Rendering += OnDanmakuRendering;
+    }
+
+    private void StopDanmakuClock()
+    {
+        if (!_danmakuClockAttached) return;
+        _danmakuClockAttached = false;
+        CompositionTarget.Rendering -= OnDanmakuRendering;
+    }
+
+    /// <summary>
+    /// 逐帧推进所有在飞的弹幕。
+    ///
+    /// ★ 时间的唯一来源是 _mp.Time(真实媒体时间, 毫秒精度), 不是墙钟。
+    ///   于是"视频暂停"这件事**根本不需要分支**: 媒体时间不前进 ⇒ elapsed 不变 ⇒ 位置不变。
+    ///   这正是原来用 DoubleAnimation 做不到的地方(那个走合成线程墙钟, 跟播放器无关)。
+    ///
+    /// 反过来在播放时它还顺带修好了另一件事: 弹幕现在与画面**帧同步**,
+    /// 拖进度条后 DispatchDanmaku 检测到游标失效会 ResetLanes(连带清空 _flying),
+    /// 所以不会看到"老弹幕从旧位置继续飞"。
+    /// </summary>
+    private void OnDanmakuRendering(object? sender, EventArgs e)
+    {
+        if (_flying.Count == 0)
+        {
+            // 一条都没在飞就没必要继续挂在渲染回调上(它每帧都会被调, 空转也是成本)
+            StopDanmakuClock();
+            return;
+        }
+        if (_closing) return;
+
+        // ★ 只读一次本地 Stopwatch, **一次原生调用都不做**(见 _dmWatch 那段说明)
+        var now = DanmakuClock();
+        var canvasWidth = DanmakuCanvas?.ActualWidth ?? 0;
+        // 倒序删: 末尾先走完, 正好与"新弹幕追加在尾部"的写入方向相反, 不会出现漏删
+        for (var i = _flying.Count - 1; i >= 0; i--)
+        {
+            var f = _flying[i];
+            var elapsed = now - f.SpawnClock;
+            if (elapsed < 0) elapsed = 0;   // 刚上屏/刚重建泳道时的取整误差, 不让它闪到画面外
+
+            if (f.IsFixed)
+            {
+                f.Element.Opacity = Helpers.DanmakuMotion.FixedOpacity(elapsed, f.TotalSeconds);
+            }
+            else
+            {
+                f.Translate.X = Helpers.DanmakuMotion.RollingX(canvasWidth, f.Width, elapsed, f.TotalSeconds);
+            }
+
+            if (Helpers.DanmakuMotion.IsFinished(elapsed, f.TotalSeconds))
+            {
+                DanmakuCanvas?.Children.Remove(f.Element);
+                _flying.RemoveAt(i);
+            }
+        }
     }
 
     /// <summary>切换弹幕开关(控制栏按钮 / 快捷键 D), 并同步到全局设置</summary>
@@ -5055,6 +5314,136 @@ public partial class PlayerWindow : FluentWindow
         }
     }
 
+    // ------------------------------------------------------------ 视频分P
+
+    /// <summary>
+    /// 当前视频的全部分P(单P 视频也会有一项)。分P 弹层的唯一数据源。
+    ///
+    /// ★ 与合集严格分开存: 两者能同时存在(一个分P 稿件被收进合集), 混在一份列表里
+    ///   用户根本分不清"点这条是换稿件还是换段落"。
+    /// </summary>
+    private List<VideoPage> _pages = new();
+
+    /// <summary>分P 够不够两条(够才值得给入口)。单P 视频的 pages 里也只有 1 项</summary>
+    private bool _hasPages;
+
+    /// <summary>
+    /// "正在换 P"的闸门, 与 <see cref="_switchingSeasonEpisode"/> 同款理由:
+    /// 连点两个 P 会叠起两个 LoadVideoAsync, 后回来的覆盖先回来的。
+    /// </summary>
+    private bool _switchingPage;
+
+    /// <summary>
+    /// 详情加载完之后灌分P 数据。
+    ///
+    /// ★ 入口的显隐只认"有没有多于一个 P": 单P 视频给一个「分P」按钮纯属噪音
+    ///   (对照: B 站自己在单P 视频上也不给选集)。
+    /// </summary>
+    private void ApplyPages(List<VideoPage> pages)
+    {
+        if (_closing) return;
+
+        _pages = pages ?? new List<VideoPage>();
+        _hasPages = _pages.Count > 1;
+
+        if (BtnPages == null) return;
+        BtnPages.Visibility = _hasPages ? Visibility.Visible : Visibility.Collapsed;
+        if (!_hasPages) ClosePagesPopup();
+        else UpdatePagesTitle();
+    }
+
+    /// <summary>关掉分P 弹层(换片 / 单P 视频时调用)。没开就别动, 免得白白改一次 IsOpen</summary>
+    private void ClosePagesPopup()
+    {
+        if (PagesPopup == null || !PagesPopup.IsOpen) return;
+        PagesPopup.IsOpen = false;
+    }
+
+    /// <summary>
+    /// 按钮上显示 "分P 12/40" —— 把"现在在第几段 / 一共几段"直接写在入口上。
+    /// 40 段的纪录片只靠弹层里的高亮, 用户永远不知道自己在哪一段。
+    /// </summary>
+    private void UpdatePagesTitle()
+    {
+        if (BtnPages == null || BtnPagesText == null) return;
+        var cur = CurrentPageIndex();
+        BtnPagesText.Text = cur > 0
+            ? $"分P {cur}/{_pages.Count}"
+            : $"分P ({_pages.Count})";
+    }
+
+    /// <summary>当前正在播的是第几个 P(1 起; 定位不上返回 0)</summary>
+    private int CurrentPageIndex()
+    {
+        if (_currentCid <= 0) return 0;
+        foreach (var p in _pages)
+            if (p.Cid == _currentCid) return p.Page;
+        return 0;
+    }
+
+    /// <summary>点「分P」: 开/收弹层。不请求接口 —— pages 跟合集一样在详情里就拿到了</summary>
+    private void OnPagesToggleClick(object sender, RoutedEventArgs e)
+    {
+        if (_closing || !_hasPages || PagesPopup == null) return;
+        var open = PagesPopup.IsOpen;
+        PagesPopup.IsOpen = !open;
+        BtnPages.Tag = !open ? "on" : "off";
+        if (!open)
+        {
+            if (PagesList != null)
+            {
+                PagesList.ItemsSource = _pages;
+                PagesList.SelectedItem = _pages.FirstOrDefault(p => p.Cid == _currentCid);
+            }
+            PagesMetaText.Text = $"共 {_pages.Count} 个分P";
+        }
+    }
+
+    /// <summary>弹层外点/按 Esc 关掉弹层时, 把按钮的高亮态一并收回</summary>
+    private void OnPagesPopupClosed(object sender, EventArgs e)
+    {
+        if (BtnPages != null) BtnPages.Tag = "off";
+    }
+
+    /// <summary>
+    /// 选中某个分P → 换段播放。
+    ///
+    /// ★ 判据是 cid 不是 bvid: 分P 之间 **bvid 完全相同**, 用 bvid 判会永远短路成"没点"。
+    ///   (这正是合集那条判据 `ep.Bvid != _currentBvid` 在分P 上不成立的原因。)
+    /// </summary>
+    private void OnPageSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (_closing || PagesList == null) return;
+        if (PagesList.SelectedItem is not VideoPage p) return;
+        if (p.Cid == _currentCid) return;
+        PagesPopup?.SetCurrentValue(System.Windows.Controls.Primitives.Popup.IsOpenProperty, false);
+        _ = SwitchToPageAsync(p);
+    }
+
+    private async Task SwitchToPageAsync(VideoPage p)
+    {
+        if (_closing || p.Cid <= 0) return;
+        if (_switchingPage) return;
+        _switchingPage = true;
+        try
+        {
+            try { _mp.Stop(); } catch { }
+            // ★ _currentBvid 一个字都不改: 分P 是同一个稿件的分段。改 bvid 会让
+            //   弹幕游标 / 历史进度 / 三连状态全部挂到别的稿件上。
+            //   ResetForNewMedia 照旧要调: cid 变了就是另一段内容, 进度、弹幕游标、
+            //   视频总长、评论都得重来(它内部会把 _indexInLib 归零)。
+            _isLocalPlayback = false;
+            _isLive = false;
+            _liveRoomId = 0;
+            ResetForNewMedia();
+            await LoadVideoAsync(p.Cid);
+        }
+        finally
+        {
+            _switchingPage = false;
+        }
+    }
+
     // ------------------------------------------------------------ 头像跳转 / 踩 / 回复 / 详情页发表
 
     /// <summary>
@@ -5903,6 +6292,9 @@ public partial class PlayerWindow : FluentWindow
             // 所以必须显式解绑(OnModalResizeRendering 里的 _closing 分支只是兜底:
             // 窗口真关闭时渲染循环可能已经停摆, 根本走不到那里)。
             StopModalResizeSizeWatch();
+            // 弹幕逐帧推进器订阅的是**同一个**静态事件, 同理必须解绑, 否则窗口关了
+            // 渲染回调还在, 回调里又摸 DanmakuCanvas —— 轻则空转, 重则已释放对象。
+            StopDanmakuClock();
 
             // ★ 立刻停掉声音 —— 这是"窗口关了但声音还响半秒"的修法。
             //

@@ -1368,8 +1368,13 @@
                                              也因此它必须有自己的列 —— 挤进 tab 组会把 简介/评论 这两个互斥的
                                              tab 拆开, 用户就看不出"这两个是一组的"了。 -->
                                         <ColumnDefinition Width="Auto" />
-                                        <!-- 第 4 列 `*`: "返回评论列表"仍占这一格靠左。它默认 Collapsed,
-                                             与「合集」按钮分开占列后, 两者同时出现时不会再叠在一起。 -->
+                                        <!-- 第 4 列给「分P」入口(2026-10-11)。同「合集」的理由:
+                                             它是个动作按钮不是 tab, 不能进 GroupName=ContentTab。
+                                             分P 与合集会同时存在(一个分P 稿件被收进合集), 所以各占一列,
+                                             不挤成同一个入口 —— 用户分不清"点这条是换稿件还是换段落"。 -->
+                                        <ColumnDefinition Width="Auto" />
+                                        <!-- 第 5 列 `*`: "返回评论列表"仍占这一格靠左。它默认 Collapsed,
+                                             与两个选集入口分开占列后, 三者同时出现时不会再叠在一起。 -->
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <RadioButton x:Name="TabIntro" Grid.Column="0" GroupName="ContentTab"
@@ -1397,9 +1402,25 @@
                                         <TextBlock Text="合集" FontSize="15"
                                                    Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                                     </Button>
+                                    <!-- 分P 入口(2026-10-11 新增, 用户报「纪录片等影视无法选集」时加的)。
+                                         ★ 与「合集」是**两回事**, 入口分开给:
+                                           合集 = 多个独立稿件, 换集要换 bvid;
+                                           分P = 同一个稿件切成几段, 换段只换 cid。
+                                         ★ 单P 视频整个按钮隐藏(Visibility=Collapsed, 同「合集」的理由):
+                                           pages 里永远有 1 项, 判 Count > 1 才知道是不是真分P。
+                                         ★ 文案随播放位置变成 "分P 12/40" —— 40 段的纪录片只靠弹层
+                                           里的高亮, 用户根本不知道自己在第几段。 -->
+                                    <Button x:Name="BtnPages" Grid.Column="3" Visibility="Collapsed"
+                                            Style="{StaticResource ContentActionTabStyle}"
+                                            HorizontalAlignment="Left" VerticalAlignment="Center"
+                                            Click="OnPagesToggleClick"
+                                            ToolTip="查看/切换分P">
+                                        <TextBlock x:Name="BtnPagesText" Text="分P" FontSize="15"
+                                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                    </Button>
                                     <!-- 返回评论列表: 进了"评论详情"才出现, 就摆在"评论详情"右边(用户指定)。
                                          用按钮而不是文字链接 —— 这里是个"动作", 有底的按钮更好认、也更好点。 -->
-                                    <Button x:Name="BtnBackToComments" Grid.Column="3" Visibility="Collapsed"
+                                    <Button x:Name="BtnBackToComments" Grid.Column="4" Visibility="Collapsed"
                                             Style="{StaticResource SubtleButtonStyle}"
                                             Content="返回评论列表" FontSize="12"
                                             Margin="10,0,0,0" Padding="10,4"
@@ -1408,6 +1429,104 @@
                                             ToolTip="回到评论列表" />
                                 </Grid>
                             </Border>
+
+                            <!-- ============ 分P 弹层(点「分P」滑出, 2026-10-11 新增) ============
+                                 ★ 它挂在上面那个 Border **外面**(是同一个 StackPanel 里的兄弟),
+                                   不是 Border 的子级 —— Border 只接受一个子级, 塞进去直接编译不过;
+                                   而且 Popup 本身不参与布局, 放哪儿都不占地方。
+                                 ★ 为什么用 Popup 而不是复用合集那套"盖住信息栏的浮层 Grid":
+                                       分P 与合集**能同时存在**(一个分P 稿件被收进合集是常态),
+                                       两个浮层会直接盖在一起, 用户只能操作最上面那个 ——
+                                       于是"合集和分P 只能二选一", 那是错的。
+                                       改成挂在按钮下方的 Popup 后, 合集面板开着时点分P
+                                       能看见"当前 P"再决定, 两边信息都在。
+                                     ★ Popup 是独立 HWND, 位置由 PlacementTarget 保证, 不必担心
+                                       盖住 VideoView 的 airspace(合集面板当年为这个才改用 Grid)。
+                                     ★ MaxHeight 必填: 40 个 P 的纪录片不封顶的话弹层会顶出屏幕。 -->
+                                <Popup x:Name="PagesPopup" PlacementTarget="{Binding ElementName=BtnPages}"
+                                       Placement="Bottom" StaysOpen="False" AllowsTransparency="True"
+                                       PopupAnimation="Fade" Closed="OnPagesPopupClosed">
+                                    <Border Background="{DynamicResource OverlaySurfaceBrush}"
+                                            CornerRadius="10" BorderThickness="1"
+                                            BorderBrush="{DynamicResource FlyoutBorderBrush}"
+                                            Width="300" MaxHeight="420">
+                                        <Border.Effect>
+                                            <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.3"
+                                                              Direction="270" Color="#000000" />
+                                        </Border.Effect>
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="*" />
+                                            </Grid.RowDefinitions>
+                                            <TextBlock x:Name="PagesMetaText" Grid.Row="0" Text="共 0 个分P"
+                                                       Style="{StaticResource MetaTextStyle}"
+                                                       Margin="14,11,14,7" />
+                                            <!-- ListBox 而非 ItemsControl: 靠 SelectedItem 给"正在播的那一段"高亮,
+                                                 且自带 BringIntoView(打开时自动滚到当前段)。 -->
+                                            <ListBox x:Name="PagesList" Grid.Row="1"
+                                                     Background="Transparent" BorderThickness="0"
+                                                     Padding="8,0,8,8"
+                                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                     SelectionChanged="OnPageSelected">
+                                                <ListBox.ItemContainerStyle>
+                                                    <Style TargetType="ListBoxItem">
+                                                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                                        <Setter Property="Padding" Value="0" />
+                                                        <Setter Property="Margin" Value="0,0,0,2" />
+                                                        <Setter Property="Cursor" Value="Hand" />
+                                                        <Setter Property="Template">
+                                                            <Setter.Value>
+                                                                <ControlTemplate TargetType="ListBoxItem">
+                                                                    <Border x:Name="Bd" Background="Transparent"
+                                                    CornerRadius="7" Padding="7,6">
+                                                <ContentPresenter />
+                                            </Border>
+                                                                    <ControlTemplate.Triggers>
+                                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                                            <Setter TargetName="Bd" Property="Background"
+                                                                                    Value="{DynamicResource ControlFillHoverBrush}" />
+                                                                        </Trigger>
+                                                                        <Trigger Property="IsSelected" Value="True">
+                                                                            <Setter TargetName="Bd" Property="Background"
+                                                                                    Value="{DynamicResource AccentSoftFillBrush}" />
+                                                                        </Trigger>
+                                                                    </ControlTemplate.Triggers>
+                                                                </ControlTemplate>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </Style>
+                                                </ListBox.ItemContainerStyle>
+                                                <ListBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <!-- P 序号: 固定 30px 右对齐, 标题再长也不会把序号顶得忽左忽右 -->
+                                                            <TextBlock Grid.Column="0" Text="{Binding Page}" MinWidth="30"
+                                                                       TextAlignment="Right" FontSize="12"
+                                                                       Margin="0,0,10,0" VerticalAlignment="Center"
+                                                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                            <!-- DisplayTitle: part 为空时退回 "P{序号}", 不会出现空白行 -->
+                                                            <TextBlock Grid.Column="1" Text="{Binding DisplayTitle}"
+                                                                       FontSize="12.5" TextWrapping="Wrap"
+                                                                       MaxHeight="34" TextTrimming="CharacterEllipsis"
+                                                                       VerticalAlignment="Center"
+                                                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                            <TextBlock Grid.Column="2" Text="{Binding Duration}"
+                                                                       FontSize="11" Margin="10,0,0,0"
+                                                                       VerticalAlignment="Center"
+                                                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ListBox.ItemTemplate>
+                                            </ListBox>
+                                        </Grid>
+                                    </Border>
+                                </Popup>
 
                             <Grid Margin="0,12,0,0" MinHeight="120">
                                 <StackPanel x:Name="IntroPanel">

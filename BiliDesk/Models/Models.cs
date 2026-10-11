@@ -167,6 +167,45 @@ public class VideoDetail
     /// ★ 跟着 view 接口一起解析, 而不是让播放器再单独请求一次 —— 见 ApiClient.GetVideoAsync。
     /// </summary>
     public SeasonInfo? Season { get; set; }
+
+    /// <summary>
+    /// 该视频的全部分P。**只有一个 P 时也会有一项**(即 pages[0]), 由界面自己判断要不要露入口。
+    ///
+    /// ★ 分P 与合集是两回事, 不能互相替代:
+    ///   合集(Season) = 多个**独立稿件**, 每集有自己的 bvid/封面/播放量;
+    ///   分P(Pages)   = **同一个稿件**被切成几段, bvid 完全一样, 换段只换 cid。
+    ///   「克拉克森的农场 1-5季」(BV1JMbw62E72) 是 40 个 P 的**单个稿件**, 没有 ugc_season ——
+    ///   这正是原先"合集"入口不出现、用户没法选集的原因(2026-10-11)。
+    /// </summary>
+    public List<VideoPage> Pages { get; set; } = new();
+}
+
+/// <summary>
+/// 一个分P(view 接口的 pages[] 之一)。
+///
+/// ★ duration 的单位是**秒**(2026-10-11 实测 BV1JMbw62E72: P1 = 5395, 对应 90 分钟正片;
+///   若按毫秒读就是 5.4 秒)。这与番剧分集(duration 毫秒)正好相反, 别串。
+/// </summary>
+public sealed class VideoPage
+{
+    /// <summary>P 序号(1 起, 接口原样给的)。</summary>
+    public int Page { get; set; }
+
+    /// <summary>这一段的 cid —— 换 P 就是换它, bvid 不用变。</summary>
+    public long Cid { get; set; }
+
+    /// <summary>分P 标题(如 "S01E01 拖拉机")。可能为空, 空时界面退回显示"P1"。</summary>
+    public string Part { get; set; } = "";
+
+    public int DurationSec { get; set; }
+    public string Duration => VideoItem.FormatSeconds(DurationSec);
+
+    /// <summary>
+    /// 界面上这一行显示的标题: 有 part 用 part, 没有就退回 "P{序号}" ——
+    /// 直接显示空的 part 会得到一条只有时长的空白行, 看着像加载坏了。
+    /// </summary>
+    public string DisplayTitle =>
+        string.IsNullOrWhiteSpace(Part) ? $"P{Page}" : Part;
 }
 
 /// <summary>
@@ -337,6 +376,15 @@ public enum ContentKind
 
     /// <summary>直播间(搜索 search_type=live_room / 历史 type=live)</summary>
     Live,
+
+    /// <summary>
+    /// 番剧(搜索 search_type=bangumi, 2026-10-11 新增)。
+    ///
+    /// ★ 它**不是**"视频的一个子类": 番剧按 season_id 寻址、封面竖版、点开是选集页,
+    ///   既没有 bvid 也播不了 —— 塞进 VideoItem 会让点击走错路。
+    ///   所以搜索结果单独走 <see cref="SearchData.BangumiItems"/>, 页面用海报卡渲染。
+    /// </summary>
+    Bangumi,
 }
 
 /// <summary>搜索 API 返回结构</summary>
@@ -346,6 +394,14 @@ public class SearchData
     public bool Blocked { get; set; }    // 被风控拦截
     public string? Error { get; set; }
     public System.Collections.Generic.List<VideoItem> Items { get; set; } = new();
+
+    /// <summary>
+    /// 番剧结果(2026-10-11 新增)。与 <see cref="Items"/> **并存但互斥**:
+    /// 搜番剧时 <see cref="Items"/> 为空、结果全在这里; 搜视频/直播时反之。
+    /// 分开而不是塞进 Items, 是因为两者点开的去向完全不同(见 <see cref="ContentKind.Bangumi"/>)。
+    /// </summary>
+    public System.Collections.Generic.List<BangumiItem> BangumiItems { get; set; } = new();
+
     public bool HasMore { get; set; }
     public int TotalPages { get; set; }
 }
@@ -1273,4 +1329,189 @@ public class CardMenuItem
     /// 留空则图标列收成 0 宽, 不会留下空档。
     /// </summary>
     public string Glyph { get; set; } = "";
+}
+
+// ============================================================================
+// 番剧(PGC / 追番)
+//
+// 与 UGC 视频是**两套完全不同的资源体系**, 不能塞进 VideoItem:
+//   视频按 bv 号寻址, 封面 16:9; 番剧按 season_id / ep_id 寻址, 封面是竖版海报 3:4,
+//   一次拿回的是"一整季 + 它的分集列表"。所以这里单开一套模型。
+//
+// 接口面(2026-10-11 实测, 均带登录 Cookie):
+//   我的追番   x/space/bangumi/follow/list?vmid=&pn=&ps=&type=   type:1 追番 2 追剧
+//   番剧推荐   pgc/season/index/result?season_type=1&type=0&page=&ps=
+//   剧集详情   pgc/view/web/season?season_id=
+// ============================================================================
+
+/// <summary>番剧卡片(追番列表 / 推荐列表共用)。</summary>
+public sealed class BangumiItem
+{
+    public long SeasonId { get; set; }
+    public long MediaId { get; set; }
+    public string Title { get; set; } = "";
+    public string Cover { get; set; } = "";
+    public string Subtitle { get; set; } = "";
+
+    /// <summary>分类: 1 = 番剧(日漫), 4 = 国创(国产动画)。接口给的是 season_type。</summary>
+    public int SeasonType { get; set; }
+
+    /// <summary>接口自带的分类名("番剧" / "国创"), 解析不到时由 <see cref="SeasonTypeText"/> 兜底。</summary>
+    public string SeasonTypeName { get; set; } = "";
+
+    /// <summary>
+    /// 分类的中文名。
+    /// ★ 不直接用 <see cref="SeasonTypeName"/>: 推荐接口(index/result)那个字段是空的,
+    ///   只有"我的追番"接口才给 —— 两个列表显示的却是同一批东西, 所以一律走这里。
+    /// </summary>
+    public string SeasonTypeText => !string.IsNullOrEmpty(SeasonTypeName)
+        ? SeasonTypeName
+        : SeasonType == 4 ? "国创" : "番剧";
+
+    /// <summary>是否为国创(推荐列表按它把「番剧推荐」与「国创推荐」分成两栏)</summary>
+    public bool IsGuochuang => SeasonType == 4;
+
+    /// <summary>角标: 大会员 / 独播 / 出品。空串表示没有角标, 界面上整个角标不显示。</summary>
+    public string Badge { get; set; } = "";
+
+    /// <summary>角标底色(B 站自带, 如 #FB7299 / #00C0FF)。取不到就由界面退回默认色。</summary>
+    public string BadgeColor { get; set; } = "";
+
+    /// <summary>总集数</summary>
+    public int TotalCount { get; set; }
+
+    /// <summary>是否已完结</summary>
+    public bool IsFinish { get; set; }
+
+    /// <summary>更新进度文案("更新至第 195 话" / "全 12 话")</summary>
+    public string IndexShow { get; set; } = "";
+
+    /// <summary>
+    /// 观看进度文案("看到第 12 话")。
+    /// ★ 只有真的看到一半的剧才会给这个值, 其余是空串 —— 所以界面按"有才显示"处理,
+    ///   空的时候退回 <see cref="IndexShow"/>, 而不是留一个空行。
+    /// </summary>
+    public string Progress { get; set; } = "";
+
+    public long FollowCount { get; set; }
+
+    /// <summary>卡片副标题: 优先显示观看进度(用户更关心"我看到哪了"), 没有就显示更新进度。</summary>
+    public string CardSubText => !string.IsNullOrWhiteSpace(Progress) ? Progress : IndexShow;
+
+    /// <summary>番剧主页(B 站网页版)</summary>
+    public string Url { get; set; } = "";
+}
+
+/// <summary>番剧的一集(PGC 的分集, 不同于 UGC 合集)。</summary>
+public sealed class BangumiEpisode
+{
+    public long EpId { get; set; }
+    public long Aid { get; set; }
+
+    /// <summary>默认分 P cid。播放走 bvid, 这个是给"定位到具体一集"用的。</summary>
+    public long Cid { get; set; }
+
+    /// <summary>这一集对应的普通稿件 bv 号 —— 播放器只认它, 点"播放"就是拿它去播。</summary>
+    public string Bvid { get; set; } = "";
+
+    /// <summary>集号("1" / "12")。部分条目是番外名而非数字。</summary>
+    public string Title { get; set; } = "";
+
+    /// <summary>本集标题("凡人风起天南1重制版")</summary>
+    public string LongTitle { get; set; } = "";
+
+    public string Cover { get; set; } = "";
+
+    /// <summary>时长(秒)</summary>
+    public int DurationSec { get; set; }
+    public string Duration => VideoItem.FormatSeconds(DurationSec);
+
+    public long PubTime { get; set; }
+
+    /// <summary>是否已播(0 = 预告 / 未播)。没播的集不该给"播放"入口。</summary>
+    public bool IsAired { get; set; }
+
+    /// <summary>
+    /// 是不是当前选中 / 正在播放的那一集(选集列表据此高亮)。
+    ///
+    /// ★ 这一集对象本身被 ItemsControl 绑定着, 所以**不能**靠"换引用"来改选中态 ——
+    ///   换引用等于换一行, 高亮会跟着闪一下。这里让同一个对象自己报属性变更,
+    ///   与 VideoItem.IsSelected 同一套路(Models 这一层刻意不依赖 WPF, 用的就是 INotifyPropertyChanged)。
+    /// </summary>
+    private bool _isCurrent;
+
+    public bool IsCurrent
+    {
+        get => _isCurrent;
+        set
+        {
+            if (_isCurrent == value) return;
+            _isCurrent = value;
+            PropertyChanged?.Invoke(this,
+                new System.ComponentModel.PropertyChangedEventArgs(nameof(IsCurrent)));
+        }
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    /// <summary>
+    /// 界面上这一行显示的文案。
+    /// 集号 + 本集标题才是用户认得的东西; 只有标题没有集号会分不清"第几集"。
+    /// </summary>
+    public string DisplayTitle
+    {
+        get
+        {
+            var num = string.IsNullOrWhiteSpace(Title) ? "" : "第" + Title + "话";
+            if (string.IsNullOrWhiteSpace(LongTitle)) return num;
+            return string.IsNullOrEmpty(num) ? LongTitle : num + " " + LongTitle;
+        }
+    }
+}
+
+/// <summary>番剧详情 + 选集列表(pgc/view/web/season 的 result)。</summary>
+public sealed class BangumiDetail
+{
+    public long SeasonId { get; set; }
+    public string Title { get; set; } = "";
+    public string Cover { get; set; } = "";
+    public string Subtitle { get; set; } = "";
+
+    /// <summary>分类名("番剧" / "国创" / "电影"…)</summary>
+    public string SeasonTypeName { get; set; } = "";
+
+    /// <summary>简介(pgc 的 evaluate)</summary>
+    public string Evaluate { get; set; } = "";
+
+    /// <summary>评分("9.7")。没评分(新番刚开播)时为空。</summary>
+    public string Score { get; set; } = "";
+
+    /// <summary>评分人数</summary>
+    public long ScoreCount { get; set; }
+
+    /// <summary>地区("中国大陆")</summary>
+    public string Area { get; set; } = "";
+
+    /// <summary>风格分类, 逗号连接("热血, 奇幻")</summary>
+    public string Styles { get; set; } = "";
+
+    /// <summary>更新时间说明("每日17:00更新一集")</summary>
+    public string Renewal { get; set; } = "";
+
+    /// <summary>首播日期("2022-01-01")</summary>
+    public string PublishDate { get; set; } = "";
+
+    /// <summary>追番人数</summary>
+    public long FollowCount { get; set; }
+
+    /// <summary>是否完结</summary>
+    public bool IsFinish { get; set; }
+
+    /// <summary>选集列表(正片, 按官方顺序展平)</summary>
+    public List<BangumiEpisode> Episodes { get; set; } = new();
+
+    public int TotalEp => Episodes.Count;
+
+    /// <summary>评分那一行的文案; 没有评分就整段不显示。</summary>
+    public string ScoreText => string.IsNullOrEmpty(Score) ? "" : Score + " 分";
 }

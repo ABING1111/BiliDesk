@@ -36,6 +36,7 @@ public partial class HomePage : UserControl
         RecommendTab.Checked += OnRecommendChecked;
         RankingTab.Checked += OnRankingChecked;
         LiveTab.Checked += OnLiveChecked;
+        BangumiTab.Checked += OnBangumiChecked;
         // 页面被重新挂载到可视树时刷新问候语(应用长时间挂在后台再切回来, 文案要跟着时段变)
         Loaded += (_, _) =>
         {
@@ -243,9 +244,15 @@ public partial class HomePage : UserControl
         if (DataContext is HomeViewModel vm) _ = vm.SwitchToLiveAsync();
     }
 
-    // ------------------------------------------------------------ 四个 tab 的列表(常驻, 不再摘挂)
+    private void OnBangumiChecked(object sender, RoutedEventArgs e)
+    {
+        ShowTab(HomeTabKind.Bangumi);
+        if (DataContext is HomeViewModel vm) _ = vm.SwitchToBangumiAsync();
+    }
 
-    private enum HomeTabKind { Recommend, Popular, Ranking, Live }
+    // ------------------------------------------------------------ 五个 tab 的列表(常驻, 不再摘挂)
+
+    private enum HomeTabKind { Recommend, Popular, Ranking, Live, Bangumi }
 
     /// <summary>
     /// 每个 tab 一个 DeferredFill, **建一次、永驻**。
@@ -271,7 +278,13 @@ public partial class HomePage : UserControl
         HomeTabKind.Recommend => RecommendList,
         HomeTabKind.Popular => PopularList,
         HomeTabKind.Ranking => RankingList,
-        _ => LiveList,
+        HomeTabKind.Live => LiveList,
+        // 追番页是**三段分区**(我的追番 / 番剧推荐 / 国创推荐), 没有"一个列表"可填。
+        // 返回 null 让 EnsureFill 直接返回 —— 不给哪一段挂填充器, 三段就都按普通
+        // ItemsControl 生成。代价是切到该页时一次生成 ~75 张卡; 可以接受, 因为海报卡
+        // 的标题走 TextTrimming(不换行), 没有 VideoCard 那种"换行排版"的昂贵测量
+        // —— 那才是 CardWallPanel 要把全墙重测摊开的主因。
+        _ => null,
     };
 
     private ScrollViewer? ScrollOf(HomeTabKind t) => t switch
@@ -279,7 +292,9 @@ public partial class HomePage : UserControl
         HomeTabKind.Recommend => RecommendScroll,
         HomeTabKind.Popular => PopularScroll,
         HomeTabKind.Ranking => RankingScroll,
-        _ => LiveScroll,
+        HomeTabKind.Live => LiveScroll,
+        HomeTabKind.Bangumi => BangumiScroll,
+        _ => null,
     };
 
     private System.Collections.IEnumerable? ItemsOf(HomeTabKind t, HomeViewModel vm) => t switch
@@ -287,7 +302,8 @@ public partial class HomePage : UserControl
         HomeTabKind.Recommend => vm.RecommendItems,
         HomeTabKind.Popular => vm.PopularItems,
         HomeTabKind.Ranking => vm.RankingItems,
-        _ => vm.LiveItems,
+        HomeTabKind.Live => vm.LiveItems,
+        _ => null,
     };
 
     /// <summary>每批补多少张卡片: 首屏一批(约 4~5 列 × 5 行), 之后每帧一批。</summary>
@@ -349,7 +365,9 @@ public partial class HomePage : UserControl
         HomeTabKind.Recommend => RecommendTab,
         HomeTabKind.Popular => PopularTab,
         HomeTabKind.Ranking => RankingTab,
-        _ => LiveTab,
+        HomeTabKind.Live => LiveTab,
+        HomeTabKind.Bangumi => BangumiTab,
+        _ => null
     };
 
     /// <summary>把选中下划线挪到某个标签下面。animate=false 用于首次摆放(不该有"滑进来"的动画)。</summary>
@@ -389,6 +407,7 @@ public partial class HomePage : UserControl
         if (vm.IsPopularTab) return HomeTabKind.Popular;
         if (vm.IsRankingTab) return HomeTabKind.Ranking;
         if (vm.IsLiveTab) return HomeTabKind.Live;
+        if (vm.IsBangumiTab) return HomeTabKind.Bangumi;
         if (vm.IsRecommendTab) return HomeTabKind.Recommend;
         return null;
     }
@@ -455,6 +474,85 @@ public partial class HomePage : UserControl
     /// <summary>排行榜不自动翻页(它是一次给完的), 但仍然要让「回到顶部」跟着滚动位置亮灭</summary>
     private void RankingScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
         => UpdateBackToTop((ScrollViewer)sender);
+
+    /// <summary>
+    /// 追番页与其它滚动列表同款: 滚到底自动翻下一批推荐。
+    /// TriggerAutoLoad 内部会判当前 tab 是不是追番; 不是的话 LoadMoreAsync 也什么都不做
+    /// (它自己按 IsBangumiTab 分流), 所以这里不需要额外判。
+    ///
+    /// ★★★ 这里**额外**要告诉 VM "用户当前看得见哪一段"(2026-11 修"往下滑只能刷新国番
+    ///   + 页面会往上跳"): 番剧推荐排在国创推荐上方, 而接口一页是番剧+国创的混合数据。
+    ///   两栏同时追加 ⇒ 新增的番剧卡落到视口上方 ⇒ 既看不见增长, 又把视口顶回看过的位置。
+    ///   判出当前段、只往那一段追加, 两个现象一起消失。
+    /// </summary>
+    private void BangumiScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        UpdateBackToTop((ScrollViewer)sender);
+        if (DataContext is not HomeViewModel vm) return;
+        SyncBangumiActiveSection((ScrollViewer)sender, vm);
+        _ = TriggerAutoLoad((ScrollViewer)sender, vm);
+    }
+
+    /// <summary>
+    /// 用**视口底部**落在哪一段来判定"用户当前在看哪一段"。
+    ///
+    /// ★ 为什么取底部而不是中线: 自动加载本来就发生在"滚到底"这一刻, 底部所在的那一段
+    ///   正是用户马上要继续看的。取中线的话, 一屏里同时露出两段时会判到靠上的那一段,
+    ///   而用户马上要滚过去的是下面那段 —— 于是又会出现"加载了看不见的那一栏"。
+    /// ★★★ **判段必须用"带延伸区"的底部探测**(2026-11-11 用户报"番剧推荐没有更多选项,
+    ///   往下滑只能刷新国漫"): 视口高度大于单个列表的高度时, 用户把番剧列表滚到**末尾**的那一刻,
+    ///   视口底部已经落进下方的国创段 —— 判成国创, 于是永远只给国创翻页, 番剧栏一个「加载更多」
+    ///   都等不到。修法: 底部探测不到某段时, **向上回看**: 只要番剧列表的**顶部**还在视口里
+    ///   (用户还看得到番剧段的任何部分), 且底部已经越过它的末尾, 就仍判番剧段 ——
+    ///   "看完了番剧的最后一行"不等于"想看国创"。国创段同理但不影响结果(它本来就是最后一栏)。
+    /// ★ 三个 ItemsControl 的 x:Name 是现成的, 不用改 XAML 结构; 集合空时它们是
+    ///   Collapsed(ActualHeight=0), 自动被跳过, 不会误判成"看的是这一段"。
+    /// </summary>
+    private void SyncBangumiActiveSection(ScrollViewer sv, HomeViewModel vm)
+    {
+        if (sv.ActualHeight <= 0) return;
+        var probeY = sv.ViewportHeight - 1;
+
+        // 段的可见区间(相对视口): [top, bottom)。列表比视口长时 bottom 截到视口底。
+        // ★ 元组字段名必须在 lambda 的返回类型上显式声明, 否则编译器推成普通 (double,double),
+        //   下面访问 .top/.bottom 直接编译不过。
+        var span = (FrameworkElement? el) =>
+        {
+            if (el == null || el.ActualHeight <= 0) return (top: double.MinValue, bottom: double.MinValue);
+            var top = el.TranslatePoint(new Point(0, 0), sv).Y;
+            return (top: top, bottom: top + el.ActualHeight);
+        };
+        var containsBottom = ((double top, double bottom) s) =>
+            s.top <= probeY && probeY < s.bottom;
+
+        var my = span(MyBangumiList);
+        var rec = span(BangumiRecommendList);
+        var gc = span(GuochuangRecommendList);
+
+        HomeViewModel.BangumiSection section;
+        if (containsBottom(my)) section = HomeViewModel.BangumiSection.My;
+        else if (containsBottom(rec)) section = HomeViewModel.BangumiSection.Recommend;
+        else if (containsBottom(gc)) section = HomeViewModel.BangumiSection.Guochuang;
+        else
+        {
+            // 底部落在两段之间的空隙 / 已越过最后一个列表的末尾:
+            // 向上回看 —— 底部之上、离得最近的那段就是用户正在看末尾的段。
+            // (滚到底时必然走到这个分支: 最后一段的 bottom 在视口底之上。)
+            var best = HomeViewModel.BangumiSection.None;
+            var bestTop = double.MinValue;
+            foreach (var (s, sec) in new[] { (my, HomeViewModel.BangumiSection.My),
+                                             (rec, HomeViewModel.BangumiSection.Recommend),
+                                             (gc, HomeViewModel.BangumiSection.Guochuang) })
+            {
+                if (s.top > bestTop && s.top <= probeY) { bestTop = s.top; best = sec; }
+            }
+            if (best == HomeViewModel.BangumiSection.None)
+                return;   // 三段一个都不可见(内容不足一屏/正在布局): 保持上一次的判定, 别来回抖
+            section = best;
+        }
+
+        vm.ActiveBangumiSection = section;
+    }
 
     // ------------------------------------------------------------ 回到顶部
 
