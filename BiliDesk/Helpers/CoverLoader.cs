@@ -144,22 +144,45 @@ public static class CoverLoader
         try
         {
             var cacheFile = Path.Combine(AppPaths.CacheDir, Hashing.Md5Hex(url) + ".jpg");
+            // ★★★ 下载与写盘分开记账(2026-10-11 修"封面加载不出来、标题却正常"):
+            //   原来这两句在同一个 try 里, 一旦 File.WriteAllBytesAsync 抛异常(缓存目录不可写/
+            //   磁盘满/被杀软锁住), 就走 catch 里的 `if (!File.Exists(cacheFile)) return null` ——
+            //   **明明已经把图片字节拿到手了, 却因为写不进磁盘而整张封面不显示**。
+            //   用户看到的就是"标题有(标题来自接口 JSON, 与图片链路无关)、封面一片灰"。
+            //   ⇒ 现在把字节留在 downloaded 里, 写盘失败就退回内存解码: 封面照常显示,
+            //     只是这一张不进磁盘缓存(下次再看会重新下载)。
+            byte[]? downloaded = null;
             try
             {
                 if (!File.Exists(cacheFile))
                 {
-                    var bytes = await Http.GetByteArrayAsync(url);
-                    await File.WriteAllBytesAsync(cacheFile, bytes);
+                    downloaded = await Http.GetByteArrayAsync(url);
+                    await File.WriteAllBytesAsync(cacheFile, downloaded);
                 }
             }
             catch
             {
-                if (!File.Exists(cacheFile)) return null; // 下载失败且无缓存
+                // 写盘失败**不等于**取图失败 —— 下面的内存兜底会处理; 真没字节才返回 null
             }
 
             // 解码放后台线程: 一张 1280 宽的 JPEG 解码要几毫秒到几十毫秒,
             // 放在 UI 线程上会直接表现为滚动/切页的卡顿。
-            var img = await Task.Run(() => FromFile(cacheFile, decodeWidth));
+            BitmapImage? img;
+            if (File.Exists(cacheFile))
+            {
+                var path = cacheFile;
+                img = await Task.Run(() => FromFile(path, decodeWidth));
+            }
+            else if (downloaded != null)
+            {
+                // 磁盘上没有文件(写失败), 但字节在手上 ⇒ 直接从内存解码, 绝不让封面空着
+                var bytes = downloaded;
+                img = await Task.Run(() => FromBytes(bytes, decodeWidth));
+            }
+            else
+            {
+                img = null;   // 既没缓存也没下载到: 这才算真的取不到图
+            }
             if (img == null) return null;
 
             lock (Lock)
@@ -264,6 +287,53 @@ public static class CoverLoader
         catch
         {
             try { File.Delete(path); } catch { /* 忽略损坏缓存文件 */ }
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 从**内存字节**解码(不落盘)。
+    ///
+    /// 为什么需要它: LoadCoreAsync 里"下载"与"写盘"是两步, 写盘可能失败(缓存目录不可写/
+    /// 磁盘满/被占用), 而那时图片字节**已经在手上**。没有这条兜底就只能返回 null,
+    /// 表现为"标题正常、封面全灰"。见 LoadCoreAsync 里的说明。
+    /// ★ 与 FromFile 的关键差别: 这里**不能**在失败时删文件(压根没有文件);
+    ///   DecodePixelWidth 也不能无条件设 —— WIC 会把小于该值的图放大, 所以同样要先用
+    ///   BitmapDecoder 探自然宽, 只在原图更宽时才降采样。
+    /// </summary>
+    private static BitmapImage? FromBytes(byte[] bytes, int decodeWidth = 0)
+    {
+        try
+        {
+            var effectiveDecodeWidth = 0;
+            if (decodeWidth > 0)
+            {
+                try
+                {
+                    using var probe = new MemoryStream(bytes, writable: false);
+                    var decoder = BitmapDecoder.Create(probe, BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.OnDemand);
+                    if (decoder.Frames.Count > 0 && decoder.Frames[0].PixelWidth > decodeWidth)
+                        effectiveDecodeWidth = decodeWidth;
+                }
+                catch
+                {
+                    effectiveDecodeWidth = 0;
+                }
+            }
+
+            var bi = new BitmapImage();
+            bi.BeginInit();
+            bi.CacheOption = BitmapCacheOption.OnLoad;   // 立刻读完, 之后 MemoryStream 可以释放
+            bi.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+            if (effectiveDecodeWidth > 0) bi.DecodePixelWidth = effectiveDecodeWidth;
+            bi.StreamSource = new MemoryStream(bytes, writable: false);
+            bi.EndInit();
+            // 必须 Freeze: 位图是在后台线程创建的, 只有冻结后才能安全地被 UI 线程使用
+            bi.Freeze();
+            return bi;
+        }
+        catch
+        {
             return null;
         }
     }
