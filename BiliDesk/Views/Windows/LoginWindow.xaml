@@ -3,8 +3,82 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:BiliDesk.Views"
              xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
-             Title="登录 - BiliDesk" Width="430" Height="580"
+             Title="登录 - BiliDesk" Width="430" Height="620"
              ResizeMode="NoResize" WindowStartupLocation="CenterOwner">
+
+    <views:FluentWindow.Resources>
+        <!-- 账号/密码输入框。只在登录窗用, 所以样式留在本地、不进 Themes/Styles.xaml -->
+        <Style x:Key="LoginInputStyle" TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource InputBackgroundBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Bd" CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                          Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Bd" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 密码框: 与文本框同一套外观(PasswordBox 的模板部件同样是 PART_ContentHost) -->
+        <Style x:Key="LoginPasswordStyle" TargetType="PasswordBox">
+            <Setter Property="Background" Value="{DynamicResource InputBackgroundBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="PasswordBox">
+                        <Border x:Name="Bd" CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                          Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Bd" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="LoginFieldLabelStyle" TargetType="TextBlock"
+               BasedOn="{StaticResource MetaTextStyle}">
+            <Setter Property="Margin" Value="2,0,0,6" />
+        </Style>
+    </views:FluentWindow.Resources>
+
     <Grid Background="{DynamicResource AppBackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -12,53 +86,136 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- 顶部品牌区 -->
-        <StackPanel Grid.Row="0" Margin="30,26,30,18">
-            <Border Width="46" Height="46" CornerRadius="13" HorizontalAlignment="Left">
-                <Border.Background>
-                    <!-- 品牌粉渐变。★ 这里的粉**不跟主题色走**: 这是 B 站品牌标识(B 字 logo),
-                         不是"强调色"。产品标识换了色就不再是那个品牌了 —— 和 UP 标/等级徽章同理。
-                         (原来是蓝色, 会显得像另一个产品, 所以固定成品牌粉。) -->
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                        <GradientStop Color="#FB7299" Offset="0" />
-                        <GradientStop Color="#FC9DB6" Offset="1" />
-                    </LinearGradientBrush>
-                </Border.Background>
-                <TextBlock Text="B" Foreground="White" FontWeight="Bold" FontSize="22"
-                           HorizontalAlignment="Center" VerticalAlignment="Center" />
-            </Border>
-            <TextBlock Text="登录哔哩哔哩" FontSize="19" FontWeight="SemiBold" Margin="0,14,0,0" />
-            <TextBlock Text="使用哔哩哔哩手机 App 扫码登录, 登录后即可观看高清视频"
-                       Style="{StaticResource MetaTextStyle}" Margin="0,6,0,0" TextWrapping="Wrap" />
+        <!-- 顶部: 品牌 + 登录方式切换 -->
+        <StackPanel Grid.Row="0" Margin="30,24,30,0">
+            <StackPanel Orientation="Horizontal">
+                <Border Width="40" Height="40" CornerRadius="11">
+                    <Border.Background>
+                        <!-- 品牌粉渐变。★ 这里的粉**不跟主题色走**: 这是 B 站品牌标识(B 字 logo),
+                             不是"强调色"。产品标识换了色就不再是那个品牌了 —— 和 UP 标/等级徽章同理。 -->
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#FB7299" Offset="0" />
+                            <GradientStop Color="#FC9DB6" Offset="1" />
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <TextBlock Text="B" Foreground="White" FontWeight="Bold" FontSize="20"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="登录哔哩哔哩" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock x:Name="SubtitleText" Text="打开哔哩哔哩手机客户端扫码登录"
+                               Style="{StaticResource MetaTextStyle}" Margin="0,3,0,0" />
+                </StackPanel>
+            </StackPanel>
+
+            <!--
+                登录方式切换: RadioButton + SettingsTabStyle —— 就是设置页顶部那套分段控件
+                (与登录入口所在的页面视觉一致; 而且它自带"选中后文字色跟着变"的补丁, 见 Styles.xaml)。
+                ★ 只挂 Checked(选中), 不处理 Unchecked —— 换选会把旧项回写 false,
+                处理 false 就会在切换时被"取消事件"再跑一遍(设置页 Tab 踩过这个坑)。
+            -->
+            <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                <RadioButton x:Name="QrModeTab" Style="{StaticResource SettingsTabStyle}"
+                             GroupName="LoginMode" Content="扫码登录" IsChecked="True" />
+                <RadioButton x:Name="PwdModeTab" Style="{StaticResource SettingsTabStyle}"
+                             GroupName="LoginMode" Content="密码登录" Margin="8,0,0,0" />
+            </StackPanel>
         </StackPanel>
 
-        <!-- 登录页(官方页面, 扫码 / 短信均可) -->
-        <Grid Grid.Row="1" Margin="24,0">
-            <Border CornerRadius="12" Background="White"
-                    BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1">
-                <wv2:WebView2 x:Name="Wv" />
-            </Border>
-            <!-- 加载失败提示 -->
-            <Border x:Name="ErrorPanel" CornerRadius="12"
-                    Background="{DynamicResource InfoBarBackgroundBrush}"
-                    BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"
-                    Padding="20" Visibility="Collapsed">
-                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock Text="&#xE783;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                               FontSize="30" Foreground="{DynamicResource TextTertiaryBrush}"
-                               HorizontalAlignment="Center" />
-                    <TextBlock x:Name="ErrorText" Text="登录页面加载失败" Margin="0,12,0,0"
-                               HorizontalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
-                    <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
-                            HorizontalAlignment="Center" Margin="0,16,0,0"
-                            Padding="24,7" Click="OnRetry" />
-                </StackPanel>
-            </Border>
+        <!-- ==================== 内容区: 三块面板互斥 ==================== -->
+        <Grid Grid.Row="1" Margin="30,18,30,0">
+
+            <!-- ===== 扫码登录: 二维码单独呈现(不是嵌一个官方网页) ===== -->
+            <Grid x:Name="QrPanel" VerticalAlignment="Center">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- 卡片固定 240 见方; 二维码按"整数像素/模块"绘制后居中, 换一张码(版本变了)卡片不会跳。 -->
+                <Border Grid.Row="0" Width="240" Height="240" CornerRadius="14"
+                        Background="White" BorderBrush="{DynamicResource CardBorderBrush}"
+                        BorderThickness="1">
+                    <Image x:Name="QrImage" Stretch="None"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+
+                <!-- 遮罩: 生成中 / 已过期 / 出错。
+                     ★ 底色写死半透明白、不走主题色板: 二维码卡片本身就是白的(二维码必须深色画在浅色上,
+                     深色主题也不反色), 所以这层"蒙白"在两个主题下都得是白的。 -->
+                <Border x:Name="QrOverlay" Grid.Row="0" CornerRadius="14"
+                        Background="#F0FFFFFF" Visibility="Collapsed">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="18">
+                        <TextBlock x:Name="QrOverlayIcon" Text="&#xE72C;"
+                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="26"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock x:Name="QrOverlayText" Text="二维码已过期" Margin="0,10,0,0"
+                                   FontSize="13.5" Foreground="{DynamicResource TextPrimaryBrush}"
+                                   HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" />
+                        <Button x:Name="QrOverlayButton" Content="点击刷新" Visibility="Collapsed"
+                                Style="{StaticResource AccentButtonStyle}" Padding="20,6" Margin="0,14,0,0"
+                                HorizontalAlignment="Center" Click="OnQrRefresh" />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock x:Name="QrStatusText" Grid.Row="1" Margin="0,14,0,0"
+                           Style="{StaticResource MetaTextStyle}" TextAlignment="Center"
+                           TextWrapping="Wrap" HorizontalAlignment="Center" />
+            </Grid>
+
+            <!-- ===== 密码登录: 自己的表单 ===== -->
+            <StackPanel x:Name="PwdPanel" VerticalAlignment="Center" Visibility="Collapsed">
+                <TextBlock Text="账号" Style="{StaticResource LoginFieldLabelStyle}" />
+                <TextBox x:Name="AccountBox" Style="{StaticResource LoginInputStyle}"
+                         MaxLength="32" KeyDown="OnPasswordFieldKeyDown" />
+                <TextBlock Text="密码" Style="{StaticResource LoginFieldLabelStyle}" Margin="2,14,0,6" />
+                <PasswordBox x:Name="PwdBox" Style="{StaticResource LoginPasswordStyle}"
+                             MaxLength="32" KeyDown="OnPasswordFieldKeyDown" />
+
+                <TextBlock x:Name="PwdErrorText" Visibility="Collapsed" Margin="2,10,0,0"
+                           FontSize="12" TextWrapping="Wrap"
+                           Foreground="{DynamicResource DangerTextBrush}" />
+
+                <Button x:Name="PwdLoginButton" Content="登录" Margin="0,16,0,0"
+                        Style="{StaticResource AccentButtonStyle}" Padding="0,9"
+                        HorizontalAlignment="Stretch" Click="OnPasswordLogin" />
+
+                <TextBlock Margin="2,12,0,0" Style="{StaticResource MetaTextStyle}" TextWrapping="Wrap"
+                           Text="哔哩哔哩要求密码登录时完成人机验证, 点「登录」后会打开官方页面并填好账号密码, 验证通过即登录成功。" />
+            </StackPanel>
+
+            <!-- ===== 官方页面(密码登录的人机验证在这一步完成) ===== -->
+            <Grid x:Name="WebPanel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" CornerRadius="8" Padding="12,9" Margin="0,0,0,10"
+                        Background="{DynamicResource InfoBarBackgroundBrush}"
+                        BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1">
+                    <Grid>
+                        <TextBlock x:Name="WebHintText" Text="请在下方官方页面完成人机验证"
+                                   TextWrapping="Wrap" FontSize="12" Margin="0,0,52,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <Button Content="返回" Style="{StaticResource LinkButtonStyle}"
+                                HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Click="OnBackFromWeb" />
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="1" CornerRadius="12" Background="White"
+                        BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1">
+                    <wv2:WebView2 x:Name="Wv" />
+                </Border>
+            </Grid>
         </Grid>
 
         <!-- 底部说明 -->
         <TextBlock Grid.Row="2" Text="登录状态仅保存在本机, 用于访问哔哩哔哩, 请勿外借账号"
                    Style="{StaticResource MetaTextStyle}" HorizontalAlignment="Center"
-                   Margin="20,12,20,18" TextWrapping="Wrap" TextAlignment="Center" />
+                   Margin="20,14,20,18" TextWrapping="Wrap" TextAlignment="Center" />
     </Grid>
 </views:FluentWindow>

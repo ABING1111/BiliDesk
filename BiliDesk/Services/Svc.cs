@@ -12,6 +12,8 @@ public static class Svc
     public static SearchHistoryService SearchHistory => SearchHistoryService.Instance;
     public static ToastService Toast => ToastService.Instance;
     public static ApiClient Api { get; } = new();
+    /// <summary>扫码登录接口(不带会话 Cookie, 见 PassportService 的说明)</summary>
+    public static PassportService Passport => PassportService.Instance;
     public static WebView2Service WebView2 { get; } = new();
     public static PlayerService Player { get; } = new();
     /// <summary>赞助片段标注数据源(SponsorBlock 兼容服务端)</summary>
