@@ -628,6 +628,49 @@
 
             <Border Style="{StaticResource SettingsCardStyle}">
                 <StackPanel>
+                    <!--
+                        下载/缓存位置(2026-10-11 语义调整)。
+                        位置放在这组卡片的**最上面**。
+                        ★ 管的是**下载的视频**(以及"图片另存为")—— 用户理解的"缓存"就是
+                          "下载下来的视频存在哪", 离线缓存页那行"缓存位置"也是同一个目录。
+                        ★ 内部缓存(封面 imgcache / 短视频 vcache)不再暴露, 固定在 %LocalAppData%,
+                          用户看不见也无需管理; 下面两行"清理缓存"清的就是那部分。
+                        ★ 改位置**只影响以后下载**的视频, 不搬走已下载的成品文件。
+                    -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="缓存位置" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <!-- 实际生效的路径(可能很长, 允许换行显示, 不省略成 "..." —— 
+                                 用户要的就是"到底存在哪"这一个信息) -->
+                            <TextBlock Text="{Binding CacheLocation}"
+                                       Style="{StaticResource SettingsRowDescStyle}"
+                                       TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding CacheLocationHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="打开" Style="{StaticResource SubtleButtonStyle}"
+                                    Padding="12,5"
+                                    Command="{Binding OpenCacheLocationCommand}"
+                                    ToolTip="在资源管理器里打开下载目录" />
+                            <Button Content="更改" Style="{StaticResource SubtleButtonStyle}"
+                                    Margin="8,0,0,0" Padding="12,5"
+                                    Command="{Binding ChangeCacheLocationCommand}"
+                                    ToolTip="选择新的下载位置(已下载的视频不会被搬走)" />
+                            <Button Content="恢复默认" Style="{StaticResource SubtleButtonStyle}"
+                                    Margin="8,0,0,0" Padding="12,5"
+                                    Command="{Binding ResetCacheLocationCommand}"
+                                    ToolTip="回到系统「下载」文件夹" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
                     <!-- "观看历史(本机)"已随本机历史移除(历史统一走云端), 不再列。 -->
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>

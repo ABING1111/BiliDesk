@@ -54,6 +54,94 @@ public class SettingsViewModel : ObservableObject
         $"位置: {ShortVideoCache.Dir}\n" +
         $"自动清理: 超 {ShortVideoCache.MaxAge.TotalDays:0} 天 / {ShortVideoCache.MaxFiles} 个 / " +
         $"{FormatBytes(ShortVideoCache.MaxTotalBytes)} 时按最久没播放过的先删 (启动时也会清一次)";
+
+    // ------------------------------------------------------------ 下载/缓存位置
+
+    /// <summary>
+    /// 当前**实际生效**的下载位置(下载的视频 / 图片另存为都存这里)。
+    /// ★ 读 AppPaths.DownloadDir 而不是 Svc.Settings.DownloadDir: 设置里存的是"用户填了什么",
+    ///   而这里要显示的是"真的落在哪" —— 用户填了非法路径(比如拔掉的移动盘)时两者会不同,
+    ///   显示实际值才能让他看出"我那个填错了/盘没插"。
+    /// ★ 界面上叫"缓存位置"是沿用用户的说法(离线缓存页也是这个说法), 实际语义是下载目录。
+    /// </summary>
+    public string CacheLocation => AppPaths.DownloadDir;
+
+    /// <summary>下载位置那一行的说明: 是否用了自定义位置</summary>
+    public string CacheLocationHint => string.Equals(
+        AppPaths.DownloadDir, AppPaths.DefaultDownloadDir, StringComparison.OrdinalIgnoreCase)
+        ? "默认位置(系统「下载」文件夹)。可改到其它盘, 只影响以后下载的视频"
+        : "自定义位置; 下载的视频与另存的图片都会存到这里";
+
+    /// <summary>当前是否用的是自定义位置(决定"恢复默认"按钮是否可点)</summary>
+    public bool IsCustomCacheLocation => !string.Equals(
+        AppPaths.DownloadDir, AppPaths.DefaultDownloadDir, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 弹窗让用户选下载目录。
+    ///
+    /// ★ 用 .NET 8 自带的 <see cref="Microsoft.Win32.OpenFolderDialog"/>: 它就是系统原生的
+    ///   选文件夹对话框(与 Windows 设置里选目录同款), 不需要引 WinForms 的 FolderBrowserDialog
+    ///   (那是另一套老界面), 也不用自己 P/Invoke。
+    /// ★ 已下载的视频**不会被搬走**: 那是用户的成品文件。改了位置只影响以后的新下载。
+    /// </summary>
+    private void PickCacheLocation()
+    {
+        try
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "选择下载位置",
+                // 打开时就落在当前下载目录上, 用户不用自己一路点过去
+                InitialDirectory = AppPaths.DownloadDir,
+                Multiselect = false
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            var effective = Svc.Settings.SetDownloadDir(dialog.FolderName);
+            RefreshCacheLocation();
+            Svc.Toast.Show($"下载位置已改为 {effective}");
+        }
+        catch (Exception ex)
+        {
+            Svc.Toast.Show("选择下载位置失败: " + ex.Message);
+        }
+    }
+
+    /// <summary>把下载位置恢复成默认的系统「下载」文件夹</summary>
+    private void ResetCacheLocation()
+    {
+        var effective = Svc.Settings.SetDownloadDir(null);
+        RefreshCacheLocation();
+        Svc.Toast.Show($"下载位置已恢复默认: {effective}");
+    }
+
+    /// <summary>在资源管理器里打开下载目录</summary>
+    private void OpenCacheLocation()
+    {
+        try
+        {
+            var dir = AppPaths.DownloadDir;
+            System.IO.Directory.CreateDirectory(dir);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Svc.Toast.Show("打开下载目录失败: " + ex.Message);
+        }
+    }
+
+    /// <summary>下载位置变化后, 重算这一行的绑定(内部缓存占用不受影响, 不必重量)</summary>
+    private void RefreshCacheLocation()
+    {
+        OnPropertyChanged(nameof(CacheLocation));
+        OnPropertyChanged(nameof(CacheLocationHint));
+        OnPropertyChanged(nameof(IsCustomCacheLocation));
+        // "恢复默认"的可用性跟着 IsCustomCacheLocation 变 —— 命令不会自己重查, 必须显式喊
+        _resetCacheLocationCommand?.RaiseCanExecuteChanged();
+    }
     /// <summary>
     /// 「关于」卡片里软件名下面那一行的副标题: 只写技术栈。
     /// 不在这里重复版本号 —— 卡片下方本来就有独立的「版本号」一栏,
@@ -941,6 +1029,20 @@ public class SettingsViewModel : ObservableObject
     public ICommand LogoutCommand { get; }
     public ICommand ClearCacheCommand { get; }
     public ICommand ClearVideoCacheCommand { get; }
+    /// <summary>改缓存位置(弹系统选目录对话框)</summary>
+    public ICommand ChangeCacheLocationCommand { get; }
+    /// <summary>缓存位置恢复默认</summary>
+    public ICommand ResetCacheLocationCommand { get; }
+    /// <summary>在资源管理器里打开缓存目录</summary>
+    public ICommand OpenCacheLocationCommand { get; }
+
+    /// <summary>
+    /// 保留"恢复默认"命令的强类型引用。
+    /// ★ 它的可用性取决于当前是不是自定义位置(见 RefreshCacheLocation) ——
+    ///   WPF 的 ICommand 不会自己重新询问 CanExecute, 必须在状态变化时显式喊一声
+    ///   (只声明 canExecute 而不 RaiseCanExecuteChanged 的典型症状: 按钮该亮/该灰时不动)。
+    /// </summary>
+    private RelayCommand? _resetCacheLocationCommand;
     public ICommand ShowDisclaimerCommand { get; }
     /// <summary>打开作者 B 站主页。旧版是页面 code-behind 的 Click 处理器;
     /// 2026-10-03 重做后页面内容整体搬进 ResourceDictionary(模板里不能挂事件),
@@ -1028,7 +1130,21 @@ public class SettingsViewModel : ObservableObject
                 : "没有可清理的短视频缓存");
         });
 
+        // 下载位置: 改 / 恢复默认 / 打开目录。三个都只做很小的事 ——
+        // 真正的写入在 SettingsStore.SetDownloadDir 里(它会过 AppPaths 的校验)。
+        // ★ 不搬文件: 已下载的视频是用户成品, 不该被程序自动挪走。
+        ChangeCacheLocationCommand = new RelayCommand(PickCacheLocation);
+        _resetCacheLocationCommand = new RelayCommand(ResetCacheLocation,
+            // 已经是默认位置时按钮置灰: 点了没有任何效果, 留着反而让人怀疑"点了没反应"
+            canExecute: () => IsCustomCacheLocation);
+        ResetCacheLocationCommand = _resetCacheLocationCommand;
+        OpenCacheLocationCommand = new RelayCommand(OpenCacheLocation);
+
         SessionManager.Instance.Changed += () => _ = RefreshUserAsync();
+
+        // ★ 缓存位置变化也可能来自别处(将来别的入口/多窗口), 统一在这里跟一次 ——
+        //   只靠"点了按钮自己刷", 换个入口就会看到界面上的路径是旧的。
+        Svc.Settings.DownloadDirChanged += RefreshCacheLocation;
         _ = RefreshUserAsync();
         UpdateCacheSizeText();
         UpdateVideoCacheSizeText();
@@ -1051,7 +1167,10 @@ public class SettingsViewModel : ObservableObject
     /// <summary>进入设置页时刷新</summary>
     public void OnNavigated()
     {
-        // 短视频缓存是"看过视频才会长"的, 每次进设置页都重新量一次
+        // 下载位置可能被外部改过(设置页长期缓存着, 不会重建 ViewModel), 进来先同步一次路径。
+        RefreshCacheLocation();
+        // 两块内部缓存的占用也重新量一次: 播放过程中会新增封面/短视频合流缓存,
+        // 而这个 ViewModel 是长期存活的, 只在构造时量一次的话隔天再看就是旧数字。
         UpdateCacheSizeText();
         UpdateVideoCacheSizeText();
         _ = RefreshUserAsync();

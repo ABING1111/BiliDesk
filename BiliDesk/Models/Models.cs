@@ -1097,6 +1097,18 @@ public class AppSettings
     /// </summary>
     public int UiScalePercent { get; set; } = 100;
 
+    /// <summary>
+    /// 自定义**下载/缓存位置**(空串 = 用默认的系统「下载」文件夹)——
+    /// 下载的视频(.mp4)与"图片另存为"都存到这里, 设置页那一行与离线缓存页显示的就是它。
+    /// ★ 2026-10-11 由 <c>CacheRoot</c> 改名而来: 用户理解的"缓存位置"是"下载的视频存哪",
+    ///   而封面图/短视频合流那些内部缓存用户看不见也不需要管, 已固定留在 %LocalAppData%。
+    /// ★ 旧配置里的 <c>CacheRoot</c> 值**不迁移**(见 SettingsStore.Load 的兼容读取) ——
+    ///   那条值过去指向用户数据目录下的 imgcache/vcache, 与"下载目录"语义完全不同,
+    ///   拿来当下载目录会让已下好的视频"凭空消失"在设置页的显示里。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public string DownloadDir { get; set; } = "";
+
     /// <summary>弹幕开关(全局, 播放器不再提供弹幕按钮)</summary>
     public bool DanmakuEnabled { get; set; } = true;
 

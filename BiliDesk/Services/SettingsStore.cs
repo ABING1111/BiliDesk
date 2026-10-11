@@ -99,6 +99,17 @@ public class SettingsStore
     /// </summary>
     public int UiScalePercent { get; set; } = 100;
 
+    /// <summary>
+    /// **自定义下载/缓存位置**(空串 = 用默认的系统「下载」文件夹)。
+    /// 下载的视频与"图片另存为"都存到这里(见 <see cref="AppPaths.DownloadDir"/>)。
+    /// ★ 2026-10-11 由 <c>CacheRoot</c> 改名而来, 语义从"内部缓存根"改成"下载目录"
+    ///   —— 用户理解的"缓存位置"就是"下载的视频存哪"(见 AppPaths.DownloadDir 的说明)。
+    /// ★ 内部缓存(imgcache/vcache)不再暴露, 固定在 <see cref="AppPaths.DataDir"/>。
+    /// ★ 读取时一律过 <see cref="AppPaths.NormalizeDir"/> 校验: 目录不存在/非法路径
+    ///   就让下载回落默认目录, 而不是把脏路径带到下游去抛异常。
+    /// </summary>
+    public string DownloadDir { get; set; } = "";
+
     /// <summary>弹幕开关(全局)</summary>
     public bool DanmakuEnabled { get; set; } = true;
 
@@ -244,6 +255,13 @@ public class SettingsStore
         Helpers.CardWall.SetFixedColumns(CardColumns);
         // 同理: 缩放倍率也是静态的, 启动时要先落到 UiScale 上, 窗口创建时才会按它施加变换。
         Helpers.UiScale.SetPercent(UiScalePercent);
+        // ★ 同理(第三处): 下载目录也是静态的(AppPaths.DownloadDir)。漏了这一步的表现是
+        //   "设置里明明存着 D:\视频, 重启后下载还是写回 C:\Users\...\Downloads" ——
+        //   与列数/缩放是同一类错, 所以三处都放在 Load 的末尾一起同步。
+        //   ★ 下载目录**不做文件迁移**: 已下载的视频是用户成品, 不是可再生缓存。
+        AppPaths.SetDownloadDir(DownloadDir);
+        // 内部缓存根目录固定回数据目录(2026-10-11 起不再暴露给用户, 见 AppPaths.CacheRoot)。
+        AppPaths.ResetCacheRoot();
     }
 
     /// <summary>
@@ -285,6 +303,14 @@ public class SettingsStore
         // ★ 缩放也要夹取: 老配置没这个字段(默认 100), 手改过的可能有 0/负数/超大值。
         //   0 会让整个界面缩成不可见的点, 必须挡住。
         UiScalePercent = Helpers.UiScale.ClampPercent(s.UiScalePercent <= 0 ? 100 : s.UiScalePercent);
+
+        // ★ 下载位置: 老配置没这个字段(默认空串 = 用系统下载文件夹)。
+        //   非法/不存在的路径**不写进设置**(回落空串), 免得把脏路径带到 Path.Combine 下游 ——
+        //   那种错的表现是"下载一直失败", 很难定位到是这行造成的。
+        //   ★ 老配置里的旧字段 CacheRoot **故意不迁移**: 它的值指向用户数据目录下的
+        //     imgcache/vcache, 与"下载目录"语义完全不同; 拿来当下载目录会让离线缓存页
+        //     突然一个文件都没有(用户以为视频被删了)。宁可让用户重新设一次。
+        DownloadDir = AppPaths.NormalizeDir(s.DownloadDir) ?? "";
 
         // 弹幕各项: 老配置缺字段时靠属性初始化值拿到默认(true / 25), 不需要版本兼容。
         DanmakuEnabled = s.DanmakuEnabled;
@@ -352,6 +378,7 @@ public class SettingsStore
         AcrylicOpacityDark = AcrylicOpacityDark,
         CardColumns = CardColumns,
         UiScalePercent = UiScalePercent,
+        DownloadDir = DownloadDir,
         DanmakuEnabled = DanmakuEnabled,
         DanmakuAreaPercent = DanmakuAreaPercent,
         DanmakuSmartFilter = DanmakuSmartFilter,
@@ -619,6 +646,39 @@ public class SettingsStore
     /// 与主题那类"换笔刷"不同, 这些必须让可视树重新测量。
     /// </summary>
     public event Action? LayoutChanged;
+
+    /// <summary>
+    /// **下载位置**变化。改位置只影响"以后下载到哪", 订阅方(设置页/离线缓存页)要把
+    /// 显示的路径换成新值。
+    /// ★ 已下载的视频**不迁移**: 那是用户的成品文件, 静默搬动等于替他做决定
+    ///   (可能几十 GB, 也可能他就是想留在原处)。
+    /// </summary>
+    public event Action? DownloadDirChanged;
+
+    /// <summary>
+    /// 设置自定义下载位置(空串 = 恢复默认的系统下载文件夹)并落盘, 广播给界面。
+    ///
+    /// ★ <paramref name="path"/> 先过 AppPaths 校验, 非法/不存在一律回落默认目录 ——
+    ///   返回的是**实际生效**的目录, 调用方拿它回显(用户能看到自己填的到底生效没)。
+    /// ★ 与旧的 SetCacheRoot 不同: **没有 migrate 参数** —— 下载目录下的文件是成品,
+    ///   不该被程序自动搬走。
+    /// </summary>
+    public string SetDownloadDir(string? path)
+    {
+        // 归一化后再存: 用户填的 "D:\视频\" 与存着的 "D:\视频" 应当视为同一个。
+        var normalized = AppPaths.NormalizeDir(path) ?? "";
+        var effective = AppPaths.SetDownloadDir(normalized);
+        // ★ 存"生效值"而不是"用户输入": 存了非法路径的话, 下次启动 Normalize 又会把它
+        //   判掉回落默认 —— 那等于用户看到的路径和实际用的不是一个。
+        //   (还原默认时 effective == DefaultDownloadDir, 存空串以保持"没自定义过"的语义)
+        DownloadDir = string.Equals(effective, AppPaths.DefaultDownloadDir, StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : effective;
+
+        Save();
+        DownloadDirChanged?.Invoke();
+        return effective;
+    }
 
     /// <summary>
     /// 调节浅色主题亚克力透明度(可调范围见 <see cref="AcrylicOpacityLightMin"/>)并落盘, 广播给所有窗口重设背景

@@ -24,7 +24,8 @@ namespace BiliDesk.Services;
 /// (遮罩上"正在下载高清视频 N%"), 下完合流再播。曾试过"先用远端 DASH 开播、后台合流、就绪后换源",
 /// 真机上换源那一下暴露了容器定位问题(见 DashRemuxer 的说明), 已删除。
 ///
-/// 磁盘策略("允许写盘但要清理"): 目录 <c>%LocalAppData%\BiliDesk\vcache</c>,
+/// 磁盘策略("允许写盘但要清理"): 目录默认 <c>%LocalAppData%\BiliDesk\vcache</c>
+/// (2026-10-11 起内部缓存不再随用户设置移动, 固定在 AppPaths.CacheRoot = 数据目录下),
 /// 每次写完都 Prune —— 超过 14 天、超过 50 个、总量超 500MB 的一律按"最久没动过"先删;
 /// 中断残留的 .part/.tmp 也会被清掉。单片按码率估算超过 150MB 的直接不做(不值得占盘)。
 /// 另外启动时也会 Prune 一次(见 App.OnStartup), 免得用户长时间不看视频时旧缓存一直占着。
@@ -46,8 +47,13 @@ public static class ShortVideoCache
         Http.DefaultRequestHeaders.UserAgent.ParseAdd(HttpDefaults.UserAgent);
     }
 
-    /// <summary>缓存目录。放在数据目录下而不是系统临时目录: 它是要跨会话复用的</summary>
-    public static string Dir => Path.Combine(AppPaths.DataDir, "vcache");
+    /// <summary>
+    /// 缓存目录。默认在数据目录下(它要跨会话复用), 但**跟随用户在设置里自定义的缓存位置** ——
+    /// 短视频合流产物是占盘最大的一块, 用户把缓存挪到别的盘时它必须一起走,
+    /// 否则"改了缓存位置但 C 盘还是越来越小"。
+    /// ★ 读的是 AppPaths.VideoCacheDir(单一来源), 不要再自己拼 Path.Combine。
+    /// </summary>
+    public static string Dir => AppPaths.VideoCacheDir;
 
     // 下面三个上限是公开的: 设置页要把"自动清理规则"原样写给用户看,
     // 数字散成两处迟早会对不上, 所以只留这一份。
