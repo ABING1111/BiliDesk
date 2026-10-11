@@ -32,6 +32,12 @@
             <SolidColorBrush x:Key="TextOnAccentBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="TextOnAccentSecondaryBrush" Color="#FFFFFF" />
 
+            <!--
+                ★ NavVeilBrush 已删除(2026-10-11): 切页过渡不再用"自己上色的幕布",
+                  改为淡出 PageHost 本身(见 Helpers/PageTransition 与 MainWindow.xaml 的说明)。
+                  幕布在材质(云母/亚克力)模式下永远算不准底色 —— 那时真实底色是壁纸。
+            -->
+
             <!-- 转换器 -->
             <helpers:EnumEqualsConverter x:Key="EnumEquals" />
             <helpers:InverseBoolConverter x:Key="InvBool" />

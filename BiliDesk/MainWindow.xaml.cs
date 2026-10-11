@@ -271,46 +271,47 @@ public partial class MainWindow : FluentWindow
     // ------------------------------------------------------------ 切页过渡
 
     /// <summary>
-    /// 切页过渡(三段式淡出→换页→淡入, 画在纯色幕布 NavVeil 上)。
-    /// 逻辑与理由见 <see cref="PageTransition"/> 与 MainWindow.xaml 里 NavVeil 那段注释。
+    /// 切页过渡(三段式淡出→换页→淡入)。
+    /// 逻辑与理由见 <see cref="PageTransition"/>。
     /// </summary>
     private PageTransition? _navTransition;
 
-    private PageTransition NavTransition => _navTransition ??= new PageTransition(NavVeil);
+    private PageTransition NavTransition => _navTransition ??= new PageTransition(PageHost);
 
     /// <summary>
     /// 切换页面。
     ///
-    /// ★★★ 整页淡入淡出**重做**(2026-10-03, 用户要求"既保证有动画又要保证流畅"):
-    ///   动画保留(观感仍是"整页淡出 → 整页淡入"), 但**画在一块纯色幕布 NavVeil 上**,
-    ///   而 `PageHost` 全程保持 `Opacity=1`。承载体的选择理由见 MainWindow.xaml 里 NavVeil 那段。
+    /// ★★★ 过渡载体从"纯色幕布"改回 **PageHost 自己**(2026-10-11, 用户报
+    ///   "云母和亚克力时切页, 白色的幕布过渡很突兀"):
     ///
-    ///   ★★ 先说实测, 别再把这段写成"幕布修好了卡顿"(初版注释这么写, 被探针推翻):
-    ///     探针 `%TEMP%\bd-probe-navframes` 用真实窗口量合成帧间隔, 325 张卡的页面 ——
-    ///       · 子树静止: 动画 PageHost.Opacity 与动画幕布**一样**(p50 ~7ms / p95 ~14ms / 掉帧 0);
-    ///       · 子树在变(复刻 DeferredFill 批量加卡): 两者也一样(~127ms 一次长帧, 那是**卡片批量
-    ///         重排**的账, 与透明度动画无关)。
-    ///     ⇒ **动画载体不是卡顿来源**。"给容器挂 Opacity<1 就会每帧重栅格化"这个说法在本机
-    ///       量不出差异, 不要当成已证事实去引用。
+    ///   幕布是一块**自己上色**的板子 —— 颜色得在本地算出来。纯色模式下算得准, 但材质模式下
+    ///   窗口底色是**全透明的**(为让 DWM 采样壁纸的合成层透出来), 真实底色是**壁纸**, 程序无从得知;
+    ///   拿主题实色合成必然偏亮(实测 241 vs 真实 ~229) ⇒ 切页闪一下白。
+    ///   ⇒ 改为淡出 PageHost 本身: 露出来的是**窗口自己的底色**, 与页面底天然同层,
+    ///     任何材质/主题/壁纸下都自动正确, 不需要再算颜色 —— 幕布连同 NavVeilBrush 一并删除。
     ///
-    ///   ★ 真正的收益在**建页时机**(这条有实测):
+    ///   ★★ 实测(探针 `%TEMP%\bd-probe-navframes`, 真实窗口量合成帧间隔, 325 张卡):
+    ///      子树静止时动画 PageHost.Opacity 与动画幕布**一样**(p50 ~7ms / p95 ~14ms / 掉帧 0);
+    ///      子树在变时两者也一样(~127ms 一次长帧, 那是**卡片批量重排**的账, 与透明度动画无关)。
+    ///     ⇒ **动画载体不是卡顿来源**。别把这段改写成"幕布是为了流畅"。
+    ///
+    ///   ★ 真正要保住的是**建页时机**(这条有实测):
     ///     `PageOf` 首次要解析整棵 XAML, Release 口径实测首页 **~360ms**(`bd-probe-navcost` A 段;
-    ///     其余页面 7~23ms)。旧写法把它放在 ShowPage 最前面 ⇒ 那 360ms 卡在"点击 → 动画开始"之间,
-    ///     用户看到的是"点了没反应"。现在它落在**幕布已全不透明**之后, 用户只看到"一块背景色"。
+    ///     其余页面 7~23ms)。放在 ShowPage 最前面 ⇒ 那 360ms 卡在"点击 → 动画开始"之间,
+    ///     用户看到的是"点了没反应"。现在它落在**页面已完全透明**之后, 用户只看到"一片底色"。
     ///     附带好处: 淡出期间改点别的导航项时, 这一拍被代数闸取消 ⇒ 页面根本不会被建。
     ///
-    ///   ★ 三段式(节奏与旧写法相同, 只是承载体换了):
-    ///       ① 幕布 0→1(90ms): 旧页面被"同一底色"渐渐盖住 —— 看起来就是页面在淡出;
-    ///       ② 幕布全不透明时换页 + 建页: 切换被完全遮住, 用户看不到任何跳变;
-    ///       ③ 幕布 1→0(170ms): 新页面淡入。
+    ///   ★ 三段式节奏不变, 只是承载体换了:
+    ///       ① 页面 1→0(90ms): 旧页面淡出, 露出窗口底色;
+    ///       ② 页面全透明时换页 + 建页: 切换被完全遮住, 用户看不到任何跳变;
+    ///       ③ 页面 0→1(170ms): 新页面淡入。
     ///
-    ///   ★ 别再改回动画 `PageHost.Opacity`(没有收益, 还多担一层"整页半透明合成"的风险),
-    ///   也别在过渡中间加 `PageHost.UpdateLayout()`(那会把整墙测量同步堆在点击这一拍)。
+    ///   ★ 别在过渡中间加 `PageHost.UpdateLayout()`(会把整墙测量同步堆在点击那一拍)。
     /// </summary>
     private void ShowPage(PageKey key, bool animate)
     {
         // 目标就是当前页: 直接返回, 免得"点当前导航项"白播一段动画。
-        // ★ 但过渡**在途**时不能早退: 那一刻 PageHost 上还挂着旧页面, 而幕布后面的换页已经排上队,
+        // ★ 但过渡**在途**时不能早退: 那一刻 PageHost 上还挂着旧页面, 而换页已经排上队,
         //   早退会让那次换页照常发生 —— 用户点了"首页"却停在别的页上。这种情况要走一次完整过渡。
         if (!NavTransition.InFlight && _pages.TryGetValue(key, out var showing)
             && ReferenceEquals(PageHost.Content, showing)) return;
@@ -318,7 +319,7 @@ public partial class MainWindow : FluentWindow
         // 首次显示(窗口刚出来)不播过渡: 那时还没有"上一个页面"可淡出。
         if (!animate) { NavTransition.Jump(() => SwitchPageNow(PageOf(key))); return; }
 
-        // ★ 建页推迟到 swap 里(幕布已全不透明): 见上面"真正的收益在**建页时机**"。
+        // ★ 建页推迟到 swap 里(页面已完全透明): 见上面"真正要保住的是建页时机"。
         NavTransition.Run(() =>
         {
             PageHost.Content = PageOf(key);
@@ -327,13 +328,14 @@ public partial class MainWindow : FluentWindow
     }
 
     /// <summary>
-    /// 立刻换页的收尾: 兜底清掉 `PageHost` 上可能残留的整页透明度动画(旧版本写法留下的),
+    /// 立刻换页的收尾: 清掉 `PageHost` 上可能残留的透明度动画(过渡被打断时会留下),
     /// 并请求一次内存回收 —— 旧页面刚离开可视树, 它的卡片容器/封面位图全变成了等 GC 的垃圾。
     /// 不主动收的话, 任务管理器里的数字就是"点遍所有页面后一直不降"的观感。
     /// </summary>
     private void SwitchPageNow(FrameworkElement page)
     {
         PageHost.Content = page;
+        // 清动画 + 落定 1: 换页这一拍页面必须完全可见, 否则新页面会"半透明地"出现
         PageHost.BeginAnimation(OpacityProperty, null);
         PageHost.Opacity = 1;
         MemoryTrim.RequestTrim();
