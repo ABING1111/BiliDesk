@@ -30,6 +30,23 @@
       涓轰粈涔堜互鍓嶄細甯︿笂: VideoLAN.LibVLC.Windows 鐨?targets 鏄寜 **$(Platform)** 鍒ゆ柇鏋舵瀯鐨?鈥斺€?        VlcWindowsX86Enabled 榛樿鍦?'$(Platform)' == 'x86' **鎴?'AnyCPU'** 鏃朵负 true銆?      鑰屾湰宸ョ▼璁剧殑鏄?<PlatformTarget>x64</PlatformTarget>(閭ｆ槸**缂栬瘧鍣?*鐩爣),
       $(Platform) 浠嶇劧鏄?AnyCPU, 浜庢槸鍖呮妸 x86 涓?x64 涓ゅ鍘熺敓搴撳叏鎷蜂簡杩涙潵銆?      鏈伐绋嬫槸 x64-only(PlatformTarget=x64), x86 閭ｅ姘歌繙涓嶄細琚姞杞?鈥斺€?鐩存帴鍏虫帀銆?    -->
     <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
+    <!--
+      ★★★ 必须显式打开 x64 那一份, 不能再靠 targets 自己推导(2026-10-11 修的"视频无法播放")。
+      为什么: VideoLAN.LibVLC.Windows 的 targets 判据是
+          '$(Platform)' == 'x64' OR '$(Platform)' == 'AnyCPU'
+      注意它写的是 **AnyCPU(无空格)**。而本仓库的构建命令一直写
+          dotnet build ... -p:Platform="Any CPU"   ← 带空格
+      ⇒ $(Platform) 变成 'Any CPU', 与 'AnyCPU' 不相等, 两个开关都落空
+      ⇒ 原生库**一个都不复制**, 输出目录里没有 libvlc/, 程序一开视频就报
+         "Failed to load required native libraries"。
+      ★ 危害在于它**静默**: 构建成功(0 错误 0 警告), 只是产物少了一整个目录;
+        而且不同构建入口结果还不一样 —— 用 .sln 构建时 Platform 会被映射成 AnyCPU(正常),
+        直接构建 .csproj 或被别的工程 ProjectReference 带出来时才是 'Any CPU'(异常)。
+      所以这里把 x64 显式写死(本工程是 x64-only, PlatformTarget=x64),
+      无论外面怎么拼 Platform, 原生库都照常复制。
+      ★ 别把它"顺手"删掉改回依赖推导 —— 那就是把这个错误再种一遍。
+    -->
+    <VlcWindowsX64Enabled>true</VlcWindowsX64Enabled>
   </PropertyGroup>
 
   <!--
