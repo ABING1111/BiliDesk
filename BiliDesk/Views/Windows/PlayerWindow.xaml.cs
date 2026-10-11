@@ -3956,19 +3956,48 @@ public partial class PlayerWindow : FluentWindow
         }
     }
 
-    private async void OnCoinClick(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// 投币按钮: 弹出数量选择对话框(形态照 B 站官方那个投币弹窗, 见 <see cref="CoinWindow"/>)。
+    ///
+    /// ★ 为什么要有"选数量"这一步: 投币**不可撤销**, 而单视频上限是 2 枚 —— 原来写死投 1 枚,
+    ///   想投 2 枚的用户只能去官方端补。
+    /// ★ 用模态窗而不是 Popup: 播放器视频区有单击暂停 / 双击全屏手势, Popup 的"点外部关闭"
+    ///   会把那一次点击漏进视频区(与收藏夹选择窗同一个理由)。
+    /// ★ 已投过就不再弹: 投币没有"取消"语义, 让用户进到对话框里再撞服务端的"超过投币上限"
+    ///   只会白跑一趟。
+    /// </summary>
+    private void OnCoinClick(object sender, RoutedEventArgs e)
     {
         if (!Svc.Session.HasLogin) { Svc.Toast.Show("投币需要先登录"); return; }
         if (string.IsNullOrEmpty(_currentBvid) || _aid <= 0) return;
-        var (ok, err) = await Svc.Api.CoinVideoAsync(_aid, 1, _currentBvid);
+        if (_isCoined) { Svc.Toast.Show("这个视频已经投过币了"); return; }
+
+        var dlg = new CoinWindow { Owner = this };
+        dlg.ShowDialog();
+        if (!dlg.Confirmed) return;
+        _ = CoinAsync(dlg.Count, dlg.AlsoLike);
+    }
+
+    /// <summary>
+    /// 投币(count = 1 或 2)。成功后点亮按钮, 计数按实际枚数累加(不是固定 +1)。
+    /// alsoLike 走接口的 select_like, 点赞由服务端在同一次请求里完成。
+    /// </summary>
+    private async Task CoinAsync(int count, bool alsoLike)
+    {
+        if (string.IsNullOrEmpty(_currentBvid) || _aid <= 0) return;
+        // 已经赞过就不带 select_like: 没有必要, 也免得撞服务端"已经点赞"那条分支
+        var wantLike = alsoLike && !_isLiked;
+        var (ok, err) = await Svc.Api.CoinVideoAsync(_aid, count, _currentBvid, wantLike);
         if (ok)
         {
             // 同一个视频最多投 2 枚, 本地只记"已投过"的点亮态(下次进来以详情接口为准)
             _isCoined = true;
-            _coinCount += 1;
+            _coinCount += count;
+            // 赞是服务端顺带点的, 本地状态要跟着走 —— 否则按钮还显示"未赞"、计数也少 1
+            if (wantLike) { _isLiked = true; _likeCount += 1; }
             UpdateActionCounts();
             PlayActionPop(CoinIconBox);
-            Svc.Toast.Show("投币成功");
+            Svc.Toast.Show(count > 1 ? "已投 2 枚币" : "投币成功");
         }
         else
         {

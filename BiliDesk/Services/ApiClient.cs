@@ -2369,8 +2369,12 @@ public class ApiClient
         return (ok, ok ? err : FriendlyRiskMessage(err));
     }
 
-    /// <summary>投币(现行 web 接口, 需要 aid)。count=1 或 2</summary>
-    public async Task<(bool ok, string? err)> CoinVideoAsync(long aid, int count, string bvid)
+    /// <summary>
+    /// 投币(现行 web 接口, 需要 aid)。count=1 或 2。
+    /// alsoLike=true 时带 select_like=1 —— 服务端会在同一次请求里把赞也点上
+    /// (对应投币弹窗里的"同时点赞内容"; 拆成两次请求的话, 赞失败就该不该退币说不清了)。
+    /// </summary>
+    public async Task<(bool ok, string? err)> CoinVideoAsync(long aid, int count, string bvid, bool alsoLike = false)
     {
         var (ok, err) = await PostFormAsync(
             "https://api.bilibili.com/x/web-interface/coin/add",
@@ -2378,7 +2382,7 @@ public class ApiClient
             {
                 ["aid"] = aid.ToString(),
                 ["multiply"] = count.ToString(),
-                ["select_like"] = "0"
+                ["select_like"] = alsoLike ? "1" : "0"
             },
             referer: "https://www.bilibili.com/video/" + bvid);
         return (ok, ok ? err : FriendlyRiskMessage(err));

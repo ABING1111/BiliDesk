@@ -4,6 +4,64 @@
              xmlns:views="clr-namespace:BiliDesk.Views"
              Title="收藏到收藏夹" Width="360" Height="450"
              ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <views:FluentWindow.Resources>
+        <Style x:Key="FavFolderRowStyle" TargetType="CheckBox">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="Margin" Value="0,1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="Row" CornerRadius="8" Padding="12,10"
+                                Background="Transparent"
+                                BorderBrush="Transparent" BorderThickness="1.4">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="Box" Grid.Column="0" Width="20" Height="20" CornerRadius="6"
+                                        VerticalAlignment="Center"
+                                        Background="{DynamicResource InputBackgroundBrush}"
+                                        BorderBrush="{DynamicResource InputBorderBrush}" BorderThickness="1.4">
+                                    <TextBlock x:Name="Mark" Text="&#xE73E;" Opacity="0"
+                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontSize="12"
+                                               Foreground="{DynamicResource TextOnAccentBrush}"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <ContentPresenter Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Row" Property="Background"
+                                        Value="{DynamicResource ControlFillHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Row" Property="Background"
+                                        Value="{DynamicResource AccentSoftFillBrush}" />
+                                <Setter TargetName="Box" Property="Background"
+                                        Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Box" Property="BorderBrush"
+                                        Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Mark" Property="Opacity" Value="1" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Row" Property="BorderBrush"
+                                        Value="{DynamicResource AccentBorderFillBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </views:FluentWindow.Resources>
     <Grid Background="{DynamicResource AppBackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -20,23 +78,30 @@
         </StackPanel>
 
         <!-- 收藏夹勾选列表 -->
-        <ScrollViewer Grid.Row="1" Margin="12,0" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer Grid.Row="1" Margin="10,0,10,4" VerticalScrollBarVisibility="Auto">
             <ItemsControl x:Name="FolderList">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <!-- Transparent 背景让整行参与命中, 点击行内空白也能切换勾选 -->
-                        <Border Background="Transparent" Padding="8,4">
-                            <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}"
-                                      HorizontalContentAlignment="Stretch">
-                                <StackPanel Margin="2,4">
-                                    <TextBlock Text="{Binding Folder.Title}" FontSize="13.5"
-                                               TextTrimming="CharacterEllipsis"
-                                               Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    <TextBlock Text="{Binding MetaText}"
-                                               Style="{StaticResource MetaTextStyle}" Margin="0,2,0,0" />
-                                </StackPanel>
-                            </CheckBox>
-                        </Border>
+                        <CheckBox Style="{StaticResource FavFolderRowStyle}"
+                                  IsChecked="{Binding IsChecked, Mode=TwoWay}">
+                            <StackPanel>
+                                <TextBlock Text="{Binding Folder.Title}" FontSize="13.5"
+                                           TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock Text="{Binding MetaText}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource MetaTextStyle}">
+                                            <Setter Property="Margin" Value="0,2,0,0" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding MetaText}" Value="">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </CheckBox>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>

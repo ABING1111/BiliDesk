@@ -1235,7 +1235,7 @@
                                     </Button>
                                     <!-- 投币 -->
                                     <Button x:Name="BtnCoin" Style="{StaticResource PlayerActionBtn}"  Grid.Column="1"
-                                            Click="OnCoinClick" ToolTip="投币 1 个">
+                                            Click="OnCoinClick" ToolTip="投币 (1 或 2 枚)">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <Grid x:Name="CoinIconBox" Style="{StaticResource ActionIconBox}">
                                                 <Path Data="{StaticResource CoinIconGeometry}"
