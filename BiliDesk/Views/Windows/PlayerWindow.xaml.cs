@@ -3161,8 +3161,8 @@ public partial class PlayerWindow : FluentWindow
     ///
     /// 性能上两条铁律(违反任何一条, 高弹幕量视频就会掉帧):
     ///   1. **不挂 Effect**: 每个带 DropShadowEffect 的元素都要独立做一次位图合成,
-    ///      几十条弹幕同屏就是几十次全像素处理 —— 描边感交给半透明黑底衬(下面那个
-    ///      Border)来给, 效果相近但零额外开销;
+    ///      几十条弹幕同屏就是几十次全像素处理。★ 曾经靠"半透明黑底衬"给描边感,
+    ///      现已按用户要求去掉(见下面那段的说明) —— 但**仍然不许挂 Effect**;
     ///   2. **动画只动 RenderTransform**: 动 Canvas.Left 每帧都要走一遍 Canvas 布局,
     ///      动 TranslateTransform 只发生在合成线程的变换矩阵上, 完全不碰布局。
     /// </summary>
@@ -3175,10 +3175,18 @@ public partial class PlayerWindow : FluentWindow
 
         var currentSeconds = _mp?.Time / 1000.0 ?? time;
 
+        // ★★★ 只留文字, 不要长方形底衬(2026-10-07 用户要求"弹幕文字有长方形背景阴影, 移除它")。
+        //   原先这里给了 Background = 60% 黑 + CornerRadius=3, 屏幕上每条弹幕都压着一块
+        //   深色小方块 —— 用户看到的就是"文字后面有个长方形阴影"。
+        //   ⇒ Background 留 null(完全不画底), CornerRadius 随之无意义、一并去掉。
+        //
+        //   ★ Padding **保留**: 它不是装饰, 而是参与 width 计算(见下面的 Measure),
+        //     泳道分配与"追尾校验"都拿这个宽度当"这条弹幕要占多宽"。
+        //     去掉它会让相邻弹幕的横向间距归零, 密集时文字首尾相接糊成一片。
+        //   ★ 不要为了"看不清"改回加底衬或挂 DropShadowEffect: 前者就是用户要去掉的东西,
+        //     后者违反上面第 1 条铁律(几十条同屏 = 几十次全像素合成)。
         var border = new Border
         {
-            Background = new SolidColorBrush(Color.FromArgb(120, 0, 0, 0)),
-            CornerRadius = new CornerRadius(3),
             Padding = new Thickness(6, 1, 6, 1),
             // RenderTransform 在这里预置好, 滚动弹幕直接拿它做位移动画
             RenderTransform = new TranslateTransform(0, 0),
