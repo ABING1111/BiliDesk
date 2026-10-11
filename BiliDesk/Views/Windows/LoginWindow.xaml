@@ -3,69 +3,45 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:BiliDesk.Views"
              xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
-             Title="登录 - BiliDesk" Width="430" Height="620"
+             Title="登录 - BiliDesk" Width="400" Height="600"
              ResizeMode="NoResize" WindowStartupLocation="CenterOwner">
 
     <views:FluentWindow.Resources>
-        <!-- 账号/密码输入框。只在登录窗用, 所以样式留在本地、不进 Themes/Styles.xaml -->
-        <Style x:Key="LoginInputStyle" TargetType="TextBox">
-            <Setter Property="Background" Value="{DynamicResource InputBackgroundBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-            <Setter Property="CaretBrush" Value="{DynamicResource TextPrimaryBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource InputBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="12,0" />
-            <Setter Property="FontSize" Value="14" />
-            <Setter Property="Height" Value="40" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="TextBox">
-                        <Border x:Name="Bd" CornerRadius="8"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}">
-                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
-                                          Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-                                <Setter TargetName="Bd" Property="BorderThickness" Value="2" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- 密码框: 与文本框同一套外观(PasswordBox 的模板部件同样是 PART_ContentHost) -->
+        <!--
+            账号/密码输入框。**账号框直接用项目共用的 FluentTextBoxStyle**(圆角 6 / 内边距 10,8 / 细描边 /
+            聚焦换成强调色描边), 与设置页、首页那些输入框同一套观感; 密码框套不了 TextBox 的样式,
+            这里照它复刻一份 PasswordBox 版(含同样把 Padding 绑到 PART_ContentHost 的 Margin 的写法 ——
+            共用样式就是这么做的, 复刻版保持一致, 免得两边"看起来差一点")。
+            唯一多出来的是右内边距: 密码行右侧要放"显示/隐藏密码"的图标按钮。
+        -->
         <Style x:Key="LoginPasswordStyle" TargetType="PasswordBox">
             <Setter Property="Background" Value="{DynamicResource InputBackgroundBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
             <Setter Property="CaretBrush" Value="{DynamicResource TextPrimaryBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource InputBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="12,0" />
-            <Setter Property="FontSize" Value="14" />
-            <Setter Property="Height" Value="40" />
+            <!-- 左 19 / 右 22: 左边让给框内的图标, 右边让给"显示/隐藏密码"按钮。
+                 共用样式把这个 Padding 既当外边距又当内边距用(见文末注释), 所以正文起点 = 19*2+3 = 41 -->
+            <Setter Property="Padding" Value="19,8,22,8" />
+            <Setter Property="FontSize" Value="13" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="PasswordBox">
-                        <Border x:Name="Bd" CornerRadius="8"
+                        <Border x:Name="Bd" CornerRadius="6"
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}">
                             <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
-                                          Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
+                                          Margin="{TemplateBinding Padding}" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                 <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-                                <Setter TargetName="Bd" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.6" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -73,9 +49,13 @@
             </Setter>
         </Style>
 
-        <Style x:Key="LoginFieldLabelStyle" TargetType="TextBlock"
-               BasedOn="{StaticResource MetaTextStyle}">
-            <Setter Property="Margin" Value="2,0,0,6" />
+        <!-- 输入框里的图标按钮(显示/隐藏密码): 比 IconButtonStyle 小一圈, 好塞进输入行右侧 -->
+        <Style x:Key="LoginFieldIconButtonStyle" TargetType="Button"
+               BasedOn="{StaticResource BareIconButtonStyle}">
+            <Setter Property="Width" Value="30" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
         </Style>
     </views:FluentWindow.Resources>
 
@@ -91,8 +71,6 @@
             <StackPanel Orientation="Horizontal">
                 <Border Width="40" Height="40" CornerRadius="11">
                     <Border.Background>
-                        <!-- 品牌粉渐变。★ 这里的粉**不跟主题色走**: 这是 B 站品牌标识(B 字 logo),
-                             不是"强调色"。产品标识换了色就不再是那个品牌了 —— 和 UP 标/等级徽章同理。 -->
                         <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                             <GradientStop Color="#FB7299" Offset="0" />
                             <GradientStop Color="#FC9DB6" Offset="1" />
@@ -164,14 +142,45 @@
                            TextWrapping="Wrap" HorizontalAlignment="Center" />
             </Grid>
 
-            <!-- ===== 密码登录: 自己的表单 ===== -->
             <StackPanel x:Name="PwdPanel" VerticalAlignment="Center" Visibility="Collapsed">
-                <TextBlock Text="账号" Style="{StaticResource LoginFieldLabelStyle}" />
-                <TextBox x:Name="AccountBox" Style="{StaticResource LoginInputStyle}"
-                         MaxLength="32" KeyDown="OnPasswordFieldKeyDown" />
-                <TextBlock Text="密码" Style="{StaticResource LoginFieldLabelStyle}" Margin="2,14,0,6" />
-                <PasswordBox x:Name="PwdBox" Style="{StaticResource LoginPasswordStyle}"
-                             MaxLength="32" KeyDown="OnPasswordFieldKeyDown" />
+
+                <Grid>
+                    <!-- Padding 左 19 => 正文起点 41, 给框内的图标腾出位置(共用样式的内边距是"双份", 见文末注释) -->
+                    <TextBox x:Name="AccountBox" Style="{StaticResource FluentTextBoxStyle}"
+                             VerticalContentAlignment="Center" Padding="19,8,10,8" MaxLength="32"
+                             KeyDown="OnPasswordFieldKeyDown" />
+                    <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="16" IsHitTestVisible="False"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               HorizontalAlignment="Left" VerticalAlignment="Center" Margin="13,0,0,0" />
+                    <!-- 提示文字(空框时显示)。左边距比正文起点(41)右 3px, 免得压住光标 -->
+                    <TextBlock x:Name="AccountHint" Text="手机号 / 邮箱 / 用户名"
+                               FontSize="13" IsHitTestVisible="False"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               HorizontalAlignment="Left" VerticalAlignment="Center" Margin="44,0,10,0" />
+                </Grid>
+
+                <Grid Margin="0,12,0,0">
+                    <PasswordBox x:Name="PwdBox" Style="{StaticResource LoginPasswordStyle}"
+                                 MaxLength="32" KeyDown="OnPasswordFieldKeyDown" />
+                    <!-- 明文框: 只有点了"显示密码"才可见, 与密码框同格互斥(见 OnTogglePasswordVisible)。
+                         Padding 与上面的 PasswordBox 一致, 两种状态下文字位置不会跳。 -->
+                    <TextBox x:Name="PwdPlainBox" Style="{StaticResource FluentTextBoxStyle}"
+                             Visibility="Collapsed" VerticalContentAlignment="Center"
+                             Padding="19,8,22,8" MaxLength="32" KeyDown="OnPasswordFieldKeyDown" />
+                    <TextBlock Text="&#xE72E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="16" IsHitTestVisible="False"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               HorizontalAlignment="Left" VerticalAlignment="Center" Margin="13,0,0,0" />
+                    <TextBlock x:Name="PwdHint" Text="密码"
+                               FontSize="13" IsHitTestVisible="False"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               HorizontalAlignment="Left" VerticalAlignment="Center" Margin="44,0,10,0" />
+                    <!-- 显示 / 隐藏密码(E7B3 眼睛 / ED1A 划线眼)。样式自带图标字体补丁 -->
+                    <Button x:Name="PwdEyeButton" Style="{StaticResource LoginFieldIconButtonStyle}"
+                            Content="&#xE7B3;" HorizontalAlignment="Right" VerticalAlignment="Center"
+                            Margin="0,0,5,0" ToolTip="显示密码" Click="OnTogglePasswordVisible" />
+                </Grid>
 
                 <TextBlock x:Name="PwdErrorText" Visibility="Collapsed" Margin="2,10,0,0"
                            FontSize="12" TextWrapping="Wrap"
@@ -182,10 +191,9 @@
                         HorizontalAlignment="Stretch" Click="OnPasswordLogin" />
 
                 <TextBlock Margin="2,12,0,0" Style="{StaticResource MetaTextStyle}" TextWrapping="Wrap"
-                           Text="哔哩哔哩要求密码登录时完成人机验证, 点「登录」后会打开官方页面并填好账号密码, 验证通过即登录成功。" />
+                           Text="哔哩哔哩要求密码登录时完成人机验证; 点「登录」后会打开官方页面并替你填好账号密码。" />
             </StackPanel>
 
-            <!-- ===== 官方页面(密码登录的人机验证在这一步完成) ===== -->
             <Grid x:Name="WebPanel" Visibility="Collapsed">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -196,13 +204,18 @@
                         Background="{DynamicResource InfoBarBackgroundBrush}"
                         BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1">
                     <Grid>
-                        <TextBlock x:Name="WebHintText" Text="请在下方官方页面完成人机验证"
-                                   TextWrapping="Wrap" FontSize="12" Margin="0,0,52,0"
+                        <TextBlock x:Name="WebHintText" Text="正在打开官方登录页…"
+                                   TextWrapping="Wrap" FontSize="12" Margin="0,0,170,0"
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
-                        <Button Content="返回" Style="{StaticResource LinkButtonStyle}"
-                                HorizontalAlignment="Right" VerticalAlignment="Center"
-                                Click="OnBackFromWeb" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                    VerticalAlignment="Center">
+                            <Button x:Name="WebZoomButton" Content="缩放 130%"
+                                    Style="{StaticResource LinkButtonStyle}" Click="OnCycleWebZoom"
+                                    ToolTip="页面太小看不清时点这里继续放大" />
+                            <Button Content="返回" Style="{StaticResource LinkButtonStyle}"
+                                    Margin="14,0,0,0" Click="OnBackFromWeb" />
+                        </StackPanel>
                     </Grid>
                 </Border>
 
