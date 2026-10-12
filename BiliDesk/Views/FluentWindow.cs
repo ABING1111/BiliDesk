@@ -121,19 +121,29 @@ public class FluentWindow : Window
             //   ★ 所以必须**先看返回值再决定窗口底色**: 只有亚克力真的启用了, 才能把窗口背景设成透明
             //     (透明是靠底下的 DWM 合成层兜住的); 失败时一旦也设透明, 客户区就没有任何底色 —— 直接黑。
             //
-            // ★★★ 云母与亚克力**必须分开走**(2026-11-12 用户报"云母有些地方发灰, 要恢复默认黑白"):
-            //   两者的窗口底色策略正好相反 ——
-            //     · 亚克力是**半透明**材质: 窗口底色必须透明, 否则材质被完全盖住(等于没开);
-            //     · 云母是**不透明**材质(只采样一次壁纸, 从不透出后面的窗口): 窗口底色透明会让
-            //       DWM 那块灰直接透出来, 再叠上半透明的 AppBackgroundBrush(#B3F3F3F3),
-            //       页面就变成"30% 云母灰 + 70% 主题色"—— 用户看到的正是"有些地方发灰"。
-            //   ⇒ 云母/云母Alt 一律走下面那条"实色底"的路(与"无材质"完全一致),
-            //     只有 AcrylicMaterial == Acrylic 时才走透明底那条路。
-            var wantAcrylic = Svc.Settings.AcrylicBackground &&
-                              Svc.Settings.AcrylicMaterial == BackdropMaterial.Acrylic;
+            // ★★★ 三种材质各自的窗口底色策略**必须分开**(2026-11-12 两次返工才理清):
+            //   ① 亚克力  = **半透明**: 窗口底色必须透明, 否则材质被盖住(等于没开)
+            //   ② 云母/Alt = **不透明**(只采样一次壁纸, 从不透出后面的窗口): 窗口底色要**实色**,
+            //      否则 DWM 那块灰透出来、再叠上半透明的 AppBackgroundBrush(#B3F3F3F3),
+            //      页面就成了"30% 云母灰 + 70% 主题色"—— 用户看到的"有些地方发灰"。
+            //   ③ 无材质  = 实色底
+            //
+            // ★★ 这里踩过一个**回归**(2026-11-12 用户报"云母材质失效"):
+            //   我第一版修"发灰"时, 让云母和"无材质"一起走 else 分支 ——
+            //   而那条分支里有 `DisableMica(this)`, **等于亲手把云母关掉了**。
+            //   ⇒ 云母必须**单独一个分支**: 照常申请材质, 但窗口底色给实色。
+            var material = Svc.Settings.AcrylicMaterial;
+            var wantAcrylic = Svc.Settings.AcrylicBackground && material == BackdropMaterial.Acrylic;
+            var wantMica = Svc.Settings.AcrylicBackground &&
+                           material is BackdropMaterial.Mica or BackdropMaterial.MicaAlt;
+
             var acrylicOn = false;
             if (wantAcrylic)
-                acrylicOn = DwmInterop.SetAcrylicBackdrop(this, Svc.Settings.AcrylicMaterial);
+                acrylicOn = DwmInterop.SetAcrylicBackdrop(this, material);
+            else if (wantMica)
+                // ★ 云母: 照样把材质下发给 DWM(这一步就是"启用云母"), 只是**不**走透明底那条路。
+                //   这里**绝不能**调 DisableMica —— 那样等于把刚要开的云母又关掉。
+                DwmInterop.SetAcrylicBackdrop(this, material);
             _acrylicActive = acrylicOn;
 
             if (acrylicOn)
@@ -150,11 +160,13 @@ public class FluentWindow : Window
             }
             else
             {
-                // 没开亚克力 / 云母 / 该窗口不支持亚克力: 一律回落普通实色背景。
-                // ★ 云母也走这条(见上面那段说明): 它不透明, 实色底既盖住 DWM 的灰,
-                //   又让页面显示纯主题色 —— 与"无材质"时观感一致。
-                DwmInterop.SetAcrylicBackdrop(this, BackdropMaterial.None);
-                DwmInterop.DisableMica(this);
+                // 亚克力 / 云母 / 无材质: 一律回落**实色**窗口底色。
+                // ★ 云母也走这条(它不透明, 实色底才能盖住 DWM 的灰、显示纯主题色),
+                //   但**上面那个分支已经申请过材质了** —— 这里只管窗口底色, 不要再去动材质。
+                //   ★★ 因此这里**不能**再调 DisableMica: 材质的选择在函数开头已经统一决定了,
+                //     这里再按"没开亚克力"去禁, 会把云母也一起禁掉(2026-11-12 的那个回归)。
+                if (!Svc.Settings.AcrylicBackground)
+                    DwmInterop.DisableMica(this);
                 // ★ 必须先卸掉动画载体: 否则那个笔刷上还挂着 ColorAnimation,
                 //   会在后台继续按旧目标改色(表现是主题切换后底色又自己跳一下)。
                 StopAcrylicBaseAnimation();
