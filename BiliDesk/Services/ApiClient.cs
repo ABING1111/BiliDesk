@@ -2005,8 +2005,15 @@ public class ApiClient
                     //   **页大小**去比, 不能拿**本页条数**去比 —— 本页不满时按本页条数乘会把
                     //   偏移算小(明明到底了还说有); 本页 0 条时更是退化成"永远有下一页",
                     //   于是「加载更多」永远不消失、每点一次都去要一个越界页(2026-10-01 修)。
+                    // ★★★ 纪录片/影视合并(2026-11-12 修): media_bangumi 对纪录片关键词
+                    //   返回的是 `data: null`(实测"人生一串"/"航拍中国" 全 0 条, 而 media_ft
+                    //   分别给 5 / 4 条) —— 原代码在下面判"没找到"就 return, media_ft 根本没机会跑。
+                    //   所以这一段必须摆在**所有** code==0 的出口之前, 而不是只塞在某个分支里。
+                    if (isBangumi) await MergeFtResultsAsync(result, ps);
+
                     // ★ 番剧结果不在 Items 里, 所以"本页取到几条"必须按 kind 分流,
                     //   否则番剧永远是 0 ⇒ HasMore 恒 false ⇒ 只给第一页就再也没了。
+                    // ★ media_ft 合并后条数会变多, 所以这段必须放在它**之后**算(见上面那段注释)。
                     var got = kind == ContentKind.Bangumi
                         ? result.BangumiItems.Count
                         : result.Items.Count;
@@ -2024,42 +2031,6 @@ public class ApiClient
                             ContentKind.Bangumi => "没有找到相关番剧",
                             _ => "没有找到相关视频"
                         };
-                    // ★ 纪录片/影视合并: media_bangumi 不含《人生一串》这类纪录片,
-                    //   它们在 media_ft(影视)里。两个端点字段完全同构, 按 season_id 去重合并。
-                    //   放在主结果判定之后: media_ft 失败不影响主结果(它只是补充)。
-                    if (isBangumi)
-                    {
-                        try
-                        {
-                            var psFt = new Dictionary<string, string>(ps)
-                            {
-                                ["search_type"] = "media_ft"
-                            };
-                            var (cFt, _, dFt) = await GetJsonAsync(
-                                "https://api.bilibili.com/x/web-interface/search/type",
-                                psFt, referer: "https://search.bilibili.com/");
-                            if (cFt == 0 && dFt != null &&
-                                dFt.Value.TryGetProperty("result", out var listFt) &&
-                                listFt.ValueKind == JsonValueKind.Array)
-                            {
-                                var before = result.BangumiItems.Count;
-                                foreach (var e in listFt.EnumerateArray())
-                                {
-                                    var b = ParseBangumiItem(e);
-                                    // season_id 去重: 两个端点可能都返回同一季(如番剧电影)
-                                    if (b != null && !result.BangumiItems.Any(x => x.SeasonId == b.SeasonId))
-                                        result.BangumiItems.Add(b);
-                                }
-                                if (result.BangumiItems.Count > before)
-                                {
-                                    result.Error = "";
-                                    var gotAll = result.BangumiItems.Count;
-                                    result.HasMore = gotAll >= pageSize;
-                                }
-                            }
-                        }
-                        catch { /* media_ft 只是补充, 失败静默 */ }
-                    }
                     result.Ok = true;
                     return result;
                 }
@@ -2097,15 +2068,26 @@ public class ApiClient
                     return result;
                 }
 
+                // ★★★ 纪录片/影视合并(2026-11-12 修): 走到这里说明 media_bangumi 什么都没给
+                //   (data 为 null 或没有 result 键), 而纪录片恰好就是这个形状 —— 它们全在
+                //   media_ft 里(实测见 MergeFtResultsAsync 的注释)。所以兜底判"没找到"**之前**
+                //   必须再问一次 media_ft, 否则纪录片永远是 0 条。
+                if (isBangumi) await MergeFtResultsAsync(result, ps);
+
                 // code == 0 但没有 result(或 data 为 null): 就是"没搜到", 不是失败
                 result.Ok = true;
-                result.HasMore = false;
-                result.Error = kind switch
+                // ★ 条数要按 media_ft 合并**之后**算 —— 上面那次合并可能刚补进来一堆纪录片,
+                //   这时再说"没找到"就是错的。
+                var gotFallback = kind == ContentKind.Bangumi
+                    ? result.BangumiItems.Count
+                    : result.Items.Count;
+                result.HasMore = gotFallback > 0 && gotFallback >= pageSize;
+                result.Error = gotFallback == 0 ? (kind switch
                 {
                     ContentKind.Live => "没有找到相关直播间",
                     ContentKind.Bangumi => "没有找到相关番剧",
                     _ => "没有找到相关视频"
-                };
+                }) : "";
                 return result;
             }
 
@@ -2124,6 +2106,49 @@ public class ApiClient
             result.Error = ex.Message;
         }
         return result;
+    }
+    /// <summary>
+    /// 把 **media_ft(影视)** 的搜索结果合并进番剧结果集。
+    ///
+    /// ★★★ 为什么需要它(2026-11-12 用户报"纪录片搜不出来"):
+    ///   纪录片在 B 站**不在** media_bangumi 里。实测裸端点:
+    ///     · "人生一串"   media_bangumi=0 条, media_ft=5 条
+    ///     · "航拍中国"   media_bangumi=0 条, media_ft=4 条
+    ///     · "地球脉动"   media_bangumi=0 条, media_ft=6 条
+    ///     · "蓝色星球"   media_bangumi=0 条, media_ft=8 条
+    ///   更关键的是 media_bangumi 在关键词无结果时返回的是 **`data: null`**(连 result 键都没有),
+    ///   于是主流程直接判"没找到"返回 —— 早年的实现在主结果分支**内部**补这一次请求,
+    ///   那个分支压根进不去, media_ft 永远没机会跑。
+    ///   ⇒ 它现在是一个独立方法, 由 <see cref="SearchAsync"/> 在**每一个** code==0 的出口前调用。
+    ///
+    /// ★ 两个端点的条目字段完全同构(season_id/cover/season_type/badge/index_show/ep_size 全有),
+    ///   所以直接复用 ParseBangumiItem; 按 season_id 去重(番剧电影可能两边都出现)。
+    /// ★ 失败必须静默: 它只是补充, 主端点已经给了结果时不该被它拖垮。
+    /// </summary>
+    private async Task MergeFtResultsAsync(SearchData result, Dictionary<string, string> ps)
+    {
+        try
+        {
+            var psFt = new Dictionary<string, string>(ps)
+            {
+                ["search_type"] = "media_ft"
+            };
+            var (cFt, _, dFt) = await GetJsonAsync(
+                "https://api.bilibili.com/x/web-interface/search/type",
+                psFt, referer: "https://search.bilibili.com/");
+            if (cFt != 0 || dFt == null) return;
+            if (!dFt.Value.TryGetProperty("result", out var listFt) ||
+                listFt.ValueKind != JsonValueKind.Array) return;
+
+            foreach (var e in listFt.EnumerateArray())
+            {
+                var b = ParseBangumiItem(e);
+                if (b == null) continue;
+                if (result.BangumiItems.Any(x => x.SeasonId == b.SeasonId)) continue;
+                result.BangumiItems.Add(b);
+            }
+        }
+        catch { /* media_ft 只是补充, 失败静默 */ }
     }
 
     /// <summary>把一段 result 数组按 kind 解析进结果集(视频/直播/番剧三套字段)</summary>
