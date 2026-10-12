@@ -170,6 +170,43 @@ public class SessionManager
         Current.DedeUserIDCkMd5 = Get("DedeUserID__ckMd5") ?? Current.DedeUserIDCkMd5;
         Current.Buvid3 = Get("buvid3") ?? Current.Buvid3;
         Current.Buvid4 = Get("buvid4") ?? Current.Buvid4;
+        // ★★★ 写操作风控 Cookie(2026-11-12): 登录时浏览器里明明有, 这里以前直接丢了,
+        //   于是"换了扫码登录之后点赞报风控"。见 Models.Session 里那一段的说明。
+        //   用 ?? 保留旧值: 新一轮登录没带这几个键时不该把已有值清掉。
+        Current.BNut = Get("b_nut") ?? Current.BNut;
+        Current.Sid = Get("sid") ?? Current.Sid;
+        Current.BuvidFp = Get("buvid_fp") ?? Current.BuvidFp;
+        Current.Blsid = Get("b_lsid") ?? Current.Blsid;
+        Save();
+        Changed?.Invoke();
+    }
+
+    /// <summary>写操作风控 Cookie 是否已经齐了(见 <see cref="Models.Session"/> 里那一段说明)。</summary>
+    public bool HasRiskCookies =>
+        !string.IsNullOrEmpty(Current.BNut) && !string.IsNullOrEmpty(Current.Sid);
+
+    /// <summary>
+    /// 从一份浏览器 Cookie 里**只补风控那几项**, 不动登录凭据。
+    ///
+    /// ★ 为什么需要它(2026-11-12): 风控 Cookie 是后来才加的, 而用户的 session.json
+    ///   是**上一版登录流程**写的 —— 里面根本没有这些字段。若不补, 就得让用户
+    ///   "退出登录再登一次"才能用上点赞, 那对这个修复来说太贵。
+    ///   而这些值在 WebView2 的 Profile 里本来就躺着(扫码/账密登录都写过),
+    ///   启动时读一次即可, 用户无感。
+    /// </summary>
+    public void BackfillRiskCookies(IReadOnlyDictionary<string, string> cookies)
+    {
+        if (!HasLogin || HasRiskCookies) return;
+        string? Get(string name) => cookies.TryGetValue(name, out var v) ? v : null;
+
+        var bNut = Get("b_nut");
+        var sid = Get("sid");
+        if (string.IsNullOrEmpty(bNut) && string.IsNullOrEmpty(sid)) return;  // Profile 里也没有, 放弃
+
+        Current.BNut = bNut ?? Current.BNut;
+        Current.Sid = sid ?? Current.Sid;
+        Current.BuvidFp = Get("buvid_fp") ?? Current.BuvidFp;
+        Current.Blsid = Get("b_lsid") ?? Current.Blsid;
         Save();
         Changed?.Invoke();
     }
@@ -235,6 +272,12 @@ public class SessionManager
         Add("DedeUserID__ckMd5", Current.DedeUserIDCkMd5);
         Add("buvid3", Current.Buvid3);
         Add("buvid4", Current.Buvid4);
+        // ★ 写操作(点赞/投币/收藏)的风控 Cookie。Add 内部已过滤空值,
+        //   所以老配置/未登录时它们不在, 行为与加这几个字段之前完全一致。
+        Add("b_nut", Current.BNut);
+        Add("sid", Current.Sid);
+        Add("buvid_fp", Current.BuvidFp);
+        Add("b_lsid", Current.Blsid);
         return string.Join("; ", parts);
     }
 }

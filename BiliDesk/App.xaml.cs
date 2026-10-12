@@ -126,6 +126,13 @@ public partial class App : Application
         // 系统托盘: 双击回主界面, 右键可退出(失败只记日志, 不影响启动)
         TrayService.Instance.Initialize();
 
+        // ★ 补齐写操作风控 Cookie(2026-11-12 修"换了扫码登录之后点赞报风控"):
+        //   用户的 session.json 是上一版登录流程写的, 里面没有 b_nut/sid 这几项,
+        //   而它们在 WebView2 的 Profile 里本来就躺着。启动后读一次即可, 用户无感 ——
+        //   否则就得让用户"退出登录再登一次"才能用上点赞, 对这个修复来说太贵。
+        //   后台做、不 await: WebView2 初始化要几百毫秒, 不能挡启动。
+        BackfillRiskCookiesAsync();
+
         // ★ 用户**又双击了一次 exe**: 已经在跑的这个实例收到管道通知, 把主窗口叫到前台。
         //   只挡"不双开"而不做这件事, 用户看到的是"双击图标毫无反应", 会以为程序坏了。
         //   ShowRequested 在后台线程触发, 这里派发回 UI 线程再碰窗口。
@@ -154,6 +161,47 @@ public partial class App : Application
             await System.Threading.Tasks.Task.Delay(6000);
             await UpdateChecker.AutoCheckAsync();
         });
+    }
+
+    /// <summary>
+    /// 从 WebView2 的 Profile 补齐写操作风控 Cookie(见 <see cref="SessionManager.BackfillRiskCookies"/> 的说明)。
+    ///
+    /// ★ 用**隐藏**的 WebView2, 不碰用户正在看的那个 —— 初始化一个 WebView2 要几百毫秒,
+    ///   不能在启动路径上同步等它, 更不能抢正在显示的控件。
+    /// ★ 全程静默: 这只是"锦上添花"的补齐, 失败/取不到都只是维持原状(旧行为), 不该打扰用户。
+    /// </summary>
+    private static async void BackfillRiskCookiesAsync()
+    {
+        try
+        {
+            if (!Svc.Session.HasLogin || Svc.Session.HasRiskCookies) return;
+
+            // ★ 用主窗口里那个**隐藏**的 WebView2, 不碰用户正在看的那个 ——
+            //   初始化一个 WebView2 要几百毫秒, 不能在启动路径上同步等它。
+            //   它是 MainWindow 建的, 所以要等主窗口起来(Loaded 之后)才有。
+            var hidden = await WaitHiddenWebViewAsync();
+            if (hidden == null) return;
+
+            await Svc.WebView2.InitAsync(hidden);
+            var cookies = await WebView2Service.ReadBiliCookiesAsync(hidden);
+            Svc.Session.BackfillRiskCookies(cookies);
+        }
+        catch
+        {
+            // 静默: 补不齐就退回改动前的行为(带 6 个 Cookie), 不会更坏
+        }
+    }
+
+    /// <summary>等主窗口把隐藏 WebView2 建好(最多等几秒; 拿不到就放弃补齐)</summary>
+    private static async Task<Microsoft.Web.WebView2.Wpf.WebView2?>
+        WaitHiddenWebViewAsync()
+    {
+        for (var i = 0; i < 40; i++)
+        {
+            if (SvcWindow.HiddenWebView is { } wv) return wv;
+            await System.Threading.Tasks.Task.Delay(250);
+        }
+        return null;
     }
 
     /// <summary>记录异常到日志文件</summary>

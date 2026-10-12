@@ -1097,6 +1097,23 @@ public class Session
     /// 老配置没有这个字段 → 反序列化保持 null → 下次启动补上并落盘。
     /// </summary>
     public string? Buvid4 { get; set; }
+
+    // ------------------------------------------------------------------
+    // ★★★ 写操作(点赞/投币/收藏/三连)必需的风控 Cookie(2026-11-12 加)
+    //
+    // 背景: B 站的**读**接口只看 SESSDATA + buvid3/4 就放行, 但**写**接口还会看
+    // 这一组"浏览器会话特征"。实测(探针 bd-probe-like, 登录态 nav 正常、只读
+    // has/like 也正常): 缺它们时写接口间歇性返回 -352「被风控拦截」/ -403「账号异常」。
+    //
+    // ★ 为什么这与"扫码登录"有关: 旧流程从浏览器 Profile 里直接拿整套 Cookie,
+    //   天然带着这些; 新登录流程(2026-10 引入扫码/账密)只挑了 6 个存进 session.json,
+    //   其余全丢 —— 于是"换了登录方式之后点赞就不行了", 而登录态本身是好的。
+    //
+    // 值全部可空: 老配置没有这些字段, 缺了就只带能带的(退回到改动前的行为, 不会更坏)。
+    public string? BNut { get; set; }
+    public string? Sid { get; set; }
+    public string? BuvidFp { get; set; }
+    public string? Blsid { get; set; }
 }
 
 /// <summary>应用设置</summary>
