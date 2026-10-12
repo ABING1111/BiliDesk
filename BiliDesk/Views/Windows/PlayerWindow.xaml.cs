@@ -914,6 +914,12 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 明确**跨片保持**的值类型字段 —— 不该进每片清单, 也不该被自检点名。
     /// 分类错了自检会报出来, 改这里即可, 别去动 <see cref="PerMediaStateFields"/> 消警告。
+    ///
+    /// ★ 这张表装两种东西, 别混淆:
+    ///   ① **用户偏好/设置**(音量、弹幕开关、排序方式…)—— 换片必须保持, 清了是 bug;
+    ///   ② **窗口级的瞬态与订阅标记**(关闭标记、黑幕闸、Rendering 订阅…)—
+    ///      它们活不到换片那一刻, 或者由事件自动收敛, 所以"不需要清"。
+    ///   两种都不该被自检点名, 但只有 ① 是"必须保持"的语义。
     /// </summary>
     private static readonly string[] PersistentFields =
     {
@@ -931,6 +937,27 @@ public partial class PlayerWindow : FluentWindow
         nameof(_isListenMode),       // 「听视频」是窗口级的播放模式(同 _isFullscreen): 换片不该把它弹回视频
         // hover 预览锁是"上一次操作的瞬时反馈"(750ms 自己过期, 与片源无关), 不属于任何一片
         nameof(_actionHoverLockUntil),
+        // ---- 2026-10-12 补登记: 以下 8 个都是**窗口级**的瞬态/订阅标记, 换片不该清 ----
+        //
+        // ★★ 为什么它们不属于"每片状态": 自检只问"这个字段换片时该不该清", 而答案可以是
+        //   "不该"—— 登记在这里就是把这个答案固化下来, 免得后人看到 errors.txt 又去
+        //   ResetForNewMedia 里补一堆实际不需要的重置代码(那反而会引入新 bug)。
+        //
+        // 关闭流程标记(见字段声明处的说明): 窗口生命周期, 与片源无关
+        nameof(_closing),
+        // 全屏黑幕/拖动按住闸: 都是**百毫秒级**的窗口显示瞬态 ——
+        //   黑幕压下来等首个新帧就撤(FullscreenCoverTimeoutMs = 600ms 兜底),
+        //   不可能活到用户换下一个视频。留着 false 的初值即可, 清了没有任何可观察差异。
+        nameof(_fullscreenCoverArmed),
+        nameof(_resizeHold),
+        // CompositionTarget.Rendering / 弹幕时钟的订阅只挂一次, 属窗口级(同 _playerRegistered)
+        nameof(_modalSizeWatchAttached),
+        nameof(_danmakuClockAttached),
+        // 弹幕时钟的三个量: 靠 _mp.TimeChanged(约 4Hz)自动校准 —— 换片后新片一开播,
+        //   下一次 TimeChanged 就把 _dmClockMedia 推到新片时间, 260ms 内自然收敛。
+        //   ★ 特意**不**在 ResetForNewMedia 里清: 那会与 CalibrateDanmakuClock 抢写,
+        //     而后者才是权威来源(2026-11-11 为修"暂停回跳"刚把权威收敛到它)。
+        nameof(_dmClockMedia), nameof(_dmClockStamp), nameof(_dmClockRunning),
     };
 
     /// <summary>
@@ -960,11 +987,33 @@ public partial class PlayerWindow : FluentWindow
             + " —— 换片时它会保留上一条视频的残留。请归类后补进对应清单。"));
     }
 
+    /// <summary>
+    /// XAML 编译器自动生成、但**不带任何特性标记**的字段名 —— 必须显式排除。
+    ///
+    /// ★★ 为什么不能靠特性过滤(2026-10-12 实测):
+    ///   `PlayerWindow.g.cs` 生成的 `private bool _contentLoaded;` 是 `InitializeComponent()`
+    ///   的防重入标记。它与手写字段同属一个部分类, 所以 `DeclaredOnly` 拦不住;
+    ///   类型正好是 bool, 于是被自检当成"漏登记的状态字段"—— errors.txt 里因此刷了 **397 条**
+    ///   (同一句话每打开一个视频报一次, 日志涨到 797KB)。
+    ///   而它**既没有 `CompilerGeneratedAttribute` 也没有 `GeneratedCodeAttribute`**
+    ///   (只有相邻的 `InitializeComponent` 方法带 GeneratedCode, 字段本身光秃秃),
+    ///   类上同样没有标记 ⇒ 反射层面没有任何判据能区分它与手写字段。
+    ///   (试过按 CompilerGenerated 过滤, 探针实测生成字段数为 0, 那条路走不通。)
+    /// ⇒ 只能按名字排除。这个名字由 XAML 编译器固定生成, 全项目唯一, 不会与业务字段撞。
+    /// </summary>
+    private static readonly HashSet<string> XamlGeneratedFieldNames = new(StringComparer.Ordinal)
+    {
+        "_contentLoaded",
+    };
+
     /// <summary>取本类里所有"简单状态"字段名(值类型 + string, 不含 UI 元素/集合/定时器/服务引用)</summary>
     private static IEnumerable<string> StateFieldNames()
     {
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
         return typeof(PlayerWindow).GetFields(flags)
+            // ★★ XAML 编译器生成的字段必须排除(2026-10-12, errors.txt 里刷了 381 次的那条),
+            //   原因与为什么只能按名字排除, 见 XamlGeneratedFieldNames 的注释。
+            .Where(f => !XamlGeneratedFieldNames.Contains(f.Name))
             .Where(f => !typeof(DispatcherTimer).IsAssignableFrom(f.FieldType))
             .Where(f => f.FieldType.IsPrimitive || f.FieldType == typeof(string)
                         || f.FieldType.IsEnum
