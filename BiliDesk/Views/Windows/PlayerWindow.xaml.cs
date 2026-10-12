@@ -534,6 +534,12 @@ public partial class PlayerWindow : FluentWindow
         //   构造路径同样会跑到这里, 那时读的仍是设置, 所以两条路都对。
         _volumeCache = Svc.Settings.PlayerVolume;
         try { _mp.Volume = _volumeCache; } catch { }
+        // ★★★ 滑块的 Value 也必须一起给(2026-11-12 用户报"进入下一个视频时音量条仍是 80%"):
+        //   XAML 里写死 `Value="80"`, 而上面只改了 _volumeCache 与原生音量, **没碰滑块** ——
+        //   于是声音确实是继承的那个值, 滑块却停在 80, 用户看到的就是"没继承"。
+        //   ★ 必须放在 _mp 就绪之后: 滑块此时已在可视树里, 赋 Value 会触发 OnVolumeChanged,
+        //     那条路会再写一次 _volumeCache/原生音量(同值回写, 无副作用), 正好对齐。
+        if (VolumeSlider != null) VolumeSlider.Value = _volumeCache;
 
         // 换片重置覆盖度自检: 新增了状态字段却忘了归类, 会在 errors.txt 里被点出来(仅 DEBUG)
         VerifyResetCoverage();
