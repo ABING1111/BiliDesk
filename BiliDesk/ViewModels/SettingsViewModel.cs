@@ -711,6 +711,11 @@ public class SettingsViewModel : ObservableObject
         {
             if (value == Svc.Settings.MultiPlayerWindow) return;
             Svc.Settings.SetMultiPlayerWindow(value);
+            // ★ 必须推这个通知(2026-10-12 审查抓到): 副标题是**依赖属性的计算属性**,
+            //   两种模式文案完全相反。不通知的话勾选框变了、说明还写着旧模式的行为,
+            //   用户看到的是"勾了单窗口、说明却说每次新建"这种自相矛盾的说法。
+            //   (范式同 ApplyMaterial 里对 AcrylicMaterialHint 的处理。)
+            OnPropertyChanged(nameof(MultiPlayerWindowHint));
         }
     }
 
@@ -1200,6 +1205,8 @@ public class SettingsViewModel : ObservableObject
         // 播放器里调音量会写回设置(见 SettingsStore.SetPlayerVolume): 设置页开着时滑杆要跟着动,
         // 否则用户会在设置页看到一个"假"的旧值。设置页实例随主窗口缓存整个应用生命周期
         // (见 MainWindow.PageOf 的 _pages), 订阅不退也没有泄漏问题。
+        // ★ 参数是发起方(origin), 这里**用不到**它: 任何来源的音量变化都只更新本页显示,
+        //   真正"要不要广播给别的播放器"的判断在 PlayerWindow.OnVolumeSettingChanged 里。
         Svc.Settings.VolumeChanged += _ =>
         {
             OnPropertyChanged(nameof(PlayerVolume));

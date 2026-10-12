@@ -41,6 +41,13 @@
           亚克力模式下这个键仍是不透明, 合集面板不会跟着工具列一起变透。 -->
     <SolidColorBrush x:Key="OverlaySurfaceBrush" Color="#2D2D2D" />
 
+    <!-- 播放器右缘「详情栏收起把手」(2026-10-12):
+         深色主题用**深色底 + 浅字**, 与 OverlaySurfaceBrush 同族但略深一点(浮在面板上要有层次),
+         箭头用浅色保证对比度。别再用浅色磨砂 —— 深色主题下那块白条会亮得刺眼。 -->
+    <SolidColorBrush x:Key="CollapseHandleBrush" Color="#E62D2D2D" />
+    <SolidColorBrush x:Key="CollapseHandleBorderBrush" Color="#33FFFFFF" />
+    <SolidColorBrush x:Key="CollapseHandleGlyphBrush" Color="#F2F2F2" />
+
     <SolidColorBrush x:Key="InputBackgroundBrush" Color="#8C323232" />
     <SolidColorBrush x:Key="InputBorderBrush" Color="#26FFFFFF" />
 
