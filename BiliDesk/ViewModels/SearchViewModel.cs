@@ -74,6 +74,13 @@ public class SearchViewModel : ObservableObject
             OnPropertyChanged(nameof(IsVideoKind));
             OnPropertyChanged(nameof(IsLiveKind));
             OnPropertyChanged(nameof(IsBangumiKind));
+            // ★★★ IsBangumiSearch **必须**一起通知(2026-11-12 用户截图报"番剧 tab 选中但
+            //   结果一片空白"的真根因): 两个结果列表的 Visibility 绑的就是它 ——
+            //   视频列表 `InvBoolToVis`、番剧列表 `BoolToVis`。它是一个只读投影,
+            //   setter 里漏通知它就永远是构造时那个值(false) ⇒ 番剧列表恒 Collapsed、
+            //   视频列表恒 Visible 且绑的是空的 Results ⇒ 界面就是"tab 选中、啥也没有"。
+            //   ★ tab 的高亮绑 IsBangumiKind(那个有通知), 所以看起来像是"只有结果没出来"。
+            OnPropertyChanged(nameof(IsBangumiSearch));
             OnPropertyChanged(nameof(IdleHint));
             OnPropertyChanged(nameof(ResultCount));
             // 换类别 = 换一套结果: 清空旧结果并重搜(没搜过关键词就只是清一下)
@@ -181,9 +188,13 @@ public class SearchViewModel : ObservableObject
         // ★ 初始类别来自设置(上次停在哪个 tab), 所以要把三个投影属性各通知一次 ——
         //   否则 RadioButton 组的 IsChecked 全绑到 false, 界面表现为"三个 tab 一个都没选"。
         //   (XAML 里三个按钮都没写 IsChecked="True", 选中态完全靠这两条绑定。)
+        // ★ IsBangumiSearch 也必须通知: 它决定结果区两个列表的显隐, 见 Kind setter 里的说明。
         OnPropertyChanged(nameof(IsVideoKind));
         OnPropertyChanged(nameof(IsLiveKind));
         OnPropertyChanged(nameof(IsBangumiKind));
+        OnPropertyChanged(nameof(IsBangumiSearch));
+        OnPropertyChanged(nameof(IdleHint));
+        OnPropertyChanged(nameof(ResultCount));
 
         SearchCommand = new AsyncRelayCommand(SearchAsync, () => !string.IsNullOrWhiteSpace(Keyword));
         LoadMoreCommand = new AsyncRelayCommand(LoadMoreAsync);
