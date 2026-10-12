@@ -120,8 +120,19 @@ public class FluentWindow : Window
             //   那种窗口要把客户区当普通内容画, 不能扩展玻璃(否则整个内容区被 DWM 当非客户区压黑)。
             //   ★ 所以必须**先看返回值再决定窗口底色**: 只有亚克力真的启用了, 才能把窗口背景设成透明
             //     (透明是靠底下的 DWM 合成层兜住的); 失败时一旦也设透明, 客户区就没有任何底色 —— 直接黑。
+            //
+            // ★★★ 云母与亚克力**必须分开走**(2026-11-12 用户报"云母有些地方发灰, 要恢复默认黑白"):
+            //   两者的窗口底色策略正好相反 ——
+            //     · 亚克力是**半透明**材质: 窗口底色必须透明, 否则材质被完全盖住(等于没开);
+            //     · 云母是**不透明**材质(只采样一次壁纸, 从不透出后面的窗口): 窗口底色透明会让
+            //       DWM 那块灰直接透出来, 再叠上半透明的 AppBackgroundBrush(#B3F3F3F3),
+            //       页面就变成"30% 云母灰 + 70% 主题色"—— 用户看到的正是"有些地方发灰"。
+            //   ⇒ 云母/云母Alt 一律走下面那条"实色底"的路(与"无材质"完全一致),
+            //     只有 AcrylicMaterial == Acrylic 时才走透明底那条路。
+            var wantAcrylic = Svc.Settings.AcrylicBackground &&
+                              Svc.Settings.AcrylicMaterial == BackdropMaterial.Acrylic;
             var acrylicOn = false;
-            if (Svc.Settings.AcrylicBackground)
+            if (wantAcrylic)
                 acrylicOn = DwmInterop.SetAcrylicBackdrop(this, Svc.Settings.AcrylicMaterial);
             _acrylicActive = acrylicOn;
 
@@ -139,7 +150,9 @@ public class FluentWindow : Window
             }
             else
             {
-                // 没开亚克力 / 该窗口不支持亚克力: 一律回落普通实色背景
+                // 没开亚克力 / 云母 / 该窗口不支持亚克力: 一律回落普通实色背景。
+                // ★ 云母也走这条(见上面那段说明): 它不透明, 实色底既盖住 DWM 的灰,
+                //   又让页面显示纯主题色 —— 与"无材质"时观感一致。
                 DwmInterop.SetAcrylicBackdrop(this, BackdropMaterial.None);
                 DwmInterop.DisableMica(this);
                 // ★ 必须先卸掉动画载体: 否则那个笔刷上还挂着 ColorAnimation,
