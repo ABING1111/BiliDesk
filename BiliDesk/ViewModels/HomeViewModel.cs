@@ -56,6 +56,7 @@ public class HomeViewModel : ObservableObject
     public ICommand RefreshCommand { get; }
     public ICommand LoadMoreCommand { get; }
     public ICommand OpenRankingWebCommand { get; }
+    public ICommand ToggleBangumiRecommendCommand { get; }
 
     // ★ 原先这里有 OpenMyBangumiWebCommand / OpenBangumiWebCommand(跳 B 站网页版的
     //   「我的追番」「番剧分区」「国创分区」), 已按用户要求删除(2026-10-11):
@@ -67,6 +68,7 @@ public class HomeViewModel : ObservableObject
     {
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
         LoadMoreCommand = new AsyncRelayCommand(LoadMoreAsync);
+        ToggleBangumiRecommendCommand = new AsyncRelayCommand(ToggleBangumiRecommendAsync);
         OpenRankingWebCommand = new RelayCommand(() =>
             Svc.Navigate?.OpenWebViewWindow(
                 "https://www.bilibili.com/v/popular/rank/all", "排行榜 - 网页版"));
@@ -334,6 +336,29 @@ public class HomeViewModel : ObservableObject
     public bool BangumiHasMore => _bangumiHasMore;
 
     /// <summary>
+    /// 「番剧推荐」栏标题右侧那个「显示更多 / 收起」。
+    ///
+    /// ★ 为什么不在页面上放"自动滚动加载"就够: 用户明确要一个**按钮**(2026-11-12)。
+    ///   滚动加载只在"滚到底"那一刻触发, 而这一栏是墙式布局, 一屏能露出七八行;
+    ///   想要更多推荐时, 要么一路滚到整页最底, 要么手动点一下 —— 后者直接得多。
+    /// ★ 展开态跨 tab 切换保持: 用户展开后切到热门再看回来, 不该被收回去。
+    /// </summary>
+    private bool _bangumiRecommendExpanded;
+
+    /// <summary>「番剧推荐」栏当前是否是展开态(按钮文案与行为跟着变)</summary>
+    public bool BangumiRecommendExpanded
+    {
+        get => _bangumiRecommendExpanded;
+        private set => SetProperty(ref _bangumiRecommendExpanded, value);
+    }
+
+    /// <summary>按钮文案: 展开中显示「收起」, 否则「显示更多」</summary>
+    public string BangumiRecommendToggleText => _bangumiRecommendExpanded ? "收起" : "显示更多";
+
+    /// <summary>「番剧推荐」栏是否还能再加载(没有下一页时按钮不该可点)</summary>
+    public bool BangumiRecommendCanLoadMore => _bangumiHasMore;
+
+    /// <summary>
     /// 三栏标题旁的条数(空集合时为空串, 界面据此把这一段藏掉)。
     ///
     /// ★ 这是**可观测性**, 不是装饰: 2026-10-11 用户报"往下滑一直在重复",
@@ -430,6 +455,8 @@ public class HomeViewModel : ObservableObject
                 OnPropertyChanged(nameof(MyBangumiCountText));
                 OnPropertyChanged(nameof(BangumiRecommendCountText));
                 OnPropertyChanged(nameof(GuochuangRecommendCountText));
+                // 「显示更多」按钮的可点状态跟着"还有没有下一页"走
+                OnPropertyChanged(nameof(BangumiRecommendCanLoadMore));
             });
         }
         catch (Exception ex)
@@ -441,6 +468,39 @@ public class HomeViewModel : ObservableObject
         {
             _bangumiLoading = false;
         }
+    }
+
+    /// <summary>
+    /// 点「显示更多 / 收起」(番剧推荐栏标题右侧那个按钮)。
+    ///
+    /// 展开时把 <see cref="ActiveBangumiSection"/> 临时钉到 Recommend,
+    /// 这样 <see cref="LoadMoreAsync"/> 的追加目标就是番剧那一栏 —— 复用同一条翻页路,
+    /// 不新写加载逻辑(见 ToggleBangumiRecommendCommand 的说明)。
+    /// </summary>
+    private async Task ToggleBangumiRecommendAsync()
+    {
+        // 收起: 只切状态, 已加载的卡片留着(用户可能还想看回来)
+        if (_bangumiRecommendExpanded)
+        {
+            BangumiRecommendExpanded = false;
+            OnPropertyChanged(nameof(BangumiRecommendToggleText));
+            return;
+        }
+
+        if (!_bangumiHasMore)
+        {
+            // 没有下一页: 仍然切成展开态(让用户知道按钮响应了), 只是不再发起请求
+            BangumiRecommendExpanded = true;
+            OnPropertyChanged(nameof(BangumiRecommendToggleText));
+            return;
+        }
+
+        // ★ 先钉目标栏再翻页: LoadMoreAsync 读的是 ActiveBangumiSection,
+        //   顺序反了会按"用户当前滚动到的那一栏"追加, 按钮就名不副实了。
+        ActiveBangumiSection = BangumiSection.Recommend;
+        BangumiRecommendExpanded = true;
+        OnPropertyChanged(nameof(BangumiRecommendToggleText));
+        await LoadMoreAsync();
     }
 
     private string _bangumiHint = "";

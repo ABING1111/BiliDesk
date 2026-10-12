@@ -568,6 +568,19 @@
                         <TextBlock Text="{Binding BangumiRecommendCountText}" Margin="8,0,0,0"
                                    VerticalAlignment="Bottom" FontSize="13" Opacity="0.6"
                                    Foreground="{DynamicResource TextTertiaryBrush}" />
+                        <!-- 「显示更多 / 收起」(2026-11-12 用户要求):
+                             滚动加载只在"滚到整页最底"那一刻触发, 而这一栏是墙式布局、
+                             一屏能露出七八行 —— 想要更多推荐时得一路滚到底, 不直观。
+                             这个按钮把"再来一页番剧"变成一次点击。
+                             ★ 走 VM 的 ToggleBangumiRecommendCommand(它内部钉住追加目标栏后
+                               复用 LoadMoreAsync), 不在这里另写加载逻辑。 -->
+                        <Button Content="{Binding BangumiRecommendToggleText}"
+                                Command="{Binding ToggleBangumiRecommendCommand}"
+                                Style="{StaticResource SubtleButtonStyle}"
+                                Margin="12,0,0,0" Padding="12,4"
+                                VerticalAlignment="Bottom"
+                                IsEnabled="{Binding BangumiRecommendCanLoadMore}"
+                                ToolTip="再加载一页番剧推荐" />
                     </StackPanel>
 
                     <ItemsControl x:Name="BangumiRecommendList" ItemsSource="{Binding BangumiRecommend}"
