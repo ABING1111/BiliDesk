@@ -731,7 +731,7 @@
                            setter, 会吃掉 Button.Foreground(项目里反复踩的那个坑)。 -->
                     <Button x:Name="BtnFillWindow" Style="{StaticResource IconButtonStyle}"
                             Width="34" Height="34"
-                            ToolTip="铺满窗口" Click="OnFillWindowClick"
+                            ToolTip="铺满窗口 (收起右侧视频详情)" Click="OnFillWindowClick"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
                         <TextBlock x:Name="FillWindowGlyph" Text="&#xE9A6;"
                                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -989,8 +989,9 @@
                                         <!-- 音量 -->
                                         <TextBlock x:Name="VolumeIcon" Grid.Column="3" Text="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                    Foreground="#E6FFFFFF" FontSize="14" VerticalAlignment="Center" Margin="10,0,6,0" />
+                                        <!-- 音量(初值不写死: 构造函数按设置里的 PlayerVolume 摆, 见 SettingsStore.PlayerVolume) -->
                                         <Slider Grid.Column="4" x:Name="VolumeSlider" Style="{StaticResource PlayerSlider}"
-                                                Minimum="0" Maximum="100" Value="80" Width="78"
+                                                Minimum="0" Maximum="100" Width="78"
                                                 ValueChanged="OnVolumeChanged" />
 
                                         <!-- 倍速 -->
@@ -1096,6 +1097,69 @@
                                     </Grid>
                                 </StackPanel>
                             </Border>
+
+                            <!-- ============ 右侧详情栏 收起/展开把手(2026-10-12 新增) ============
+                                 ★ 为什么放在 VideoAreaRoot 里(而不是主窗口那层 Grid): VideoView 是
+                                   HwndHost, 主窗口里的 WPF 元素会被视频 HWND 整个盖住(airspace)——
+                                   只有 VideoView.Content 这棵子树渲染在"跟随视频区位置/大小的浮动
+                                   窗口"里, 既能浮在视频之上又能收到鼠标。控制栏/音量提示都在这里, 同理。
+                                 ★ 停靠在视频区右缘, 也就是与右侧信息栏的分界线。
+                                 ★ 箭头指向**面板运动的方向**(2026-10-12 按用户反馈修正, 别改反):
+                                   展开态(详情栏可见)显示 › —— 点它, 面板向右收起;
+                                   收起态显示 ‹ —— 点它, 面板从右边放回来。
+                                 ★ 必须**贴死**右缘(Margin=0): 留任何边距都会有一线视频从把手与
+                                   详情栏之间透出来, 看着就是"中间有缝"(2026-10-12 用户反馈)。
+                                 ★ 与顶栏「铺满窗口」是**同一个开关**( _isFillWindow, 见
+                                   ToggleFillWindow): 两个入口共用一份状态, 箭头与提示由
+                                   UpdateFillWindowButton 一起摆 —— 不会出现"把手说收起、
+                                   顶栏按钮说展开"各说各话。全屏时整个藏掉(信息栏已被强制收起,
+                                   点了不会有任何画面变化, 见 ApplyInfoPanelState)。
+                                 ★ 视觉(2026-10-12 按用户给的参考图改): 学参考浮钮的**浅色磨砂**
+                                   材质 —— 半透明白底 + 深色箭头, 而不是早期那套"深色胶囊 + 白字"
+                                   (那套是音量提示为压暗视频定的, 把手贴在白色详情栏边上用浅色更协调)。
+                                   细边 10% 黑: 平时看不出, 亮画面/白视频上用来勾出轮廓, 免得把手隐形。
+                                 ★ ZIndex=90: 在弹幕层(0)与控制栏之上、跳过提示(97)/音量提示(98)之下。
+                                 ★ 点击防护见 OnVideoAreaMouseLeftDown/Up: 那两兄弟是 Preview 隧道
+                                   事件, 挂在 VideoAreaRoot 上会**先于**本按钮收到点击, 不挡的话
+                                   点把手会顺带暂停一次。 -->
+                            <Button x:Name="BtnCollapsePanel" HorizontalAlignment="Right"
+                                    VerticalAlignment="Center" Margin="0"
+                                    Width="18" Height="64" Panel.ZIndex="90"
+                                    Focusable="False"
+                                    Click="OnCollapsePanelClick">
+                                <Button.Style>
+                                    <Style TargetType="Button">
+                                        <Setter Property="Background" Value="#E6FFFFFF" />
+                                        <Setter Property="Cursor" Value="Hand" />
+                                        <Setter Property="SnapsToDevicePixels" Value="True" />
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="Button">
+                                                    <!-- 左缘贴视频、圆角开在左边(像个从视频里伸出来的拉手);
+                                                         右缘必须**直角且贴死**边界(Margin=0, 见上方注释) -->
+                                                    <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                                            BorderBrush="#19000000" BorderThickness="1"
+                                                            CornerRadius="8,0,0,8">
+                                                        <ContentPresenter HorizontalAlignment="Center"
+                                                                          VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="Bd" Property="Background" Value="#F2FFFFFF" />
+                                                        </Trigger>
+                                                        <Trigger Property="IsPressed" Value="True">
+                                                            <Setter TargetName="Bd" Property="Background" Value="#D9FFFFFF" />
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </Button.Style>
+                                <TextBlock x:Name="CollapsePanelGlyph" Text="&#x203A;"
+                                           FontFamily="Segoe UI" FontSize="16" FontWeight="Bold"
+                                           Foreground="#333333" HorizontalAlignment="Center" />
+                            </Button>
                         </Grid>
                 </vlc:VideoView>
             </Grid>

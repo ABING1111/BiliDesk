@@ -404,6 +404,8 @@ public partial class PlayerWindow : FluentWindow
         Svc.Settings.DanmakuSettingsChanged += OnDanmakuSettingsChanged;
         // 跳过赞助片段: 开关/类别一变就重算(关掉要立刻停, 改类别要立刻生效)
         Svc.Settings.SponsorBlockChanged += OnSponsorSettingsChanged;
+        // 设置页改默认音量: 正在播的也立刻生效(与弹幕设置同款语义, 见 OnVolumeSettingChanged)
+        Svc.Settings.VolumeChanged += OnVolumeSettingChanged;
         // 进度条色块是按像素摆的, 控件一改宽度就得重画(窗口缩放、切全屏、控制栏重排都会触发)。
         // 重画成本只有几个 Rectangle, 不必做节流。
         SponsorMarks.SizeChanged += (_, _) => RenderSponsorMarks();
@@ -527,18 +529,20 @@ public partial class PlayerWindow : FluentWindow
         };
         _progressTimer.Start();
 
-        // 音量: 从设置里读"上一次调到的音量"(2026-11-12 音量继承)。
-        // ★ 这里必须是**读设置**, 不能写死 80 —— 写死的表现是"每个视频都要重调一遍音量",
-        //   而用户调过的偏好应该跟着走到下一个视频。
-        // ★ 也**不能**只依赖"复用同一个窗口时不重置": PlayerService 关窗重开时
-        //   构造路径同样会跑到这里, 那时读的仍是设置, 所以两条路都对。
+        // 默认音量: 取设置里的 PlayerVolume(用户预设 + 播放器里调节后的记忆, 见 SettingsStore.PlayerVolume)。
+        // ★ 在上游 b07d82c 的基础上补齐了另一半: 它只做了"继承上次调到的音量"(单向),
+        //   本分支把它同时做成设置页里可预置的「默认音量」项, 并让设置页与所有播放器双向同步
+        //   (见 OnVolumeSettingChanged / SettingsStore.VolumeChanged)。
+        //   这里保留上游那行 try/catch: 构造早期原生库未必已就绪, 写失败不该让窗口起不来。
+        // ★ 放构造函数而不是 ResetForNewMedia: 音量是窗口级用户偏好(登记在 PersistentFields,
+        //   换片不重置), 只该在开新窗口时取一次 —— 与上面 ApplyPreferredQuality 同款考虑:
+        //   带 bvid 直开这条路径不走 ResetForNewMedia(见那里 2026-10-04 的注释),
+        //   漏了就会出现"设置里改了音量, 第一个视频不生效"。
+        // ★ 滑块的 Value 也必须一起给(上游 2026-11-12 用户报的"进入下一个视频音量条仍是 80%"):
+        //   XAML 里不再写死 Value(见 PlayerWindow.xaml), 只给 _volumeCache 与原生音量的话,
+        //   滑块会停在 0 —— 用户看到的就是"没继承"。
         _volumeCache = Svc.Settings.PlayerVolume;
         try { _mp.Volume = _volumeCache; } catch { }
-        // ★★★ 滑块的 Value 也必须一起给(2026-11-12 用户报"进入下一个视频时音量条仍是 80%"):
-        //   XAML 里写死 `Value="80"`, 而上面只改了 _volumeCache 与原生音量, **没碰滑块** ——
-        //   于是声音确实是继承的那个值, 滑块却停在 80, 用户看到的就是"没继承"。
-        //   ★ 必须放在 _mp 就绪之后: 滑块此时已在可视树里, 赋 Value 会触发 OnVolumeChanged,
-        //     那条路会再写一次 _volumeCache/原生音量(同值回写, 无副作用), 正好对齐。
         if (VolumeSlider != null) VolumeSlider.Value = _volumeCache;
 
         // 换片重置覆盖度自检: 新增了状态字段却忘了归类, 会在 errors.txt 里被点出来(仅 DEBUG)
@@ -924,6 +928,7 @@ public partial class PlayerWindow : FluentWindow
     private static readonly string[] PersistentFields =
     {
         nameof(_volumeCache),        // 音量是用户偏好, 换片不该重置
+        nameof(_preMuteVolume),      // 静音前的音量(M 键恢复目标), 同 _volumeCache 是窗口级偏好
         nameof(_wheelAccum),         // 滚轮音量累计, 瞬时量
         nameof(_danmakuOn),          // 弹幕总开关是设置项
         nameof(_danmakuColorful),    // 彩色弹幕是设置项
@@ -2242,10 +2247,13 @@ public partial class PlayerWindow : FluentWindow
         // 滑块是用户拖动时的入口, 程序化赋值(SetVolume)也会走到这 —— 同值回写, 无副作用。
         // 必须同步权威值: 否则拖完滑块再滚轮, 基数还是旧缓存(见 _volumeCache 的说明)。
         _volumeCache = v;
-        // ★ 音量继承: 拖滑块这条路也要落盘(2026-11-12)。
-        //   SetVolume 里已经存过一次, 这里是**直接拖滑块**的路径 —— 那条路不经过 SetVolume。
-        //   两个入口都存, 才不会出现"滚轮调的继承了、拖滑块调的没继承"。
-        Svc.Settings.SetPlayerVolume(v);
+        // 与 SetVolume 里同一行: 滑块是独立入口(不经 SetVolume, 避免回环), 持久化不能少。
+        //   ★ 这里就是上游 b07d82c 说的"拖滑块这条路也要落盘" —— 本分支把它并进了完整的
+        //   设置项(同一个 PlayerVolume, 不另开"默认音量"), 所以滑块与设置页永远是同一个值。
+        // 拖动时每个 tick 都会调一次 —— Save 是合并异步写, 连拖只落盘一次(见 SettingsStore.Save)。
+        // ★ 第二个参数 this = "是本窗口调的": 多窗口下别的窗口不该被这个写入牵着走
+        //   (见 SettingsStore.VolumeChanged 关于 origin 的说明)。
+        Svc.Settings.SetPlayerVolume(v, this);
         // seek 静音期间(与 SetVolume 同一套约定): 新值记为恢复目标, 声音保持静音直到画面就绪。
         // 这里不能直接写 _mp.Volume —— 否则拖一下滑块就绕过静音, 声音又跑到画面前面去了。
         if (_seekMuteSavedVolume >= 0)
@@ -2255,6 +2263,22 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
         try { _mp.Volume = v; } catch { }
+    }
+
+    /// <summary>
+    /// 设置里的音量变了(设置页改的, 或别的播放器窗口改的), 按需应用到本窗口。
+    /// 走 <see cref="SetVolume"/> 统一入口(OSD/滑块/seek 静音语义全带上); 它内部的持久化
+    /// 回写是同值短路(见 SettingsStore.SetPlayerVolume), 不会连环触发事件。
+    ///
+    /// ★ origin 就是防"多窗口串音量"的那一半(事件带发起方, 见 SettingsStore.VolumeChanged):
+    ///   自己改的(滑块/滚轮/快捷键) → 音量已经是这个值, 再走一遍只会多弹一次 OSD,
+    ///   所以直接 return; 设置页或其他窗口改的 → 才真的应用。
+    /// </summary>
+    private void OnVolumeSettingChanged(PlayerWindow? origin)
+    {
+        if (_closing) return;
+        if (ReferenceEquals(origin, this)) return;   // 自己刚设的, 别自己再改一遍
+        SetVolume(Svc.Settings.PlayerVolume);
     }
 
     // ------------------------------------------------------------ 音量(滚轮 / 快捷键)
@@ -2321,6 +2345,13 @@ public partial class PlayerWindow : FluentWindow
     private int _volumeCache = 80;
 
     /// <summary>
+    /// 静音前的音量(M 键的恢复目标)。跟着 <see cref="_volumeCache"/> 一起变, 但只在按 M
+    /// 静音的那一刻定格 —— 之后用户用滚轮/滑块改音量都不影响它, 直到下次静音时重新定格。
+    /// 窗口级字段(换片不重置, 见 <see cref="PersistentFields"/>): 恢复目标与"正在看第几集"无关。
+    /// </summary>
+    private int _preMuteVolume;
+
+    /// <summary>
     /// 设置音量: 同步 LibVLC 与滑块, 并弹出音量提示。
     /// 统一入口是必要的 —— 之前 ↑↓/静音键各自改一遍 _mp.Volume 和 VolumeSlider.Value,
     /// 再加一条滚轮路径就会变成三份容易走偏的代码。
@@ -2331,10 +2362,15 @@ public partial class PlayerWindow : FluentWindow
         var v = Math.Max(0, Math.Min(100, volume));
         // 权威值先落账: 之后所有路径(滚轮/键盘)都以它为基数, 不依赖原生读回(见 _volumeCache 的说明)
         _volumeCache = v;
-        // ★ 音量继承: 用户每调一次就落盘, 下一个视频/下一次打开都用它。
-        //   放在这里而不是各处调用点 —— SetVolume 是滚轮/键盘/滑块的唯一入口。
-        //   SetPlayerVolume 内部有"值没变就不写"的短路, 连滚到同一值不会反复写盘。
-        Svc.Settings.SetPlayerVolume(v);
+        // 持久化: 这一行同时承担"设置页默认音量"与"播放器音量记忆"两个语义(见 SettingsStore.PlayerVolume)。
+        //   ★ 沿用上游 b07d82c 放在这里的 SetPlayerVolume(音量继承), 本分支把同一个值接进设置页,
+        //     并给它加上 origin 参数 —— 多窗口下"在 B 调音量把 A 也调了"就是漏传 origin 造成的。
+        // 放在 _volumeCache 落账之后、下面两条 return 之前: seek 静音期间用户调音量时 _volumeCache 记的
+        // 是"恢复目标", 那也正是用户想记住的值; 放后面会被"静音中"和"原生写失败"两条 return 漏掉。
+        // SetPlayerVolume 内部有同值短路, 程序性回写不会产生额外落盘, 也不需要调用方判重。
+        // ★ 第二个参数 this = "是本窗口调的": 多窗口下别的窗口不该被这个写入牵着走
+        //   (见 SettingsStore.VolumeChanged 关于 origin 的说明)。
+        Svc.Settings.SetPlayerVolume(v, this);
         // seek 静音期间用户调音量: 把新值记为"恢复目标", 声音仍保持静音直到画面就绪 ——
         // 若直接写 _mp.Volume 会立刻出声(又变成画面没到声音先到), 而且恢复时还会覆盖用户的值。
         if (_seekMuteSavedVolume >= 0)
@@ -2720,6 +2756,11 @@ public partial class PlayerWindow : FluentWindow
         // 跳过提示条上的点击(「撤回」按钮)同样不算视频区手势 ——
         // 它是覆盖层里除了控制栏之外唯一会吃掉左键的自绘元素, 不挡住就会"点撤回顺带切一次播放/暂停"。
         if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
+        // 右缘的收起把手同理(2026-10-12 新增): 它和上面几个一样会吃掉左键, 不挡的话
+        // "点把手收详情"会顺带暂停一次。
+        // ★ 必须挡: 本方法是 **Preview**(隧道)事件, 挂在 VideoAreaRoot 上会**先于**按钮
+        //   自己收到点击 —— 按钮内部标 Handled 也拦不住已经路过的隧道事件。
+        if (BtnCollapsePanel != null && BtnCollapsePanel.IsMouseOver) return;
 
         // 双击: 立即全屏, 取消所有挂起的单击/长按动作, 并抑制后续 Up 的单击排队
         if (e.ClickCount >= 2)
@@ -2758,6 +2799,8 @@ public partial class PlayerWindow : FluentWindow
         if (ControlBar != null && ControlBar.IsMouseOver) return;
         // 与 Down 对称: 跳过提示条上的「撤回」点击也不触发单击暂停
         if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
+        // 与 Down 对称: 右缘收起把手的点击不触发单击暂停(见 Down 里同名的说明)
+        if (BtnCollapsePanel != null && BtnCollapsePanel.IsMouseOver) return;
 
         _longPressTimer?.Stop();
 
@@ -3723,11 +3766,18 @@ public partial class PlayerWindow : FluentWindow
             case Key.Space: OnPlayPauseClick(this, new RoutedEventArgs()); e.Handled = true; return;
             case Key.Left: SeekRelative(-5); e.Handled = true; return;
             case Key.Right: SeekRelative(5); e.Handled = true; return;
-            // 音量: ↑↓ 走统一入口(顺带弹音量提示), M 在静音与 80 之间切换
+            // 音量: ↑↓ 走统一入口(顺带弹音量提示), M 在静音与"静音前听着的音量"之间切换
             // 基数用 _volumeCache: aout 未就绪时 _mp.Volume 原生读回是 -1/旧值(见 _volumeCache 的说明)
             case Key.Up: SetVolume(_volumeCache + VolumeStep); e.Handled = true; return;
             case Key.Down: SetVolume(_volumeCache - VolumeStep); e.Handled = true; return;
-            case Key.M: SetVolume(_volumeCache == 0 ? 80 : 0); e.Handled = true; return;
+            // M: 静音 / 取消静音。恢复值取"静音前听着的那个音量"(_preMuteVolume, 它跟着音量一起
+            // 被持久化过) —— ★ 别恢复成写死的 80: 用户明明在 30 听, 静音再取消应该回 30。
+            // 兜底 80 只发生在"窗口打开时就带着 0(上次退出停在静音)、且本窗口还没调过音量":
+            // 这时 _preMuteVolume 是 0, 给一个听得见的默认值比"按了没反应"好。
+            case Key.M:
+                if (_volumeCache > 0) _preMuteVolume = _volumeCache;
+                SetVolume(_volumeCache == 0 ? (_preMuteVolume > 0 ? _preMuteVolume : 80) : 0);
+                e.Handled = true; return;
             case Key.F: if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.None) ToggleFullscreen(); e.Handled = true; return;
             case Key.L: OnLikeClick(this, new RoutedEventArgs()); e.Handled = true; return;
             case Key.U: OnUpPageClick(this, new RoutedEventArgs()); e.Handled = true; return;
@@ -4137,6 +4187,13 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void OnFillWindowClick(object sender, RoutedEventArgs e) => ToggleFillWindow();
 
+    /// <summary>
+    /// 视频区右缘「收起把手」的点击入口(2026-10-12 新增: 用户要求在这个位置就能收起详情栏)。
+    /// ★ 与顶栏「铺满窗口」共用同一个开关(<see cref="ToggleFillWindow"/>): 两个入口、一份状态,
+    ///   把手的箭头方向与提示由 <see cref="UpdateFillWindowButton"/> 一起摆。
+    /// </summary>
+    private void OnCollapsePanelClick(object sender, RoutedEventArgs e) => ToggleFillWindow();
+
     private void ToggleFillWindow()
     {
         if (_closing) return;
@@ -4191,20 +4248,50 @@ public partial class PlayerWindow : FluentWindow
             VideoColumn.MinWidth = hide ? 0 : VideoColumnNormalMinWidth;
         MinWidth = hide ? FillWindowMinWidth : NormalWindowMinWidth;
         MinHeight = hide ? FillWindowMinHeight : NormalWindowMinHeight;
+
+        // ★ 视频区右缘的收起把手(2026-10-12 新增): **只**在全屏时藏掉。
+        //   全屏会把信息栏强制收起(见 ApplyFullscreenLayout), 这时候点把手只会改
+        //   _isFillWindow 而不改变画面, 退全屏时信息栏却不会回来 —— 一个"看着没反应
+        //   还留后患"的按钮, 不如藏掉。窗口模式下两种状态都显示: 收起态箭头朝右(›),
+        //   正是"把它放回来"的入口, 不能一起藏。
+        if (BtnCollapsePanel != null)
+            BtnCollapsePanel.Visibility = _isFullscreen ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// <summary>
-    /// 同步「铺满窗口」按钮的字形与提示(进入前 = 虚线框"填充这块区域", 已铺满 = 向内的双箭头"还原")。
+    /// 同步「铺满窗口」相关的两个控件: 顶栏按钮与视频区右缘的收起把手(2026-10-12 起)。
+    /// 字形: 顶栏按钮进入前 = 虚线框"填充这块区域", 已铺满 = 向内的双箭头"还原";
+    /// 把手: 箭头指向**面板运动的方向** —— 展开态 = 朝右(›, 点它面板向右收起),
+    /// 收起态 = 朝左(‹, 点它面板从右边放回来)。
     ///
-    /// 为什么图标要跟着状态变: 同一个位置点两下是"进入/退出", 字形不变的话用户不知道
-    /// 现在是不是已经铺满了, 也不知道再点一下会发生什么。
+    /// 为什么字形要跟着状态变: 同一个位置点两下是"进入/退出", 字形不变的话用户不知道
+    /// 现在是不是已经收起了, 也不知道再点一下会发生什么。
+    ///
+    /// ★ 两个控件必须在这里**一起**摆: 它们是同一个开关的两个入口(见 ToggleFillWindow),
+    ///   各摆各的必然出现"把手说收起、顶栏按钮说展开"各说各话。
+    /// ★ 顶栏按钮的提示文案里必须带上"收起右侧视频详情"(2026-10-12 用户反馈): 这个开关的
+    ///   本职效果就是"非全屏时把右侧详情栏收掉、让视频铺满窗口宽度", 但名字只叫"铺满窗口"——
+    ///   用户按"收起详情"去找根本想不到是它。两种状态的文案都把效果说全, 当搜索词用。
+    /// ★ 箭头方向 2026-10-12 按用户反馈修正过一次(原来朝反了): 就是上面那个"面板运动方向",
+    ///   改前看一眼这段再动手, 别再改反。
     /// </summary>
     private void UpdateFillWindowButton()
     {
-        if (BtnFillWindow == null) return;
-        // E9A6 = 虚线框(填充区域) / E73F = 向内的双箭头(还原)。两者在本字体里形状差异明显。
-        if (FillWindowGlyph != null) FillWindowGlyph.Text = _isFillWindow ? "\uE73F" : "\uE9A6";
-        BtnFillWindow.ToolTip = _isFillWindow ? "还原 (退出铺满窗口)" : "铺满窗口";
+        if (BtnFillWindow != null)
+        {
+            // E9A6 = 虚线框(填充区域) / E73F = 向内的双箭头(还原)。两者在本字体里形状差异明显。
+            if (FillWindowGlyph != null) FillWindowGlyph.Text = _isFillWindow ? "\uE73F" : "\uE9A6";
+            BtnFillWindow.ToolTip = _isFillWindow
+                ? "还原 (退出铺满窗口, 右侧视频详情回来)"
+                : "铺满窗口 (收起右侧视频详情)";
+        }
+        // 视频区右缘的把手(见 XAML 里 BtnCollapsePanel 的说明):
+        //   展开态 ›(203A) = 点它面板向右收起; 收起态 ‹(2039) = 点它面板放回来。
+        //   2039/203A 是 Segoe UI 都有的单尖括号 —— 不依赖图标字体(MDL2 没有稳的"单 V 形"字形)。
+        if (CollapsePanelGlyph != null)
+            CollapsePanelGlyph.Text = _isFillWindow ? "\u2039" : "\u203A";
+        if (BtnCollapsePanel != null)
+            BtnCollapsePanel.ToolTip = _isFillWindow ? "展开右侧视频详情" : "收起右侧视频详情";
     }
 
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreen();
@@ -6519,6 +6606,7 @@ public partial class PlayerWindow : FluentWindow
         Svc.Settings.DanmakuSettingsChanged -= OnDanmakuSettingsChanged;
         // 跳过赞助片段: 退订 + 掐掉还没回来的查询
         Svc.Settings.SponsorBlockChanged -= OnSponsorSettingsChanged;
+        Svc.Settings.VolumeChanged -= OnVolumeSettingChanged;
         CancelSponsorFetch();
         // 主动松掉"占地大"的那几处引用, 再请求一次回收 + 把空出来的物理页交还系统。
         // 顺序不能反: 先松引用, 紧接着那次回收才有东西可收 —— 对用户就是"关掉视频内存数字马上掉"。

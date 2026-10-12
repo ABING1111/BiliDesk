@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
+using BiliDesk.Views;   // VolumeChanged / SetPlayerVolume 的 origin 参数是 PlayerWindow
 
 namespace BiliDesk.Services;
 
@@ -155,6 +156,21 @@ public class SettingsStore
     public int PreferredQualityQn { get; set; } = QualityPreference.DefaultQn;
 
     /// <summary>
+    /// 是否允许同时打开多个播放器窗口(默认**开**)。
+    ///
+    /// · 开: 每次播放(视频/直播/本地文件)都**新建**一个播放器窗口, 已开着的窗口继续播
+    ///   各自的 —— 用户可以一边看 A 一边点开 B, 不会互相覆盖;
+    /// · 关: 复用同一个播放器窗口(旧行为), 打开新视频会替换当前播放。
+    ///
+    /// ★ 只影响"新窗口怎么来": 播放中改它不会动已经开着的窗口(下次播放才按新值走),
+    ///   所以不需要广播事件 —— 与「默认画质」同款(见 <see cref="SetPreferredQuality"/> 的说明)。
+    /// ★ 默认开的理由: 复用窗口会覆盖正在看的视频, 是用户明确不要的行为;
+    ///   想要旧行为的在设置页关掉即可(见 <see cref="SetMultiPlayerWindow"/>)。
+    /// ★ 读取点只有一个: PlayerService.GetOrCreateWindow。
+    /// </summary>
+    public bool MultiPlayerWindow { get; set; } = true;
+
+    /// <summary>
     /// 首页「推荐」用哪套算法。★ 2026-10-03 起**固定为网页版**, 该字段仅为兼容老配置保留 ——
     /// 读取时丢弃、写入时固定写 Web, 代码里没有任何地方按它分支。
     ///
@@ -223,8 +239,29 @@ public class SettingsStore
     ///   满格), 每个视频都要重调一遍纯属折腾。0 也照样存 —— 那是用户主动静音的,
     ///   下次打开还该是静音(与"静音键"的语义一致)。
     /// ★ 与 <see cref="Models.AppSettings.PlayerVolume"/> 是读写契约, 两处必须一致。
+    /// ★ 2026-10-12 起它同时是设置页的「默认音量」项(可直接预置, 不必先播一次);
+    ///   范围常量见 <see cref="VolumeMin"/>/<see cref="VolumeMax"/>, 变更事件见
+    ///   <see cref="VolumeChanged"/>(带发起方, 多窗口下才不会互相串音量)。
     /// </summary>
     public int PlayerVolume { get; set; } = 80;
+
+    /// <summary>音量可调范围(含)。设置页滑杆上下限、Load 兜底、setter 夹取全引这两个常量,
+    /// 不在别处重复写字面量(与 AppSettings.PlayerVolume 是读写契约)。</summary>
+    public const int VolumeMin = 0;
+    /// <inheritdoc cref="VolumeMin"/>
+    public const int VolumeMax = 100;
+
+    /// <summary>
+    /// 音量变更。事件参数 = **发起方**(null = 设置页/外部, 非 null = 那个播放器窗口)。
+    ///
+    /// ★ 为什么必须带来源(2026-10-12 审查发现, 多窗口下的真 bug):
+    ///   多播放器窗口同时开着时, 每个窗口都订阅本事件。如果无脑广播, 在 B 窗口调音量 →
+    ///   写回设置 → 事件 → **A 窗口也跟着变**(两个窗口一起被调), 与"音量是长期偏好"
+    ///   的语义不符 —— 用户在 A 里听的声音不该被 B 动。
+    ///   带来源后: 设置页发起 ⇒ 广播给所有窗口(这是用户明确要求"全部生效"的);
+    ///   某个播放器发起 ⇒ 只写回设置供**下次**开窗使用, 不打扰其他窗口。
+    /// </summary>
+    public event Action<PlayerWindow?>? VolumeChanged;
 
     /// <summary>
     /// 上次用的搜索类别(见 <see cref="Models.ContentKind"/>: 0=视频 1=直播间 2=番剧)。
@@ -248,14 +285,21 @@ public class SettingsStore
     }
 
     /// <summary>
-    /// 设置播放器音量并落盘。0~100 之外的值被夹回范围内(老配置可能存着越界值)。
+    /// 设置播放器音量并落盘, 并按需广播。0~100 之外的值被夹回范围内(老配置可能存着越界值)。
+    ///
+    /// <paramref name="origin"/> = 谁发起的这次修改(null = 设置页/外部, 非 null = 某个播放器窗口)。
+    /// ★ 它决定事件怎么被消费, 别随手传 null: 多窗口下"在 B 窗口调音量却把 A 也调了"
+    ///   就是漏传 origin 造成的(见 <see cref="VolumeChanged"/> 的说明)。
+    /// ★ 同值短路不只是省磁盘: 程序性回写(Playing 补写、事件触发后的同步)因此不会
+    ///   产生额外落盘, 也不需要调用方判重。
     /// </summary>
-    public void SetPlayerVolume(int volume)
+    public void SetPlayerVolume(int volume, PlayerWindow? origin = null)
     {
-        var v = Math.Clamp(volume, 0, 100);
+        var v = Math.Clamp(volume, VolumeMin, VolumeMax);
         if (PlayerVolume == v) return;
         PlayerVolume = v;
         Save();
+        VolumeChanged?.Invoke(origin);
     }
 
     /// <summary>
@@ -369,6 +413,9 @@ public class SettingsStore
         //   的值, 直接流进取流请求会变成一个谁也不认识的 qn(表现为画质莫名其妙)。
         PreferredQualityQn = QualityPreference.Normalize(s.PreferredQualityQn);
 
+        // 多窗口开关: 老配置缺字段时靠属性初始化值(true), 不需要版本兼容。
+        MultiPlayerWindow = s.MultiPlayerWindow;
+
         // ★ 算法选择已删除(2026-10-03): 固定网页版, 不再从配置读 ——
         //   老配置里存着 App 的会被纠正(那一档实测对第三方客户端不提供个性化),
         //   继续"尊重"旧值就是让用户看一屏通用热门。
@@ -400,8 +447,8 @@ public class SettingsStore
             ? s.DisclaimerVersion
             : (s.DisclaimerAccepted ? 1 : 0);
 
-        // 音量继承: 老配置没这个字段 ⇒ 保持默认 80。越界值夹回 0~100。
-        PlayerVolume = Math.Clamp(s.PlayerVolume, 0, 100);
+        // 音量继承: 老配置没这个字段 ⇒ 保持默认 80。越界值夹回 VolumeMin~VolumeMax。
+        PlayerVolume = Math.Clamp(s.PlayerVolume, VolumeMin, VolumeMax);
 
         // 上次的搜索类别: 老配置没这个字段 ⇒ 视频(与搜索页初始类别一致)。
         SearchKind = Enum.IsDefined(typeof(ContentKind), s.LastSearchKind)
@@ -439,6 +486,7 @@ public class SettingsStore
         DanmakuFilterColorful = DanmakuFilterColorful,
         DanmakuFilterAdvanced = DanmakuFilterAdvanced,
         PreferredQualityQn = PreferredQualityQn,
+        MultiPlayerWindow = MultiPlayerWindow,
         RecommendSource = RecommendSource,
         AccentColor = AccentColor,
         SponsorBlockEnabled = SponsorBlockEnabled,
@@ -641,6 +689,18 @@ public class SettingsStore
         var next = QualityPreference.Normalize(qn);
         if (PreferredQualityQn == next) return;
         PreferredQualityQn = next;
+        Save();
+    }
+
+    /// <summary>
+    /// 改"多个播放器窗口"并落盘。
+    /// ★ 不需要广播事件: 它只在**新建播放器窗口那一刻**被读(见 PlayerService.GetOrCreateWindow),
+    ///   已经开着的窗口不受影响 —— 与「默认画质」「免登录 1080P」同款, 下次播放即按新值走。
+    /// </summary>
+    public void SetMultiPlayerWindow(bool value)
+    {
+        if (MultiPlayerWindow == value) return;
+        MultiPlayerWindow = value;
         Save();
     }
 

@@ -1121,9 +1121,13 @@ public class AppSettings
 {
     public AppTheme ThemeMode { get; set; } = AppTheme.System;
     /// <summary>
-    /// 播放器音量(0~100)。用户调过一次就记住, 之后打开的每个视频都用它 ——
+    /// 播放器音量(0~100, 默认 80)。用户调过一次就记住, 之后打开的每个视频都用它 ——
     /// 这就是"音量继承"(2026-11-12 用户要求"调节音量以后下一个视频的音量也一样")。
-    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// ★ 2026-10-12 起它同时是设置页「播放」tab 的「默认音量」项, 可以在播放前直接预置。
+    /// ★ 播放器里调节音量(滚轮/滑块/↑↓/M)后会写回这个值, 所以它也承担"记住上次音量";
+    ///   0(静音)也照样存 —— 那是用户主动静音的, 下次打开还该是静音。
+    /// ★ 默认值/范围与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    ///   老配置缺这个字段 → 反序列化保持 80 → 与升级前播放器写死的 80 一致, 体感不变。
     /// </summary>
     public int PlayerVolume { get; set; } = 80;
 
@@ -1239,6 +1243,13 @@ public class AppSettings
     /// 写死的 qn=80 一致, 老用户升级后起播画质不变。
     /// </summary>
     public int PreferredQualityQn { get; set; } = QualityPreference.DefaultQn;
+
+    /// <summary>
+    /// 是否允许同时打开多个播放器窗口(默认 true)。开启后每次播放都新建窗口,
+    /// 已打开的继续播放; 关闭则复用同一个窗口(打开新视频会替换当前播放)。
+    /// ★ 默认值与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool MultiPlayerWindow { get; set; } = true;
 
     /// <summary>
     /// 首页「推荐」tab 的算法来源。★ 2026-10-03 起固定为网页版(字段仅为兼容老配置保留,

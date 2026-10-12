@@ -326,6 +326,46 @@
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
+                    <!-- 默认音量: 起播音量与播放器的音量记忆是**同一个值**(见 SettingsStore.PlayerVolume)——
+                         在播放器里用滚轮/滑块/↑↓ 调过之后自动记住, 下次打开视频仍生效。
+                         排版与"弹幕显示区域"那行同款: 说明行带数值, 右侧 240 宽滑杆。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="默认音量" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding PlayerVolumeText}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                Width="240" VerticalAlignment="Center"
+                                Minimum="{Binding PlayerVolumeMin}" Maximum="{Binding PlayerVolumeMax}"
+                                IsSnapToTickEnabled="True" TickFrequency="5"
+                                Value="{Binding PlayerVolume, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 多个播放器窗口: 开 = 每次播放新建窗口(已打开的继续播, 不会互相覆盖);
+                         关 = 复用同一个窗口(旧行为, 打开新视频替换当前播放)。
+                         只影响新窗口怎么来, 播放中改它不动已经开着的窗口(见 PlayerService.GetOrCreateWindow)。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="多个播放器窗口" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding MultiPlayerWindowHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding MultiPlayerWindow, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
                     <!-- 免登录 1080P: 未登录时给取流请求补 try_look + dm_img_* 四件套,
                          把匿名可见清晰度从 360P/480P 提到 720P/1080P(依据见 ApiClient.ApplyTryLook)。
                          这是设备指纹启发式放权, B 站改判据就会失效, 所以给用户一个关掉的入口。 -->
