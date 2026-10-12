@@ -254,6 +254,13 @@
                                    FontSize="12" VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextTertiaryBrush}" />
                     </Button>
+                    <!-- ★ IP 属地摆在**回复键右边**(2026-11-12 用户要求)。
+                         接口给的 Location 已自带 "IP属地：" 前缀, 直接显示即可;
+                         没有就整块不显示(用户可在 B 站设置里关掉 / 未登录时接口不下发)。 -->
+                    <TextBlock Text="{Binding Location}"
+                               FontSize="11" Margin="10,1,0,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               Visibility="{Binding HasLocation, Converter={StaticResource BoolToVis}}" />
                 </StackPanel>
             </DataTemplate>
 
@@ -291,7 +298,7 @@
                         <TextBlock Text="置顶" FontSize="9" FontWeight="SemiBold" Foreground="White" />
                     </Border>
                     <TextBlock Text="{Binding UserName}"
-                               FontWeight="SemiBold" FontSize="12" />
+                               FontWeight="SemiBold" FontSize="13" />
                     <!-- 等级徽章 + UP 标 -->
                     <Border Style="{StaticResource LevelBadgeStyle}"
                             Visibility="{Binding HasLevel, Converter={StaticResource BoolToVis}}">
@@ -304,19 +311,18 @@
                     <TextBlock Text="{Binding RcTime}"
                                Style="{StaticResource MetaTextStyle}"
                                Margin="8,1,0,0" FontSize="11" />
-                    <!-- IP 属地: 接口给的 Location 已经自带 "IP属地：" 前缀,
-                         没有就整块不显示(用户可以在 B 站设置里关掉展示 / 未登录时接口不下发)。
-                         用比时间更淡的颜色, 别和昵称/时间抢视线。 -->
-                    <TextBlock Text="{Binding Location}"
-                               FontSize="11" Margin="8,1,0,0"
-                               Foreground="{DynamicResource TextTertiaryBrush}"
-                               Visibility="{Binding HasLocation, Converter={StaticResource BoolToVis}}" />
+                    <!-- ★ IP 属地已移到评论操作行(回复键右边), 见 CommentActionBarTemplate
+                         与下方 ContentControl 的说明。这里不再放 —— 它原本和"昵称 + 等级 + UP 标
+                         + 时间"抢同一行, 长昵称会把它顶出可见区域。 -->
                 </StackPanel>
                 <!-- 评论内容: 走 CommentText, 把 [表情] 内联成图片。
                      换成它之后就不能再拖选复制了(TextBlock 没有选中能力),
-                     所以控件自带右键菜单"复制评论文字"补回来。 -->
+                     所以控件自带右键菜单"复制评论文字"补回来。
+                     ★ 字号 12 → 14(2026-11-12 用户报"评论区可读性差"):
+                       12px 在 1080p/125% 缩放下偏小, 一段长评论要凑近看。
+                       提到 14 后与正文其它区块(简介/操作栏说明)同档, 又不至于像标题那样抢。 -->
                 <controls:CommentText Comment="{Binding}"
-                                     FontSize="12" Margin="0,3,0,0"
+                                     FontSize="14" Margin="0,3,0,0"
                                      Foreground="{DynamicResource TextPrimaryBrush}" />
                 <!-- 评论操作行(赞 / 踩 / 回复): 统一走 CommentActionBarTemplate, 别在这里另写一份 -->
                 <ContentControl Content="{Binding}" HorizontalAlignment="Left" Margin="0,3,0,0"
@@ -340,7 +346,7 @@
                                     <controls:CommentText Comment="{Binding}"
                                                           Prefix="{Binding ReplyPrefix}"
                                                           PrefixForeground="{DynamicResource TextTertiaryBrush}"
-                                                          FontSize="11.5" Margin="0,0,0,3"
+                                                          FontSize="13" Margin="0,0,0,3"
                                                           Foreground="{DynamicResource TextSecondaryBrush}" />
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
@@ -1652,13 +1658,12 @@
                                                                         </StackPanel>
                                                                         <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
                                                                             <TextBlock Text="{Binding RcTime}" Style="{StaticResource MetaTextStyle}" FontSize="11" />
-                                                                            <TextBlock Text="{Binding Location}" FontSize="11" Margin="8,0,0,0"
-                                                                                       Foreground="{DynamicResource TextTertiaryBrush}"
-                                                                                       Visibility="{Binding HasLocation, Converter={StaticResource BoolToVis}}" />
+                                                                            <!-- ★ IP 属地已移到下方评论操作行(回复键右边),
+                                                                         由 CommentActionBarTemplate 统一渲染, 这里不再重复。 -->
                                                                         </StackPanel>
                                                                     </StackPanel>
                                                                 </StackPanel>
-                                                                <controls:CommentText Comment="{Binding}" FontSize="13.5" Margin="0,8,0,0"
+                                                                <controls:CommentText Comment="{Binding}" FontSize="14" Margin="0,8,0,0"
                                                                                       Foreground="{DynamicResource TextPrimaryBrush}" />
                                                                 <ContentControl Content="{Binding}"
                                                                                 HorizontalAlignment="Left" Margin="0,6,0,0"
