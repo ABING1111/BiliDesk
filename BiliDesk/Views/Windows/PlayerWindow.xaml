@@ -6,6 +6,7 @@
              xmlns:behaviors="clr-namespace:BiliDesk.Helpers"
              xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
              xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
+     xmlns:sys="clr-namespace:System;assembly=mscorlib"
              Title="BiliDesk 播放器" Width="1280" Height="760"
              MinWidth="1100" MinHeight="600" WindowStartupLocation="CenterScreen"
              WindowStyle="None" ResizeMode="CanResize" UseLayoutRounding="True">
@@ -21,6 +22,12 @@
                             UseAeroCaptionButtons="False" />
     </shell:WindowChrome.WindowChrome>
     <views:FluentWindow.Resources>
+        <!-- 简介折叠后的最大高度(2026-10-12)。12px 字号 × 行高 ≈ 18px, 这里约 6 行。
+             ★ 抽成资源而不是写死数字: 折叠判据(要不要显示"展开")与 MaxHeight
+               必须用**同一个值**, 否则会出现"明明没超却冒出展开按钮"或反之。
+               代码里判断用 ActualHeight 与它比较。 -->
+        <sys:Double x:Key="DescCollapsedHeight">108</sys:Double>
+
         <!-- ============ 三连 / 评论图标(B 站官方 SVG 的路径数据) ============
              WPF 不认 SVG, 所以把 svg 里 <path d="..."> 的数据原样搬进来当几何资源。
 
@@ -102,6 +109,23 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+
+        <!-- 弹幕外观弹层里的两行文字(2026-10-12 新增): 标签左 / 数值右。
+             ★ 颜色必须**写死**成白系而不是用主题刷子: 这块弹层永远浮在视频画面上,
+               跟着主题走的话浅色主题下会变成深色字压在亮画面上, 直接看不见。
+             ★ 必须显式设 Foreground(项目里那条全局隐式 TextBlock 样式带 Foreground setter,
+               优先级高于继承) —— 这是本项目的老坑, 省略就等于什么都没写。 -->
+        <Style x:Key="DanmakuRowLabelStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#E6FFFFFF" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="DanmakuRowValueStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#99FFFFFF" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="TextAlignment" Value="Right" />
+            <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
 
         <!-- 播放器圆形图标按钮 -->
@@ -1073,8 +1097,11 @@
                                         <Popup x:Name="DanmakuAreaPopup"
                                                Placement="Top" StaysOpen="False" AllowsTransparency="True"
                                                PopupAnimation="Fade">
+                                            <!-- ★ 宽度从 190 放宽到 240: 现在这一张里要放三行
+                                                 "标签 + 滑杆 + 数值", 190 会让「不透明度 100%」
+                                                 这类标签+数值挤到一行放不下(用户截图里就是这么挤的)。 -->
                                             <Border Background="#F0202226" CornerRadius="8" Padding="12,10"
-                                                    BorderBrush="#33FFFFFF" BorderThickness="1" Width="190">
+                                                    BorderBrush="#33FFFFFF" BorderThickness="1" Width="240">
                                                 <StackPanel>
                                                     <TextBlock Text="弹幕显示区域" Foreground="#E6FFFFFF" FontSize="12" />
                                                     <Slider x:Name="DanmakuAreaSlider" Style="{StaticResource PlayerSlider}"
@@ -1083,6 +1110,73 @@
                                                             TickFrequency="5" ValueChanged="OnDanmakuAreaChanged" />
                                                     <TextBlock x:Name="DanmakuAreaValue" Text="25%"
                                                                Foreground="#99FFFFFF" FontSize="11" HorizontalAlignment="Right" />
+
+                                                    <!-- ============ 弹幕外观三项(2026-10-12 新增) ============
+                                                         ★ 排版照用户给的截图来: 每行都是「标签 | 滑杆 | 数值」,
+                                                           标签左对齐固定宽(70), 滑杆撑开, 数值右对齐(50)。
+                                                           三行等距(margin 14)才像一组, 不然会散成三块。
+                                                         ★ 底色仍是 #F0202226 而不是主题刷子: 控制栏浮在画面上,
+                                                           必须与主题无关(浅色主题下也不会变成白底糊住画面)。
+                                                         ★ 数值单独放一个 TextBlock 而不是绑到滑杆上:
+                                                           要更新的地方多一个控件,但"代码里写字符串"这件事
+                                                           不再散落在三个地方 —— 见 UpdateDanmakuLookTexts。 -->
+                                                    <Border Height="1" Margin="0,12,0,12"
+                                                            Background="#26FFFFFF" />
+
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="70" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="50" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="不透明度" Style="{StaticResource DanmakuRowLabelStyle}" />
+                                                        <Slider Grid.Column="1" x:Name="DanmakuOpacitySlider"
+                                                                Style="{StaticResource PlayerSlider}"
+                                                                Minimum="20" Maximum="100" Value="80"
+                                                                Margin="8,0,8,0" IsSnapToTickEnabled="True"
+                                                                TickFrequency="5" ValueChanged="OnDanmakuOpacityChanged" />
+                                                        <TextBlock Grid.Column="2" x:Name="DanmakuOpacityValue" Text="80%"
+                                                                   Style="{StaticResource DanmakuRowValueStyle}" />
+                                                    </Grid>
+
+                                                    <Grid Margin="0,14,0,0">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="70" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="50" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="弹幕字号" Style="{StaticResource DanmakuRowLabelStyle}" />
+                                                        <Slider Grid.Column="1" x:Name="DanmakuFontSlider"
+                                                                Style="{StaticResource PlayerSlider}"
+                                                                Minimum="50" Maximum="300" Value="100"
+                                                                Margin="8,0,8,0" IsSnapToTickEnabled="True"
+                                                                TickFrequency="25" ValueChanged="OnDanmakuFontChanged" />
+                                                        <TextBlock Grid.Column="2" x:Name="DanmakuFontValue" Text="100%"
+                                                                   Style="{StaticResource DanmakuRowValueStyle}" />
+                                                    </Grid>
+
+                                                    <Grid Margin="0,14,0,0">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="70" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="50" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="弹幕速度" Style="{StaticResource DanmakuRowLabelStyle}" />
+                                                        <!-- ★ 速度是五档离散值, 用 Slider 而不是滑杆+区间:
+                                                             整数档位才能保证"每一格 = 一个明确的速度",
+                                                             拖到任意位置都能对上 SpeedLabel。
+                                                             ★ 步长 = 1 档(IsSnapToTickEnabled), 不设的话
+                                                             滑杆能停在 2.37 这种值上, 而 DanmakuMotion 会
+                                                             把它夹到 2 —— 于是滑杆显示"2.37"而实际是"适中",
+                                                             看着就是"滑块不准"。 -->
+                                                        <Slider Grid.Column="1" x:Name="DanmakuSpeedSlider"
+                                                                Style="{StaticResource PlayerSlider}"
+                                                                Minimum="0" Maximum="4" Value="2"
+                                                                Margin="8,0,8,0" IsSnapToTickEnabled="True"
+                                                                TickFrequency="1" ValueChanged="OnDanmakuSpeedChanged" />
+                                                        <TextBlock Grid.Column="2" x:Name="DanmakuSpeedValue" Text="适中"
+                                                                   Style="{StaticResource DanmakuRowValueStyle}" />
+                                                    </Grid>
                                                 </StackPanel>
                                             </Border>
                                         </Popup>
@@ -1536,11 +1630,183 @@
 
                             <Grid Margin="0,12,0,0" MinHeight="120">
                                 <StackPanel x:Name="IntroPanel">
-                                    <!-- 简介可自由选中复制: 只读文本框(无边框透明, 光标为文本) -->
+                                    <!-- ============ 简介(2026-10-12 加折叠) ============
+                                         ★ 折叠是**给下面的「相关视频」让位置**: 很多 UP 主的简介
+                                           动辄几百字, 不折的话右半屏全被它吃掉,
+                                           用户得滚很久才看得到推荐列表。
+                                         ★ MaxHeight 判据选的是"折起来大约 6 行"(12px 字号 + 行高):
+                                           低于它就没必要折, 多出的展开按钮是纯噪音。 -->
                                     <TextBox x:Name="DescText" TextWrapping="Wrap" IsReadOnly="True"
                                              Background="Transparent" BorderThickness="0" Padding="0"
                                              Foreground="{DynamicResource TextSecondaryBrush}"
-                                             FontSize="12" Cursor="IBeam" Text="加载中…" />
+                                             FontSize="12" Cursor="IBeam" Text="加载中…"
+                                             MaxHeight="{StaticResource DescCollapsedHeight}" />
+                                    <!-- 展开/收起(2026-10-12 用户要求"加粗、居中、加展开/收起符号"):
+                                         ★ 加粗 + 居中: 它是简介的唯一操作入口, 之前是 12px 普通体
+                                           靠左, 夹在一大段灰色正文里几乎看不见。
+                                         ★ 符号用 **⌄ / ⌃**(U+2303 / U+2302): 这两个是"上下尖头",
+                                           语义直指"往下展开 / 往上收起"; 常见的 ▾ 会让人以为
+                                           折叠起来是个下拉菜单。
+                                         ★ 符号与文案**写在同一个 TextBlock 的两段**里(而不是两个控件):
+                                           它们要一起换方向, 分成两个控件就得在代码里同时改两处,
+                                           早晚会漏掉一个。
+                                         ★ 显式给 Foreground(局部值): 全局隐式 TextBlock 样式带
+                                           Foreground setter, 会吃掉继承来的强调色。 -->
+                                    <Button x:Name="BtnDescFold" Style="{StaticResource LinkButtonStyle}"
+                                            HorizontalAlignment="Center" Padding="6,4,6,4"
+                                            Margin="0,4,0,0"
+                                            Visibility="Collapsed" Click="OnDescFoldClick"
+                                            ToolTip="展开完整简介">
+                                        <TextBlock x:Name="BtnDescFoldText" FontSize="12.5" FontWeight="SemiBold">
+                                            <TextBlock x:Name="BtnDescFoldGlyph" Text="&#x2303;"
+                                                       FontWeight="Normal" Margin="0,0,4,0" />
+                                            <Run x:Name="BtnDescFoldLabel" Text="展开简介" />
+                                        </TextBlock>
+                                    </Button>
+
+                                    <!-- ============ 相关视频(2026-10-12 新增) ============
+                                         ★ 位置在简介**下方**(用户指定), 所以上面那段折叠
+                                           是为它腾位置的 —— 两者是配套改动, 不是两件独立的事。
+                                         ★ 与简介同属 IntroPanel: 切到「评论」tab 时整块一起隐藏
+                                           (相关视频是"这个视频的补充信息", 不是评论的一部分),
+                                           放在 IntroPanel 里就不必再单独写一遍可见性联动。
+                                         ★ 一行一个视频(用户指定): 卡片横排会挤在 400px 的信息栏里,
+                                           标题会被压成两三行, 反而看不清"这是哪个视频"。 -->
+                                    <StackPanel x:Name="RelatedPanel" Visibility="Collapsed" Margin="0,16,0,0">
+                                        <Border BorderBrush="{DynamicResource DividerBrush}"
+                                                BorderThickness="0,1,0,0" Padding="0,12,0,0">
+                                            <DockPanel>
+                                                <StackPanel DockPanel.Dock="Right"
+                                                            Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <controls:LoadingRing x:Name="RelatedLoadingRing"
+                                                                          Width="12" Height="12"
+                                                                          Visibility="Collapsed" />
+                                                    <TextBlock x:Name="RelatedHint" FontSize="11"
+                                                               Style="{StaticResource MetaTextStyle}"
+                                                               Margin="6,0,0,0" Text="" />
+                                                </StackPanel>
+                                                <TextBlock Text="相关视频" FontSize="13" FontWeight="SemiBold"
+                                                           Style="{StaticResource MetaTextStyle}"
+                                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                            </DockPanel>
+                                        </Border>
+
+                                        <!-- ★ 用 ItemsControl 而不是 ListBox: 这里**不需要选中态**
+                                             (不像合集要标"正在播的这一集"), 点击走按钮事件即可。
+                                             ListBox 那套 ItemContainerStyle 模板在这里纯属负担。 -->
+                                        <ItemsControl x:Name="RelatedList" Margin="0,10,0,0">
+                                            <ItemsControl.ItemContainerStyle>
+                                                <Style TargetType="ContentPresenter">
+                                                    <Setter Property="Margin" Value="0,0,0,8" />
+                                                </Style>
+                                            </ItemsControl.ItemContainerStyle>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <!-- ★ 用 Button 而不是 ListBoxItem/Border:
+                                                         点整行就换片, 这是这个列表唯一的交互,
+                                                         包一层 Button 才有悬停反馈与手型光标。
+                                                         ★ CommandParameter 传 bvid: 一次只能带一个值,
+                                                           而模板里拿得到的是整条 item, 拆不出"点了哪条"。
+                                                         ★ Command 是 Execute, 不用 Click 事件:
+                                                           Click 事件在 DataTemplate 里不好绑到父窗口,
+                                                           绑定相对源要多写一层 ElementName。 -->
+                                                    <!-- ★★ 命令必须绑**属性本身**, 不能写成
+                                                         `{Binding DataContext.PlayRelatedCommand, RelativeSource=...}` ——
+                                                         这是本轮修掉的"点不动"的真根因(2026-10-12):
+                                                         DataContext 绑到的是 `PlayerWindow` 这个**框架元素**,
+                                                         而框架元素的 DataContext 默认为 **null**,
+                                                         于是 `DataContext.PlayRelatedCommand` 一路走空,
+                                                         按钮拿到的 Command 是 null —— 命中测试全过(整行都能点到、
+                                                         光标也是手型), 点下去**什么都不发生**, 与"没绑命令"完全同形。
+                                                         ★ 正确写法: RelativeSource 找到窗口之后, 路径**直接从属性名起**
+                                                           (`PlayRelatedCommand`), 不经过 DataContext 那一层。
+                                                           —— 顺带也让这段不依赖"窗口有没有设 DataContext"这件事。 -->
+                                                    <Button Command="{Binding PlayRelatedCommand,
+                                                              RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            CommandParameter="{Binding Bvid}"
+                                                            HorizontalContentAlignment="Stretch"
+                                                            Cursor="Hand" Focusable="False"
+                                                            Background="Transparent" BorderThickness="0"
+                                                            Padding="0">
+                                                        <Button.Template>
+                                                            <ControlTemplate TargetType="Button">
+                                                                <Border x:Name="Bd" CornerRadius="8"
+                                                                        Background="Transparent" Padding="6,6">
+                                                                    <ContentPresenter />
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter TargetName="Bd" Property="Background"
+                                                                                Value="{DynamicResource ControlFillHoverBrush}" />
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </Button.Template>
+                                                        <!-- 卡片: 16:9 封面 + 标题 + UP 主 + 播放/弹幕。
+                                                             ★★ 封面必须是**三层叠放**(封面 Border / 时长角标 / 无)而不是
+                                                               两个同尺寸 Border 并排 —— 这是本轮修掉的一个真 bug:
+                                                               我给时长角标也写了 Width=96 Height=54,
+                                                               而 DurationBadgeBackgroundBrush 是 **65% 黑**,
+                                                               于是那层半透明黑铺满了整张封面, 画面明显发暗。
+                                                               角标必须"有多大底就多大底", 由 Padding 撑出尺寸。 -->
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <Grid Grid.Column="0" Width="96" Height="54">
+                                                                <!-- 封面: 圆角必须写在**它自己**身上 —— Border 的圆角只裁自己的
+                                                                     背景/边框, 不裁子元素; 图走 Cover 附加属性设在 Background 上,
+                                                                     角标是子元素, 不圆角就会把四角顶成直角(同 VideoCard 的说明)。 -->
+                                                                <Border CornerRadius="6" ClipToBounds="True"
+                                                                        Background="{DynamicResource PlaceholderBrush}"
+                                                                        behaviors:Cover.Source="{Binding Cover}" />
+                                                                <!-- 时长压在封面右下角(与全站卡片一致)。
+                                                                     ★ 不写 Width/Height: 尺寸由 Content + Padding 决定,
+                                                                       否则半透明黑底会铺满整个封面格子。 -->
+                                                                <Border HorizontalAlignment="Right"
+                                                                        VerticalAlignment="Bottom" Margin="0,0,4,4"
+                                                                        CornerRadius="3" Padding="4,1"
+                                                                        Background="{DynamicResource DurationBadgeBackgroundBrush}"
+                                                                        Visibility="{Binding Duration, Converter={StaticResource StrToVis}}">
+                                                                    <TextBlock Text="{Binding Duration}" FontSize="10"
+                                                                               Foreground="White" />
+                                                                </Border>
+                                                            </Grid>
+                                                            <StackPanel Grid.Column="1" Margin="10,0,0,0"
+                                                                        VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Title}" FontSize="12.5"
+                                                                           TextWrapping="Wrap" MaxHeight="34"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                                    <!-- UP 主名前的 UP 角标: 与 B 站卡片一致的一眼辨识 -->
+                                                                    <TextBlock Text="UP" FontSize="9.5"
+                                                                               Margin="0,0,4,0"
+                                                                               VerticalAlignment="Center"
+                                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                                    <TextBlock Text="{Binding Author}" FontSize="11"
+                                                                               MaxWidth="120"
+                                                                               TextTrimming="CharacterEllipsis"
+                                                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                                    <TextBlock Text=" · " FontSize="11" Margin="3,0"
+                                                                               Visibility="{Binding ViewCountText, Converter={StaticResource StrToVis}}"
+                                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                                    <TextBlock Text="{Binding ViewCountText}" FontSize="11"
+                                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                                    <TextBlock Text=" · " FontSize="11" Margin="3,0"
+                                                                               Visibility="{Binding DanmakuCountText, Converter={StaticResource StrToVis}}"
+                                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                                    <TextBlock Text="{Binding DanmakuCountText}" FontSize="11"
+                                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                                </StackPanel>
+                                                            </StackPanel>
+                                                        </Grid>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
                                 </StackPanel>
                                 <StackPanel x:Name="CommentsPanel" Visibility="Collapsed">
                                     <!-- ===== 发表评论 =====

@@ -1,4 +1,4 @@
-<Application x:Class="BiliDesk.App"
+﻿<Application x:Class="BiliDesk.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
@@ -31,6 +31,13 @@
             -->
             <SolidColorBrush x:Key="TextOnAccentBrush" Color="#FFFFFF" />
             <SolidColorBrush x:Key="TextOnAccentSecondaryBrush" Color="#FFFFFF" />
+
+            <!-- ★ 压在**卡片底**药丸上的强调色文字(分段选择器选中态)。
+                 和 TextOnAccentBrush 一样只是"解析兜底" —— 真正生效的值由
+                 ThemeService.ApplyAccent() 按当前主题色算出来(浅色压深 35%)。
+                 兜底值取压深后的粉, 与 ThemeService 的算法保持一致,
+                 这样万一注入失败也不会退成"粉字压白底读不清"那种情况。 -->
+            <SolidColorBrush x:Key="AccentTextOnCardBrush" Color="#8A3F54" />
 
             <!--
                 ★ NavVeilBrush 已删除(2026-10-11): 切页过渡不再用"自己上色的幕布",

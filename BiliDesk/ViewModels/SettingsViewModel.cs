@@ -906,6 +906,113 @@ public class SettingsViewModel : ObservableObject
 
     public string DanmakuAreaText => $"画面上方 {DanmakuAreaPercent}%";
 
+    // ---- 外观三项: 不透明度 / 字号 / 速度(2026-10-12 新增) ----
+    //
+    // ★ 三个属性写法与上面的 DanmakuAreaPercent 完全一致: 只把"自己这一项"作为可选覆盖
+    //   传给存储层, 其余传 null(= 不改)。这样加新字段时不需要回头改这些调用点。
+
+    /// <summary>弹幕不透明度(20~100)。低于 100 时弹幕会半透明, 白字压亮画面不再晃眼。</summary>
+    public int DanmakuOpacityPercent
+    {
+        get => Svc.Settings.DanmakuOpacityPercent;
+        set
+        {
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent, Svc.Settings.DanmakuSmartFilter,
+                opacityPercent: value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DanmakuOpacityText));
+        }
+    }
+
+    public string DanmakuOpacityText => $"{DanmakuOpacityPercent}%";
+
+    /// <summary>弹幕字号倍率(50~300)。★ 改了会连带泳道高一起变, 见 PlayerWindow.DanmakuLaneRatio</summary>
+    public int DanmakuFontScalePercent
+    {
+        get => Svc.Settings.DanmakuFontScalePercent;
+        set
+        {
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent, Svc.Settings.DanmakuSmartFilter,
+                fontScalePercent: value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DanmakuFontScaleText));
+        }
+    }
+
+    /// <summary>
+    /// 字号的人话描述。倍率直接印成 "150%" 不好懂 —— 玩家关心的是"比默认大多少/小多少"。
+    /// </summary>
+    public string DanmakuFontScaleText
+    {
+        get
+        {
+            var p = DanmakuFontScalePercent;
+            if (p == 100) return "默认大小";
+            return p > 100 ? $"放大到 {p}%" : $"缩小到 {p}%";
+        }
+    }
+
+    /// <summary>弹幕速度档位(0 最慢 ~ 4 最快)</summary>
+    public int DanmakuSpeedLevel
+    {
+        get => Svc.Settings.DanmakuSpeedLevel;
+        set
+        {
+            var v = Math.Clamp(value,
+                BiliDesk.Helpers.DanmakuMotion.MinSpeedLevel, BiliDesk.Helpers.DanmakuMotion.MaxSpeedLevel);
+            if (v == Svc.Settings.DanmakuSpeedLevel) return;
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent, Svc.Settings.DanmakuSmartFilter,
+                speedLevel: v);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DanmakuSpeedText));
+        }
+    }
+
+    public string DanmakuSpeedText => BiliDesk.Helpers.DanmakuMotion.SpeedLabel(DanmakuSpeedLevel);
+
+    /// <summary>速度可选值的文案列表(给播放器里的说明文案复用)</summary>
+    public string[] DanmakuSpeedOptions => BiliDesk.Helpers.DanmakuMotion.SpeedLevelLabels;
+
+    // ---- 五个档位各自的"选中态" ----
+    //
+    // ★ 为什么是 5 个 bool 属性而不是把 int 档位绑进 RadioButtonGroup:
+    //   RadioButton 的 IsChecked 是 bool, 档位是 int, 中间隔着一个不存在的转换器。
+    //   那种写法(Slider→int 直绑)在这里会静默失灵, 而且失效时不报任何错。
+    //   5 个属性各自"读档位、判等号、转发 setter", 选中逻辑一眼可读, 也好加档。
+    //   命名末尾用数字而不是名字: 档位号与 DanmakuSpeedLevel 的值必须一一对应。
+
+    /// <summary>是否选中「慢」档(档位 0)。set 为 true 时把档位设成 0。</summary>
+    public bool DanmakuSpeedIs0 { get => IsSpeed(0); set { if (value) SetSpeed(0); } }
+
+    /// <summary>是否选中「较慢」档(档位 1)</summary>
+    public bool DanmakuSpeedIs1 { get => IsSpeed(1); set { if (value) SetSpeed(1); } }
+
+    /// <summary>是否选中「适中」档(档位 2)</summary>
+    public bool DanmakuSpeedIs2 { get => IsSpeed(2); set { if (value) SetSpeed(2); } }
+
+    /// <summary>是否选中「较快」档(档位 3)</summary>
+    public bool DanmakuSpeedIs3 { get => IsSpeed(3); set { if (value) SetSpeed(3); } }
+
+    /// <summary>是否选中「极快」档(档位 4)</summary>
+    public bool DanmakuSpeedIs4 { get => IsSpeed(4); set { if (value) SetSpeed(4); } }
+
+    private bool IsSpeed(int level) => DanmakuSpeedLevel == level;
+
+    /// <summary>切档: 走 DanmakuSpeedLevel 的 setter, 然后把五个选中态一起刷新</summary>
+    private void SetSpeed(int level)
+    {
+        DanmakuSpeedLevel = level;
+        OnPropertyChanged(nameof(DanmakuSpeedIs0));
+        OnPropertyChanged(nameof(DanmakuSpeedIs1));
+        OnPropertyChanged(nameof(DanmakuSpeedIs2));
+        OnPropertyChanged(nameof(DanmakuSpeedIs3));
+        OnPropertyChanged(nameof(DanmakuSpeedIs4));
+    }
+
+
     public bool DanmakuSmartFilter
     {
         get => Svc.Settings.DanmakuSmartFilter;

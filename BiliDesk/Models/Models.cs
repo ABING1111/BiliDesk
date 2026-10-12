@@ -1233,6 +1233,18 @@ public class AppSettings
     public bool DanmakuFilterAdvanced { get; set; } = true;
 
     /// <summary>
+    /// 弹幕不透明度(20~100)。★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**,
+    /// 两处必须一致 —— 老配置缺这个字段时靠属性初始化值拿到 80, 不需要版本兼容。
+    /// </summary>
+    public int DanmakuOpacityPercent { get; set; } = 80;
+
+    /// <summary>弹幕字号倍率(50~300)。与 SettingsStore 同名属性是读写契约。</summary>
+    public int DanmakuFontScalePercent { get; set; } = 100;
+
+    /// <summary>弹幕速度档位(0 最慢 ~ 4 最快)。与 SettingsStore 同名属性是读写契约。</summary>
+    public int DanmakuSpeedLevel { get; set; } = 2;
+
+    /// <summary>
     /// 默认画质(qn)。用户在设置页**开始播放前**预先选定的清晰度档位,
     /// 每次起播都用它取流; 该档拿不到时自动降级(见 ApiClient.GetPlayUrlAsync)。
     /// 默认取 QualityPreference.DefaultQn(1080P) —— 与新增本设置项之前播放器里

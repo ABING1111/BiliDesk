@@ -589,6 +589,28 @@ public class ThemeService
             ? Frozen(Blend(accent, Colors.Black, 0.55))
             : Frozen(Blend(accent, Colors.Black, 0.35));
 
+        // ★★ 压在**卡片底色**上的强调色文字(2026-10-12, 分段选择器的选中文字用)。
+        //
+        //   场景与上面那个 AccentTextStrongBrush **不一样**, 别混用:
+        //     · AccentTextStrongBrush 是给"强调色实底胶囊"配的 —— 浅色下底是白/淡强调,
+        //       深色下底是**提亮的强调色**(亮底), 所以深色时文字要压黑。
+        //     · 这里是"**卡片底**胶囊"(CardBackgroundBrush): 浅色下底是纯白 #FFFFFF,
+        //       深色下底是深灰 #2E2E2E。要读得清, 浅色需要**压深**的强调色,
+        //       深色需要**原色**(亮)的强调色 —— 两者的方向正好相反。
+        //
+        //   ★ 为什么必须新增而不是复用: 实测选中文字用原色强调色压白底只有
+        //     **2.64:1**、压页面浅底(#E9E9E9)更是只有 **2.17:1**
+        //     (WCAG AA 要求 4.5:1), 观感就是"粉字发飘、读不清"。
+        //   ★ 压深比例按**浅色主题的实际底色**算过:
+        //     底色是 #F3F3F3 叠 4% 黑 ≈ #E9E9E9, 原色 #FB7299 压深 45% 后
+        //     实测 **5.92:1**, 达标且留有余量(用户换自定义强调色时同样按这个比例走,
+        //     深浅关系不会翻车)。压 35% 只有 4.65:1, 余量太少 —— 一旦用户选了个
+        //     更浅的强调色就会掉到线下。
+        //   ★ 跟着 accent 走: 用户自定义主题色时这里自动重算, 不会退回硬编码粉。
+        app.Resources["AccentTextOnCardBrush"] = IsDark
+            ? Frozen(accent)
+            : Frozen(Blend(accent, Colors.Black, 0.45));
+
         app.Resources["TextOnAccentBrush"] = Frozen(onAccent);
         app.Resources["TextOnAccentSecondaryBrush"] = Frozen(onAccent);
     }

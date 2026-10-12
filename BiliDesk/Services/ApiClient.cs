@@ -910,6 +910,70 @@ public class ApiClient
     }
 
     /// <summary>
+    /// 相关视频推荐(播放器信息栏简介下方那一列, 2026-10-12 新增)。
+    ///
+    /// 接口: <c>/x/web-interface/archive/related</c>(B 站播放器右侧「相关推荐」同源)。
+    /// 已由 .probes/bd-probe-related 实测核对过响应形状, 有两点与直觉相反:
+    ///
+    /// ★ `data` **直接就是数组**, 不是 `{ list: [...] }`。
+    ///   照着热门那套去取 `data.list` 会静默拿到"0 条"—— 请求成功、页面却永远空着,
+    ///   是一类极难往接口头上想的失败。所以两种形状都认。
+    /// ★ 条目字段与 popular **完全同构**(owner{mid,name,face} / stat{view,danmaku,...} /
+    ///   top-level bvid/pic/title/duration/pubdate), 因此直接复用
+    ///   <see cref="ParseVideoItem"/>, 不必再写一份解析器 —— 写两份必然漂移。
+    ///   duration 单位是秒(实测 133 / 134), 与 popular 一致; 番剧 PGC 那套是毫秒, 别混。
+    ///
+    /// 需要设备指纹: 与 view 一样, 无 cookie 时会被风控拦下(返回非 0 码)。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRelatedAsync(string bvid)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(bvid)) return (false, "缺少视频 BV 号", null);
+            await EnsureBuvidAsync();
+
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/web-interface/archive/related",
+                new Dictionary<string, string> { ["bvid"] = bvid, ["pn"] = "1", ["ps"] = "12" });
+            if (code != 0 || data == null)
+                return (false, msg ?? $"获取相关视频失败 (code {code})", null);
+
+            // data 可能直接是数组, 也可能是 { list: [...] }; 两种都认, 见上面的说明
+            JsonElement arr;
+            var root = data.Value;
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                arr = root;
+            }
+            else if (root.TryGetProperty("list", out var l) && l.ValueKind == JsonValueKind.Array)
+            {
+                arr = l;
+            }
+            else
+            {
+                return (true, null, new List<VideoItem>());   // 形状不认识: 空列表而不是崩
+            }
+
+            var items = new List<VideoItem>();
+            foreach (var e in arr.EnumerateArray())
+            {
+                var item = ParseVideoItem(e);
+                if (item == null) continue;
+                // ★ 自身可能混在结果里(实测会), 点它等于原地重播 —— 先挡一道,
+                //   免得列表末尾莫名出现"当前视频"且点了没反应。
+                if (item.Bvid == bvid) continue;
+                items.Add(item);
+            }
+            return (true, null, items);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "获取相关视频失败: " + ex.Message, null);
+        }
+    }
+
+    /// <summary>
     /// 给展平后的每一集补上"第几集"与"是不是分组第一集"。
     /// 单独一步是因为这两件事依赖**跨分组的累计**, 逐条解析时算不出来。
     ///

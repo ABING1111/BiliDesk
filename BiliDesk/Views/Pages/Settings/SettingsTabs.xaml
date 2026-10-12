@@ -483,6 +483,95 @@
                     </StackPanel>
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+                    <!-- ===== 外观三项(2026-10-12 新增): 不透明度 / 字号 / 速度 =====
+                         ★ 为什么单独一块而不是塞进「显示弹幕」那一行:
+                           三项都是**滑杆+数值**, 与上面那行"标题+开关"的形状不同,
+                           挤在一起会让开关那一行被拉得很高。
+                         ★ 每一项的滑杆都绑定到**同一个** SettingsViewModel 属性,
+                           播放器与设置页因此始终是同一份数据(不存在两边各存一份)。 -->
+                    <StackPanel Style="{StaticResource SettingsRowStyle}">
+                        <TextBlock Text="弹幕外观" Style="{StaticResource SettingsRowTitleStyle}" />
+                        <TextBlock Text="即时生效, 播放中的弹幕会立刻跟着变"
+                                   Style="{StaticResource SettingsRowDescStyle}" />
+
+                        <!-- 不透明度 -->
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="不透明度" FontSize="12.5" Width="66"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                    Margin="10,0,10,0" VerticalAlignment="Center"
+                                    Minimum="20" Maximum="100" TickFrequency="5"
+                                    IsSnapToTickEnabled="True"
+                                    Value="{Binding DanmakuOpacityPercent, Mode=TwoWay}" />
+                            <TextBlock Grid.Column="2" Text="{Binding DanmakuOpacityText}" FontSize="12.5"
+                                       MinWidth="42" TextAlignment="Right" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </Grid>
+
+                        <!-- 字号 -->
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="弹幕字号" FontSize="12.5" Width="66"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                    Margin="10,0,10,0" VerticalAlignment="Center"
+                                    Minimum="50" Maximum="300" TickFrequency="25"
+                                    IsSnapToTickEnabled="True"
+                                    Value="{Binding DanmakuFontScalePercent, Mode=TwoWay}" />
+                            <TextBlock Grid.Column="2" Text="{Binding DanmakuFontScaleText}" FontSize="12.5"
+                                       MinWidth="66" TextAlignment="Right" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </Grid>
+
+                        <!-- 速度: 用五个档位而不是滑杆, 与 B 站客户端的观感一致(见 DanmakuMotion 的说明) -->
+                        <StackPanel Margin="0,12,0,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="弹幕速度" FontSize="12.5"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <TextBlock Text="{Binding DanmakuSpeedText}" FontSize="12.5"
+                                           Margin="12,0,0,0" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource AccentTextBrush}" />
+                            </StackPanel>
+                            <WrapPanel Margin="0,8,0,0">
+                                <!-- ★ 五个档位手写成 5 个 RadioButton, 不走 ItemsControl:
+                                       档位是**固定的五档**, 不是运行时数据 —— 套 ItemsControl
+                                       反而要额外写一个"文案→档位"的转换器(而 WPF 里
+                                       RadioButtonGroup 的选中项与 int 之间并没有现成转换,
+                                       那种写法看起来省事, 实际是最容易静默失灵的一种。
+                                       5 个按钮写死在这里, 选中逻辑一眼可读。 -->
+                                <RadioButton Style="{StaticResource SettingsSpeedChipStyle}" GroupName="DanmakuSpeed"
+                                             Content="慢" Cursor="Hand"
+                                             IsChecked="{Binding DanmakuSpeedIs0, Mode=TwoWay}" />
+                                <RadioButton Style="{StaticResource SettingsSpeedChipStyle}" GroupName="DanmakuSpeed"
+                                             Content="较慢" Cursor="Hand" Margin="8,0,0,0"
+                                             IsChecked="{Binding DanmakuSpeedIs1, Mode=TwoWay}" />
+                                <RadioButton Style="{StaticResource SettingsSpeedChipStyle}" GroupName="DanmakuSpeed"
+                                             Content="适中" Cursor="Hand" Margin="8,0,0,0"
+                                             IsChecked="{Binding DanmakuSpeedIs2, Mode=TwoWay}" />
+                                <RadioButton Style="{StaticResource SettingsSpeedChipStyle}" GroupName="DanmakuSpeed"
+                                             Content="较快" Cursor="Hand" Margin="8,0,0,0"
+                                             IsChecked="{Binding DanmakuSpeedIs3, Mode=TwoWay}" />
+                                <RadioButton Style="{StaticResource SettingsSpeedChipStyle}" GroupName="DanmakuSpeed"
+                                             Content="极快" Cursor="Hand" Margin="8,0,0,0"
+                                             IsChecked="{Binding DanmakuSpeedIs4, Mode=TwoWay}" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </StackPanel>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />

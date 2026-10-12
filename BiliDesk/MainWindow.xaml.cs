@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows;
@@ -379,17 +379,20 @@ public partial class MainWindow : FluentWindow
 
     private bool _partitionOpen;
 
-    private void OnBrandLogoClick(object sender, MouseButtonEventArgs e)
-    {
-        e.Handled = true;
-        OpenPartition();
-    }
+    /// <summary>左下角「分区」入口(2026-10-12 用户要求搬到左下角, 面板也从这里展开)</summary>
+    private void OnPartitionClick(object sender, RoutedEventArgs e) => OpenPartition();
 
     /// <summary>
-    /// 展开分区面板。动画"从 logo(左上角)长出": 面板以左上角为锚点缩放放大 + 淡入。
-    /// RenderTransformOrigin=0,0 意味着缩放锚点就是面板左上角 —— 那里正是 logo 的位置。
+    /// 展开分区面板(2026-10-12: 入口从"左上角 logo"搬到了**首页右下角工具栏**)。
+    ///
+    /// ★ 面板**仍然留在窗口左上角**展开 —— 入口搬了, 但展开位置没跟着搬:
+    ///   分区是"导航级"的菜单, 从右下角按钮长出一张贴着左上的大面板会很别扭;
+    ///   而左上角正好是导航栏的位置, 面板从那儿长出来仍然贴着它。
+    ///   (真正会读代码的人会问"为什么不跟着入口走", 所以在这里写明。)
+    ///
+    /// RenderTransformOrigin=0,0 意味着缩放锚点是面板左上角, 动画看起来就是"从左上角长出"。
     /// </summary>
-    private void OpenPartition()
+    public void OpenPartition()
     {
         if (_partitionOpen) return;
         _partitionOpen = true;

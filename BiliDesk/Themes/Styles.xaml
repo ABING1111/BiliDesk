@@ -1,4 +1,4 @@
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=System.Runtime">
 
@@ -311,6 +311,48 @@
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 左侧导航的**动作按钮**变体(「分区」入口用的就是这个)。
+         ★ 为什么需要单独一份而不能直接用 NavRadioStyle:
+           那个样式的 TargetType 是 RadioButton, 而分区入口是个普通 Button
+           (它是动作不是"选中某个页面"), WPF 在**运行时**才报
+           「RadioButton TargetType 与元素 Button 的类型不匹配」——
+           整窗加载失败, 而 XAML 编译期完全无感。
+         ★★ 尺寸/圆角/悬停色必须与 NavRadioStyle **逐项一致**(2026-10-12 用户要求
+            "候选框大小和侧边栏其他按钮保持一致"):
+             · Height=58  —— 导航项是 58 高, 分区按钮不写就变成"按内容高"(约 48),
+                             并排一看就是"比别的矮一截"; 而且两者都在同一个 StackPanel
+                             对齐语境下, 高度不一致会让底部的视觉节奏断掉。
+             · CornerRadius=8 —— 与导航项的高亮块同款圆角。
+             · NavItemHoverBrush —— 导航项的悬停底色用的是这个(比通用的
+               ControlFillHoverBrush 更淡), 混用会让两个控件的悬停深浅不一。
+           ⇒ 改导航样式时, 这三项要**一起**改(两份模板没法继承, 只能靠对齐)。 -->
+    <Style x:Key="NavActionButtonStyle" TargetType="Button">
+        <Setter Property="Height" Value="58" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="8">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background"
+                                    Value="{DynamicResource NavItemHoverBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background"
+                                    Value="{DynamicResource ControlFillPressedBrush}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -1226,7 +1268,80 @@
                             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
-                            <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                            <!-- ★★ 用 AccentTextOnCardBrush(浅色下压深 35%)而不是原色 AccentTextBrush:
+                                 原色强调色压页面浅底只有 **2.17:1**, 远低于 WCAG AA 的 4.5:1 ——
+                                 视觉上就是"选中的粉字发飘、读不清"(与分段选择器同一处缺陷)。
+                                 压深后 4.81:1 达标, 且跟着用户的自定义主题色自动重算。
+                                 ★ 这与下划线本身无关: 线是强调色(它是图形, 不需要 4.5:1),
+                                   文字才需要。两者用不同深浅是刻意的。 -->
+                            <Setter Property="Foreground" Value="{DynamicResource AccentTextOnCardBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ===== 分段选择器(2026-10-12 用户给参考图重做首页 5 个 tab) =====
+         形态: 一条圆角浅底的长条, 里面每个标签一块; **选中块是一块会滑动的白色药丸**,
+         未选中只有文字。与原来 UnderlineTabStyle 的"文字 + 下方短横线"是两种语言。
+
+         ★ 本样式只负责**每个标签自身**的底/字; 那块会滑动的药丸由页面单独画一个 Border
+           (HomePage 的 TabIndicator)再用 TranslateTransform 推过去 —— 不能靠每个标签各自
+           "IsChecked 时显示底色"来实现, 那样切换时底色是**跳**过去的, 没有滑动。
+         ★ 选中态是**白底 + 强调色字**(参考图观感), 所以药丸用 CardBackgroundBrush;
+           浅色主题下正好是纯白压浅灰轨道, 深色主题下是 #2E2E2E 压深灰轨道 —— 两边都成立。
+         ★ Padding 下留 12: 那 12px 是药丸与文字的呼吸空间, 同时让药丸比标签高出一圈。
+         ★ 触发器顺序: 悬停写在选中**前面** —— 否则"选中的项被悬停"会掉回主文字色
+           (与 UnderlineTabStyle 同一条教训)。
+         ★ ContentPresenter.Resources 里挡隐式 TextBlock 样式是必须的: 它带 Foreground
+           setter, 优先级高于继承, 不挡的话选中标签不会变粉(同 UnderlineTabStyle)。 -->
+    <Style x:Key="SegmentTabStyle" TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="FontSize" Value="14" />
+        <!-- ★★ 内边距必须**上下对称**(2026-10-12 重做美观时改)。
+             原来是 12,6,12,14 —— 下方多给的 8px 是给"下划线"版本留位置的,
+             换成药丸之后那 8px 就成了纯浪费: 文字在药丸里**偏上**, 药丸又被迫加高,
+             整条 tab 显得又高又空(用户反馈"太不美观")。
+             现在 10,6,10,6: 文字在标签里垂直居中, 药丸也跟着居中。
+             ★ 横向 10(原 12): 五个标签连成一段, 每个都留 12 会让"段间空隙"
+               看起来比"药丸到文字"的空隙还大, 视觉上散; 10 更紧凑。
+             ★ 目标是"视觉密度": 标签高 ≈ 字号行高 + 上下各 6, 整条 tab 约 31px,
+               在 1280 宽的窗口里既不显小也不喧宾夺主。 -->
+        <Setter Property="Padding" Value="10,6,10,6" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid Background="Transparent">
+                        <Border Padding="{TemplateBinding Padding}">
+                            <ContentPresenter
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                TextElement.Foreground="{TemplateBinding Foreground}">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                        <Setter Property="Foreground"
+                                                Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
+                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <!-- ★ 压在**卡片底**药丸上的强调色文字: 用 AccentTextOnCardBrush
+                                 (浅色下压深 35%), 而不是原色 AccentTextBrush —— 后者压白底
+                                 只有 2.64:1, 读不清(见 ThemeService 里的对比度说明)。 -->
+                            <Setter Property="Foreground" Value="{DynamicResource AccentTextOnCardBrush}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -1321,6 +1436,95 @@
                                     <Style TargetType="TextBlock" BasedOn="{x:Null}">
                                         <Setter Property="Foreground"
                                                 Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}" />
+                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Hover"
+                                                         Storyboard.TargetProperty="Opacity"
+                                                         To="1" Duration="0:0:0.14" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Hover"
+                                                         Storyboard.TargetProperty="Opacity"
+                                                         To="0" Duration="0:0:0.14" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Pill"
+                                                         Storyboard.TargetProperty="Opacity"
+                                                         To="1" Duration="0:0:0.16" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Pill"
+                                                         Storyboard.TargetProperty="Opacity"
+                                                         To="0" Duration="0:0:0.16" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ★ 弹幕速度档位(2026-10-12 新增): 与 SettingsFilterChipStyle **完全同款**观感,
+         只是 TargetType 换成 RadioButton。
+         ★ 为什么不用 ToggleButton 复用那个样式: 速度是**互斥**的五选一,
+           用 ToggleButton 的话五个按钮可以被同时点亮, 而用户没法从"全亮"里看出当前选的是哪一档。
+         ★ 模板是照着上面那个逐行搬的(圆角 14 / Hover 与 Pill 两层 / 0.14s 淡入淡出),
+           两处若有漂移就会看出"这两种胶囊不是一套的"。
+         ★ ContentPresenter.Resources 里挡隐式 TextBlock 样式的那段是**必须的**:
+           全局隐式样式带 Foreground setter, 会吃掉选中态设的强调色,
+           表现就是"点亮了底色但文字不变色"。 -->
+    <Style x:Key="SettingsSpeedChipStyle" TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Padding" Value="18,7" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid Background="Transparent">
+                        <Border x:Name="Hover" CornerRadius="14" Opacity="0"
+                                Background="{DynamicResource ControlFillHoverBrush}" />
+                        <Border x:Name="Pill" CornerRadius="14" Opacity="0"
+                                Background="{DynamicResource AccentSoftFillStrongBrush}" />
+                        <Border CornerRadius="14" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                TextElement.Foreground="{TemplateBinding Foreground}">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                        <Setter Property="Foreground"
+                                                Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
                                         <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
                                     </Style>
                                 </ContentPresenter.Resources>

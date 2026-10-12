@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BiliDesk 首页重排 · 设计提案</title>
+<style>
+/* ============================================================
+   BiliDesk 首页重排提案 —— 「索引墙」
+   色板 / 字阶 / 间距全部从现有 Themes/Colors.*.xaml 与
+   App.xaml 的品牌粉 #FB7299 推导, 不引入新色相。
+   ============================================================ */
+
+:root {
+  /* 浅色(对应 Colors.Light.xaml) */
+  --bg:          #F3F3F3;
+  --rail:        #FAFAFA;
+  --surface:     #FFFFFF;
+  --surface-2:   #EDEDED;
+  --line:        #E4E4E4;
+  --line-strong: #D2D2D2;
+
+  --ink-1: #1A1A1A;   /* 主文字 */
+  --ink-2: #5C5C5C;   /* 次文字 */
+  --ink-3: #8A8A8A;   /* 弱文字 / 序号 / meta */
+  --ink-4: #B4B4B4;   /* 占位符 */
+
+  --pink:       #FB7299;   /* AccentBrush */
+  --pink-hover: #FB83A5;
+  --pink-text:  #D4527B;   /* 浅底下当文字用需压深, 对应 AccentTextStrongBrush */
+  --pink-soft:  #FBE7EE;   /* AccentSoftFill 提亮档 */
+  --pink-line:  #F0B7CA;
+
+  --chip: rgba(18,18,18,.74);  /* 序号墨块 / 封面角标 */
+  --chip-text: #FFFFFF;
+  --live: #E5484D;
+
+  --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --mono: "Cascadia Code", "Consolas", "SF Mono", monospace;
+}
+
+html[data-theme="dark"] {
+  --bg:          #1C1C1C;
+  --rail:        #161616;
+  --surface:     #262626;
+  --surface-2:   #2E2E2E;
+  --line:        #303030;
+  --line-strong: #3C3C3C;
+
+  --ink-1: #F2F2F2;
+  --ink-2: #ABABAB;
+  --ink-3: #7C7C7C;
+  --ink-4: #565656;
+
+  --pink-text: #FB7299;
+  --pink-soft: #35222A;
+  --pink-line: #6A3B4C;
+
+  --chip: rgba(10,10,10,.80);
+  --chip-text: #F5F5F5;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--ink-1);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  transition: background .25s ease, color .25s ease;
+}
+
+button { font-family: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+/* ============================================================ 应用骨架 */
+.app { display: flex; height: 100vh; }
+
+/* ---- 左侧导航轨: 96px, 复刻现有 NavRail ---- */
+.rail {
+  width: 96px;
+  flex: 0 0 96px;
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 18px 0 16px;
+  transition: background .25s ease;
+}
+
+.rail .brand {
+  width: 42px; height: 42px;
+  border-radius: 12px;
+  background:
+    radial-gradient(120% 120% at 30% 20%, #FFC9DA 0%, #FB7299 55%, #E0567F 100%);
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  margin-bottom: 22px;
+}
+/* 品牌标里的小电视形状 */
+.rail .brand::after {
+  content: "";
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(transparent 46%, rgba(255,255,255,.85) 46%, rgba(255,255,255,.85) 54%, transparent 54%);
+  clip-path: polygon(28% 22%, 72% 22%, 82% 34%, 82% 74%, 18% 74%, 18% 34%);
+}
+
+.rail nav { display: flex; flex-direction: column; gap: 4px; margin: auto 0; }
+
+.rail .nav-item {
+  width: 76px;
+  padding: 9px 0 8px;
+  border-radius: 8px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  font-size: 11px;
+  color: var(--ink-2);
+  transition: background .15s ease, color .15s ease;
+}
+.rail .nav-item svg { width: 18px; height: 18px; }
+.rail .nav-item:hover { background: var(--surface-2); }
+.rail .nav-item.on { color: var(--pink-text); font-weight: 600; }
+.rail .nav-item.on .nav-pill { background: var(--pink-soft); }
+.rail .nav-pill {
+  width: 34px; height: 34px;
+  border-radius: 9px;
+  display: grid; place-items: center;
+  margin-bottom: 1px;
+  transition: background .15s ease;
+}
+
+/* ---- 右侧内容区 ---- */
+.stage {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  scroll-behavior: smooth;
+}
+.stage::-webkit-scrollbar { width: 10px; }
+.stage::-webkit-scrollbar-thumb { background: var(--line-strong); border: 3px solid var(--bg); border-radius: 6px; }
+.stage::-webkit-scrollbar-thumb:hover { background: var(--ink-4); }
+
+/* 自绘窗口按钮: 复刻现有 WindowButtons 浮层 */
+.win-btns {
+  position: sticky; top: 0; z-index: 60;
+  height: 0;
+  display: flex; justify-content: flex-end; gap: 0;
+  pointer-events: none;
+}
+.win-btns button {
+  pointer-events: auto;
+  width: 46px; height: 32px;
+  display: grid; place-items: center;
+  color: var(--ink-2);
+  font-size: 10px;
+  transition: background .15s ease, color .15s ease;
+}
+.win-btns button:hover { background: var(--surface-2); color: var(--ink-1); }
+.win-btns .close:hover { background: #C42B1C; color: #fff; }
+
+.wrap {
+  max-width: 1216px;
+  margin: 0 auto;
+  padding: 0 32px 56px;
+}
+
+/* ============================================================ 页头 */
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 32px;
+  padding: 26px 0 18px;
+}
+
+.eyebrow {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .14em;
+  color: var(--pink-text);
+  margin-bottom: 3px;
+}
+.eyebrow .dot { color: var(--ink-4); margin: 0 1px; }
+
+.page-head h1 {
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+  line-height: 1.1;
+}
+.page-head .greet {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin-top: 4px;
+}
+
+/* ---- 搜索: 收起态是入口条, 不是居中孤岛 ---- */
+.search { position: relative; flex: 0 0 auto; }
+
+.search-box {
+  width: 320px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex; align-items: center;
+  padding: 0 8px 0 12px;
+  gap: 8px;
+  transition: border-color .15s ease, box-shadow .15s ease, width .2s ease;
+}
+.search-box:hover { border-color: var(--line-strong); }
+.search.open .search-box,
+.search-box:focus-within {
+  border-color: var(--pink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pink) 18%, transparent);
+}
+.search-box svg { width: 14px; height: 14px; color: var(--ink-3); flex: 0 0 auto; }
+.search-box input {
+  flex: 1; border: none; outline: none; background: none;
+  font-family: inherit; font-size: 13px; color: var(--ink-1);
+  min-width: 0;
+}
+.search-box input::placeholder { color: var(--ink-4); }
+.search-box .kbd {
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--ink-3);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  background: var(--surface-2);
+}
+
+/* 展开的内容卡 */
+.search-pop {
+  position: absolute; top: 44px; right: 0;
+  width: 460px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px -8px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.06);
+  padding: 16px 18px 18px;
+  opacity: 0; transform: translateY(-6px) scale(.98);
+  transform-origin: top right;
+  pointer-events: none;
+  transition: opacity .16s ease, transform .16s cubic-bezier(.2,.8,.3,1);
+  z-index: 50;
+}
+.search.open .search-pop { opacity: 1; transform: none; pointer-events: auto; }
+
+.search-pop h3 {
+  font-size: 11px; font-weight: 600; letter-spacing: .1em;
+  color: var(--ink-3);
+  margin-bottom: 8px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.search-pop h3 button {
+  font-size: 11px; letter-spacing: 0; color: var(--ink-3);
+  font-weight: 400;
+}
+.search-pop h3 button:hover { color: var(--pink-text); }
+
+/* 热搜: 两列, 带与卡片墙同一套序号 */
+.hot { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+.hot-row {
+  display: flex; align-items: center; gap: 8px;
+  height: 28px; border-radius: 5px;
+  font-size: 12.5px;
+  color: var(--ink-1);
+  padding: 0 4px;
+  cursor: pointer;
+  transition: background .12s ease;
+}
+.hot-row:hover { background: var(--surface-2); }
+.hot-row .rank {
+  position: static;
+  width: 18px; height: 18px;
+  font-size: 11px; line-height: 18px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+.hot-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hot-row .tag {
+  font-size: 10px; padding: 0 4px; height: 15px; line-height: 15px;
+  border-radius: 3px; flex: 0 0 auto;
+}
+.tag.new  { background: var(--chip); color: #fff; }
+.tag.hot  { background: var(--chip); color: #fff; }
+.tag.hot::before { content: ""; display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: var(--live); margin-right: 3px; vertical-align: 1px; }
+.tag.excl { background: var(--chip); color: #fff; }
+
+.hot-sep { height: 1px; background: var(--line); margin: 14px -18px 14px; }
+
+.history { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font-size: 12px; color: var(--ink-2);
+  background: var(--surface-2);
+  border-radius: 5px; padding: 3px 9px;
+  transition: background .12s ease, color .12s ease;
+}
+.chip:hover { background: var(--pink-soft); color: var(--pink-text); }
+
+/* ============================================================ 索引头(签名结构) */
+.index-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 0 11px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 18px;
+}
+
+.tabs { display: flex; gap: 2px; }
+.tab {
+  position: relative;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  padding: 5px 11px 7px;
+  border-radius: 6px 6px 0 0;
+  transition: color .15s ease, background .15s ease;
+}
+.tab:hover { color: var(--ink-1); background: var(--surface-2); }
+.tab.on { color: var(--pink-text); font-weight: 600; }
+.tab.on::after {
+  content: "";
+  position: absolute; left: 11px; right: 11px; bottom: -12px;
+  height: 2px; border-radius: 1px;
+  background: var(--pink);
+}
+
+.index-meta {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  display: flex; align-items: center; gap: 10px;
+  white-space: nowrap;
+}
+.index-meta b { color: var(--ink-2); font-weight: 600; }
+
+/* 工具从右下悬浮改为收纳进索引头右端 */
+.tools { display: flex; gap: 2px; align-items: center; }
+.tool {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  display: grid; place-items: center;
+  color: var(--ink-2);
+  transition: background .14s ease, color .14s ease, opacity .18s ease;
+}
+.tool svg { width: 15px; height: 15px; }
+.tool:hover { background: var(--surface-2); color: var(--pink-text); }
+.tool.ghost { opacity: 0; pointer-events: none; }
+.tool.ghost.show { opacity: 1; pointer-events: auto; }
+.tools .sep { width: 1px; height: 16px; background: var(--line); margin: 0 5px; }
+
+/* ============================================================ 卡片墙 */
+.wall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(198px, 1fr));
+  gap: 20px 14px;
+}
+.wall.poster { grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); }
+
+.card { position: relative; cursor: pointer; }
+.card .cover {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  background: var(--surface-2);
+  transition: transform .18s cubic-bezier(.2,.8,.3,1), box-shadow .18s ease;
+}
+.wall.poster .card .cover { aspect-ratio: 3 / 4; }
+.card:hover .cover {
+  transform: scale(1.022);
+  box-shadow: 0 8px 22px -6px rgba(0,0,0,.28);
+}
+.card:hover .rank, .card:hover .cover-tag, .card:hover .stats { opacity: 0; }
+
+/* 占位封面: 抽象构成, 模拟真实封面有色 */
+.ph { position: absolute; inset: 0; }
+.ph::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: var(--g);
+}
+.ph::after {
+  content: "";
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(60% 80% at 78% 18%, rgba(255,255,255,.30), transparent 60%),
+    radial-gradient(50% 70% at 12% 92%, rgba(0,0,0,.22), transparent 65%);
+}
+
+/* 序号墨块 —— 本提案的签名元素 */
+.rank {
+  position: absolute; top: 7px; left: 7px;
+  min-width: 19px; height: 19px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--chip);
+  color: var(--chip-text);
+  font-family: var(--mono);
+  font-size: 11px; font-weight: 700; line-height: 19px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(6px);
+  transition: opacity .12s ease;
+  z-index: 2;
+}
+.rank.top { background: var(--pink); }
+
+/* 封面右下角 meta(时长/人气) */
+.cover-tag {
+  position: absolute; right: 7px; bottom: 7px;
+  height: 18px; padding: 0 6px;
+  border-radius: 4px;
+  background: var(--chip);
+  color: var(--chip-text);
+  font-size: 11px; line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(6px);
+  transition: opacity .12s ease;
+  z-index: 2;
+}
+.cover-tag.live { display: flex; align-items: center; gap: 4px; }
+.cover-tag.live::before {
+  content: ""; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--live) 40%, transparent);
+}
+
+/* 封面左下播放量 */
+.stats {
+  position: absolute; left: 7px; bottom: 7px;
+  height: 18px; padding: 0 6px;
+  border-radius: 4px;
+  background: var(--chip);
+  color: var(--chip-text);
+  font-size: 11px; line-height: 18px;
+  display: flex; align-items: center; gap: 4px;
+  backdrop-filter: blur(6px);
+  transition: opacity .12s ease;
+  z-index: 2;
+}
+.stats svg { width: 10px; height: 10px; }
+
+.card .body { padding: 9px 2px 0; }
+.card .title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.42;
+  color: var(--ink-1);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 2.84em;
+  transition: color .14s ease;
+}
+.card:hover .title { color: var(--pink-text); }
+
+/* meta 合并为单行: UP · 播放 · 日期 */
+.card .meta {
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  display: flex; align-items: center; gap: 5px;
+  white-space: nowrap; overflow: hidden;
+}
+.card .meta .up { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; max-width: 46%; }
+.card .meta .up:hover { color: var(--pink-text); }
+.card .meta .sep { color: var(--ink-4); }
+.card .meta .n { font-variant-numeric: tabular-nums; }
+
+/* 番剧卡: 更新状态作为 meta 前缀 */
+.card .badge-prog {
+  display: inline-flex; align-items: center;
+  font-size: 10.5px; font-weight: 600;
+  color: var(--pink-text);
+  background: var(--pink-soft);
+  border-radius: 3px;
+  padding: 0 5px; height: 17px; line-height: 17px;
+  flex: 0 0 auto;
+}
+
+/* 墙尾 */
+.wall-end {
+  display: flex; align-items: center; gap: 14px;
+  margin: 34px 0 0;
+}
+.wall-end::before, .wall-end::after {
+  content: ""; flex: 1; height: 1px; background: var(--line);
+}
+.wall-end span {
+  font-size: 11.5px; color: var(--ink-3);
+  letter-spacing: .08em;
+}
+
+/* ============================================================ 注解层 */
+.notes {
+  position: fixed; right: 18px; bottom: 18px; z-index: 100;
+  font-size: 12px;
+}
+.notes > button {
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 20px -4px rgba(0,0,0,.22);
+  color: var(--pink-text);
+  font-weight: 700;
+  display: grid; place-items: center;
+  margin-left: auto;
+}
+.notes > button:hover { transform: translateY(-1px); }
+
+.note-panel {
+  position: absolute; right: 0; bottom: 48px;
+  width: 288px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px -10px rgba(0,0,0,.26);
+  padding: 14px 6px 10px 14px;
+  opacity: 0; transform: translateY(8px); pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease;
+}
+.notes.open .note-panel { opacity: 1; transform: none; pointer-events: auto; }
+.note-panel h4 {
+  font-size: 10.5px; letter-spacing: .12em; font-weight: 600;
+  color: var(--ink-3); margin-bottom: 8px;
+}
+.note-list { list-style: none; max-height: 46vh; overflow-y: auto; padding-right: 8px; }
+.note-list li {
+  display: flex; gap: 8px;
+  padding: 7px 8px 7px 0;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--ink-2);
+  line-height: 1.45;
+  transition: background .12s ease, color .12s ease;
+}
+.note-list li:hover, .note-list li.on { background: var(--pink-soft); color: var(--pink-text); }
+.note-list li i {
+  font-family: var(--mono); font-style: normal;
+  font-size: 10.5px; font-weight: 700;
+  color: var(--ink-4);
+  flex: 0 0 auto; padding-top: 1px;
+}
+.note-list li:hover i, .note-list li.on i { color: var(--pink); }
+
+/* 高亮态 */
+body.focus [data-note]:not(.on) { opacity: .22; }
+[data-note] { transition: opacity .22s ease, box-shadow .22s ease; }
+[data-note].on {
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px var(--pink), 0 0 0 6px color-mix(in srgb, var(--pink) 16%, transparent);
+}
+
+@media (max-width: 900px) {
+  .rail { width: 64px; flex-basis: 64px; }
+  .rail .nav-item { width: 54px; }
+  .rail .nav-item span { display: none; }
+  .page-head { flex-direction: column; align-items: stretch; gap: 14px; }
+  .search-box { width: 100%; }
+  .wrap { padding: 0 18px 40px; }
+  .index-meta { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ==================== 左侧导航轨 ==================== -->
+  <aside class="rail">
+    <div class="brand" title="分区"></div>
+    <nav>
+      <button class="nav-item on">
+        <span class="nav-pill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/><path d="M10 20v-5h4v5"/></svg>
+        </span>
+        <span>首页</span>
+      </button>
+      <button class="nav-item">
+        <span class="nav-pill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 4 12L16 12h5"/></svg>
+        </span>
+        <span>动态</span>
+      </button>
+      <button class="nav-item">
+        <span class="nav-pill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c0-4 3.4-6.4 7.5-6.4S19.5 16 19.5 20"/></svg>
+        </span>
+        <span>我的</span>
+      </button>
+      <button class="nav-item">
+        <span class="nav-pill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M18 6l-1.4 1.4M7.4 16.6 6 18"/></svg>
+        </span>
+        <span>设置</span>
+      </button>
+    </nav>
+  </aside>
+
+  <!-- ==================== 内容区 ==================== -->
+  <main class="stage" id="stage">
+
+    <div class="win-btns">
+      <button title="最小化"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1"/></svg></button>
+      <button title="最大化"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg></button>
+      <button class="close" title="关闭"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"/></svg></button>
+    </div>
+
+    <div class="wrap">
+
+      <!-- ============ 页头: 眉题 + 标题 + 搜索入口 ============ -->
+      <header class="page-head">
+        <div data-note="head">
+          <div class="eyebrow">BILIDESK<span class="dot">·</span>索引</div>
+          <h1>首页</h1>
+          <div class="greet">下午好，今天想从哪儿开始看</div>
+        </div>
+
+        <div class="search" id="search" data-note="search">
+          <div class="search-box" id="searchBox">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+            <input id="searchInput" type="text" placeholder="搜索视频、UP 主、番剧">
+            <span class="kbd">/</span>
+          </div>
+
+          <div class="search-pop" id="searchPop">
+            <h3>热搜 <button>清空搜索历史</button></h3>
+            <div class="hot" id="hotList"></div>
+            <div class="hot-sep"></div>
+            <h3>搜索历史</h3>
+            <div class="history">
+              <button class="chip">延时摄影</button>
+              <button class="chip">芙莉莲</button>
+              <button class="chip">Rust 内核</button>
+              <button class="chip">4K 修复</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- ============ 索引头: 页签 + 条目元信息 + 工具 ============ -->
+      <div class="index-bar" data-note="indexbar">
+        <div class="tabs" id="tabs">
+          <button class="tab on" data-tab="rec">推荐</button>
+          <button class="tab" data-tab="hot">热门</button>
+          <button class="tab" data-tab="rank">排行榜</button>
+          <button class="tab" data-tab="live">直播</button>
+          <button class="tab" data-tab="bangumi">追番</button>
+        </div>
+        <div class="index-meta" id="indexMeta"></div>
+        <div class="tools">
+          <button class="tool ghost" id="btnTop" title="回到顶部">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 14 7-7 7 7"/></svg>
+          </button>
+          <button class="tool" title="刷新">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5A8 8 0 0 0 6.3 6.3L4 8.5"/><path d="M4 4.5v4h4"/><path d="M4 12.5a8 8 0 0 0 13.7 5.2L20 15.5"/><path d="M20 19.5v-4h-4"/></svg>
+          </button>
+          <span class="sep"></span>
+          <button class="tool" id="btnTheme" title="切换深浅色">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5Z"/></svg>
+          </button>
+          <button class="tool" title="B 站消息">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v11H9l-4 3.5V11"/><path d="M4 11h16"/></svg>
+          </button>
+          <button class="tool" title="屏蔽内容">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="m6 18 12-12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- ============ 卡片墙 ============ -->
+      <div class="wall" id="wall"></div>
+
+      <div class="wall-end" data-note="end"><span>已经到底啦</span></div>
+
+    </div>
+  </main>
+</div>
+
+<!-- ==================== 设计注解 ==================== -->
+<div class="notes" id="notes">
+  <div class="note-panel">
+    <h4>设计注解 · 点击高亮</h4>
+    <ul class="note-list" id="noteList"></ul>
+  </div>
+  <button id="noteToggle" title="设计注解">※</button>
+</div>
+
+<script>
+/* ============================================================ 数据 */
+const COVERS = [
+  "linear-gradient(135deg,#3E5C76,#5B8FB9 55%,#A7C7E7)",
+  "linear-gradient(135deg,#7A4E8C,#B76E97 60%,#F0B7CD)",
+  "linear-gradient(135deg,#2F4858,#33658A 50%,#86BBD8)",
+  "linear-gradient(135deg,#8C5E3C,#C89F7B 55%,#F2E2C9)",
+  "linear-gradient(135deg,#3A6B5B,#6FA287 55%,#CFE3D4)",
+  "linear-gradient(135deg,#5C4B8A,#9B7EDE 60%,#D9CBF2)",
+  "linear-gradient(135deg,#A63D40,#D96C6C 55%,#F3C6C6)",
+  "linear-gradient(135deg,#1F4E5F,#3E8E9C 55%,#B8E0E6)",
+  "linear-gradient(135deg,#6B5B3E,#A99A6B 55%,#EDE4CE)",
+  "linear-gradient(135deg,#4A3B52,#7D5A80 55%,#CBB3D1)",
+  "linear-gradient(135deg,#26547C,#4E8FC7 55%,#BBD9F2)",
+  "linear-gradient(135deg,#8A4B2E,#C4794B 55%,#F0D3B8)"
+];
+
+const VIDEOS = [
+  { t:"【4K】富士山下：一年四季的延时摄影", u:"影视飓风", v:"325.4万", d:"2 天前", dur:"12:48" },
+  { t:"一个人如何复刻一整座《千与千寻》汤屋", u:"手工耿", v:"186.2万", d:"5 天前", dur:"18:03" },
+  { t:"我们分析了 10 万条弹幕，找到了年度百大梗", u:"差评君", v:"94.7万", d:"1 周前", dur:"09:31" },
+  { t:"从零手搓一台能打电话的 Linux 手机", u:"何同学", v:"512.8万", d:"3 天前", dur:"22:17" },
+  { t:"把家里的旧电视改成了 4K 显示器", u:"硬件茶谈", v:"43.1万", d:"昨天", dur:"14:52" },
+  { t:"为什么便利店冰柜总是亮得刺眼", u:"李自然说", v:"12.6万", d:"6 天前", dur:"07:44" },
+  { t:"用 Rust 写一个能跑的操作系统内核", u:"阿哲技术", v:"28.9万", d:"4 天前", dur:"31:05" },
+  { t:"修复了一段 1948 年的城市影像", u:"影像修复所", v:"77.3万", d:"2 周前", dur:"16:20" },
+  { t:"我在青藏高原拍了三个月星空", u:"星空摄影师", v:"156.9万", d:"1 周前", dur:"25:36" },
+  { t:"拆解了一台 1994 年的笔记本电脑", u:"老张拆机", v:"61.2万", d:"3 天前", dur:"19:48" },
+  { t:"这 12 个镜头语言，导演不会告诉你", u:"电影自习室", v:"89.4万", d:"5 天前", dur:"13:27" },
+  { t:"城市天桥下的吉他手们", u:"人间观察", v:"33.8万", d:"昨天", dur:"11:02" },
+  { t:"一个人自驾穿过可可西里", u:"在路上", v:"212.5万", d:"6 天前", dur:"28:41" },
+  { t:"把高中课本做成了开放世界游戏", u:"独立开发者", v:"145.1万", d:"4 天前", dur:"17:55" },
+  { t:"探访最后一家胶片冲印店", u:"城市档案", v:"58.7万", d:"1 周前", dur:"15:13" },
+  { t:"用示波器演奏一支曲子", u:"电子狂人", v:"41.6万", d:"2 天前", dur:"08:29" }
+];
+
+const LIVES = [
+  { t:"【直播】深夜写代码：重写播放器内核", u:"阿哲技术", v:"1.2万人气", tag:"直播中" },
+  { t:"一起看《银翼杀手 2049》4K", u:"电影放映厅", v:"8,432 人气", tag:"直播中" },
+  { t:"毕业设计答辩现场", u:"设计系小李", v:"326 人气", tag:"直播中" },
+  { t:"手绘一张城市海报", u:"插画师日常", v:"5,671 人气", tag:"直播中" },
+  { t:"【录播】操作系统公开课 第 7 讲", u:"计算机讲堂", v:"2.3万人气", tag:"回放" },
+  { t:"凌晨四点的海鲜市场", u:"人间观察", v:"9,104 人气", tag:"直播中" },
+  { t:"拆一台永远不会亮的示波器", u:"老张拆机", v:"742 人气", tag:"直播中" },
+  { t:"用 8 位机做一首 chipmusic", u:"电子狂人", v:"3,388 人气", tag:"直播中" }
+];
+
+const BANGUMI = [
+  { t:"葬送的芙莉莲", u:"更新至第 28 话", prog:"更新至 28" },
+  { t:"咒术回战 第二季", u:"全 23 话", prog:"完结" },
+  { t:"药屋少女的呢喃", u:"更新至第 24 话", prog:"更新至 24" },
+  { t:"间谍过家家 第二季", u:"更新至第 11 话", prog:"更新至 11" },
+  { t:"石纪元 第三季", u:"全 11 话", prog:"完结" },
+  { t:"我推的孩子 第二季", u:"更新至第 13 话", prog:"更新至 13" },
+  { t:"虚构推理 第二季", u:"全 12 话", prog:"完结" },
+  { t:"MONSTER", u:"全 74 话", prog:"完结" },
+  { t:"天国大魔镜", u:"全 13 话", prog:"完结" },
+  { t:"迷宫饭", u:"全 24 话", prog:"完结" }
+];
+
+const HOT_SEARCH = [
+  { n:"一年四季的延时摄影", tag:"新" },
+  { n:"Linux 手机手搓教程", tag:"热" },
+  { n:"芙莉莲 第 28 话", tag:"" },
+  { n:"1948 年影像修复", tag:"独家" },
+  { n:"示波器演奏", tag:"" },
+  { n:"可可西里自驾", tag:"热" },
+  { n:"8 位机 chipmusic", tag:"" },
+  { n:"胶片冲印店", tag:"新" },
+  { n:"开放世界课本", tag:"" },
+  { n:"天桥下的吉他手", tag:"" }
+];
+
+/* ============================================================ 渲染 */
+const $ = s => document.querySelector(s);
+const wall = $("#wall");
+
+function cover(i){ return `--g:${COVERS[i % COVERS.length]}`; }
+
+function videoCard(v, i, ranked){
+  const rank = ranked
+    ? `<div class="rank ${i < 3 ? "top" : ""}">${String(i+1).padStart(2,"0")}</div>` : "";
+  return `
+  <article class="card">
+    <div class="cover" style="${cover(i)}">
+      <div class="ph"></div>
+      ${rank}
+      <div class="stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 18c3-6 6-8 9-8s6 2 9 8"/><circle cx="12" cy="8" r="1.6" fill="currentColor"/></svg>${v.v}</div>
+      <div class="cover-tag">${v.dur}</div>
+    </div>
+    <div class="body">
+      <div class="title">${v.t}</div>
+      <div class="meta">
+        <span class="up">${v.u}</span>
+        <span class="sep">·</span>
+        <span class="n">${v.v}</span>
+        <span class="sep">·</span>
+        <span class="n">${v.d}</span>
+      </div>
+    </div>
+  </article>`;
+}
+
+function liveCard(v, i){
+  const rank = `<div class="rank ${i < 3 ? "top" : ""}">${String(i+1).padStart(2,"0")}</div>`;
+  return `
+  <article class="card">
+    <div class="cover" style="${cover(i+3)}">
+      <div class="ph"></div>
+      ${rank}
+      <div class="cover-tag ${v.tag === "直播中" ? "live" : ""}">${v.tag}</div>
+    </div>
+    <div class="body">
+      <div class="title">${v.t}</div>
+      <div class="meta">
+        <span class="up">${v.u}</span>
+        <span class="sep">·</span>
+        <span class="n">${v.v}</span>
+      </div>
+    </div>
+  </article>`;
+}
+
+function bangumiCard(v, i){
+  const rank = `<div class="rank ${i < 3 ? "top" : ""}">${String(i+1).padStart(2,"0")}</div>`;
+  return `
+  <article class="card">
+    <div class="cover" style="${cover(i+6)}">
+      <div class="ph"></div>
+      ${rank}
+      <div class="cover-tag">${v.prog.startsWith("更新") ? "" : "完结"}</div>
+    </div>
+    <div class="body">
+      <div class="title">${v.t}</div>
+      <div class="meta">
+        <span class="badge-prog">${v.prog}</span>
+      </div>
+    </div>
+  </article>`;
+}
+
+function hotSearchRow(h, i){
+  const tagCls = h.tag === "新" ? "new" : h.tag === "热" ? "hot" : h.tag === "独家" ? "excl" : "";
+  return `
+  <div class="hot-row">
+    <span class="rank ${i < 3 ? "top" : ""}">${i+1}</span>
+    <span class="name">${h.n}</span>
+    ${h.tag ? `<span class="tag ${tagCls}">${h.tag}</span>` : ""}
+  </div>`;
+}
+
+const TABS = {
+  rec:     { render: () => VIDEOS.map((v,i) => videoCard(v, i, false)).join(""),
+             meta: () => `<b>${VIDEOS.length}</b> 条 · 个性化排序，无序号`, poster: false },
+  hot:     { render: () => VIDEOS.slice().reverse().map((v,i) => videoCard(v, i, true)).join(""),
+             meta: () => `<b>${VIDEOS.length}</b> 条 · 按热度排序`, poster: false },
+  rank:    { render: () => VIDEOS.map((v,i) => videoCard(v, i, true)).join(""),
+             meta: () => `排行榜 · 全站 <b>TOP 100</b> 已载入 30`, poster: false },
+  live:    { render: () => LIVES.map((v,i) => liveCard(v, i)).join(""),
+             meta: () => `<b>${LIVES.length}</b> 个直播间 · 滚动加载`, poster: false },
+  bangumi: { render: () => BANGUMI.map((v,i) => bangumiCard(v, i)).join(""),
+             meta: () => `我的追番 <b>${BANGUMI.length}</b> 部 · 番剧推荐 <b>${BANGUMI.length}</b> 部`, poster: true }
+};
+
+function setTab(key){
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.dataset.tab === key));
+  const cfg = TABS[key];
+  wall.classList.toggle("poster", cfg.poster);
+  wall.innerHTML = cfg.render();
+  $("#indexMeta").innerHTML = cfg.meta();
+  $("#stage").scrollTo({ top: 0 });
+}
+
+$("#tabs").addEventListener("click", e => {
+  const t = e.target.closest(".tab");
+  if (t) setTab(t.dataset.tab);
+});
+
+$("#hotList").innerHTML = HOT_SEARCH.map(hotSearchRow).join("");
+
+/* ============================================================ 搜索展开 */
+const search = $("#search");
+$("#searchBox").addEventListener("click", () => {
+  search.classList.add("open");
+  $("#searchInput").focus();
+});
+document.addEventListener("click", e => {
+  if (!search.contains(e.target)) search.classList.remove("open");
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && document.activeElement !== $("#searchInput")) {
+    e.preventDefault();
+    search.classList.add("open");
+    $("#searchInput").focus();
+  }
+  if (e.key === "Escape") search.classList.remove("open");
+});
+
+/* ============================================================ 主题切换 */
+$("#btnTheme").addEventListener("click", () => {
+  const cur = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = cur;
+});
+
+/* ============================================================ 回到顶部 */
+const stage = $("#stage"), btnTop = $("#btnTop");
+stage.addEventListener("scroll", () => {
+  btnTop.classList.toggle("show", stage.scrollTop > 240);
+}, { passive: true });
+btnTop.addEventListener("click", () => stage.scrollTo({ top: 0, behavior: "smooth" }));
+
+/* ============================================================ 设计注解 */
+const NOTES = [
+  { k:"head",     t:"「首页」从 28px 降到 24px，上方加一行眉题。首页不是仪表盘，标题不该抢封面的戏。" },
+  { k:"search",   t:"搜索从 440px 居中孤岛改为右对齐入口条，与索引头、卡片墙共用同一条左缘轴线；点开后原地展开，不再左右乱移。" },
+  { k:"indexbar", t:"签名结构：索引头。页签 + 条目元信息 + 工具三件事收在一条线上，它同时是卡片墙的头部和整个页面的控制面。" },
+  { k:"rank",     t:"序号墨块（本提案的核心记号）：热门/排行榜/直播/追番都带排名，前三名用品牌粉，其余墨色；推荐 tab 刻意不带序号——推荐没有顺序语义，结构只编码真实信息。" },
+  { k:"card",     t:"卡片文字区压缩为标题两行 + 单行 meta（UP · 播放 · 日期），meta 从两行并成一行，扫读密度更高。" },
+  { k:"end",      t:"右下角悬浮工具列取消后，墙尾不再需要 250px 让路边距——滚到底时最后一行整行可见，这是排版上的真实收益。" }
+];
+
+const noteList = $("#noteList");
+noteList.innerHTML = NOTES.map((n,i) =>
+  `<li data-k="${n.k}"><i>${String(i+1).padStart(2,"0")}</i><span>${n.t}</span></li>`
+).join("");
+
+$("#noteToggle").addEventListener("click", () => $("#notes").classList.toggle("open"));
+
+noteList.addEventListener("click", e => {
+  const li = e.target.closest("li");
+  if (!li) return;
+  const k = li.dataset.k;
+  const already = li.classList.contains("on");
+
+  document.querySelectorAll(".note-list li").forEach(x => x.classList.remove("on"));
+  document.querySelectorAll("[data-note]").forEach(x => x.classList.remove("on"));
+  document.body.classList.remove("focus");
+
+  if (already) return;
+
+  li.classList.add("on");
+  document.body.classList.add("focus");
+  document.querySelectorAll(`[data-note="${k}"]`).forEach(x => x.classList.add("on"));
+});
+
+/* 初始 */
+setTab("rec");
+</script>
+</body>
+</html>
