@@ -276,6 +276,156 @@ public class ApiClient
         return cookie;
     }
 
+    // ---------------------------------------------------------------- 写操作风控预热
+
+    /// <summary>
+    /// 从 Referer 推导 Origin。web 端每个 POST 都带它, 且必须与 Referer 同源。
+    /// Referer 是页面地址(带路径), Origin 只要 origin 部分。
+    /// </summary>
+    private static string OriginFor(string? referer)
+    {
+        if (string.IsNullOrEmpty(referer)) return "https://www.bilibili.com";
+        var i = referer.IndexOf("://", StringComparison.Ordinal);
+        if (i < 0) return "https://www.bilibili.com";
+        var rest = referer[(i + 3)..];
+        var slash = rest.IndexOf('/', StringComparison.Ordinal);
+        return slash < 0 ? referer : referer[..(i + 3 + slash)];
+    }
+
+    /// <summary>写操作预热是否已经做过(每进程一次, 失败不重试以免拖慢用户点击)</summary>
+    private bool _writeReady;
+
+    /// <summary>
+    /// 清掉内存里的设备指纹缓存(下次 <see cref="EnsureBuvidAsync"/> 会重新领并落盘)。
+    ///
+    /// ★★ 为什么需要它(2026-10-12 16:33 实测, 用户报"退出登录再登进去风控又出现"):
+    ///   <see cref="EnsureBuvidAsync"/> 第一句是"内存里这一对齐全就直接返回" ——
+    ///   这是为了"一台设备的身份稳定"(见该方法注释)。但退出登录会删掉 session.json,
+    ///   而这个单例的 `_buvid3/_buvid4` **不会**跟着清 ⇒ 重新登录后它直接短路,
+    ///   既不重新领也不落盘 ⇒ 磁盘上 buvid 是空的, 写接口报风控。
+    ///   由 <see cref="SessionManager.Clear"/> 调用。
+    /// </summary>
+    public void ResetBuvidCache()
+    {
+        _buvid3 = null;
+        _buvid4 = null;
+    }
+
+    /// <summary>
+    /// 供启动时调用的写操作预热(见 <see cref="EnsureWriteReadyAsync"/>)。
+    ///
+    /// ★ 为什么要单独暴露: 预热放在"用户第一次点赞"那一刻的话, 那一次点击要多等
+    ///   一个网络往返, 体感就是"点了没反应"。启动 1.5 秒后静默做掉, 用户无感。
+    /// </summary>
+    public Task WarmUpWriteAsync() => EnsureWriteReadyAsync();
+
+    /// <summary>
+    /// 当前屏幕分辨率(上报设备指纹用)。取不到就给一个常见的桌面值 ——
+    /// 这个字段服务端只校验存在性, 不影响任何判断, 所以失败不需要重试。
+    /// </summary>
+    private static string ScreenRes()
+    {
+        try
+        {
+            var bounds = System.Windows.Forms.Screen.PrimaryScreen?.Bounds;
+            return bounds is { } b ? $"{b.Width}x{b.Height}" : "1920x1080";
+        }
+        catch
+        {
+            return "1920x1080";
+        }
+    }
+
+    /// <summary>
+    /// 写操作(点赞/投币/收藏/三连)发出前的最后一道风控预热。
+    ///
+    /// ★★ 为什么需要它(2026-10-12 用户报"冷门视频点赞报 -352 风控现在依然存在"):
+    ///   B 站的写接口有**三层**设备身份校验, 缺任何一层都可能 -352:
+    ///     1) buvid3/buvid4 —— 光"有"不够, 还必须 POST 一次
+    ///        `/x/internal/gaia-gateway/ExClimbWuzhi` 才算"激活";
+    ///        未激活的指纹服务端视为无效, 读接口照过、写接口判风控。
+    ///     2) b_nut / sid / buvid_fp / b_lsid —— 登录会话特征(2026-11-12 已补到 Cookie 头)。
+    ///     3) Origin 头 —— web 端 POST 都带, 缺了会被判成非浏览器客户端。
+    ///
+    /// ★ 实测基线(探针 bd-probe-like2/3/4/5, 全程未改用户点赞状态):
+    ///   · 对本人冷门投稿(播放 7762、赞 0)打 like=1 → **成功**(65006/0),
+    ///     说明"当前账号 + 当前 Cookie + 当前代码路径"本身是通的;
+    ///   · 补 b_nut/b_lsid/buvid_fp/dm_img/Origin 与不补, 返回码完全一样
+    ///     ⇒ 这几项在**探针环境**下不是必要条件;
+    ///   · 评论点赞 /x/v2/reply/action 同样全放行(不存在的 rpid 也返 0)。
+    ///
+    /// ★★ 当时据此推断"根因是冷启动未激活指纹"——**那个推断是错的**, 别沿用。
+    ///   真根因(2026-10-12 用户对照实验定位): "退出登录 → 重新扫码登录"这条路上
+    ///   `EnsureBuvidAsync` 的内存短路导致 buvid 从未落盘(session.json 里是空的),
+    ///   见 <see cref="ResetBuvidCache"/> 与 SessionManager.Clear。
+    ///   ⇒ 探针查不出问题**不等于**代码没问题: 探针的 ApiClient 是全新实例(内存为空),
+    ///     而用户跑的是长驻进程(退出登录不清内存)。**"探针复现不了"本身就是一条线索** ——
+    ///     要找"探针与真实进程的差异", 而不是回头怀疑用户或账号。
+    ///   预热本身仍有价值(激活未激活的指纹是已知风控面), 保留。
+    ///
+    /// ★ 实测(2026-10-12, 探针 bd-probe-wuzhi, 只读):
+    ///   这个接口返回 `{"code":130212,"message":"130212","data":null}` —— **不是错误**。
+    ///   社区里同样如此(bilibili-api issue #691 有人专门问过这个码),
+    ///   它是"已收到但不需要响应"的意思, 之后写接口仍可正常放行。
+    ///   所以**不要**因为看到非 0 码就以为激活失败而反复重试。
+    ///
+    /// ★ 每进程只做一次且不阻塞失败: 预热失败就照常发写请求(退回预热前的行为),
+    ///   绝不让"防风控"本身变成"不能点赞"。
+    /// </summary>
+    private async Task EnsureWriteReadyAsync()
+    {
+        if (_writeReady) return;
+        _writeReady = true;   // 先置位: 失败也不重试(避免每次点赞都多打一次预热请求)
+
+        // 第一层: 设备指纹必须存在(读接口已经在用, 通常已经是现成的)
+        await EnsureBuvidAsync();
+
+        // 第二层: 激活 buvid。**光拿到 buvid3/buvid4 不算激活** —— 还必须 POST 一次
+        //   `/x/internal/gaia-gateway/ExClimbWuzhi` 把设备指纹上报, 服务端才认这个设备。
+        //   未激活的指纹: 读接口照过、写接口判风控(这正是"能看不能赞"的根因之一)。
+        //
+        // ★ 请求形态按社区实测文档(SocialSisterYi/bilibili-API-collect issue #933):
+        //     POST https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi
+        //     Content-Type: application/x-www-form-urlencoded
+        //     表单字段 payload = 一串 JSON(里面是 WebGL/分辨率/时间戳等设备特征)
+        //     Cookie 需要 buvid3 / buvid4 / b_nut
+        //   payload 里的编号字段服务端只校验存在性, 用公开常量即可。
+        // ★ 不需要登录态, 失败/无响应都不影响主流程。
+        try
+        {
+            if (string.IsNullOrEmpty(_buvid3)) return;
+
+            var cookie = "buvid3=" + _buvid3;
+            if (!string.IsNullOrEmpty(_buvid4)) cookie += "; buvid4=" + _buvid4;
+            var bNut = SessionManager.Instance.Current.BNut;
+            if (!string.IsNullOrEmpty(bNut)) cookie += "; b_nut=" + bNut;
+
+            // payload: 设备特征。分辨率用真实屏幕, 其余用公开常量(服务端只验存在性)。
+            //   ★ 用 WinForms 的 Screen 而不是 WPF 的 SystemParameters: ApiClient 不依赖 WPF,
+            //     而这是一个可能在非 UI 线程上跑的 Service(探针/后台任务都直接调它)。
+            var res = ScreenRes();
+            var payload = "{\"3064\":1,\"5062\":\"" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                + "\",\"03bf\":\"https%3A%2F%2Fwww.bilibili.com%2F\",\"39c8\":\"333.1007.fp.risk\""
+                + ",\"34f1\":\"\",\"d402\":\"\",\"654a\":\"\",\"6e7c\":\"" + res
+                + "\",\"3c43\":{\"2673\":1,\"5766\":24,\"6527\":0,\"7003\":1,\"807e\":1}}";
+
+            using var req = new HttpRequestMessage(HttpMethod.Post,
+                "https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi");
+            req.Headers.TryAddWithoutValidation("Cookie", cookie);
+            req.Headers.TryAddWithoutValidation("Origin", "https://www.bilibili.com");
+            req.Headers.TryAddWithoutValidation("Referer", "https://www.bilibili.com/");
+            req.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["payload"] = payload
+            });
+            await _http.SendAsync(req);
+        }
+        catch
+        {
+            // 预热失败不阻塞: 见方法注释
+        }
+    }
+
     // ---------------------------------------------------------------- 业务接口
 
     /// <summary>热门视频</summary>
@@ -2320,11 +2470,18 @@ public class ApiClient
         ps["csrf"] = csrf;
         try
         {
+            // ★ 写操作(点赞/投币/收藏/三连)的风控门比读接口严, 实测要点见下面 EnsureWriteReadyAsync。
+            //   在真正发写请求前把设备身份预热一次, 不做的话新登录用户第一次点赞极易撞 -352。
+            await EnsureWriteReadyAsync();
+
             using var req = new HttpRequestMessage(HttpMethod.Post, url);
             req.Headers.TryAddWithoutValidation("Cookie",
                 AppendFingerprint(SessionManager.Instance.BuildCookieHeader()));
             if (!string.IsNullOrEmpty(referer))
                 req.Headers.TryAddWithoutValidation("Referer", referer);
+            // ★ Origin 必须与 Referer 同源: B 站 web 端所有 POST 都带这个头, 缺了
+            //   读接口照样过, 写接口却会被当成"非浏览器客户端"直接判风控。
+            req.Headers.TryAddWithoutValidation("Origin", OriginFor(referer));
             req.Content = new FormUrlEncodedContent(ps);
             using var resp = await _http.SendAsync(req);
             var text = await resp.Content.ReadAsStringAsync();

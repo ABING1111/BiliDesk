@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
@@ -131,6 +132,16 @@ public partial class App : Application
         //   而它们在 WebView2 的 Profile 里本来就躺着。启动后读一次即可, 用户无感 ——
         //   否则就得让用户"退出登录再登一次"才能用上点赞, 对这个修复来说太贵。
         //   后台做、不 await: WebView2 初始化要几百毫秒, 不能挡启动。
+        // ★ 写操作风控预热(2026-10-12 用户报"冷门视频点赞报 -352 风控依然存在"):
+        //   把设备指纹激活(buvid ExClimbWuzhi)提前到启动时做, 而不是等用户第一次点赞。
+        //   否则用户点下点赞的那一刻要多等一次网络往返, 体感就是"点了没反应"。
+        //   只读的静默请求, 失败无副作用。
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            await System.Threading.Tasks.Task.Delay(1500);
+            try { await Svc.Api.WarmUpWriteAsync(); } catch { /* 预热失败不阻塞启动 */ }
+        });
+
         BackfillRiskCookiesAsync();
 
         // ★ 用户**又双击了一次 exe**: 已经在跑的这个实例收到管道通知, 把主窗口叫到前台。
@@ -174,13 +185,31 @@ public partial class App : Application
     {
         try
         {
-            if (!Svc.Session.HasLogin || Svc.Session.HasRiskCookies) return;
+            if (!Svc.Session.HasLogin) return;
+
+            // ★★ 设备指纹(buvid3/buvid4)优先补齐, 且**不依赖 WebView2**(2026-10-12 16:33 实测):
+            //   用户重新扫码登录后 session.json 里 buvid3/buvid4/b_nut 全是空的, 点赞照旧报风控。
+            //   这三个值 SPI 接口就能领到, 没必要等 WebView2 起不来就整体放弃。
+            //   (登录窗口里也补了一次, 但那里是 fire-and-forget 被 Close() 掐断过 —— 双保险。)
+            if (string.IsNullOrEmpty(Svc.Session.Current.Buvid3) ||
+                string.IsNullOrEmpty(Svc.Session.Current.Buvid4))
+            {
+                await Svc.Api.EnsureBuvidAsync();
+            }
+
+            if (Svc.Session.HasRiskCookies) return;
 
             // ★ 用主窗口里那个**隐藏**的 WebView2, 不碰用户正在看的那个 ——
             //   初始化一个 WebView2 要几百毫秒, 不能在启动路径上同步等它。
             //   它是 MainWindow 建的, 所以要等主窗口起来(Loaded 之后)才有。
             var hidden = await WaitHiddenWebViewAsync();
-            if (hidden == null) return;
+            if (hidden == null)
+            {
+                // ★ WebView2 拿不到也要把 b_nut 补上: 它是登录时刻时间戳, 不依赖浏览器
+                //   (2026-10-12: 原来这里是 return, 于是"WebView2 起不来"就等于"永远不补 b_nut")
+                Svc.Session.BackfillRiskCookies(new Dictionary<string, string>());
+                return;
+            }
 
             await Svc.WebView2.InitAsync(hidden);
             var cookies = await WebView2Service.ReadBiliCookiesAsync(hidden);

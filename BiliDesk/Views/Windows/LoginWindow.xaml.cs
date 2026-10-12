@@ -661,6 +661,23 @@ public partial class LoginWindow : FluentWindow
         _webTimer.Stop();
         _pageTimer.Stop();
         Svc.Session.UpdateFromCookies(cookies);
+
+        // ★★ 扫码这条路拿不到 buvid3/buvid4(2026-10-12 用户对照实验定位):
+        //   旧版 WebView2 登录时浏览器自己访问 bilibili.com 会生成指纹并写进 Profile,
+        //   新版扫码走 passport 接口, 浏览器那侧的指纹与 session.json 里的不是同一个 ⇒
+        //   写接口被判"设备不一致"而报 -352。
+        //   这里补一次: 本地没有就现领一对, 让"接口侧"与"浏览器侧"用同一个设备身份。
+        //
+        // ★★ 必须**同步等它做完**再往下走(2026-10-12 16:33 实测教训):
+        //   上一版这里是 `_ = Svc.Api.EnsureBuvidAsync();`(fire-and-forget),
+        //   而下面第 12 行就是 `Close()` —— 用户重新扫码登录后 session.json 里
+        //   buvid3/buvid4/b_nut **全是空的**, 点赞照旧报风控。
+        //   探针 bd-probe-ensure 单独验证过: `await` 时领得到、也落得了盘
+        //   ⇒ 不是逻辑错, 是窗口关闭把未完成的异步任务掐断了。
+        //   代价: 多等一次 SPI 往返(通常 <300ms), 发生在"登录成功"提示之后、关窗之前,
+        //   用户感知不到; 而它决定了下一次点赞会不会被风控。
+        Svc.Api.EnsureBuvidAsync().GetAwaiter().GetResult();
+
         Svc.Toast.Show("登录成功");
 
         if (syncToWebProfile && SvcWindow.HiddenWebView is { } hidden)

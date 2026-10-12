@@ -181,9 +181,17 @@ public class SessionManager
         Changed?.Invoke();
     }
 
-    /// <summary>写操作风控 Cookie 是否已经齐了(见 <see cref="Models.Session"/> 里那一段说明)。</summary>
-    public bool HasRiskCookies =>
-        !string.IsNullOrEmpty(Current.BNut) && !string.IsNullOrEmpty(Current.Sid);
+    /// <summary>
+    /// 写操作风控 Cookie 是否已经齐了(见 <see cref="Models.Session"/> 里那一段说明)。
+    ///
+    /// ★★ 2026-10-12 修: 原来这里是 `b_nut` 和 `sid` **都**非空才算齐, 而这个判据被
+    ///   <see cref="BackfillRiskCookies"/> 当入口守卫用 ⇒ 老用户 session.json 里
+    ///   `sid` 一直有值(旧登录流程就存了), 于是恒为 true, **整个补齐方法从上线那天起
+    ///   就没执行过一次**(包括上一轮新加的"自造 b_nut"分支, 也是死代码)。
+    ///   用户的现象正是"换了扫码登录后点赞报风控, 而代码明明补了 Cookie"。
+    /// ⇒ 判据收紧到 `b_nut` 一项: 它才是写接口风控最常被点名、且唯一可能缺失的那一个。
+    /// </summary>
+    public bool HasRiskCookies => !string.IsNullOrEmpty(Current.BNut);
 
     /// <summary>
     /// 从一份浏览器 Cookie 里**只补风控那几项**, 不动登录凭据。
@@ -201,6 +209,16 @@ public class SessionManager
 
         var bNut = Get("b_nut");
         var sid = Get("sid");
+
+        // ★★ b_nut 是"登录时刻的 Unix 时间戳", **不是随机值** —— 服务端拿它算
+        //   "这个会话存在多久了"。所以 Profile 里没有时也能自己造一个:
+        //   本次启动时刻就是合法的登录时刻(老用户的 session.json 缺这个字段,
+        //   本质上就是"上一版登录流程没记", 而不是"用户没有登录时刻")。
+        //   (2026-10-12: 实测用户 session.json 里 b_nut 为空、sid 有值,
+        //     而 b_nut 恰好是写接口风控最常被点名的那一项。)
+        if (string.IsNullOrEmpty(bNut) && string.IsNullOrEmpty(Current.BNut))
+            bNut = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+
         if (string.IsNullOrEmpty(bNut) && string.IsNullOrEmpty(sid)) return;  // Profile 里也没有, 放弃
 
         Current.BNut = bNut ?? Current.BNut;
@@ -254,6 +272,16 @@ public class SessionManager
         {
             // 忽略
         }
+
+        // ★★ 退出登录时必须同时清掉 ApiClient 内存里的设备指纹(2026-10-12 16:33 实测):
+        //   `EnsureBuvidAsync()` 第一句就是"内存里这一对齐全就直接返回"。
+        //   于是"启动时领过一次 → 退出登录 → 重新扫码登录"这条路上,
+        //   磁盘上的 buvid 已被 Clear() 删掉, 而 ApiClient 单例里的 `_buvid3/_buvid4` **还在**
+        //   ⇒ EnsureBuvidAsync 直接短路, 既不重新领也不落盘
+        //   ⇒ 用户重新登录后 session.json 里 buvid 是空的, 点赞照旧报风控。
+        //   (用户原话: "退出登录, 在最新的 debug 上重新登录, 风控问题出现")
+        Svc.Api.ResetBuvidCache();
+
         Changed?.Invoke();
     }
 

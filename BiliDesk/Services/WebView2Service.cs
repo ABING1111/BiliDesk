@@ -336,6 +336,15 @@ public class WebView2Service
     ///   **不经过浏览器** —— 而内嵌网页(BrowserWindow 打开的视频页/活动页)读的是 Profile 里的 Cookie。
     ///   不写这一份, 就会出现"接口已登录、内嵌网页还是未登录"的割裂;
     ///   退出登录那边的 ClearProfileCookiesAsync 也说明这份 Profile 本来就是登录态的一部分。
+    ///
+    /// ★★ 2026-10-12 补: 除登录凭据外, **设备指纹(buvid3/buvid4)也必须一起写进 Profile**。
+    ///   用户对照实验(旧版 WebView2 登录无风控 / 新版扫码登录有风控)定位到根因就在这:
+    ///      · 旧版走官方登录页, 浏览器**自己**访问 bilibili.com 时生成了 buvid3/buvid4
+    ///        并写进 Profile ⇒ 浏览器与接口用的是**同一台设备**;
+    ///      · 新版扫码走 passport 接口, 我们只在 session.json 里存了指纹, Profile 里没有
+    ///        ⇒ 浏览器侧是"另一台设备"。
+    ///   实测(探针 bd-probe-cookieschema 只读 Cookie 库): 扫码登录后 Profile 里只有 8 个
+    ///   bilibili Cookie(SESSDATA/bili_jct/DedeUserID/…), **buvid3/buvid4/b_nut/buvid_fp 一个都没有**。
     /// </summary>
     public async Task SyncSessionCookiesAsync(WebView2 webView, IReadOnlyDictionary<string, string> cookies)
     {
@@ -351,6 +360,22 @@ public class WebView2Service
                 var cookie = manager.CreateCookie(name, value, ".bilibili.com", "/");
                 // 服务端给的是会话级 Cookie(没有 Max-Age), 不设过期时间进程一退就没了,
                 // 下次启动内嵌网页又变未登录。B 站登录凭据本身寿命约半年, 这里给一年, 真失效由服务端兜底。
+                cookie.Expires = DateTime.Now.AddYears(1);
+                manager.AddOrUpdateCookie(cookie);
+            }
+
+            // 设备指纹: 与登录凭据同源写入(见方法注释里那段根因说明)。
+            // 不覆盖 Profile 里已有的 —— 浏览器自己生成的那份比 SPI 领的更"被服务端认过"。
+            var sess = SessionManager.Instance.Current;
+            foreach (var (name, value) in new (string, string?)[]
+                     {
+                         ("buvid3", sess.Buvid3),
+                         ("buvid4", sess.Buvid4),
+                         ("b_nut", sess.BNut),
+                     })
+            {
+                if (string.IsNullOrEmpty(value)) continue;
+                var cookie = manager.CreateCookie(name, value, ".bilibili.com", "/");
                 cookie.Expires = DateTime.Now.AddYears(1);
                 manager.AddOrUpdateCookie(cookie);
             }
