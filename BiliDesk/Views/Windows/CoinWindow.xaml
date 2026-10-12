@@ -1,0 +1,93 @@
+﻿<views:FluentWindow x:Class="BiliDesk.Views.CoinWindow"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:BiliDesk.Views"
+             Title="投币" Width="400" SizeToContent="Height"
+             ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+
+    <views:FluentWindow.Resources>
+        <Style x:Key="CoinCardStyle" TargetType="RadioButton">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="MinHeight" Value="72" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid>
+                            <Rectangle x:Name="Card" RadiusX="8" RadiusY="8" Fill="Transparent"
+                                       Stroke="{DynamicResource InputBorderBrush}" StrokeThickness="1.6"
+                                       StrokeDashArray="4 3" />
+                            <ContentPresenter Margin="12,10" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Card" Property="Stroke"
+                                        Value="{DynamicResource AccentBorderFillBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Card" Property="Stroke" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Card" Property="StrokeDashArray" Value="{x:Null}" />
+                                <Setter TargetName="Card" Property="Fill"
+                                        Value="{DynamicResource AccentSoftFillBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </views:FluentWindow.Resources>
+
+    <Grid Background="{DynamicResource AppBackgroundBrush}">
+        <StackPanel Margin="26,22,26,20">
+
+            <!-- 标题: 数字随选中的卡片变化 -->
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <TextBlock Text="给 UP 主投上" FontSize="15" VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                <TextBlock x:Name="CountText" Text="1" FontSize="22" FontWeight="SemiBold"
+                           Margin="7,0,7,0" VerticalAlignment="Center"
+                           Foreground="{DynamicResource AccentTextBrush}" />
+                <TextBlock Text="枚硬币" FontSize="15" VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextPrimaryBrush}" />
+            </StackPanel>
+
+            <!-- 数量卡片(默认 1 枚) -->
+            <Grid Margin="0,18,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <RadioButton x:Name="CardOne" Grid.Column="0" GroupName="CoinCount"
+                             Style="{StaticResource CoinCardStyle}" IsChecked="True"
+                             Checked="OnCardChecked">
+                    <TextBlock Text="1 硬币" FontSize="14.5" TextAlignment="Center"
+                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
+                </RadioButton>
+
+                <RadioButton x:Name="CardTwo" Grid.Column="2" GroupName="CoinCount"
+                             Style="{StaticResource CoinCardStyle}" Checked="OnCardChecked">
+                    <TextBlock Text="2 硬币" FontSize="14.5" TextAlignment="Center"
+                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
+                </RadioButton>
+            </Grid>
+
+            <CheckBox x:Name="AlsoLikeCheck" Style="{StaticResource LabeledCheckBoxStyle}"
+                      Content="同时点赞内容" IsChecked="True" Margin="0,16,0,0"
+                      HorizontalAlignment="Center" />
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0">
+                <Button Content="取消" Style="{StaticResource SubtleButtonStyle}"
+                        Padding="22,7" Click="OnCancelClick" />
+                <Button Content="确定" Style="{StaticResource AccentButtonStyle}"
+                        Padding="22,7" Margin="10,0,0,0" Click="OnConfirmClick" />
+            </StackPanel>
+
+            <TextBlock Text="投币不可撤销，请确认数量" FontSize="11" Margin="0,12,0,0"
+                       HorizontalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}" />
+        </StackPanel>
+    </Grid>
+</views:FluentWindow>

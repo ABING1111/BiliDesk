@@ -1243,7 +1243,8 @@ public class SettingsViewModel : ObservableObject
         Svc.Session.Clear();
         try
         {
-            await Svc.WebView2.ClearProfileCookiesAsync(SvcWindow.HiddenWebView);
+            if (SvcWindow.HiddenWebView is { } hidden)
+                await Svc.WebView2.ClearProfileCookiesAsync(hidden);
         }
         catch
         {

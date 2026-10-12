@@ -328,4 +328,40 @@ public class WebView2Service
             webView.Visibility = System.Windows.Visibility.Collapsed;
         }
     }
+
+    /// <summary>
+    /// 把扫码登录拿到的凭据写进浏览器 Profile(隐藏控件需先显示再初始化)。
+    ///
+    /// ★ 为什么必须补这一步: 扫码走的是 passport 接口, Cookie 只落在 session.json 里,
+    ///   **不经过浏览器** —— 而内嵌网页(BrowserWindow 打开的视频页/活动页)读的是 Profile 里的 Cookie。
+    ///   不写这一份, 就会出现"接口已登录、内嵌网页还是未登录"的割裂;
+    ///   退出登录那边的 ClearProfileCookiesAsync 也说明这份 Profile 本来就是登录态的一部分。
+    /// </summary>
+    public async Task SyncSessionCookiesAsync(WebView2 webView, IReadOnlyDictionary<string, string> cookies)
+    {
+        try
+        {
+            webView.Visibility = System.Windows.Visibility.Visible;
+            await InitAsync(webView);
+            var manager = webView.CoreWebView2.CookieManager;
+
+            foreach (var (name, value) in cookies)
+            {
+                if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(value)) continue;
+                var cookie = manager.CreateCookie(name, value, ".bilibili.com", "/");
+                // 服务端给的是会话级 Cookie(没有 Max-Age), 不设过期时间进程一退就没了,
+                // 下次启动内嵌网页又变未登录。B 站登录凭据本身寿命约半年, 这里给一年, 真失效由服务端兜底。
+                cookie.Expires = DateTime.Now.AddYears(1);
+                manager.AddOrUpdateCookie(cookie);
+            }
+        }
+        catch
+        {
+            // 写不进去不影响主流程(session.json 里的登录态已经生效)
+        }
+        finally
+        {
+            webView.Visibility = System.Windows.Visibility.Collapsed;
+        }
+    }
 }
