@@ -55,7 +55,7 @@ public class SearchViewModel : ObservableObject
 
     // ---------------- 搜索类别(视频 / 直播间 / 番剧) ----------------
 
-    private ContentKind _kind = ContentKind.Video;
+    private ContentKind _kind = Svc.Settings.SearchKind;
 
     /// <summary>
     /// 当前搜的是视频还是直播间。切换时**重新搜一次**(带着同一个关键词) ——
@@ -67,6 +67,10 @@ public class SearchViewModel : ObservableObject
         set
         {
             if (!SetProperty(ref _kind, value)) return;
+            // ★ 记住用户停在哪个类别(2026-11-12 用户报"番剧依然无法被搜索"):
+            //   首页搜索框跳过来时用的是默认类别(视频), 用户每次都得手动切一次「番剧」。
+            //   落盘之后, 切过一次就一直是那个类别。
+            Svc.Settings.SetSearchKind(value);
             OnPropertyChanged(nameof(IsVideoKind));
             OnPropertyChanged(nameof(IsLiveKind));
             OnPropertyChanged(nameof(IsBangumiKind));
@@ -174,6 +178,13 @@ public class SearchViewModel : ObservableObject
 
     public SearchViewModel()
     {
+        // ★ 初始类别来自设置(上次停在哪个 tab), 所以要把三个投影属性各通知一次 ——
+        //   否则 RadioButton 组的 IsChecked 全绑到 false, 界面表现为"三个 tab 一个都没选"。
+        //   (XAML 里三个按钮都没写 IsChecked="True", 选中态完全靠这两条绑定。)
+        OnPropertyChanged(nameof(IsVideoKind));
+        OnPropertyChanged(nameof(IsLiveKind));
+        OnPropertyChanged(nameof(IsBangumiKind));
+
         SearchCommand = new AsyncRelayCommand(SearchAsync, () => !string.IsNullOrWhiteSpace(Keyword));
         LoadMoreCommand = new AsyncRelayCommand(LoadMoreAsync);
         RetryCommand = new AsyncRelayCommand(SearchAsync);

@@ -227,6 +227,27 @@ public class SettingsStore
     public int PlayerVolume { get; set; } = 80;
 
     /// <summary>
+    /// 上次用的搜索类别(见 <see cref="Models.ContentKind"/>: 0=视频 1=直播间 2=番剧)。
+    ///
+    /// ★ 为什么要记住它(2026-11-12 用户报"番剧依然无法被搜索"):
+    ///   从首页搜索框发起搜索时, 搜索页用的是**默认类别(视频)** —— 于是搜"咒术回战"
+    ///   出来的是视频, 一条番剧都没有, 用户看到的就是"番剧搜不到"。
+    ///   而切到「番剧」tab 后同一关键词立刻能搜到(实测 4 条), 所以真正缺的是
+    ///   "记住用户上次停在哪个类别", 让他不必每次手动切。
+    /// ★ 与 <see cref="Models.AppSettings.LastSearchKind"/> 是读写契约, 两处必须一致。
+    /// </summary>
+    public ContentKind SearchKind { get; set; } = ContentKind.Video;
+
+    /// <summary>设置搜索类别并落盘(越界值回落视频)</summary>
+    public void SetSearchKind(ContentKind kind)
+    {
+        if (!Enum.IsDefined(typeof(ContentKind), kind)) kind = ContentKind.Video;
+        if (SearchKind == kind) return;
+        SearchKind = kind;
+        Save();
+    }
+
+    /// <summary>
     /// 设置播放器音量并落盘。0~100 之外的值被夹回范围内(老配置可能存着越界值)。
     /// </summary>
     public void SetPlayerVolume(int volume)
@@ -381,6 +402,11 @@ public class SettingsStore
 
         // 音量继承: 老配置没这个字段 ⇒ 保持默认 80。越界值夹回 0~100。
         PlayerVolume = Math.Clamp(s.PlayerVolume, 0, 100);
+
+        // 上次的搜索类别: 老配置没这个字段 ⇒ 视频(与搜索页初始类别一致)。
+        SearchKind = Enum.IsDefined(typeof(ContentKind), s.LastSearchKind)
+            ? (ContentKind)s.LastSearchKind
+            : ContentKind.Video;
     }
 
     /// <summary>
@@ -426,7 +452,8 @@ public class SettingsStore
         BlockPcdn = BlockPcdn,
         DisclaimerAccepted = DisclaimerAccepted,
         DisclaimerVersion = AcceptedDisclaimerVersion,
-        PlayerVolume = PlayerVolume
+        PlayerVolume = PlayerVolume,
+        LastSearchKind = (int)SearchKind
     };
 
     /// <summary>

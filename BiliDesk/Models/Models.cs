@@ -1111,6 +1111,13 @@ public class AppSettings
     public int PlayerVolume { get; set; } = 80;
 
     /// <summary>
+    /// 上次用的搜索类别(见 <see cref="ContentKind"/>: 0=视频 1=直播间 2=番剧)。
+    /// 存 int 而不是枚举本身: JSON 里枚举按数字走, 老配置没有这个字段时默认 0(视频),
+    /// 与搜索页的初始类别一致。★ 取值范围由 SettingsStore.SearchKind 夹取。
+    /// </summary>
+    public int LastSearchKind { get; set; }
+
+    /// <summary>
     /// 旧字段(仅用于**读取**老配置, 兼容用)。
     ///
     /// ★★★ 2026-10-06 起"窗口背景材质"合并成了**一个**选择器(无/亚克力/云母/云母Alt),
