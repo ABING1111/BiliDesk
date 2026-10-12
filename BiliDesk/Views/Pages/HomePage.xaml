@@ -500,12 +500,13 @@
             </ScrollViewer>
 
             <!-- ===== 追番 =====
-                 与其它四个 tab 的结构不同: 这里是**三段分区**(我的追番 / 番剧推荐 / 国创推荐),
+                 与其它四个 tab 的结构不同: 这里是**两段分区**(我的追番 / 番剧推荐),
                  不是一条一拉到底的列表。所以它不接 DeferredFill 那套单列表分帧填充
-                 (三段各自有 ItemsControl, 没有"一个列表"可填), 但下划线、滚动定位、
+                 (两段各自有 ItemsControl, 没有"一个列表"可填), 但下划线、滚动定位、
                  刷新滚回顶部仍按 tab 统一处理(见 HomePage.xaml.cs 的 HomeTabKind.Bangumi)。
+                 ★ 2026-11-12 起「国创推荐」已并入「番剧推荐」(用户要求), 两面墙。
 
-                 海报是**竖版 3:4**, 所以三面墙都挂 Aspect="0.75" —— 卡片只读 CoverHeight,
+                 海报是**竖版 3:4**, 所以两面墙都挂 Aspect="0.75" —— 卡片只读 CoverHeight,
                  高度由 CardWall 按这个比例算(见 Helpers/CardWall.cs 的 Aspect)。 -->
             <ScrollViewer x:Name="BangumiScroll" VerticalScrollBarVisibility="Auto"
                           ScrollChanged="BangumiScroll_OnScrollChanged"
@@ -568,19 +569,6 @@
                         <TextBlock Text="{Binding BangumiRecommendCountText}" Margin="8,0,0,0"
                                    VerticalAlignment="Bottom" FontSize="13" Opacity="0.6"
                                    Foreground="{DynamicResource TextTertiaryBrush}" />
-                        <!-- 「显示更多 / 收起」(2026-11-12 用户要求):
-                             滚动加载只在"滚到整页最底"那一刻触发, 而这一栏是墙式布局、
-                             一屏能露出七八行 —— 想要更多推荐时得一路滚到底, 不直观。
-                             这个按钮把"再来一页番剧"变成一次点击。
-                             ★ 走 VM 的 ToggleBangumiRecommendCommand(它内部钉住追加目标栏后
-                               复用 LoadMoreAsync), 不在这里另写加载逻辑。 -->
-                        <Button Content="{Binding BangumiRecommendToggleText}"
-                                Command="{Binding ToggleBangumiRecommendCommand}"
-                                Style="{StaticResource SubtleButtonStyle}"
-                                Margin="12,0,0,0" Padding="12,4"
-                                VerticalAlignment="Bottom"
-                                IsEnabled="{Binding BangumiRecommendCanLoadMore}"
-                                ToolTip="再加载一页番剧推荐" />
                     </StackPanel>
 
                     <ItemsControl x:Name="BangumiRecommendList" ItemsSource="{Binding BangumiRecommend}"
@@ -598,43 +586,23 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- ===== 国创推荐 ===== -->
-                    <StackPanel Orientation="Horizontal" Margin="20,28,20,0">
-                        <TextBlock Text="国创推荐" Style="{StaticResource SectionTitleStyle}" />
-                        <TextBlock Text="{Binding GuochuangRecommendCountText}" Margin="8,0,0,0"
-                                   VerticalAlignment="Bottom" FontSize="13" Opacity="0.6"
-                                   Foreground="{DynamicResource TextTertiaryBrush}" />
-                    </StackPanel>
+                    <!-- ★ 「国创推荐」整段已删除(2026-11-12 用户要求"删除国番推荐, 保留番剧推荐,
+                         番剧的范围更广包括日番和国番"): 国创就是番剧的一类, 分两栏没有意义。
+                         现在接口一页返回的番剧与国创**全部收进上面这一栏**, 是一个连续推荐流。
+                         连带删掉: GuochuangRecommendList / GuochuangRecommendCountText /
+                         HasGuochuangRecommend / BangumiSection.Guochuang。
 
-                    <ItemsControl x:Name="GuochuangRecommendList" ItemsSource="{Binding GuochuangRecommend}"
-                                  Visibility="{Binding HasGuochuangRecommend, Converter={StaticResource BoolToVis}}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <helpers:CardWallPanel helpers:CardWall.Enable="True"
-                                                        helpers:CardWall.Aspect="0.75" />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <controls:BangumiCard />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <StackPanel Margin="0,18,0,28" HorizontalAlignment="Center">
-                        <StackPanel Orientation="Horizontal"
-                                    Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
+                         ★ 页底那个「加载更多」按钮也已删除(用户要求"移除加载更多, 保留下滑刷新"):
+                           往下滚到底仍会自动加载(BangumiScroll_OnScrollChanged → TriggerAutoLoad),
+                           工具栏的「刷新」也还在; 想多看几部可以直接点标题旁的「显示更多」。
+                           底部只保留一个"加载中…"的转圈, 作为自动加载的反馈。 -->
+                    <StackPanel Margin="0,18,0,28" HorizontalAlignment="Center"
+                                Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal">
                             <controls:LoadingRing Width="18" Height="18" />
                             <TextBlock Text="加载中…" Margin="8,0,0,0"
                                        VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
                         </StackPanel>
-                        <!-- 手动加载更多。与热门 tab 同款按钮, 但显隐绑 BangumiHasMore:
-                             翻完了就换「已经到底啦」, 免得用户对着一个点了没反应的按钮干等。 -->
-                        <Button Content="加载更多" Style="{StaticResource SubtleButtonStyle}"
-                                Command="{Binding LoadMoreCommand}"
-                                Visibility="{Binding BangumiHasMore, Converter={StaticResource BoolToVis}}" />
-                        <TextBlock Text="已经到底啦" Style="{StaticResource MetaTextStyle}"
-                                   Visibility="{Binding BangumiHasMore, Converter={StaticResource InvBoolToVis}}" />
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
