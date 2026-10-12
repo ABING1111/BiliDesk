@@ -217,6 +217,27 @@ public class SettingsStore
     public int AcceptedDisclaimerVersion { get; set; }
 
     /// <summary>
+    /// 播放器音量(0~100), 跨视频继承 —— 调一次, 之后打开的每个视频都是这个音量。
+    ///
+    /// ★ 为什么不做"关窗即还原成 80": 用户的音量偏好是**长期**的(有人常年 30%, 有人常年
+    ///   满格), 每个视频都要重调一遍纯属折腾。0 也照样存 —— 那是用户主动静音的,
+    ///   下次打开还该是静音(与"静音键"的语义一致)。
+    /// ★ 与 <see cref="Models.AppSettings.PlayerVolume"/> 是读写契约, 两处必须一致。
+    /// </summary>
+    public int PlayerVolume { get; set; } = 80;
+
+    /// <summary>
+    /// 设置播放器音量并落盘。0~100 之外的值被夹回范围内(老配置可能存着越界值)。
+    /// </summary>
+    public void SetPlayerVolume(int volume)
+    {
+        var v = Math.Clamp(volume, 0, 100);
+        if (PlayerVolume == v) return;
+        PlayerVolume = v;
+        Save();
+    }
+
+    /// <summary>
     /// 是否已同意**当前版本**的免责声明。
     /// 算出来而不是存一个 bool: 声明正文一改, Version 一变, 这里自动变回 false,
     /// 用户会被再问一次 —— 不会出现"点了同意却看到的是另一份文本"。
@@ -357,6 +378,9 @@ public class SettingsStore
         AcceptedDisclaimerVersion = s.DisclaimerVersion > 0
             ? s.DisclaimerVersion
             : (s.DisclaimerAccepted ? 1 : 0);
+
+        // 音量继承: 老配置没这个字段 ⇒ 保持默认 80。越界值夹回 0~100。
+        PlayerVolume = Math.Clamp(s.PlayerVolume, 0, 100);
     }
 
     /// <summary>
@@ -401,7 +425,8 @@ public class SettingsStore
         CdnManualId = CdnManualId,
         BlockPcdn = BlockPcdn,
         DisclaimerAccepted = DisclaimerAccepted,
-        DisclaimerVersion = AcceptedDisclaimerVersion
+        DisclaimerVersion = AcceptedDisclaimerVersion,
+        PlayerVolume = PlayerVolume
     };
 
     /// <summary>

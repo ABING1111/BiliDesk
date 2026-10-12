@@ -527,9 +527,13 @@ public partial class PlayerWindow : FluentWindow
         };
         _progressTimer.Start();
 
-        // 默认音量
-        _volumeCache = 80;
-        _mp.Volume = 80;
+        // 音量: 从设置里读"上一次调到的音量"(2026-11-12 音量继承)。
+        // ★ 这里必须是**读设置**, 不能写死 80 —— 写死的表现是"每个视频都要重调一遍音量",
+        //   而用户调过的偏好应该跟着走到下一个视频。
+        // ★ 也**不能**只依赖"复用同一个窗口时不重置": PlayerService 关窗重开时
+        //   构造路径同样会跑到这里, 那时读的仍是设置, 所以两条路都对。
+        _volumeCache = Svc.Settings.PlayerVolume;
+        try { _mp.Volume = _volumeCache; } catch { }
 
         // 换片重置覆盖度自检: 新增了状态字段却忘了归类, 会在 errors.txt 里被点出来(仅 DEBUG)
         VerifyResetCoverage();
@@ -2183,6 +2187,10 @@ public partial class PlayerWindow : FluentWindow
         // 滑块是用户拖动时的入口, 程序化赋值(SetVolume)也会走到这 —— 同值回写, 无副作用。
         // 必须同步权威值: 否则拖完滑块再滚轮, 基数还是旧缓存(见 _volumeCache 的说明)。
         _volumeCache = v;
+        // ★ 音量继承: 拖滑块这条路也要落盘(2026-11-12)。
+        //   SetVolume 里已经存过一次, 这里是**直接拖滑块**的路径 —— 那条路不经过 SetVolume。
+        //   两个入口都存, 才不会出现"滚轮调的继承了、拖滑块调的没继承"。
+        Svc.Settings.SetPlayerVolume(v);
         // seek 静音期间(与 SetVolume 同一套约定): 新值记为恢复目标, 声音保持静音直到画面就绪。
         // 这里不能直接写 _mp.Volume —— 否则拖一下滑块就绕过静音, 声音又跑到画面前面去了。
         if (_seekMuteSavedVolume >= 0)
@@ -2268,6 +2276,10 @@ public partial class PlayerWindow : FluentWindow
         var v = Math.Max(0, Math.Min(100, volume));
         // 权威值先落账: 之后所有路径(滚轮/键盘)都以它为基数, 不依赖原生读回(见 _volumeCache 的说明)
         _volumeCache = v;
+        // ★ 音量继承: 用户每调一次就落盘, 下一个视频/下一次打开都用它。
+        //   放在这里而不是各处调用点 —— SetVolume 是滚轮/键盘/滑块的唯一入口。
+        //   SetPlayerVolume 内部有"值没变就不写"的短路, 连滚到同一值不会反复写盘。
+        Svc.Settings.SetPlayerVolume(v);
         // seek 静音期间用户调音量: 把新值记为"恢复目标", 声音仍保持静音直到画面就绪 ——
         // 若直接写 _mp.Volume 会立刻出声(又变成画面没到声音先到), 而且恢复时还会覆盖用户的值。
         if (_seekMuteSavedVolume >= 0)

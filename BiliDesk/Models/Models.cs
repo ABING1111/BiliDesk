@@ -1103,6 +1103,12 @@ public class Session
 public class AppSettings
 {
     public AppTheme ThemeMode { get; set; } = AppTheme.System;
+    /// <summary>
+    /// 播放器音量(0~100)。用户调过一次就记住, 之后打开的每个视频都用它 ——
+    /// 这就是"音量继承"(2026-11-12 用户要求"调节音量以后下一个视频的音量也一样")。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public int PlayerVolume { get; set; } = 80;
 
     /// <summary>
     /// 旧字段(仅用于**读取**老配置, 兼容用)。
