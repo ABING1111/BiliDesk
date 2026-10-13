@@ -154,8 +154,6 @@ public class VideoDetail
     public long CoinCount { get; set; }
     public long FavoriteCount { get; set; }
     public long ShareCount { get; set; }
-    /// <summary>当前登录用户是否已对该视频投过币(view 接口的 coin 字段, 登录后才有意义)</summary>
-    public bool HasCoined { get; set; }
     public long Pubdate { get; set; }
     public long Aid { get; set; }
     public long Cid { get; set; }

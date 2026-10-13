@@ -727,8 +727,10 @@ public class ApiClient
                 detail.FavoriteCount = GetLong(st, "favorite");
                 detail.ShareCount = GetLong(st, "share");
             }
-            // 用户互动状态(登录后才有): 是否已投币
-            detail.HasCoined = GetInt(d, "coin") == 1;
+            // ★★ 这里以前写的是 `GetInt(d, "coin") == 1`, 而 view 接口**没有**这个字段
+            //   (data.stat.coin 是全站投币总数, 不是本人的状态) ⇒ 恒为 false,
+            //   于是"投过币、重开视频后投币键还是灰的"(2026-10-13)。
+            //   真实状态改由 <see cref="GetCoinCountAsync"/> 单独查询, 调用方在拿到 aid 后拉一次。
             detail.Aid = GetLong(d, "aid");
             detail.Pubdate = GetLong(d, "pubdate");
 
@@ -923,6 +925,15 @@ public class ApiClient
     ///   <see cref="ParseVideoItem"/>, 不必再写一份解析器 —— 写两份必然漂移。
     ///   duration 单位是秒(实测 133 / 134), 与 popular 一致; 番剧 PGC 那套是毫秒, 别混。
     ///
+    /// ★★ 2026-10-13 用户报"相关视频只有 8 个, 添加更多视频, 往下滑刷新":
+    ///   实测(探针 bd-probe-coin, 逐组 ps/pn 对照):
+    ///     · ps=12 / 40 / 50 **返回的条数完全一样, 都是 40** —— 服务端忽略了 ps,
+    ///       一次就把 40 条全给;
+    ///     · pn=1 与 pn=2 拿到的也是同一批 40 条 ⇒ **翻页没有意义**,
+    ///       拉第二页只会得到重复内容(自己跟自己重复, 比不拉更难查)。
+    ///   所以"更多"的正解是: 一次拿全 40 条, 由界面**分批展示**(先 8 条,
+    ///   滚到附近再补下一批), 而不是"滚到底再请求一次"。
+    ///
     /// 需要设备指纹: 与 view 一样, 无 cookie 时会被风控拦下(返回非 0 码)。
     /// </summary>
     public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRelatedAsync(string bvid)
@@ -934,7 +945,8 @@ public class ApiClient
 
             var (code, msg, data) = await GetJsonAsync(
                 "https://api.bilibili.com/x/web-interface/archive/related",
-                new Dictionary<string, string> { ["bvid"] = bvid, ["pn"] = "1", ["ps"] = "12" });
+                // ps 写 40 只是"表明意图": 实测服务端恒返 40 条, 这个值不影响结果(见上面那段)
+                new Dictionary<string, string> { ["bvid"] = bvid, ["pn"] = "1", ["ps"] = "40" });
             if (code != 0 || data == null)
                 return (false, msg ?? $"获取相关视频失败 (code {code})", null);
 
@@ -2708,6 +2720,45 @@ public class ApiClient
         {
             App.ReportError(ex);
             return (false, "查询点赞状态失败: " + ex.Message, false);
+        }
+    }
+
+    /// <summary>
+    /// 查询当前用户对该视频**已投了几枚币**(0 = 没投过)。
+    ///
+    /// ★★ 2026-10-13 用户报"投过币、关掉重开, 投币键还是灰的"——真根因是
+    ///   <c>GetVideoAsync</c> 里那句 <c>GetInt(d, "coin") == 1</c> 读的字段**根本不存在**。
+    ///   实测(探针 bd-probe-coin, 带真实登录 Cookie):
+    ///     · <c>/x/web-interface/view</c> 的 data 里**没有** coin / req_user 这类用户态字段,
+    ///       只有 <c>data.stat.coin</c> —— 那是**全站投币总数**(实测 128 万), 与本账号无关;
+    ///     · 真正管用的是 <c>/x/web-interface/archive/coins</c>, 返回
+    ///       <c>{"code":0,"data":{"multiply":N}}</c>, N 就是本人投的枚数(0/1/2)。
+    ///   决定性验证: 真投 1 枚后, 同一个 aid 的 multiply 由 0 变成 1(探针已跑通)。
+    ///   ⇒ 判断"曾经投过币"必须走这里, 不能靠详情接口。
+    ///
+    /// ★ 返回**枚数**而不是 bool: 单稿件上限 2 枚, 界面上"已投 1 枚还想再投 1 枚"
+    ///   是有意义的场景, bool 会把这个信息丢掉。
+    /// </summary>
+    public async Task<(bool ok, string? err, int coins)> GetCoinCountAsync(long aid)
+    {
+        try
+        {
+            if (aid <= 0) return (false, "缺少视频 aid", 0);
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/web-interface/archive/coins",
+                new Dictionary<string, string> { ["aid"] = aid.ToString() });
+            if (code != 0 || data == null) return (false, msg ?? $"查询投币状态失败 (code {code})", 0);
+            // data.multiply: 本人已投枚数(实测 0/1)
+            if (data.Value.ValueKind == JsonValueKind.Object &&
+                data.Value.TryGetProperty("multiply", out var m) && m.ValueKind == JsonValueKind.Number)
+                return (true, null, m.GetInt32());
+            // 字段缺失时按"没投过"处理, 不能让按钮卡在"已投"上 —— 那会让用户再也投不了
+            return (true, null, 0);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "查询投币状态失败: " + ex.Message, 0);
         }
     }
 

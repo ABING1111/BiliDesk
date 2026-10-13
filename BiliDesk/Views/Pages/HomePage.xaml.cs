@@ -662,8 +662,6 @@ public partial class HomePage : UserControl
     /// <summary>搜索框聚焦时描边淡入的最终不透明度(2026-09-26 起是描边、不再是光晕)</summary>
     private const double SearchRingOpacity = 1.0;
 
-    /// <summary>平移段时长。位移有好几百像素, 太短会"闪一下就到位"</summary>
-    private const int SearchPanMs = 300;
     /// <summary>展开段时长(紧接平移之后)</summary>
     private const int SearchExpandMs = 340;
     /// <summary>收起时先让内容淡出, 这段之后尺寸才开始缩 —— 反过来能看见内容被挤扁</summary>

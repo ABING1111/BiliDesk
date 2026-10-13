@@ -394,6 +394,9 @@ public partial class PlayerWindow : FluentWindow
         DanmakuAreaPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
                 RightAlignPopup(DanmakuAreaPopup, BtnDanmakuArea)));
+        // ★ 两个弹层的"开着"状态本身就是判据(见 AnyPlayerPopupOpen), 不需要订阅 Closed。
+        //   2026-10-13 第一版在这里订阅过 Closed 记时间窗, 实测证明 Closed 晚于视频区的
+        //   Up(70ms), 时间窗一次都没生效过 —— 已删除。
         // 主题无需在此订阅: FluentWindow 基类已监听 ThemeChanged 并重建窗体 chrome,
         // 播放器自身的 DynamicResource 会随之自动刷新。之前这里多订阅了一次且从不退订,
         // 导致每个关闭过的播放器窗口都无法被 GC 回收。
@@ -671,7 +674,15 @@ public partial class PlayerWindow : FluentWindow
         DescText.Focus();
     }
 
-    /// <summary>载入当前视频的相关视频。</summary>
+    /// <summary>
+    /// 载入当前视频的相关视频。
+    ///
+    /// ★★ 2026-10-13 用户报"相关视频只有 8 个, 添加更多视频, 往下滑刷新":
+    ///   接口一次就返 40 条且翻页无效(实测 ps/pn 都不影响, 见 GetRelatedAsync 的说明),
+    ///   所以这里把**全量 40 条**存在 <see cref="_relatedAll"/>, 界面只挂前
+    ///   <see cref="RelatedPageSize"/> 条; 滚到附近时由 <see cref="ShowMoreRelated"/>
+    ///   再补一批。列表用 ObservableCollection, 追加即刷新, 不重排已有卡片。
+    /// </summary>
     private async Task LoadRelatedAsync(string bvid)
     {
         if (_closing || string.IsNullOrEmpty(bvid)) return;
@@ -682,6 +693,8 @@ public partial class PlayerWindow : FluentWindow
         var gen = ++_relatedGen;
 
         // 先清空再转圈: 不清的话上一次的卡片会一直挂在界面上, 而那批推荐与当前视频无关。
+        _relatedAll = new List<VideoItem>();
+        _relatedShown = 0;
         RelatedList.ItemsSource = null;
         RelatedPanel.Visibility = Visibility.Visible;
         RelatedLoadingRing.Visibility = Visibility.Visible;
@@ -707,9 +720,61 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
 
-        // 只展示前 8 条: 右半屏高度有限, 40 条会让用户滚很久; 而"相关"的前几条相关性最高。
-        const int MaxRelated = 8;
-        var shown = items.Count > MaxRelated ? items.GetRange(0, MaxRelated) : items;
+        _relatedAll = items;
+        // 先挂第一批(与旧行为一致: 打开播放器先看到 8 条, 不一下铺满 40 条)
+        _relatedShown = Math.Min(RelatedPageSize, items.Count);
+        RelatedList.ItemsSource = items.GetRange(0, _relatedShown);
+    }
+
+    /// <summary>
+    /// 信息栏滚动: 滚到相关视频附近时把下一批补上(用户要求"往下滑刷新出更多相关视频")。
+    ///
+    /// ★ 判据是"相关视频列表的**底部**离视口底部还有不到一屏", 不是"滚到底":
+    ///   等用户真的滚到最底才补, 会先出现"列表空了半屏"的空白期, 看着像没有了。
+    /// ★ 只在往下滚的方向补: 往上滚回来时不该再 append(已经补过的就在那儿)。
+    ///   <see cref="ShowMoreRelated"/> 本身幂等, 这里加方向判断是省掉无谓的 ItemsSource 重挂 ——
+    ///   每次重挂都会让 ItemsControl 重新生成全部容器, 一屏卡片会闪一下。
+    /// </summary>
+    private void OnInfoScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (_closing || _relatedShown >= _relatedAll.Count) return;
+        // 换片后 _relatedAll 是空的, 上面的闸门已经挡住; 这里再确认面板是显示的,
+        // 免得在"简介 tab"下也补(相关视频属于简介 tab, 评论 tab 下整块是隐藏的)。
+        if (RelatedPanel == null || RelatedPanel.Visibility != Visibility.Visible) return;
+        // 往上滚不补
+        if (e.VerticalChange < 0) return;
+
+        if (sender is not ScrollViewer sv) return;
+        // 相关视频列表在可视区里的位置: 它的底部距 ScrollViewer 内容底部还有多远
+        var targetBottom = RelatedList.TransformToVisual(sv)
+            .Transform(new Point(0, RelatedList.ActualHeight)).Y;
+        // 距"还要再滚一屏才看得见"的阈值内就补下一批
+        if (targetBottom - (sv.VerticalOffset + sv.ViewportHeight) < sv.ViewportHeight)
+            ShowMoreRelated();
+    }
+
+    /// <summary>相关视频每批展示几条(滚动到附近时按这个量追加)</summary>
+    private const int RelatedPageSize = 8;
+
+    /// <summary>当前视频的相关视频**全量**(接口一次给 40 条; 界面只挂前 <see cref="_relatedShown"/> 条)</summary>
+    private List<VideoItem> _relatedAll = new();
+
+    /// <summary>当前已经挂到界面上的条数; 换片时归零</summary>
+    private int _relatedShown;
+
+    /// <summary>
+    /// 再展示一批相关视频(信息栏滚到相关视频附近时调)。
+    ///
+    /// ★ 幂等 + 到顶即停: 已经全展示完时什么都不做, 不会重复 append。
+    /// ★ 换片后 <see cref="_relatedAll"/> 是空的, 这里直接返回 —— 不会把上一片的
+    ///   推荐补进新片的列表(那是"点下去跳到不相干视频"的老 bug)。
+    /// </summary>
+    private void ShowMoreRelated()
+    {
+        if (_closing || _relatedShown >= _relatedAll.Count) return;
+        var next = Math.Min(_relatedShown + RelatedPageSize, _relatedAll.Count);
+        var shown = _relatedAll.GetRange(0, next);
+        _relatedShown = next;
         RelatedList.ItemsSource = shown;
     }
 
@@ -828,6 +893,11 @@ public partial class PlayerWindow : FluentWindow
     private void ClearRelatedPanel()
     {
         _relatedGen++;
+        // 换片/切直播: 缓存也一起丢。不清的话 OnInfoScrollChanged 里的闸门
+        // (_relatedShown >= _relatedAll.Count) 会看到上一片还有"没展示完"的条数,
+        // 于是把上一片的推荐补进新片的列表 —— 那是"点下去跳到不相干视频"的老 bug。
+        _relatedAll = new List<VideoItem>();
+        _relatedShown = 0;
         if (RelatedList != null) RelatedList.ItemsSource = null;
         if (RelatedPanel != null) RelatedPanel.Visibility = Visibility.Collapsed;
         if (RelatedLoadingRing != null) RelatedLoadingRing.Visibility = Visibility.Collapsed;
@@ -1619,13 +1689,17 @@ public partial class PlayerWindow : FluentWindow
         // 切换视频时重置各操作按钮状态(随后的异步查询会刷新为真实值)
         _isLiked = false;
         _isFollowed = false;
-        _isCoined = detail.HasCoined;
+        // ★ 投币态**不能**取自详情(那个字段根本不存在, 见 GetCoinCountAsync 的说明),
+        //   这里先复位, 真实值由随后的 RefreshCoinStateAsync 异步补上。
+        _isCoined = false;
         // 计数直接来自详情(view 接口的 stat), 比旧的"点赞/投币/收藏"三个字信息量大
         _likeCount = detail.LikeCount;
         _coinCount = detail.CoinCount;
         _favCount = detail.FavoriteCount;
         UpdateActionCounts();
         SetFavorited(false);
+        // 与点赞同款: 详情带不来"本人是否投过币", 换片后单独查一次, 否则投币键恒灰
+        _ = RefreshCoinStateAsync();
         // 「稍后再看」的点亮态不在这里复位 —— 它统一在 ResetForNewMedia 里清,
         // 因为直播/本地文件那两条路根本不会走到这里。
         UpdateFollowButton();
@@ -2579,12 +2653,18 @@ public partial class PlayerWindow : FluentWindow
             _volumeOsdTimer?.Stop();
             _volumeOsdTimer = null;
             if (_closing) return;
-            var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240));
+            var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240))
+            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop };
             fade.Completed += (_, _) =>
             {
                 // 淡出期间用户又调了一次 -> ShowVolumeHint 已经重开计时器并重播淡入,
                 // 这时绝对不能把浮层藏掉(表现就是"滚轮调音量提示闪一下就不见了")
                 if (_closing || _volumeOsdTimer != null) return;
+                // ★ 摘动画 + 归位(2026-10-13 修): 原来这里是裸 Collapsed,
+                //   而 DoubleAnimation 默认 FillBehavior=Hold ⇒ Opacity 被钉死在 0,
+                //   下次滚轮时浮层虽 Visible 却整块透明 —— 提示像"消失"了一样。
+                VolumeOsd.BeginAnimation(OpacityProperty, null);
+                VolumeOsd.Opacity = 1;
                 VolumeOsd.Visibility = Visibility.Collapsed;
             };
             VolumeOsd.BeginAnimation(OpacityProperty, fade);
@@ -2667,6 +2747,41 @@ public partial class PlayerWindow : FluentWindow
             _fillingQualityMenu = false;
         }
     }
+
+    /// <summary>
+    /// 清晰度 / 弹幕区域弹层是否**有任意一个开着**。
+    ///
+    /// ★ 为什么需要它(2026-10-13 用户报"点清晰度 → 点空白处收起 → 视频变 2 倍速"):
+    ///   这两个 Popup 是 <c>StaysOpen="False"</c>, 而 Popup 是**独立 HWND**。
+    ///   实测(探针 bd-probe-coin, 真实 Win32 鼠标点击, 时间戳):
+    ///     <code>
+    ///     12:14:38.955  VIDEO UP                ← 只有 Up, 没有 Down!
+    ///     12:14:38.975  *** POPUP CLOSED ***    ← Closed 晚 20ms
+    ///     </code>
+    ///   ⇒ 三个"当前状态"信号在 Up 到达时**全部不可用**:
+    ///     · <c>Popup.IsOpen</c> 已被 WPF 自己的收起逻辑置成 false;
+    ///     · <c>Mouse.LeftButton</c> 已回报 Released;
+    ///     · <c>Popup.Closed</c> 还没来。
+    ///   ⇒ 第一版写在 Closed 里的时间窗是**死代码**(等它记上, Up 早跑完了),
+    ///     第二版的 IsOpen 判据同样挡不住这一次 Up。
+    ///
+    ///   ★ 真正可靠的判据是**手势配对**: 关闭弹层那一次点击, 它的 Down 被弹层 HWND
+    ///     吃掉, 只有 Up 漏进视频区 —— 也就是"没有配对 Down 的 Up"。
+    ///     这种 Up 一律丢弃即可, 且**不依赖任何事件顺序**。
+    /// </summary>
+    private bool AnyPlayerPopupOpen
+        => (QualityPopup != null && QualityPopup.IsOpen)
+        || (DanmakuAreaPopup != null && DanmakuAreaPopup.IsOpen);
+
+    /// <summary>
+    /// 视频区手势是否已经由一次 **Down** 正式起步。
+    ///
+    /// ★ 唯一可靠的弹层余波判据(见 <see cref="AnyPlayerPopupOpen"/> 里的实测记录):
+    ///   弹层开着时按下的那一下不算视频区手势(它属于浮层), 所以这里必须为 false;
+    ///   否则随后漏进来的 Up 会被当成一次完整的"单击", 于是**收起清晰度列表会把视频暂停**,
+    ///   更糟的是漏进来的 Down 会起长按计时器 → 500ms 后 SetRate(2.0) 无故快进。
+    /// </summary>
+    private bool _videoGestureActive;
 
     private void OnQualityClick(object sender, RoutedEventArgs e)
     {
@@ -2990,11 +3105,18 @@ public partial class PlayerWindow : FluentWindow
         // 跳过提示条上的点击(「撤回」按钮)同样不算视频区手势 ——
         // 它是覆盖层里除了控制栏之外唯一会吃掉左键的自绘元素, 不挡住就会"点撤回顺带切一次播放/暂停"。
         if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
+        // ★ 弹层开着 ⇒ 这次按下属于浮层, 视频区手势**不起步**。
+        //   这是整套防护的地基(见 _videoGestureActive 的说明): 不起步, 随后漏进来的
+        //   那个孤立 Up 才会因为"没有配对 Down"而被丢掉。
+        if (AnyPlayerPopupOpen) { _videoGestureActive = false; return; }
+        // 记下"这一下是我起的" —— Up 里靠它识别弹层余波
+        _videoGestureActive = true;
 
         // 双击: 立即全屏, 取消所有挂起的单击/长按动作, 并抑制后续 Up 的单击排队
         if (e.ClickCount >= 2)
         {
             _suppressSingleClick = true;
+            _videoGestureActive = false;   // 这一下已被双击消费, 不再等 Up 配对
             _singleClickTimer?.Stop();
             _longPressTimer?.Stop();
             _longPressFired = false;
@@ -3028,8 +3150,18 @@ public partial class PlayerWindow : FluentWindow
     {
         // 与 Down 对称: 控制栏上的点击不触发单击暂停
         if (ControlBar != null && ControlBar.IsMouseOver) return;
-        // 与 Down 对称: 跳过提示条上的「撤回」点击也不触发单击暂停
+        // ★ 与 Down 对称: 跳过提示条上的「撤回」点击也不触发单击暂停
         if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
+        // ★★ 弹层余波(2026-10-13 第三轮修正, 前两轮都没修对):
+        //   关闭清晰度/弹幕弹层那一次点击, Down 被弹层 HWND 吃掉, 只有 Up 漏进视频区。
+        //   实测它到达时 IsOpen 已 false、Mouse.LeftButton 已 Released、Closed 还没来
+        //   —— 三个"当前状态"信号全不可用(完整时间戳见 _videoGestureActive 的说明)。
+        //   唯一可靠判据: **没有配对 Down 的 Up**。视频区手势由 Down 起步,
+        //   没起步就来的 Up 必然是浮层漏过来的, 直接丢。
+        //   不丢的后果有两个: 排一个"单击暂停"(收起列表视频自己暂停了);
+        //   万一 Down 也漏进来, 长按计时器 500ms 后 SetRate(2.0) 无故快进。
+        if (!_videoGestureActive) { e.Handled = true; return; }
+        _videoGestureActive = false;
 
         _longPressTimer?.Stop();
 
@@ -3073,6 +3205,9 @@ public partial class PlayerWindow : FluentWindow
         _longPressTimer?.Stop();
         _singleClickTimer?.Stop();
         _suppressSingleClick = false;
+        // ★ 手势状态一并复位: 鼠标移出去了, 这一次按下就不再属于视频区,
+        //   之后即使漏一个 Up 进来也会因为"没有配对 Down"被正确丢掉。
+        _videoGestureActive = false;
         if (_longPressFired)
         {
             _longPressFired = false;
@@ -3269,8 +3404,10 @@ public partial class PlayerWindow : FluentWindow
     /// <see cref="DanmakuLaneRatio"/> 推出来, 改字号只需要改这一处。
     /// ★ 2026-10-12 起它不再是"写死的值", 而是 100% 档位的基准, 实际字号
     ///   = 本值 × (用户的字号百分比 / 100), 见 <see cref="_danmakuFontSize"/>。
+    /// ★ 2026-10-13 删掉了这里的别名常量 `DanmakuFontSize`(它只是 = DanmakuBaseFontSize,
+    ///   全项目无引用): 两个名字指同一个值, 改字号时"该改哪一个"会让人停一下。
+    ///   真正的定义在文件上方(见 DanmakuBaseFontSize)。
     /// </remarks>
-    private const double DanmakuFontSize = DanmakuBaseFontSize;
 
     /// <summary>泳道高 = 字号 × 该系数(留出上下各约四分之一行距, 密集时才不会糊成一片)</summary>
     private const double DanmakuLaneRatio = 1.5;
@@ -4667,6 +4804,25 @@ public partial class PlayerWindow : FluentWindow
         if (!_closing) UpdateActionCounts();
     }
 
+    /// <summary>
+    /// 查询真实的投币状态并刷新按钮点亮态。
+    ///
+    /// ★ 为什么必须单独查一次: 详情接口(view)**不给**"本人是否投过币"这个信息
+    ///   (见 <see cref="ApiClient.GetCoinCountAsync"/> 里那段实测记录), 所以换片之后
+    ///   `_isCoined` 不能继续取自详情 —— 那正是"投过币、重开视频后键还是灰的"的根因。
+    /// ★ 与 <see cref="RefreshLikeStateAsync"/> 同构: 失败时保持原状(不把已点亮的刷成灰),
+    ///   只记一笔便于排查。
+    /// ★ 只在已登录且是点播时查: 本地文件/直播没有投币这回事, 查了也是白问一次接口。
+    /// </summary>
+    private async Task RefreshCoinStateAsync()
+    {
+        if (_aid <= 0 || !Svc.Session.HasLogin || _isLocalPlayback || _isLive) return;
+        var (ok, _, coins) = await Svc.Api.GetCoinCountAsync(_aid);
+        if (!ok) { WriteLibVLCDebug($"\n[Coined] 查询失败 aid={_aid}\n"); return; }
+        _isCoined = coins > 0;
+        if (!_closing) UpdateActionCounts();
+    }
+
     private async void OnLikeClick(object sender, RoutedEventArgs e)
     {
         if (!Svc.Session.HasLogin) { Svc.Toast.Show("点赞需要先登录"); return; }
@@ -5596,6 +5752,9 @@ public partial class PlayerWindow : FluentWindow
     private void CloseCommentDetail()
     {
         if (CommentDetailPanel.Visibility != Visibility.Visible) return;
+        // ★ 记下"刚才在看哪一条", 供返回后滚回去用(见 _commentReturnRpid)。
+        //   必须在清空 _detailThreadRoot **之前**取, 否则信息就没了。
+        _commentReturnRpid = _detailThreadRoot?.Rpid ?? 0;
         CommentDetailPanel.Visibility = Visibility.Collapsed;
         CommentDetailCard.Content = null;
         CommentDetailHost.DataContext = null;
@@ -5605,6 +5764,53 @@ public partial class PlayerWindow : FluentWindow
         TabComments.Content = "评论";
         BtnBackToComments.Visibility = Visibility.Collapsed;
         CommentList.Visibility = Visibility.Visible;
+        // ★ 用户报"从某条评论的回复返回后, 列表回到顶部, 得重新下拉找那条评论"
+        //   (2026-10-13): 默认回到**刚才那条评论**所在的位置。
+        //   ★ 走 Dispatcher 排队: 上面刚把 CommentList 从 Collapsed 恢复成 Visible,
+        //     此刻容器还没生成(ContainerFromItem 会返回 null), 直接找必然落空。
+        if (_commentReturnRpid > 0)
+            Dispatcher.BeginInvoke(new Action(ScrollCommentIntoView),
+                System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    /// <summary>
+    /// 从评论详情返回列表后要滚回去的那条评论(rpid); 0 = 不需要滚动。
+    ///
+    /// ★ 为什么单独存 rpid 而不是留着 CommentItem 引用: 重新拉列表(换排序/发表后刷新)时
+    ///   会换成一批**新的** CommentItem 实例, 引用会失效; rpid 是服务端主键, 跨刷新仍然对得上。
+    /// </summary>
+    private long _commentReturnRpid;
+
+    /// <summary>
+    /// 把 <see cref="_commentReturnRpid"/> 对应的那条评论滚进视野并闪一下。
+    ///
+    /// ★ 找不到就**静默放弃**: 排序换过、或那条已被删除时它确实不在列表里,
+    ///   这时弹提示反而打扰用户 —— 回到顶部是合理退路。
+    /// ★ 闪一下是必要的: 光滚过去, 用户仍不知道"是哪一条"(与"查看对话"同一个理由)。
+    /// </summary>
+    private void ScrollCommentIntoView()
+    {
+        var rpid = _commentReturnRpid;
+        _commentReturnRpid = 0;      // 一次性: 用完即清, 免得下次切 tab 又滚一次
+        if (rpid <= 0 || _closing || CommentList == null) return;
+
+        var target = (CommentList.ItemsSource as IEnumerable<CommentItem>)
+            ?.FirstOrDefault(c => c.Rpid == rpid);
+        if (target == null) return;
+
+        if (CommentList.ItemContainerGenerator.ContainerFromItem(target) is not FrameworkElement fe) return;
+        fe.BringIntoView();
+        // 闪两下: 告诉用户"就是这一条"
+        // ★ FillBehavior=Stop 是必须的: 默认 Hold 会让动画把 Opacity 停在末值(0.35),
+        //   用户看到的就是"这条评论变透明了, 而且再也回不来"—— 因为它从此被动画接管,
+        //   连可见性切换都拉不回 1.0。Stop 表示动画结束后属性**回到本地值**(1)。
+        var flash = new DoubleAnimation(1, 0.35, TimeSpan.FromMilliseconds(140))
+        {
+            AutoReverse = true,
+            RepeatBehavior = new RepeatBehavior(2),
+            FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop
+        };
+        fe.BeginAnimation(OpacityProperty, flash);
     }
 
     // ------------------------------------------------------------ 视频合集
@@ -6341,15 +6547,29 @@ public partial class PlayerWindow : FluentWindow
         if (_closing) return;
         LocalToastText.Text = msg;
         LocalToastBorder.Visibility = Visibility.Visible;
+        // ★ 淡入前必须先摘掉上一次的动画 + 归位: 连发两条 Toast 时(投币成功又来一条提示),
+        //   上一次的淡出动画可能还挂着。不摘的话新淡入的起点读到的是"动画当前值"
+        //   (可能已经是 0), 于是这条 Toast 是从 0 淡到 0.95 —— **等于看不见**。
+        LocalToastBorder.BeginAnimation(OpacityProperty, null);
+        LocalToastBorder.Opacity = 0.95;
         LocalToastBorder.BeginAnimation(OpacityProperty,
-            new DoubleAnimation(0.95, 1, TimeSpan.FromMilliseconds(160)));
+            new DoubleAnimation(0.95, 1, TimeSpan.FromMilliseconds(160))
+            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop });
         _localToastTimer?.Stop();
         _localToastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.4) };
         _localToastTimer.Tick += (_, _) =>
         {
             _localToastTimer.Stop();
-            var a = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(280));
-            a.Completed += (_, _) => LocalToastBorder.Visibility = Visibility.Collapsed;
+            var a = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(280))
+            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop };
+            a.Completed += (_, _) =>
+            {
+                // ★ 淡出结束后把动画摘掉并归位: 不摘的话 Opacity 被动画钉在 0,
+                //   下一条 Toast 即使 Visible 也完全不显示(整块透明)。
+                LocalToastBorder.BeginAnimation(OpacityProperty, null);
+                LocalToastBorder.Opacity = 0.95;
+                LocalToastBorder.Visibility = Visibility.Collapsed;
+            };
             LocalToastBorder.BeginAnimation(OpacityProperty, a);
         };
         _localToastTimer.Start();

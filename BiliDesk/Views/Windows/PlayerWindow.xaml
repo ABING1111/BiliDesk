@@ -1198,7 +1198,8 @@
             <!-- x:Name 供全屏退出时做淡入用(400px 的一大块"啪"地出现很跳) -->
             <Grid x:Name="InfoPanel" Grid.Column="1" Background="{DynamicResource AppBackgroundBrush}">
                 <Border BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1,0,0,0">
-                    <ScrollViewer x:Name="InfoScroll" VerticalScrollBarVisibility="Auto">
+                    <ScrollViewer x:Name="InfoScroll" VerticalScrollBarVisibility="Auto"
+                                  ScrollChanged="OnInfoScrollChanged">
                         <StackPanel Margin="20,18,20,24">
                             <!-- 标题 + 数据 -->
                             <TextBlock x:Name="VideoTitleText" FontSize="17" FontWeight="SemiBold"
@@ -1965,7 +1966,7 @@
                                                                 </Border>
                                                                 <StackPanel Grid.Column="1" Margin="8,0,0,0">
                                                                     <StackPanel Orientation="Horizontal">
-                                                                        <TextBlock Text="{Binding UserName}" FontSize="12" FontWeight="SemiBold" />
+                                                                        <TextBlock Text="{Binding UserName}" FontSize="13" FontWeight="SemiBold" />
                                                                         <Border Style="{StaticResource LevelBadgeStyle}"
                                                                                 Visibility="{Binding HasLevel, Converter={StaticResource BoolToVis}}">
                                                                             <TextBlock Text="{Binding LevelText}" FontSize="9" Foreground="White" />
@@ -1975,12 +1976,15 @@
                                                                             <TextBlock Text="UP" FontSize="9" FontWeight="SemiBold" Foreground="White" />
                                                                         </Border>
                                                                         <TextBlock Text="{Binding RcTime}" Style="{StaticResource MetaTextStyle}"
-                                                                                   FontSize="10" Margin="8,1,0,0" />
-                                                                        <TextBlock Text="{Binding Location}" FontSize="10" Margin="8,1,0,0"
-                                                                                   Foreground="{DynamicResource TextTertiaryBrush}"
-                                                                                   Visibility="{Binding HasLocation, Converter={StaticResource BoolToVis}}" />
+                                                                                   FontSize="11" Margin="8,1,0,0" />
+                                                                        <!-- ★★ 2026-10-13 用户报"详情页 IP 属地重复显示"(截图: 昵称行一个、
+                                                                             操作行又来一个): 这里原来多放了一份 Location, 而操作行那份由统一的
+                                                                             CommentActionBarTemplate 渲染。昵称行这份删掉 —— 一条评论的 IP
+                                                                             属地只该出现一次; 留在操作行是因为它与"赞/踩/回复"同属这条评论的元信息。
+                                                                         ★ 详情页字号同时与列表页对齐(用户报"详情页字体不跟随评论区"):
+                                                                           昵称 12→13、正文 12→14, 与 CommentCardTemplate 逐项一致。 -->
                                                                     </StackPanel>
-                                                                    <controls:CommentText Comment="{Binding}" FontSize="12" Margin="0,3,0,0"
+                                                                    <controls:CommentText Comment="{Binding}" FontSize="14" Margin="0,3,0,0"
                                                                                           Foreground="{DynamicResource TextPrimaryBrush}" />
                                                                     <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
                                                                         <ContentControl Content="{Binding}"
