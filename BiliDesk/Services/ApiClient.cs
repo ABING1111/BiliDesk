@@ -437,30 +437,89 @@ public class ApiClient
     }
 
     /// <summary>
-    /// 分区内容(**热门/质量优先**)。分区页现在走这里。
+    /// 分区内容(**混合排序**: 分区热门为主干 + 最新投稿混入)。分区页走这个。
     ///
-    /// ★★ 2026-10-13 数据源选型(用户先后报了两轮, 结论是"两个接口各对一半"):
-    ///   · <c>ranking/v2</c>(分区榜): 质量好 —— 动画分区 50 条里**最低播放 33.7 万**,
-    ///     且服务端 note 明说"根据稿件内容质量、近期的数据综合展示, 动态更新"。
-    ///     但 **rid=202(资讯)直接 -400**, 别的分区都正常。
-    ///   · <c>newlist</c>(最新投稿): 新鲜、所有分区都能用, 但 <c>stat.view 全是 0</c>
-    ///     —— 实测按播放量过滤会**筛掉全部 50 条**, 所以"新 + 热门"这条路走不通。
-    ///     用户原话: "分区内容现在全是垃圾视频"。
+    /// ★★ 2026-10-13 终选(用户从三条取舍里选了"混合排序")。选型过程与实测数据:
     ///
-    /// ⇒ 采用**混合**: 正常分区走 ranking/v2(热门+质量), 只有它拒掉的 rid 才回退 newlist。
+    ///   | 接口 | 分区关联 | 质量信号 | 时间跨度 |
+    ///   |---|---|---|---|
+    ///   | ranking/v2 | 精确按 rid | 真实播放量(动画最低 33.7 万) | **全部 559~577 天前** |
+    ///   | newlist | 精确按 rid | stat.view 只有 0~8 | **只有"此刻最新 50 条"**(ps 锁死 50) |
+    ///   | popular/precious(入站必刷) | 用二级分区,一级 rid 命中 **0/19** | 极高(中位 1638 万) | 1150~6191 天前 |
+    ///   | rcmd(个性化) | **不带 tid**,无法按分区筛 | 真实 | 正常 |
     ///
-    /// ★ 翻页: 两个接口的 pn **都被服务端忽略**(ranking pn=1/2/3 返回完全相同 95 条;
-    ///   newlist pn=1/2/3 返回完全相同 50 条, page.count 恒 0)。
-    ///   "刷新"靠**重新请求**而不是翻页 —— 每次进来都是新拉的一次快照。
+    ///   ⇒ 没有任何单一接口能同时满足"分区关联 + 质量 + 近期", 所以**混起来**:
+    ///   · 主干 = ranking(保证质量下限与分区精确性);
+    ///   · 混入 = newlist 的最新投稿(保证列表里有"当下在发生的内容");
+    ///   · 按比例交错, 而不是把新内容堆到末尾 —— 堆末尾等于藏起来, 用户仍觉得"全是老视频"。
+    ///
+    /// ★ 混入比例 <see cref="FreshSharePercent"/>: 太高会退回"全是垃圾视频", 太低则看不到新内容。
+    /// ★ rid=202(资讯)被 ranking 硬拒收(-400), 此时 ranking 主干为空, 自动退化成纯 newlist
+    ///   —— 那本来就是资讯这类时效性分区的合理形态。
     /// </summary>
     public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRegionFeedAsync(int tid)
     {
-        var (ok, err, items) = await GetRegionRankAsync(tid);
-        // ranking 拒了这个 rid(实测只有资讯 202 这一类): 回退到最新投稿流。
-        // ★ 判据用 ok 而不是"条数为 0": 服务端确实有 3 个分区两种接口下都是空的,
-        //   那时该显示"没有新内容", 而不是再去求一个同样为空的新接口。
-        if (ok) return (ok, err, items);
-        return await GetRegionListAsync(tid);
+        var (rankOk, rankErr, ranked) = await GetRegionRankAsync(tid);
+        // ranking 拒收这个 rid: 退回纯最新流(实测只有资讯 202 属于这一类)
+        if (!rankOk || ranked == null || ranked.Count == 0) return await GetRegionListAsync(tid);
+
+        // 拿到最新投稿; 失败也不影响主流程(ranking 已经够看了)
+        var (_, _, fresh) = await GetRegionListAsync(tid);
+
+        // 交错: 每 FreshSharePercent 条留一个位置给新内容
+        var merged = Interleave(ranked, fresh ?? new List<VideoItem>(), FreshSharePercent);
+        return (true, null, merged);
+    }
+
+    /// <summary>新内容在混合列表里的占比(每 100 条里占多少)。见 <see cref="GetRegionFeedAsync"/>。</summary>
+    private const int FreshSharePercent = 40;
+
+    /// <summary>
+    /// 把"主干列表"与"新内容列表"按比例交错合并, 并按 aid 去重。
+    ///
+    /// ★ 为什么要交错而不是"主干 + 追加在末尾":
+    ///   追加在末尾等于把新内容**藏在最下面**, 用户往下滑之前看到的全是老视频,
+    ///   观感与"全是老视频"没区别。交错让新内容均匀出现在整页里。
+    ///
+    /// ★ 去重按 aid(服务端主键): 两个接口完全可能同时收录同一条视频
+    ///   (榜单热门往往也是最新投稿), 不去重会出现两张一模一样的卡片。
+    /// </summary>
+    private static List<VideoItem> Interleave(List<VideoItem> main, List<VideoItem> fresh, int freshPercent)
+    {
+        if (freshPercent <= 0 || fresh.Count == 0) return main;
+        if (main.Count == 0) return fresh;
+
+        var result = new List<VideoItem>(main.Count + fresh.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var mainIdx = 0; var freshIdx = 0;
+
+        // 每插入 1 条新的, 要跟 freshShare 条主干 —— 走位计数而不是取模, 避免末尾扎堆
+        var sinceFresh = 0;
+        while (mainIdx < main.Count || freshIdx < fresh.Count)
+        {
+            var wantFresh = sinceFresh >= freshPercent;
+            if (wantFresh && freshIdx < fresh.Count)
+            {
+                var f = fresh[freshIdx++];
+                if (seen.Add(f.Bvid)) result.Add(f);
+                sinceFresh = 0;
+                continue;
+            }
+            if (mainIdx < main.Count)
+            {
+                var m = main[mainIdx++];
+                if (seen.Add(m.Bvid)) result.Add(m);
+                sinceFresh++;
+                continue;
+            }
+            // 主干走完了, 剩下的新内容全接上
+            while (freshIdx < fresh.Count)
+            {
+                var f = fresh[freshIdx++];
+                if (seen.Add(f.Bvid)) result.Add(f);
+            }
+        }
+        return result;
     }
 
     /// <summary>

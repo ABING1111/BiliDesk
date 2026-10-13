@@ -28,7 +28,7 @@
             </Grid.ColumnDefinitions>
             <StackPanel Grid.Column="0" Orientation="Horizontal">
                 <TextBlock Text="{Binding RegionName}" Style="{StaticResource PageTitleStyle}" />
-                <TextBlock Text="热门" Margin="14,0,0,6" VerticalAlignment="Bottom"
+                <TextBlock Text="热门 · 最新" Margin="14,0,0,6" VerticalAlignment="Bottom"
                            Style="{StaticResource MetaTextStyle}" />
             </StackPanel>
             <!-- ★ 刷新按钮(2026-10-13 用户要求"内容可以刷新"):
