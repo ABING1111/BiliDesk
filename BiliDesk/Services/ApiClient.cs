@@ -436,7 +436,61 @@ public class ApiClient
             new Dictionary<string, string> { ["ps"] = "20", ["pn"] = pn.ToString() });
     }
 
-    /// <summary>全站排行榜(rid=0 = 全站, 与分区榜同一个接口)</summary>
+    /// <summary>
+    /// 分区内容(**热门/质量优先**)。分区页现在走这里。
+    ///
+    /// ★★ 2026-10-13 数据源选型(用户先后报了两轮, 结论是"两个接口各对一半"):
+    ///   · <c>ranking/v2</c>(分区榜): 质量好 —— 动画分区 50 条里**最低播放 33.7 万**,
+    ///     且服务端 note 明说"根据稿件内容质量、近期的数据综合展示, 动态更新"。
+    ///     但 **rid=202(资讯)直接 -400**, 别的分区都正常。
+    ///   · <c>newlist</c>(最新投稿): 新鲜、所有分区都能用, 但 <c>stat.view 全是 0</c>
+    ///     —— 实测按播放量过滤会**筛掉全部 50 条**, 所以"新 + 热门"这条路走不通。
+    ///     用户原话: "分区内容现在全是垃圾视频"。
+    ///
+    /// ⇒ 采用**混合**: 正常分区走 ranking/v2(热门+质量), 只有它拒掉的 rid 才回退 newlist。
+    ///
+    /// ★ 翻页: 两个接口的 pn **都被服务端忽略**(ranking pn=1/2/3 返回完全相同 95 条;
+    ///   newlist pn=1/2/3 返回完全相同 50 条, page.count 恒 0)。
+    ///   "刷新"靠**重新请求**而不是翻页 —— 每次进来都是新拉的一次快照。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRegionFeedAsync(int tid)
+    {
+        var (ok, err, items) = await GetRegionRankAsync(tid);
+        // ranking 拒了这个 rid(实测只有资讯 202 这一类): 回退到最新投稿流。
+        // ★ 判据用 ok 而不是"条数为 0": 服务端确实有 3 个分区两种接口下都是空的,
+        //   那时该显示"没有新内容", 而不是再去求一个同样为空的新接口。
+        if (ok) return (ok, err, items);
+        return await GetRegionListAsync(tid);
+    }
+
+    /// <summary>
+    /// 分区内容流(**最新投稿**)。只在 <see cref="GetRegionFeedAsync"/> 的回退分支里用。
+    ///
+    /// 接口: <c>GET /x/web-interface/newlist?rid={tid}&amp;pn=1&amp;ps=50</c>,
+    /// 数据在 <c>data.archives[]</c> —— 与 popular/ranking 的条目**完全同构**,
+    /// 所以直接复用 <see cref="GetVideoListAsync"/> + <see cref="ParseVideoItem"/>。
+    ///
+    /// ★★ 为什么不当主源(2026-10-13 用户报"分区内容现在全是垃圾视频"):
+    ///   它是最新投稿, 没有质量筛选; 且 <c>stat.view</c> 恒为 0, 想按播放量补一层
+    ///   筛选也做不到(实测阈值 1000 就把全部 50 条筛光)。
+    /// ★★ 翻页做不到: <c>ps</c> 有效, <c>pn</c> 被忽略(pn=1/2/3 条目完全相同)。
+    /// </summary>
+    public Task<(bool ok, string? err, List<VideoItem>? items)> GetRegionListAsync(int tid)
+    {
+        return GetVideoListAsync(
+            "https://api.bilibili.com/x/web-interface/newlist",
+            new Dictionary<string, string>
+            {
+                ["rid"] = tid.ToString(),
+                ["pn"] = "1",
+                ["ps"] = "50"      // 接口上限实测 50; 再多也是 50
+            },
+            jsonProp: "archives");
+    }
+
+    /// <summary>
+    /// 全站排行榜(rid=0 = 全站, 与分区榜同一个接口)。
+    /// </summary>
     public Task<(bool ok, string? err, List<VideoItem>? items)> GetRankingAsync() => GetRegionRankAsync(0);
 
     /// <summary>

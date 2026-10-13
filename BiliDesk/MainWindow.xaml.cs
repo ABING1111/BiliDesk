@@ -375,12 +375,16 @@ public partial class MainWindow : FluentWindow
         Activate();
     }
 
-    // ------------------------------------------------------------ 分区面板(点 logo 展开)
+    // ------------------------------------------------------------ 分区面板(点左上角 logo 展开)
 
     private bool _partitionOpen;
 
-    /// <summary>左下角「分区」入口(2026-10-12 用户要求搬到左下角, 面板也从这里展开)</summary>
-    private void OnPartitionClick(object sender, RoutedEventArgs e) => OpenPartition();
+    /// <summary>
+    /// 左上角 logo: 点它展开分区面板(2026-10-13 用户要求"改回左上角 logo 点击后显示分区,
+    /// 一切与以前保持一致" —— 这一版与 2026-10-12 之前完全一致)。
+    /// ★ 用 MouseLeftButtonUp 而不是 Click: logo 是 Border, 没有 Click 事件。
+    /// </summary>
+    private void OnBrandLogoClick(object sender, MouseButtonEventArgs e) => OpenPartition();
 
     /// <summary>
     /// 展开分区面板(2026-10-12: 入口从"左上角 logo"搬到了**首页右下角工具栏**)。

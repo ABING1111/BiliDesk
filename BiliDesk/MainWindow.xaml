@@ -124,13 +124,10 @@
                                          Storyboard.TargetProperty="Opacity" To="0" Duration="0" />
                         <DoubleAnimation Storyboard.TargetName="NavLabelSettings"
                                          Storyboard.TargetProperty="Height" To="0" Duration="0" />
-                        <!-- ★ 分区按钮的文字也要一起收窄(2026-10-12 新增入口时补上):
-                             忘了这一处, 侧栏一收窄它就只剩一个孤零零的图标,
-                             而四个导航项都是纯图标 —— 两者并排, 像有一个漏改了。 -->
-                        <DoubleAnimation Storyboard.TargetName="NavLabelPartition"
-                                         Storyboard.TargetProperty="Opacity" To="0" Duration="0" />
-                        <DoubleAnimation Storyboard.TargetName="NavLabelPartition"
-                                         Storyboard.TargetProperty="Height" To="0" Duration="0" />
+                        <!-- ★ 2026-10-13: 这里原来还有两条针对 NavLabelPartition 的动画
+                             (2026-10-12 左下角那一版的分区按钮文字)。入口已改回左上角 logo、
+                             那个元素已删除, 这两条必须一起撤 —— 否则 VisualState 一进 Compact
+                             就会因为找不到 TargetName 而抛异常(运行时才炸, 编译期无感)。 -->
                     </Storyboard>
                 </VisualState>
             </VisualStateGroup>
@@ -148,26 +145,42 @@
                 Background="{DynamicResource SideBarBackgroundBrush}"
                 BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,1,0">
             <Grid>
-                <!-- ★ 2026-10-12: 左上角的 logo/汉堡菜单**已整体移除**(分区入口先搬到
-                     首页右下角工具栏, 当天又按用户要求搬回**左下角**),
-                     所以这里恢复成两行: 第一行是导航项(垂直居中),
-                     第二行是底部对齐的「分区」入口。
-                     ★ 两行而不是一行的原因: 导航项要"垂直居中", 而分区按钮
-                       必须**贴底**; 同一个 Grid 里给不同 VerticalAlignment
-                       是可以的, 但用行来分能让"贴底"这件事一眼可见。
-                     ★ 第一行是 "*" 而不是 Auto: 否则导航项那行的 Auto 高度
-                       会把它顶上去, 底部按钮就被挤到中间去了。 -->
+                <!-- ★ 2026-10-13 用户要求"改回左上角 logo 点击后显示分区, 一切与以前保持一致":
+                     于是恢复成 2026-10-12 之前的三行结构 ——
+                       ① 第一行(Auto): 左上角 logo, 点它展开分区面板;
+                       ② 第二行(*"):  导航项, 在"logo 与底部之间"那段里垂直居中;
+                       ③ 底部不再有「分区」按钮(2026-10-12 搬去左下角那一版已撤掉)。
+                     ★ 三行而不是"logo 与导航项挤一格": 导航项要"在剩余空间里垂直居中",
+                       而 logo 必须**贴顶**; 用行来分能让"贴顶"这件事一眼可见。
+                     ★ 第一行必须是 Auto: 写 "*" 的话 logo 会被拉到整列高, 图片变形。 -->
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
+
+                <!-- ===== 左上角 logo(点它展开分区面板) =====
+                     上边距 18 是**对着页面标题定的**: 42px 的图标中心落在 y=39,
+                     与各页面大标题(PageTitleStyle 28 号字 + 头部上边距 20)的中心基本重合 ——
+                     也就是首页那两个字和这个 logo 处在同一条水平线上。
+                     CaptionHeight 只有 20, 图标基本不在拖动区里, 但它本来也不是可点的东西。
+                     ★ 用 app.png 当 ImageBrush(而不是再画一个图标): 这是"以前"的样子,
+                       用户要求一切保持一致, 包括这个图。 -->
+                <Border x:Name="BrandLogo" Grid.Row="0" Width="42" Height="42" CornerRadius="12"
+                        HorizontalAlignment="Center" Margin="0,18,0,20"
+                        Cursor="Hand" ToolTip="分区" MouseLeftButtonUp="OnBrandLogoClick">
+                    <Border.Background>
+                        <ImageBrush ImageSource="/Assets/app.png" Stretch="UniformToFill" />
+                    </Border.Background>
+                </Border>
 
                 <!-- 导航项: 图标在上、文字在下(NavRadioStyle)。
                      间距 4 而不是贴着排: 58px 高的块连成一串会显得很闷。
                      ★ 上边距 18: 与内容区的大标题对齐; 顶部 20px 是拖动区, 不能压上去。
+                     ★ VerticalAlignment="Center" 让这几项在"logo 与底部之间"那段里垂直居中,
+                       而不是紧贴 logo 下方、把大半个侧边栏空着。
                      2026-09-26 用户改版: 收藏/历史从侧栏撤下(入口收进「我的」页),
                      新增「我的」; 左下角的头像账户区也一并撤掉。 -->
-                <StackPanel Grid.Row="0" HorizontalAlignment="Stretch" Margin="10,18,10,0"
+                <StackPanel Grid.Row="1" HorizontalAlignment="Stretch" Margin="10,18,10,0"
                             VerticalAlignment="Center">
                     <StackPanel.Resources>
                         <!--
@@ -248,54 +261,19 @@
                         </StackPanel>
                     </RadioButton>
                 </StackPanel>
-
-                <!-- ★★ 分区入口(2026-10-12 用户要求"放左下角", 面板也从左下角展开)。
-                     挂在**导航栏**而不是某个页面: 它是窗口级功能(面板盖住整窗、含导航栏),
-                     放在首页工具栏里既不合逻辑, 切到别的页面就没入口了。
-                     图标 E700 = Grid(九宫格), B 站官方分区面板用的就是它。
-                     ★ 复用 NavRadioStyle: 它已处理好"图标+文字"、悬停底色, 以及窄档
-                       (收起侧栏)时把文字淡出收高 —— 分区按钮跟着一起收, 否则侧栏一收
-                       它就变成一个孤零零的图标、还留在原位。
-                     ★ 但它是**动作按钮**不是页面切换(点了弹面板, 不切页), 所以不加
-                       Tag / IsChecked 绑定, 点击直接走 OnPartitionClick。 -->
-                <Button x:Name="BtnPartition" Grid.Row="1" Style="{StaticResource NavActionButtonStyle}"
-                        HorizontalAlignment="Stretch" Margin="10,0,10,14"
-                        Cursor="Hand" Click="OnPartitionClick" ToolTip="分区">
-                    <!-- ★ 高度(58)/圆角(8)/悬停底色由 NavActionButtonStyle 给,
-                         这里只放内容 —— 与导航项(NavHome 等)的写法完全一致。
-                         ★★ 尺寸必须与导航项一致(用户要求"候选框大小和侧边栏其他按钮保持一致"):
-                           之前这条样式没写 Height, 于是它按内容高只有约 48px, 而导航项是 58px,
-                           并排在侧栏里一眼就能看出"底部那个比上面几个矮"。
-                           这条已用探针断言钉死(见 bd-probe-logo 的"与导航项等高"检查)。 -->
-                    <StackPanel>
-                        <!-- ★★ 字形必须是 **E8A9**(四宫格/分类), 不能用 E700。
-                             ★ 这是本轮修掉的真实缺陷: E700 是 **GlobalNavButton(三横线/汉堡)**,
-                               渲染出来就是一道"三条杠"(已用对照图逐个字形确认) ——
-                               用户上一轮明确说过"分区按钮不要汉堡菜单", 结果我这次换过来时
-                               又写回了 E700, 于是底部又出现一个汉堡图标。
-                             ★ E8A9 = 2×2 圆角方块, 是"分类/分区/应用抽屉"的通用语义,
-                               而且圆角方块与侧栏其余四个图标的体量一致(不像 E80A 九宫格
-                               那样线条碎、显轻)。
-                             ★ 对照过程记在 .probes/bd-probe-shot 的 DumpGlyphs 里:
-                               图标编号只能靠渲染确认, 凭记忆写编号必错。 -->
-                        <TextBlock Text="&#xE8A9;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                   FontSize="18" HorizontalAlignment="Center"
-                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
-                        <Grid x:Name="NavLabelPartition" Height="15" Margin="0,4,0,0">
-                            <TextBlock Text="分区" FontSize="11"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
-                        </Grid>
-                    </StackPanel>
-                </Button>
+                <!-- ★★ 2026-10-13: 底部不再有「分区」按钮。
+                     用户要求"改回左上角 logo 点击后显示分区, 一切与以前保持一致" ——
+                     2026-10-12 那一版(入口搬去左下角)已整体撤掉, 入口回到顶部的 BrandLogo。
+                     ★ NavActionButtonStyle 样式目前**无人使用**, 但先留着:
+                       删样式要连带确认没有别处引用, 而它本身无害(不被引用就不进视觉树)。 -->
             </Grid>
         </Border>
 
         <!-- ============ 右侧: 内容区 ============
              内容区**占满整列**, 顶部不再留一条标题栏的高度 —— 页面内容因此整体上移,
              与左侧导航项保持在同一条水平线上(见 NavRail 那段的说明)。
-             ★ 左上角 logo 已在 2026-10-12 移除, 但这条"内容区上移到最上沿"的结论不变:
-               它当初是为了与 logo 对齐, 现在是为了与导航项对齐, 效果一样。 -->
+             ★ 2026-10-13 左上角 logo 已恢复, "内容区上移到最上沿"的结论不变:
+               它当初是为了与 logo 对齐, 现在仍然与 logo 对齐。 -->
         <Grid Grid.Column="1" ClipToBounds="True">
             <ContentControl x:Name="PageHost" Focusable="False" />
 
@@ -378,32 +356,28 @@
                                     Margin="0,4,4,0" Panel.ZIndex="20" />
         </Grid>
 
-        <!-- ============ 分区面板 ============
+        <!-- ============ 分区面板(点左上角 logo 展开) ============
              2026-09-26 用户要求: 只保留"与视频相关"的分区(其他全精简掉), 且展开后**占用左上角区域**
-             —— 所以是一张贴在左上角的下拉卡, 不是盖满整窗的大面板。
-             从左上角展开: 遮罩淡入 + 面板以左上角为锚点缩放放大(RenderTransformOrigin=0,0)。
+             —— 所以是一个从 logo 下方长出来的下拉卡, 不再是盖满整窗的大面板。
+             从 logo 处展开: 遮罩淡入 + 面板以左上角为锚点缩放放大(RenderTransformOrigin=0,0)。
              点遮罩 / 点任一分区项 / 鼠标侧键 / 切导航页都会收起。
 
-             ★★ 2026-10-12 改了两次位置:
-               ① 入口从"左上角 logo"搬到了首页右下角工具栏(见 HomePage 的 BtnPartition);
-               ② 又搬回**左下角**, 面板也跟着一起搬到左下角展开(用户要求"分区入口放左下角,
-                  展开的内容也做到左下角")。入口与展开位置现在是一致的。
-               → VerticalAlignment=Bottom + RenderTransformOrigin="0,1":
-                 缩放锚点必须跟着变成**左下角**, 否则展开动画会往上长(看着像从上方落下),
-                 而不是"从按钮位置长出来"。
-               → 上边距留 66: 那原来避开的是左上角 logo, 现在顶部没有元素了,
-                 但窗口顶部有 20px 的拖动区(CaptionHeight), 面板贴着顶会被拖动区吃掉点击。
-                 底部则给 20px 边距, 与右侧工具列的 16/20 对齐。 -->
+             ★★ 2026-10-13 用户要求"改回左上角 logo 点击后显示分区, 一切与以前保持一致":
+                于是撤销 2026-10-12 那一版的"左下角"改动, 回到左上角展开 ——
+                  · VerticalAlignment=Top + RenderTransformOrigin="0,0": 缩放锚点是面板左上角,
+                    动画看起来就是"从 logo 下方长出来";
+                  · 上边距留 66: 避开左上角的 BrandLogo(42px + 上 18px = 60), 并给一点呼吸;
+                  · 左边距 14 与右侧工具列的 16 对齐, 底部不设(内容多高就多高)。 -->
         <Border x:Name="PartitionScrim" Grid.ColumnSpan="2" Panel.ZIndex="40"
                 Background="#4D000000" Opacity="0" Visibility="Collapsed"
                 MouseLeftButtonDown="OnPartitionScrimClick" />
         <Border x:Name="PartitionPanel" Grid.ColumnSpan="2" Panel.ZIndex="41"
-                HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                Margin="14,66,14,20" Width="470" Padding="24,18,24,22"
+                HorizontalAlignment="Left" VerticalAlignment="Top"
+                Margin="14,66,14,0" Width="470" Padding="24,18,24,22"
                 CornerRadius="12" Opacity="0" Visibility="Collapsed"
                 Background="{DynamicResource FlyoutBackgroundBrush}"
                 BorderBrush="{DynamicResource FlyoutBorderBrush}" BorderThickness="1"
-                RenderTransformOrigin="0,1">
+                RenderTransformOrigin="0,0">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="24" ShadowDepth="6" Opacity="0.28" />
             </Border.Effect>
