@@ -1847,4 +1847,70 @@
         <Setter Property="BorderThickness" Value="1.6" />
     </Style>
 
+
+    <!--
+        圆形悬浮返回按钮(2026-10-13 新增, 关系页与播放器评论区**共用**)。
+        ★ 为什么抽成共享样式而不是各页写一份:
+          两个返回按钮长得一模一样(同一个 ChevronLeft、同样 46 圆、同样压在内容右下角),
+          却是两次分别实现的 —— 结果关系页那个加了阴影没加键盘焦点, 播放器那个加了焦点
+          没换不透明底色。现在只有这一份, 想调外观只改一处。
+        ★ 底色用 FloatingButton* 而不是 FloatingFillBrush: 后者在亚克力模式下会被覆盖成
+          半透明(那是给压在彩色封面上的工具列设计的), 按钮底下一堆文字, 半透明会糊成一片。
+        ★ **Focusable 默认就是 true**: 常驻在界面上的按钮不给键盘焦点, 等于对键盘用户
+          宣布"这里出不去"。聚焦时换底色 + 加一圈描边, 两个通道都给出反馈 ——
+          只改颜色对色觉障碍用户不够, 只加描边在浅色主题下几乎看不见。
+        ★ 投影挂在独立的 ShadowBd 上而不是装图标的 Bd: DropShadowEffect 会把整棵子树
+          栅格化, 挂在装内容的 Border 上图标会发糊(项目里反复踩过的同一个坑)。
+        ★ CornerRadius = 直径/2 = 23。用 999 这类大值 WPF 会算出略大于半径的形状,
+          边缘发虚 —— 圆就老老实实用直径的一半。 -->
+    <Style x:Key="CircularFloatingBackButtonStyle" TargetType="Button">
+        <Setter Property="Width" Value="46" />
+        <Setter Property="Height" Value="46" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="Background" Value="{DynamicResource FloatingButtonBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Focusable" Value="True" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid Background="Transparent">
+                        <Border x:Name="ShadowBd" Width="46" Height="46" CornerRadius="23"
+                                Background="{TemplateBinding Background}" />
+                        <Border x:Name="Bd" Width="46" Height="46" CornerRadius="23"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}">
+                                <!-- ★ 这段补丁不能删: 全局隐式 TextBlock 样式带 Foreground setter,
+                                     而 **Style setter 优先级高于继承**, 会压过上面
+                                     TextElement.Foreground 传下来的值 —— 后果是"悬停时按钮不变色"。 -->
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock" BasedOn="{x:Null}" />
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource FloatingButtonHoverBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource FloatingButtonPressedBrush}" />
+                        </Trigger>
+                        <!-- 键盘焦点: 底色 + 描边两个通道同时给反馈 -->
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush"
+                                    Value="{DynamicResource AccentBrush}" />
+                            <Setter TargetName="Bd" Property="BorderThickness" Value="2" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 </ResourceDictionary>

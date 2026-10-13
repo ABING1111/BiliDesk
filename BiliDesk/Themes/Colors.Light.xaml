@@ -60,6 +60,22 @@
           亚克力模式下这个键仍是不透明, 合集面板不会跟着工具列一起变透。 -->
     <SolidColorBrush x:Key="OverlaySurfaceBrush" Color="#E8EAED" />
 
+    <!--
+        **圆形悬浮返回按钮**的底色(2026-10-13 新增, 关系页与播放器评论区共用)。
+        ★ 为什么又开一组键, 而不是直接用 OverlaySurfaceBrush 或 FloatingFillBrush:
+          · FloatingFillBrush 亚克力开启时会被 ThemeService 覆盖成半透明 —— 那是给"压在
+            彩色封面上"的工具列设计的, 底下一张图片才好看。返回按钮底下一堆文字/卡片,
+            半透明会让文字整片透上来糊成一团(和 OverlaySurfaceBrush 当年诞生的原因一样)。
+          · OverlaySurfaceBrush 虽然不透明, 但它是**面板**语义: 面板是"一块有面积的东西",
+            按钮是"一个点"。按钮比面板小得多, 用同一个色值时按钮会比周围的面板**更显眼**,
+            在深色主题里尤其明显(一个亮圆点钉在评论区右下)。
+          这组键的取值与面板**错开两阶**(面板 #E8EAED → 按钮 #F2F4F7), 让按钮比它压着的
+          面板略亮一点 —— 悬浮物应该"比承载它的面更靠前", 而不是融进去。
+        ★ 同样**刻意不进** ApplyAcrylicSurfaces 覆盖清单: 亚克力改不了它们。 -->
+    <SolidColorBrush x:Key="FloatingButtonBrush" Color="#F2F4F7" />
+    <SolidColorBrush x:Key="FloatingButtonHoverBrush" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="FloatingButtonPressedBrush" Color="#E1E5EA" />
+
     <!-- 播放器右缘「详情栏收起把手」(2026-10-12):
          它贴在**主题面板**边缘(不是压在视频上), 所以颜色必须跟主题走 ——
          写死浅色的话深色主题下就是画面上唯一一块纯白亮条。 -->

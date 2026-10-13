@@ -523,6 +523,48 @@
                     </StackPanel>
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
+
+                    <!-- ============ 描边(2026-10-14 新增) ============
+                         ★ 摆在这儿的理由: 它和"显示弹幕""显示区域""按类型过滤"是同一类
+                           —— 都是**画成什么样**; 而"智能屏蔽 / 关键词屏蔽"是**放不放进来**。
+                           把"看得清"的旋钮放在一起, 用户改的时候不用在两张卡片里来回找。
+                         ★ 为什么拆成"开关 + 粗细"两行而不是一行(开关 + 下拉):
+                           开关下面挂一根滑杆, 关掉时滑杆变灰禁用 —— 挤在一行会让粗细控件
+                           在窄窗口里被压扁, 而且"关了就该失效"这件事在两行里表达得最直接。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="文字描边" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="给弹幕文字加一圈黑边, 白色画面上也看得清"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding DanmakuOutlineEnabled, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="240" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="描边粗细" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <!-- ★ 文案给"档位名 + 字外实际多粗": 只写"1.2 DIP"没人知道那是什么,
+                                 而"标准 · 字外约 1"是有体感的(用户能想象自己看到的那圈黑边)。 -->
+                            <TextBlock Text="{Binding DanmakuOutlineWidthText}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                Width="240" VerticalAlignment="Center"
+                                Minimum="0.4" Maximum="1.6" TickFrequency="0.2"
+                                IsSnapToTickEnabled="True"
+                                IsEnabled="{Binding DanmakuOutlineWidthEnabled}"
+                                Value="{Binding DanmakuOutlineWidth, Mode=TwoWay}" />
+                    </Grid>
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />

@@ -972,6 +972,69 @@ public class SettingsViewModel : ObservableObject
         }
     }
 
+    // ---- 描边(2026-10-14 新增, 用户要求"设置界面可以选择开启和粗细") ----
+
+    /// <summary>
+    /// 弹幕文字的黑色描边开关。
+    ///
+    /// ★ 为什么放在设置里而不是写死: 描边存在的理由是"白色画面上也看得清"(用户 2026-10-13
+    ///   的需求), 而它在深色画面上几乎看不出、还可能让字显脏。用户比我们知道自己的片单长什么样。
+    /// </summary>
+    public bool DanmakuOutlineEnabled
+    {
+        get => Svc.Settings.DanmakuOutlineEnabled;
+        set
+        {
+            if (value == Svc.Settings.DanmakuOutlineEnabled) return;
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled,
+                Svc.Settings.DanmakuAreaPercent,
+                Svc.Settings.DanmakuSmartFilter,
+                outlineEnabled: value);
+            OnPropertyChanged();
+            // ★ 联动: 关掉之后下面那根粗细滑杆就失去意义了, 必须一起变灰禁用 ——
+            //   否则界面上留着一根还能拖的滑杆, 而拖它什么都不会发生, 用户会以为设置坏了。
+            OnPropertyChanged(nameof(DanmakuOutlineWidthEnabled));
+        }
+    }
+
+    /// <summary>
+    /// 描边的**可见**宽度(0.4~1.6 DIP, 即字外面那一圈黑边有多厚)。
+    /// ★ 与播放器内部那个 StrokeThickness 差两倍: Stroke 向两侧各扩一半, 而向内那半圈
+    ///   被填充层盖住(见 PlayerWindow.BuildDanmakuElement)。设置里必须讲用户看到的那一半。
+    /// </summary>
+    public double DanmakuOutlineWidth
+    {
+        get => Svc.Settings.DanmakuOutlineWidth;
+        set
+        {
+            var v = Math.Clamp(value, 0.4, 1.6);
+            if (Math.Abs(v - Svc.Settings.DanmakuOutlineWidth) < 1e-6) return;
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled,
+                Svc.Settings.DanmakuAreaPercent,
+                Svc.Settings.DanmakuSmartFilter,
+                outlineWidth: v);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DanmakuOutlineWidthText));
+        }
+    }
+
+    /// <summary>滑杆上显示的档位名(比"0.8 DIP"好懂: 用户要的是"细/标准/粗")</summary>
+    public string DanmakuOutlineWidthText
+    {
+        get
+        {
+            var w = DanmakuOutlineWidth;
+            if (w < 0.6) return "细 · 字外约 0.4";
+            if (w < 1.0) return $"标准 · 字外约 {w:0.0}";
+            return w < 1.3 ? "粗 · 字外约 1.0" : "很粗 · 字外约 1.0 以上";
+        }
+    }
+
+    /// <summary>描边关掉时, 粗细滑杆一起禁用(见 DanmakuOutlineEnabled 的说明)</summary>
+    public bool DanmakuOutlineWidthEnabled => Svc.Settings.DanmakuOutlineEnabled;
+
     /// <summary>
     /// 弹幕关键词屏蔽(用户手写黑名单)。
     /// 用 TextChanged 慢一点也关系不大: 每敲一个字就重算规则并让播放器重新过滤,

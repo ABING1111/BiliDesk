@@ -41,6 +41,14 @@
           亚克力模式下这个键仍是不透明, 合集面板不会跟着工具列一起变透。 -->
     <SolidColorBrush x:Key="OverlaySurfaceBrush" Color="#2D2D2D" />
 
+    <!--
+        **圆形悬浮返回按钮**的底色(2026-10-13 新增), 说明与取值理由见 Colors.Light.xaml。
+        深色下取比面板(#2D2D2D)略亮的一档: 按钮压在评论文字与视频画面上, 与面板同色就会
+        糊进背景里看不出边界(这正是悬浮物最不能接受的失败方式)。 -->
+    <SolidColorBrush x:Key="FloatingButtonBrush" Color="#383838" />
+    <SolidColorBrush x:Key="FloatingButtonHoverBrush" Color="#454545" />
+    <SolidColorBrush x:Key="FloatingButtonPressedBrush" Color="#2E2E2E" />
+
     <!-- 播放器右缘「详情栏收起把手」(2026-10-12):
          深色主题用**深色底 + 浅字**, 与 OverlaySurfaceBrush 同族但略深一点(浮在面板上要有层次),
          箭头用浅色保证对比度。别再用浅色磨砂 —— 深色主题下那块白条会亮得刺眼。 -->

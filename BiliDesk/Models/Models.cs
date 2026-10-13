@@ -433,6 +433,82 @@ public class HotSearchItem
     public bool IsTopRank => Rank is >= 1 and <= 3;
 }
 
+/// <summary>
+/// 「关注 / 粉丝」二级页的两种模式(2026-10-13 新增, 见 <see cref="RelationPage"/>)。
+///
+/// ★ 为什么共用一个页面而不是做两个页: 两个列表的**数据形状完全一样**
+///   (头像 + 名字 + 签名 + 认证信息, 都是 <see cref="FollowUser"/>), 交互也一样
+///   (点开 UP 主页、看头像、取消关注), 只有"请求哪个接口"和标题文案不同。
+///   做成两个页面的话, 那 90% 重复的 XAML 将来改一处就要记得改另一处。
+/// </summary>
+public enum RelationMode
+{
+    /// <summary>我关注的人(接口 followings)</summary>
+    Following = 0,
+    /// <summary>关注我的人(接口 fans)</summary>
+    Fans = 1
+}
+
+/// <summary>
+/// 关注分组(2026-10-13 新增)。对应 B 站网页版关注页左边那一列分类。
+///
+/// ★ 数据来源是 `GET /x/relation/tags`(实测): 返回用户自建的分组, 字段只有
+///   tagid / name / count / tip 四个 —— **不含成员 mid**, 所以选中一个分组之后
+///   还要再打 `GET /x/relation/tag?mid=<自己>&tagid=<分组id>` 才能拿到那一组的人(见 ApiClient)。
+/// </summary>
+public class FollowGroup : System.ComponentModel.INotifyPropertyChanged
+{
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    /// <summary>分组 id。注意有两个"魔法值": -10 = 特别关注, 0 = 默认分组</summary>
+    public int TagId { get; set; }
+
+    public string Name { get; set; } = "";
+
+    /// <summary>该分组下的 UP 数量(接口直接给, 不用自己数)</summary>
+    public int Count { get; set; }
+
+    /// <summary>官方给的一句提示(只有「特别关注」这类特殊分组才有)</summary>
+    public string Tip { get; set; } = "";
+
+    /// <summary>界面上显示的名字。空名兜底成"未命名分组", 不给用户一个空白行</summary>
+    public string DisplayName => string.IsNullOrWhiteSpace(Name) ? "未命名分组" : Name;
+
+    /// <summary>
+    /// 「全部」这个虚拟分组的 TagId。
+    /// ★ 必须是 -1: B 站真实的 tagid 里已经有 -10(特别关注) 与 0(默认分组),
+    ///   用 0 或 -10 当"全部"会跟真分组撞车, 点"默认分组"反而变成看全部。
+    /// </summary>
+    public const int AllTagId = -1;
+
+    public bool IsAll => TagId == AllTagId;
+
+    private bool _isSelected;
+
+    /// <summary>
+    /// 左栏里这一项是否选中(UI 用, 不参与请求)。
+    /// ★ 必须带通知: 选中是**从 ViewModel 侧**改的(RelationViewModel.SelectedGroup 的 setter),
+    ///   旧项与新项的高亮都要跟着变, 而且是在**集合不变**的前提下换高亮 —— 不发通知的话
+    ///   界面上就是"点了新分组, 旧的还亮着"。
+    /// ★ 不参与按位相等比较: 参考 FollowUser.IsSelected 的处理, 用真值相等而不是 Equals。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set
+        {
+            if (_isSelected == value) return;
+            _isSelected = value;
+            PropertyChanged?.Invoke(this,
+                new System.ComponentModel.PropertyChangedEventArgs(nameof(IsSelected)));
+        }
+    }
+
+    /// <summary>标题右侧那个计数。数量为 0 时不显示"(空分组在左栏点进去也是空, 不如不写)"</summary>
+    public string CountText => Count > 0 ? Count.ToString() : "";
+}
+
 /// <summary>关注列表项(关注的 UP 主)</summary>
 public class FollowUser : System.ComponentModel.INotifyPropertyChanged
 {
@@ -441,9 +517,88 @@ public class FollowUser : System.ComponentModel.INotifyPropertyChanged
     public long Mid { get; set; }
     public string Name { get; set; } = "";
     public string Face { get; set; } = "";
+    /// <summary>
+    /// 个人签名。关注列表(followings)给这个字段; **粉丝列表(fans)不给** ——
+    /// 实测返回里没有 sign 键, 取到就是空串。UI 上空串时整行隐藏, 不留一道空行。
+    /// </summary>
     public string Sign { get; set; } = "";
     public int VerifyType { get; set; } = -1;
     public string VerifyDesc { get; set; } = "";
+
+    /// <summary>
+    /// B 站两个关系接口里的 <c>attribute</c> 原始值(不直接给 UI 用, 见 <see cref="RelationText"/>)。
+    ///
+    /// ★ 约定(B 站 web 接口一直如此, 但没有官方文档, 靠实测):
+    ///   followings(我关注的人)里: 0 = 互相关注, 2 = 我单关了他, 6 = 他也关注了我(我没关他);
+    ///   fans(关注我的人)里:     0 = 互相关注, 2 = 我已经关注了他, 6 = 单向(他关注我, 我没回关)。
+    /// 两个接口的语义**不是同一套**, 所以别在模型里自己推导 —— 由 <c>ApiClient</c>
+    /// 在解析时按"当时调的是哪个接口"翻成一句人话存进 <see cref="RelationText"/>。
+    /// </summary>
+    public int Attribute { get; set; } = -1;
+
+    /// <summary>
+    /// 关系徽章文案(「互相关注」/「TA 关注了我」/「已关注」…), 已在 ApiClient 里翻好。
+    /// 空串 = 这种关系没有值得标注的内容(比如关注列表里的一堆单向关注), UI 上整块隐藏。
+    /// </summary>
+    public string RelationText { get; set; } = "";
+
+    /// <summary>有没有关系徽章可显示</summary>
+    public bool HasRelation => !string.IsNullOrWhiteSpace(RelationText);
+
+    /// <summary>
+    /// 是不是互相关注。两个接口的 attribute==0 都是这个意思(见 <see cref="Attribute"/>),
+    /// 所以这个判断是跨模式安全的 —— 头部那句「N 位互相关注」可以直接数它。
+    /// </summary>
+    public bool IsMutual => Attribute == 0;
+
+    /// <summary>有没有签名可显示(粉丝列表里基本全是 false)</summary>
+    public bool HasSign => !string.IsNullOrWhiteSpace(Sign);
+
+    /// <summary>
+    /// 签名/认证在卡片上显示的**单行**版本(2026-10-13)。
+    ///
+    /// ★ 为什么必须归一化, 而不能直接 TextWrapping: B 站的 sign 字段里带真实换行
+    ///   (实测有人写八行), 卡片墙上一张八行签名会把**整墙**的卡片高度顶成 158px ——
+    ///   左边一行矮卡片右边一行高卡片, 网格被撑出参差不齐的空洞, 整页看起来是坏的。
+    ///   这里把 \r\n / \r / \n / 全角空白统一压成单个半角空格, 再去掉首尾空白,
+    ///   于是"多行"在数据层就变回一行, XAML 那边单行省略就一定成立。
+    /// ★ 完整内容仍在 <see cref="SignFull"/> 里, 放 ToolTip; 鼠标停在卡片上能看到原文。
+    /// </summary>
+    public string SignDisplay => OneLine(Sign);
+
+    /// <summary>卡片上那行签名的**完整**原文(给 ToolTip)。空 = 无签名的**完整**原文(给 ToolTip)。空 = 无签名</summary>
+    public string SignFull => string.IsNullOrWhiteSpace(Sign) ? "" : Sign.Trim();
+
+    /// <summary>
+    /// 认证信息文案(机构认证/个人认证)。空 = 没认证, UI 上整块隐藏。
+    /// 与签名同一个道理: 一律压成单行, 完整原文留给 ToolTip。
+    /// </summary>
+    public string VerifyText => OneLine(VerifyDesc);
+
+    /// <summary>认证的完整原文(给 ToolTip)</summary>
+    public string VerifyFull => string.IsNullOrWhiteSpace(VerifyDesc) ? "" : VerifyDesc.Trim();
+
+    /// <summary>
+    /// 把任意多行文本压成一行: 换行与连续空白(含全角空格)都收成**单个**半角空格。
+    /// ★ 用正则一次性扫而不是 Replace 链: Replace 链每一步都要新建字符串,
+    ///   几百个 UP 的签名在翻页时全量算一遍, 链式写法能把分配放大好几倍。
+    /// </summary>
+    private static string OneLine(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return "";
+        // ★★ 正则必须是 @"\s+" —— 匹配**所有**空白(含换行)并压成一个半角空格。
+        //   踩过的两个坑(都是探针跑出来的, SignDisplay 里仍带着 \n):
+        //     ① 写成 @"[^\S\n\r]+" —— 那是"水平空白"的**补集**, 换行不在其中,
+        //        于是换行**原样留下**(而卡片是单行省略的, 于是八行签名照样把卡片撑高);
+        //     ② 写成 @"[^\S\\n\\r]+" —— 逐字字符串里 \\ 是两个字面反斜杠, 正则收到的是
+        //        "排除 反斜杠/S/n/r 四个字符", 同样什么都合不上。
+        //   .NET 的 \s 默认就含 \r \n \t 与 Unicode 空白, 所以一个 \s+ 足够。
+        return System.Text.RegularExpressions.Regex
+            .Replace(s, @"\s+", " ").Trim();
+    }
+
+    /// <summary>有没有认证信息可显示</summary>
+    public bool HasVerify => !string.IsNullOrWhiteSpace(VerifyDesc);
 
     private bool _isSelected;
 
@@ -463,6 +618,37 @@ public class FollowUser : System.ComponentModel.INotifyPropertyChanged
                 new System.ComponentModel.PropertyChangedEventArgs(nameof(IsSelected)));
         }
     }
+}
+
+/// <summary>
+/// 卡片墙的一「行」(2026-10-13 新增, 服务于关系页的行虚拟化)。
+///
+/// ★ 为什么要有"行"这个中间层, 而不像以前那样一张卡片一个元素:
+///   原来 652 个关注 = 652 个控件**全部**被创建并测量, 就算它们都在视口外 ——
+///   签名一长卡片就更高, 于是这堵"墙"的高度和测量耗时一起炸开。
+///   现在先把数据按列数切成行, 再交给 <c>VirtualizingStackPanel</c>:
+///   视口外的**整行**被回收(连里面 N 张卡一起销毁), 控件数量就只跟视口高度走。
+/// ★ <see cref="Columns"/> 必须随行带出来(而不是只放在外层面板):
+///   行模板里的 UniformGrid 要按列数均分宽度, 拿不到外层那个值。
+/// </summary>
+public sealed class RelationUserRow
+{
+    public RelationUserRow(IReadOnlyList<FollowUser> items, int columns)
+    {
+        Items = items;
+        Columns = columns;
+    }
+
+    /// <summary>这一行的卡片(从满列到末尾可能不足整列)</summary>
+    public IReadOnlyList<FollowUser> Items { get; }
+
+    /// <summary>
+    /// 本行的列数。
+    /// ★ 必须跟着行走: 行模板里的 <c>UniformGrid Columns</c> 绑的是这一行的 DataContext,
+    ///   而那个绑定发生在**面板**里 —— 面板拿不到外层 ViewModel 的 Columns,
+    ///   拿得到的是"我这一行自己"。
+    /// </summary>
+    public int Columns { get; }
 }
 
 /// <summary>
@@ -1250,6 +1436,51 @@ public class AppSettings
     /// ★ 默认值与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
     /// </summary>
     public bool MultiPlayerWindow { get; set; } = true;
+
+    /// <summary>
+    /// 播放器窗口宽度(上次关闭时的, 0 = 从没记过)。
+    /// ★ 读写契约: 与 Services/SettingsStore.cs 的同名属性必须成对出现,
+    ///   少一边就是"存进去了读不出来"或"改了不落盘"(编译器会抓, 别靠记忆)。
+    /// ★ 只记大小不记位置, 理由见 SettingsStore 里那段的说明。
+    /// </summary>
+    public double PlayerWindowWidth { get; set; }
+
+    /// <summary>播放器窗口高度(见 <see cref="PlayerWindowWidth"/>)</summary>
+    public double PlayerWindowHeight { get; set; }
+
+    // ---- 弹幕描边(2026-10-14 新增)。读写契约: 与 Services/SettingsStore.cs 的同名属性
+    //      必须成对出现, 少一边就是"存进去了读不出来"或"改了不落盘"(编译器会抓)。
+
+    /// <summary>
+    /// 弹幕文字要不要带黑色描边(用户要求可开关)。
+    /// ★ 默认开: 描边存在的原意是"白色画面上也看得清"(2026-10-13 提的需求)。
+    /// 老配置没有这个字段时反序列化会留 false, 所以 Load 里要显式纠正 ——
+    /// 否则"升级之后描边莫名其妙没了", 而原因只是新 bool 字段的默认值。
+    /// </summary>
+    public bool DanmakuOutlineEnabled { get; set; } = true;
+
+    /// <summary>
+    /// 描边的**可见**宽度(DIP, 0.4~1.6), 即字外面那一圈黑边有多厚。
+    /// ★ 为什么不是内部那个 StrokeThickness: 它是可见宽度的**两倍**(Stroke 向两侧各扩
+    ///   一半, 而向内那半圈被填充层盖住)。存用户看到的那一半, 语义才不会骗人。
+    /// 老配置缺这个字段时为 0, Load 里会替换成默认 0.8(见 SettingsStore.Load)。
+    /// </summary>
+    public double DanmakuOutlineWidth { get; set; } = 0.8;
+
+    /// <summary>
+    /// **收起右侧详情栏**状态下的播放器窗口宽度(2026-10-13 新增, 0 = 从没记过)。
+    ///
+    /// ★ 为什么必须与 <see cref="PlayerWindowWidth"/> **分开存**:
+    ///   收起时窗口能缩到 320x200, 展开时最小 1100x600 —— 两个模式的取值范围不重叠。
+    ///   共用一个字段就会出现"收起时缩到 500x400, 下次以普通模式打开被 WPF 抬到 1100x600"
+    ///   (用户以为记忆坏了) 以及"展开时调好的大尺寸, 收起时被原样套上, 视频小得看不见"。
+    ///   理由与实现见 SettingsStore.RememberPlayerWindowCollapsedSize。
+    /// ★ 读写契约: 与 Services/SettingsStore.cs 的同名属性必须成对出现。
+    /// </summary>
+    public double PlayerWindowCollapsedWidth { get; set; }
+
+    /// <summary>收起详情栏模式下的窗口高度(见 <see cref="PlayerWindowCollapsedWidth"/>)</summary>
+    public double PlayerWindowCollapsedHeight { get; set; }
 
     /// <summary>
     /// 首页「推荐」tab 的算法来源。★ 2026-10-03 起固定为网页版(字段仅为兼容老配置保留,

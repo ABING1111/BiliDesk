@@ -412,6 +412,33 @@ public partial class PlayerWindow : FluentWindow
         if (DanmakuAreaSlider != null) DanmakuAreaSlider.Value = Svc.Settings.DanmakuAreaPercent;
         UpdateDanmakuButton();
 
+        // ---- 窗口尺寸记忆: 套用上一次关闭时的普通尺寸(2026-10-13 用户要求) ----
+        // ★ 必须放在构造函数里、且在 Show() 之前: WPF 允许在窗口显示前改 Width/Height,
+        //   显示后再改就会看到窗口"跳"一下变大变小。
+        // ★ 放在**这个**类里而不是 PlayerService.GetOrCreateWindow: 那里只负责分流
+        //   (复用还是新建), 尺寸属于窗口自己的事; 而且将来若有别的路径 new PlayerWindow,
+        //   这里照样生效 —— 建窗口的地方不止一处。
+        // ★ 只套"普通模式"的尺寸 —— 铺满/全屏是临时状态, 不该被记下来(见 OnClosed)。
+        // ★ 有效值门槛用**常规模式的最小尺寸**(NormalWindowMinWidth/Height = 1100x600,
+        //   与 XAML 的 MinWidth/MinHeight 一致), 而不是"随便大于 0":
+        //   WPF 碰到比 MinWidth 小的 Width **不会拒绝**, 它会**把值抬到 MinWidth** ——
+        //   于是配置里一个 400x300 的脏值会开出一个 1100x600 的窗口, 用户以为"记忆坏了",
+        //   而实际是我们把一个不该套的值套上去了。低于下限 ⇒ 当作没有记忆, 走 XAML 默认值。
+        if (IsUsablePlayerWindowSize(Svc.Settings.PlayerWindowWidth, Svc.Settings.PlayerWindowHeight))
+        {
+            Width = Svc.Settings.PlayerWindowWidth;
+            Height = Svc.Settings.PlayerWindowHeight;
+        }
+        // 恢复出来的尺寸未必装得下这块屏幕 → 记下"这次读到的两组值",
+        // 等 SourceInitialized 之后按工作区夹一道(见 ClampSizeToWorkingArea)。
+        // ★ 用恢复出来的值当暂存初值: 用户开窗后**一个字都没改**就关掉时,
+        //   落盘写回去的是同一个数, 不会白触发一次配置写入。
+        _lastNotedNormalW = Width;
+        _lastNotedNormalH = Height;
+
+        // 尺寸记忆的防抖计时器与夹取(2026-10-13)
+        InitSizeMemory();
+
         // LibVLC 走进程级共享单例(见 VlcCore): 初始化全进程只做一次, 且永不在这里释放。
         // 反复 new/Dispose 原生库会引发 Windows 级访问违例弹窗:
         //   "Exception Processing Message 0xc0000005 - Unexpected parameters"
@@ -741,6 +768,9 @@ public partial class PlayerWindow : FluentWindow
         _totalMs = 0;
         _currentCid = 0;
         _aid = 0;
+        // ★ 换片 = 楼中楼回复全部换代。还在飞的请求回来时 aid 已经对不上, 整份丢掉 ——
+        //   不然上一个视频某条楼中楼的第 2 页会被写进新片的界面上。
+        _replyPaging.Invalidate();
         // 换片源: 上一片的合流任务立刻作废(否则会白下几十兆, 也可能把结果写进新片的键)
         CancelRemuxPrefetch();
         _ownerMid = 0;
@@ -755,6 +785,8 @@ public partial class PlayerWindow : FluentWindow
         // 否则新片子一进来右侧就挂着上一条视频的评论详情页
         if (CommentDetailPanel != null) CloseCommentDetail();
         if (CommentList != null) CommentList.ItemsSource = null;
+        // 一级评论列表整个换了一份 ⇒ 旧锚点的下标已经指向别的评论, 必须丢掉
+        DropCommentListAnchor();
         if (CommentHint != null) CommentHint.Text = "加载评论中…";
         // 上一条视频没写完的评论草稿不能带到下一条去(用户点开新视频发现输入框里
         // 还留着给上一个视频写了一半的话, 会以为是自己点错了)
@@ -762,8 +794,9 @@ public partial class PlayerWindow : FluentWindow
         _postingComment = false;
         // 进度上报的节流状态也要重置, 让新视频的第一条云端历史能立刻落地
         Svc.HistorySync.Reset();
-        // 清掉屏幕上残留的弹幕(防泄漏)并重置泳道占用
-        DanmakuCanvas.Children.Clear();
+        // 清掉屏幕上残留的弹幕(防泄漏)并重置泳道占用。
+        // ★ 画布子元素 / 活动记录 / 推进器三样由 ResetLanes → ClearFlyingDanmaku 一次收干净, 
+        //   这里不再单独 Children.Clear(): 两处各清一半正是那个“活动记录 1 / 画布 0”失步的温床。
         ResetLanes();
         // ★ 收起把手的显隐要重新摆一次(2026-10-12 新增)。_controlsHidden 是"每片状态"
         //   (登记在 PerMediaStateFields 里), 换片时被清成 false, 但上一片隐藏时按钮已经
@@ -918,6 +951,15 @@ public partial class PlayerWindow : FluentWindow
         nameof(_hasSeason), nameof(_switchingSeasonEpisode),
         // 分P 与合集是一对: 同样是"每片重算 + 换片闸门"。别只加一个漏一个。
         nameof(_hasPages), nameof(_switchingPage),
+        // 评论一级列表的滚动锚点(返回时还原到离开时那一行)。它属于"这一片"的界面态:
+        //   换了视频, 上一个视频看到第几条跟新视频毫无关系, 带着走会让新视频一进来就
+        //   试图还原到一个根本不存在的下标上。
+        // ★ 这四个字段之前**漏登记**过: ResetForNewMedia 里实实在在清了它们(见 CloseCommentDetail
+        //   与换片复位处的 5932~5934 行), 但清单没列, 于是 DEBUG 下 VerifyResetCoverage
+        //   每次换片都往 errors.txt 刷一条"漏清理"—— 一条噪声日志会让人以为真出了问题,
+        //   时间久了就没人看日志了(狼来了)。
+        nameof(_commentAnchorOffset), nameof(_commentAnchorIndex),
+        nameof(_commentAnchorDelta), nameof(_commentAnchorPending),
     };
 
     /// <summary>
@@ -939,6 +981,15 @@ public partial class PlayerWindow : FluentWindow
         nameof(_danmakuColorful),    // 彩色弹幕是设置项
         nameof(_danmakuAreaRatio),   // 弹幕显示区域是设置项
         nameof(_laneHeight),         // 泳道高随字号走, 跟着设置走
+        // ---- 窗口尺寸记忆(2026-10-13 新增)的暂存值 ----
+        // ★ 归到 PersistentFields 而不是 PerMediaStateFields: 它们记的是"这个窗口被调成多大",
+        //   生命周期跟着**窗口**而不是片源。放进每片清单会在换片时被清掉, 而换片根本不该
+        //   改变窗口尺寸 —— 表现为"看着视频顺手换一集, 关掉窗口尺寸记忆就丢了"。
+        // ★ 漏登记的代价不是崩溃而是噪声: VerifyResetCoverage 会往 errors.txt 刷
+        //   "漏清理", 一条无害日志天天刷, 时间久了就没人看日志了(狼来了)。
+        nameof(_lastNotedNormalW), nameof(_lastNotedNormalH),
+        nameof(_lastNotedCollapsedW), nameof(_lastNotedCollapsedH),
+        nameof(_mySizeSeq), nameof(_sizeTouched), nameof(_clampingSize),
         nameof(_teardownDone),       // 拆解只做一次
         nameof(_playerRegistered),   // 注册计数, 生命周期是窗口而非片源
         nameof(_seasonOpen),         // 合集面板的展开态: 用户开着面板连看几集是常态, 换片收起它很烦
@@ -963,11 +1014,14 @@ public partial class PlayerWindow : FluentWindow
         // CompositionTarget.Rendering / 弹幕时钟的订阅只挂一次, 属窗口级(同 _playerRegistered)
         nameof(_modalSizeWatchAttached),
         nameof(_danmakuClockAttached),
-        // 弹幕时钟的三个量: 靠 _mp.TimeChanged(约 4Hz)自动校准 —— 换片后新片一开播,
+        // 弹幕时钟的四个量 + 残差: 靠 _mp.TimeChanged(约 4Hz)自动校准 —— 换片后新片一开播,
         //   下一次 TimeChanged 就把 _dmClockMedia 推到新片时间, 260ms 内自然收敛。
         //   ★ 特意**不**在 ResetForNewMedia 里清: 那会与 CalibrateDanmakuClock 抢写,
         //     而后者才是权威来源(2026-11-11 为修"暂停回跳"刚把权威收敛到它)。
+        //   ★ 倍速也不清: 它跟的是用户选的播放速度, 换片不该把 2x 悄悄退回 1x
+        //     (倍速是用户偏好, 和音量同一性质)。残差是"平滑纠偏"的中间量, 由校准自己收敛。
         nameof(_dmClockMedia), nameof(_dmClockStamp), nameof(_dmClockRunning),
+        nameof(_dmClockRate), nameof(_dmClockResidual), nameof(_dmClockBuffered),
     };
 
     /// <summary>
@@ -2004,6 +2058,10 @@ public partial class PlayerWindow : FluentWindow
         if (_isLive || _isLocalPlayback || _ended || _mp == null || _mp.Length <= 0)
         {
             _stallTicks = 0;
+            // ★ 同步缓冲态给弹幕时钟: 缓冲期间媒体时间不前进, 而弹幕时钟按墙钟外推 →
+            //   弹幕会一路往左颠出画面, 而画面停在原地, 观感就是"弹幕跑得比视频快"。
+            //   冻结后 elapsed 不变, 弹幕自然停住; 缓冲结束继续从冻结处往前跑, 与画面重新对齐。
+            SetDanmakuClockBuffered(false);
             return;
         }
 
@@ -2011,10 +2069,14 @@ public partial class PlayerWindow : FluentWindow
         if (!_mp.IsPlaying || _isSeeking || inSeekGrace || _pendingSeekMs >= 0)
         {
             _stallTicks = 0;
+            // ★ 同步缓冲态给弹幕时钟: 缓冲期间媒体时间不前进, 而弹幕时钟按墙钟外推 →
+            //   弹幕会一路往左颠出画面, 而画面停在原地, 观感就是"弹幕跑得比视频快"。
+            //   冻结后 elapsed 不变, 弹幕自然停住; 缓冲结束继续从冻结处往前跑, 与画面重新对齐。
+            SetDanmakuClockBuffered(false);
             return;
         }
 
-        // ★ 结尾豁免(2026-10-01, 用户实测"长视频最后五秒弹'正在缓冲'"): 剩余不足
+        // ★ 结尾豁免(2026-10-01, 用户实测"长视频最后五秒弹正在缓冲"): 剩余不足
         // TailQuietZoneMs 时不再报缓冲。DASH 音视频是两路独立流, 长度略有差异,
         // 短的那路数据先耗尽时 Time 会停几秒等另一路 —— 这是"快播完了"的正常形态,
         // 不是网络卡顿(三分钟以下的视频走本地合流单文件没有双流, 所以从来不出这个提示)。
@@ -2026,12 +2088,23 @@ public partial class PlayerWindow : FluentWindow
             _stallTicks = 0;
             _stallLastMs = now;
             HideBufferingIfShown();
+            // ★ 同步缓冲态给弹幕时钟: 缓冲期间媒体时间不前进, 而弹幕时钟按墙钟外推 →
+            //   弹幕会一路往左颠出画面, 而画面停在原地, 观感就是"弹幕跑得比视频快"。
+            //   冻结后 elapsed 不变, 弹幕自然停住; 缓冲结束继续从冻结处往前跑, 与画面重新对齐。
+            SetDanmakuClockBuffered(false);
             return;
         }
 
         if (_stallLastMs >= 0 && Math.Abs(now - _stallLastMs) < StallIdleToleranceMs)
         {
             _stallTicks++;
+            // ★ 达到 StallTicksToReport 之前不冻结: 一个心跳的卡顿常见(网络抖动),
+            //   那时倒冻结会让弹幕顺下就卡一次。确认真卡顿了才冻。
+            // ★ 同步缓冲态给弹幕时钟: 缓冲期间媒体时间不前进, 而弹幕时钟按墙钟外推 →
+            //   弹幕会一路往左颠出画面, 而画面停在原地, 观感就是"弹幕跑得比视频快"。
+            //   冻结后 elapsed 不变, 弹幕自然停住; 缓冲结束继续从冻结处往前跑, 与画面重新对齐。
+            SetDanmakuClockBuffered(_stallTicks >= StallTicksToReport);
+
             if (_stallTicks >= StallTicksToReport && LoadingOverlay != null &&
                 LoadingOverlay.Visibility != Visibility.Visible)
             {
@@ -2045,6 +2118,10 @@ public partial class PlayerWindow : FluentWindow
         _stallLastMs = now;
         if (_stallTicks >= StallTicksToReport) HideBufferingIfShown();
         _stallTicks = 0;
+            // ★ 同步缓冲态给弹幕时钟: 缓冲期间媒体时间不前进, 而弹幕时钟按墙钟外推 →
+            //   弹幕会一路往左颠出画面, 而画面停在原地, 观感就是"弹幕跑得比视频快"。
+            //   冻结后 elapsed 不变, 弹幕自然停住; 缓冲结束继续从冻结处往前跑, 与画面重新对齐。
+        SetDanmakuClockBuffered(false);
     }
 
     /// <summary>把一次跳转记下来: 打上宽限期, 并立刻把进度条/时间钉到目标位置</summary>
@@ -2461,8 +2538,24 @@ public partial class PlayerWindow : FluentWindow
             2.0f => 0.5f,
             _ => 1.0f
         };
-        _mp.SetRate(next);
+        // ★ 必须走 ApplyPlayerRate: 改了原生倍速就得同步改弹幕时钟的倍率, 且是"先结算旧时钟、再换倍率"。
+        ApplyPlayerRate(next);
         if (SpeedText != null) SpeedText.Text = next.ToString("0.#") + "x";
+    }
+
+    /// <summary>
+    /// 设置播放倍速的**唯一**落地点: 改完原生播放器必须同步改弹幕时钟的倍率。
+    ///
+    /// ★ 为什么不在 <see cref="CalibrateDanmakuClock"/> 里顺手取 <c>_mp.Rate</c> 统一管理:
+    ///   那是约 4Hz 的低频校准。等它发现倍速变了, 中间这 0.25 秒弹幕已经按旧斜率跑完了一段,
+    ///   切回来时被硬纠一次 —— 观感就是"切倍速时弹幕跳一下"。
+    ///   所以倍速必须在"用户点了倍速"那一刻就同步, 而不是等下一次校准。
+    /// ★ 原生调用保留 try/catch: 关窗过程中原生对象可能已失效(同 Paused/Playing 处理器)。
+    /// </summary>
+    private void ApplyPlayerRate(double rate)
+    {
+        try { _mp?.SetRate((float)rate); } catch { /* 原生对象可能已失效 */ }
+        SetDanmakuClockRate(rate);
     }
 
     /// <summary>把弹层的右缘与目标按钮的右缘对齐(放在按钮正上方)。</summary>
@@ -2767,7 +2860,9 @@ public partial class PlayerWindow : FluentWindow
         //   按下时先跑进 TryBeginEdgeResize 就进了系统模态缩放循环, 把手点了没反应。
         //   把手优先之后, 缩放带仍可从把手上/下方拖(那里不在带内), 右缘整体照样能拖。
         //   (Up 里同一道守卫见 OnVideoAreaMouseLeftUp —— Down/Up 必须对称。)
-        if (BtnCollapsePanel != null && BtnCollapsePanel.IsMouseOver) return;
+        // ★ 浮层点击统一由 IsOverFloatingOverlay 挡掉: 收起把手/展开按钮都压在视频上,
+        //   不挡就是"点它顺带把视频暂停了"(不报错, 只是看着像玄学)。
+        if (IsOverFloatingOverlay()) return;
 
         // 落在窗口边缘缩放带里的按下是"拖边缘改大小", 不算视频区手势(见 TryBeginEdgeResize)
         if (TryBeginEdgeResize()) { e.Handled = true; return; }
@@ -2803,7 +2898,7 @@ public partial class PlayerWindow : FluentWindow
             _longPressTimer!.Stop();
             _longPressFired = true;
             // 进入 2x 快进
-            try { _mp.SetRate(FastForwardRate); } catch { }
+            ApplyPlayerRate(FastForwardRate);   // ★ 倍速一改就同步弹幕时钟倍率(见 ApplyPlayerRate)
             if (SpeedText != null) SpeedText.Text = FastForwardRate.ToString("0.#") + "x";
             // 长按触发了, 不再触发单击
             _singleClickTimer?.Stop();
@@ -2818,15 +2913,12 @@ public partial class PlayerWindow : FluentWindow
         //   守卫会直接 return, 于是"按住视频区快进后把指针滑到把手上松手"这条路
         //   既没停 _longPressTimer, 也没走到恢复 1x 的分支 —— 视频就一直卡在 2x,
         //   要等下一次按下或鼠标离开才复位。把手紧贴视频右缘, 正是长按后顺手滑过去的落点。
-        //   三道守卫(控制栏/跳过提示/收起把手)只是"别顺手暂停", 与倍速恢复无关, 不该拦住它。
+        //   那些守卫只是"别顺手暂停", 与倍速恢复无关, 不该拦住它。
         _longPressTimer?.Stop();
 
-        // 与 Down 对称: 控制栏上的点击不触发单击暂停
-        if (ControlBar != null && ControlBar.IsMouseOver) return;
-        // 与 Down 对称: 跳过提示条上的「撤回」点击也不触发单击暂停
-        if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
-        // 与 Down 对称: 右缘收起把手的点击不触发单击暂停(见 Down 里同名的说明)
-        if (BtnCollapsePanel != null && BtnCollapsePanel.IsMouseOver) return;
+        // 与 Down 对称: 压在视频上的浮层(控制栏/跳过提示/收起把手/评论展开按钮)的点击
+        // 不触发单击暂停 —— 统一走 IsOverFloatingOverlay(新增浮层只需在那一处加一行)。
+        if (IsOverFloatingOverlay()) return;
 
         // 双击已被 Down 处理过(全屏), 这里直接吞掉, 绝不能再排一次播放/暂停
         if (_suppressSingleClick)
@@ -2840,7 +2932,7 @@ public partial class PlayerWindow : FluentWindow
         if (_longPressFired)
         {
             _longPressFired = false;
-            try { _mp.SetRate(1.0f); } catch { }
+            ApplyPlayerRate(1.0);   // ★ 恢复 1x 同样要同步弹幕时钟倍率(见 ApplyPlayerRate)
             if (SpeedText != null) SpeedText.Text = "1.0x";
             e.Handled = true;
             return;
@@ -2869,7 +2961,7 @@ public partial class PlayerWindow : FluentWindow
         if (_longPressFired)
         {
             _longPressFired = false;
-            try { _mp.SetRate(1.0f); } catch { }
+            ApplyPlayerRate(1.0);   // ★ 恢复 1x 同样要同步弹幕时钟倍率(见 ApplyPlayerRate)
             if (SpeedText != null) SpeedText.Text = "1.0x";
         }
         // 离开视频区: 播放中直接藏(倒计时都不用等), 暂停时保持常显
@@ -2927,23 +3019,61 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 收起把手的显隐。**唯一**改它 Visibility 的地方(2026-10-12 审查新增)。
+    /// 收起把手 / 展开按钮的显隐。**唯一**改这两个 Visibility 的地方。
     ///
     /// ★ 为什么要单独一个入口, 而不在 ApplyInfoPanelState 里顺手写:
-    ///   它要跟着**两个互不相关**的状态走 ——
-    ///     · 全屏: 全屏时信息栏被强制收起, 把手点了没有任何画面变化(且会留"_isFillWindow
-    ///       被悄悄改掉"的隐患) ⇒ 必须藏;
-    ///     · 控制栏自动隐藏: 播放中控制栏淡出、鼠标隐藏, 沉浸模式就该彻底; 把手还常驻可见
-    ///       且吃掉鼠标、光标还从"无光标"突变成手型(审查抓到的沉浸模式破损)。
-    ///   两个条件由 HideControls/ShowControls 与 ApplyInfoPanelState 分别触发, 各写一份
+    ///   它们要跟着**三个互不相关**的状态走 ——
+    ///     · 全屏: 全屏时信息栏被强制收起, 收起侧的把手点了没有任何画面变化(且会留
+    ///       "_isFillWindow 被悄悄改掉"的隐患) ⇒ 必须藏;
+    ///     · 控制栏自动隐藏: 展开状态下, 播放中控制栏淡出、鼠标隐藏, 沉浸模式就该彻底;
+    ///       把手还常驻可见且吃掉鼠标、光标还从"无光标"突变成手型(审查抓到的沉浸模式破损);
+    ///     · 收起状态(_isFillWindow): 见方法体里那条 ★★ —— 这是 2026-10-13 修的死路。
+    ///   三个条件由 HideControls/ShowControls 与 ApplyInfoPanelState 分别触发, 各写一份
     ///   就会出现"全屏退出了把手却没回来"这类状态打架。
     /// </summary>
     private void ApplyCollapseHandleVisibility()
     {
         if (_closing || BtnCollapsePanel == null) return;
-        var visible = !_isFullscreen && !_controlsHidden;
+
+        // ★★ 收起态下必须**无视 _controlsHidden**(2026-10-13 修"收起后回不来了"):
+        //   详情栏收起时 InfoPanel 整个 Collapsed, 评论区里那个「收起」按钮跟着一起消失 ——
+        //   能把面板叫回来的只剩这把把手与右上角的「评论与详情」。而老逻辑把 _controlsHidden
+        //   也算进去, 于是: 点把手收起 → 播放几秒控制栏自动隐藏 → **把手与展开按钮同时消失**
+        //   → 面板再也回不去, 只能重启窗口。
+        //   沉浸观感与"能恢复"冲突时后者优先(而且此时光标是 Arrow 不是 None, 不算破坏沉浸)。
+        //   反过来在**展开**状态下仍然跟 _controlsHidden 走, 免得把手常驻吃掉播放中的鼠标。
+        var immersiveOk = !_controlsHidden || _isFillWindow;
+        var visible = !_isFullscreen && immersiveOk;
         BtnCollapsePanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+
+        // 收起后才出现的叫回入口(2026-10-13 新增)。它同样无视 _controlsHidden ——
+        //   收起态下它与把手是仅有的两条回家路(见上面 ★★)。
+        // ★ 显隐只在这里写: ApplyInfoPanelState 已经调过本方法, 不必在它那里重复一遍,
+        //   否则又是一份会打架的状态。
+        if (BtnExpandInfoPanel != null)
+            BtnExpandInfoPanel.Visibility =
+                _isFillWindow && !_isFullscreen ? Visibility.Visible : Visibility.Collapsed;
     }
+
+    /// <summary>
+    /// 指针当前是否压在某个**浮在视频上的浮层**上: 控制栏 / 跳过提示条 / 右缘收起把手 /
+    /// 收起后出现的「评论与详情」按钮。
+    ///
+    /// ★ 为什么必须有: 这些浮层都是 VideoAreaRoot 的子元素, 而单击暂停 / 双击全屏 /
+    ///   长按快进挂在 VideoAreaRoot 上是 **Preview 隧道事件** —— 隧道事件从根往叶子走,
+    ///   **先于**叶子上的按钮收到。不挡的话, 点浮层按钮会顺带把视频暂停一次。
+    /// ★ 为什么收成一处: 早先是 Down/Up 各一处、浮层各写一行
+    ///   (`if (BtnXxx != null && BtnXxx.IsMouseOver) return;`)。新增第四个浮层时极容易
+    ///   漏改 —— 而漏掉的现象是"点那个新按钮顺带暂停", 不报错、很隐蔽。
+    ///   现在新增浮层只要往下面的条件里加一行。
+    /// ★ 必须 Down / Up 对称: 只挡 Down 的话, 指针在浮层上按下、在别处松手时,
+    ///   Up 里排队的单击动作照样执行(按下-抬起横跨了两个区域)。
+    /// </summary>
+    private bool IsOverFloatingOverlay()
+        => (ControlBar != null && ControlBar.IsMouseOver)
+           || (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver)
+           || (BtnCollapsePanel != null && BtnCollapsePanel.IsMouseOver)
+           || (BtnExpandInfoPanel != null && BtnExpandInfoPanel.IsMouseOver);
 
     private void HideControls()
     {
@@ -3038,7 +3168,8 @@ public partial class PlayerWindow : FluentWindow
 
     // 滚动弹幕在屏幕上横穿的时长(秒)。B 站惯用 8 秒, 弹幕密集时略短可提升吞吐。
     private const double DanmakuScrollSeconds = 8.0;
-    // 屏幕上的滚动弹幕上限(内存/渲染保护)
+    // 同屏弹幕总上限(滚动 + 顶部固定 + 底部固定, 内存/渲染保护)。
+    // ★ 按**活动记录数**判定, 不按画布子元素数 —— 见 AddDanmaku 里那段的说明。
     private const int MaxOnScreenDanmaku = 80;
     // 顶部/底部固定弹幕的停留时长
     private const double DanmakuFixedSeconds = 4.0;
@@ -3084,52 +3215,189 @@ public partial class PlayerWindow : FluentWindow
     //     暂停/恢复由 `_mp.Paused` 冻结/解冻。既零 P/Invoke, 又跟得上真实媒体时间
     //     (seek 会在下一个 TimeChanged 立刻纠偏)。
     private readonly Stopwatch _dmWatch = Stopwatch.StartNew();
-    /// <summary>上次校准到的媒体时间(秒)</summary>
+
+    // ---- 弹幕时钟的四个量: 基准媒体时间 + 高精度起点 + 倍速 + 播放状态 ----
+    //
+    // ★★★ 为什么必须多一个"倍速"(2026-10-13 修"低频校准时弹幕会跳一下"):
+    //   外推式只有一个, 就是「基准媒体时间 + 墙钟经过 × **播放倍速**」。
+    //   原来漏乘了倍速: 2x 播放时墙钟走 1 秒, 弹幕钟也只涨 1 秒, 而真实媒体时间涨了 2 秒
+    //   ⇒ 外推值**永远**落后真实媒体时间一大段(差得越多, 跑得越久差得越多)。
+    //   下一次 TimeChanged 校准就得把这整段误差一次性吃掉, 于是每隔约 0.25 秒
+    //   弹幕集体"跳一下" —— 这正是用户报的"低频校准时发生位置纠偏"。
+    //   乘上倍速后外推与媒体时间同速, 校准只剩播放器上报本身的量化误差(零点几秒),
+    //   由下面的平滑纠偏分几次吃掉, 肉眼就看不出来了。
+
+    /// <summary>上次校准/结算到的媒体时间(秒) —— 外推公式里的"基准时间"</summary>
     private double _dmClockMedia;
-    /// <summary>校准那一刻 <see cref="_dmWatch"/> 的毫秒读数 —— 走时的起点</summary>
-    private long _dmClockStamp;
-    /// <summary>是否在走时。暂停/未播放时为 false, 此时弹幕时钟就是 _dmClockMedia</summary>
+
+    /// <summary>
+    /// 基准时刻 <see cref="_dmWatch"/> 的**秒**读数(double), 外推的起点。
+    ///
+    /// ★ 为什么不再用 <c>Stopwatch.ElapsedMilliseconds</c>: 它是**整数毫秒**, 单次量化就有
+    ///   最多 1ms 的锯齿, 而倍速 2x 会把这 1ms 放大成 2ms; 两次校准各自的量化余数还互不相同,
+    ///   逐帧相减就是"每帧抖一下"的微颤。秒级 double 没有这个量化。
+    /// </summary>
+    private double _dmClockStamp;
+
+    /// <summary>
+    /// 播放倍速(1.0 / 1.5 / 2.0 …), 外推时乘它。
+    /// ★ 切倍速**必须先结算旧时钟再换倍率**(见 <see cref="SetDanmakuClockRate"/>),
+    ///   否则换倍率那一瞬斜率突变, 弹幕会凭空前跳一整段。
+    /// </summary>
+    private double _dmClockRate = 1.0;
+
+    /// <summary>
+    /// 平滑纠偏残差(秒)。正常播放时恒为 0; 只在"低频校准发现时钟偏了零点几秒"时被
+    /// 逐次调小(见 <see cref="CalibrateDanmakuClock"/>)。
+    /// </summary>
+    private double _dmClockResidual;
+
+    /// <summary>播放状态: 暂停 / 未播放 / 播完时为 false</summary>
     private bool _dmClockRunning;
 
     /// <summary>
-    /// 当前弹幕时钟(媒体秒)。每帧调用, **零原生调用** —— 只做一次 Stopwatch 读数 + 一次加法。
+    /// 缓冲中: 为 true 时弹幕时钟冻结。
+    ///
+    /// ★ 为什么必须单独一个字段, 不能塞进 <see cref="_dmClockRunning"/>:
+    ///   缓冲时 <c>_mp.IsPlaying</c> 仍然是 true, <c>Paused</c> 事件根本不会来 ——
+    ///   只有"播放位置连续几个心跳不推进"才认得出缓冲(见 UpdateStallDetector)。
+    ///   而"暂停"是用户意图、"缓冲"是网络状态, 两者必须能各自独立地冻结/解冻;
+    ///   合成一个标志的话, 缓冲结束会把**仍然暂停着**的弹幕错误地放跑。
     /// </summary>
-    private double DanmakuClock() => _dmClockRunning
-        ? _dmClockMedia + (_dmWatch.ElapsedMilliseconds - _dmClockStamp) / 1000.0
-        : _dmClockMedia;
+    private bool _dmClockBuffered;
+
+    /// <summary>普通校准时一次只吃掉这个比例的误差, 其余留给下一次心跳 —— 平滑纠偏, 不硬跳。</summary>
+    private const double DanmakuCalibrateGain = 0.25;
+
+    /// <summary>校准误差超过这个值(秒)就判定为"发生了跳转", 直接硬重置而不是平滑。</summary>
+    private const double DanmakuSeekResetThreshold = 1.5;
+
+    /// <summary>弹幕时钟此刻是否在走(在播且不在缓冲)。为 false 时整个弹幕层是静止的, 逐帧可直接跳过。</summary>
+    private bool DanmakuClockAdvancing => _dmClockRunning && !_dmClockBuffered;
+
+    /// <summary>
+    /// 当前弹幕时钟(媒体秒)。每帧调用, **零原生调用** —— 只做一次本地 Stopwatch 读数 + 几次四则运算。
+    ///
+    /// ★ 倍速必须乘进外推项, 否则弹幕与画面不同速(见 <see cref="_dmClockRate"/> 的说明)。
+    /// ★ <see cref="_dmClockResidual"/> 是平滑纠偏的残差, 正常播放时为 0;
+    ///   它让"校准"不再表现为硬跳(见 <see cref="CalibrateDanmakuClock"/>)。
+    /// ★ 冻结态(暂停/缓冲)返回的是"基准 + 残差", 也就是冻结那一刻所见, 不含任何外推项。
+    /// </summary>
+    private double DanmakuClock() => DanmakuClockAdvancing
+        ? _dmClockMedia + (_dmWatch.Elapsed.TotalSeconds - _dmClockStamp) * _dmClockRate + _dmClockResidual
+        : _dmClockMedia + _dmClockResidual;
 
     /// <summary>
     /// 用播放器推来的真实媒体时间校准一次(顺带把走时起点重置到"现在")。
     /// 只在 <c>_mp.TimeChanged</c> 里调 —— 那是约 4Hz 的低频事件, 一帧一次的原生调用在这里不心疼。
+    ///
+    /// ★ 分两种处理(2026-10-13 用户报"低频校准时弹幕跳一下"):
+    ///   · 误差 &gt; <see cref="DanmakuSeekResetThreshold"/> ⇒ 判定为**跳转**
+    ///     (拖进度条 / 切清晰度 / 换片)。位置本来就该突变, 于是残差清零、一次性对齐 ——
+    ///     弹幕整体瞬移在这种情况下是**正确**的, 反倒"平滑"会让它慢慢飘过去, 那才叫飘。
+    ///   · 误差在阈值以内 ⇒ 只是外推与播放器上报之间的量化差(以及缓冲尾巴)。
+    ///     这时**不能硬纠**: 每 0.25 秒硬纠一次, 屏幕上就是每隔 0.25 秒集体抽搐一下。
+    ///     所以每次只向真值靠近 <see cref="DanmakuCalibrateGain"/>×err, 剩下的 (1−gain)×err
+    ///     存进 <see cref="_dmClockResidual"/> 等下一次心跳再缩小 (每次倍率 0.75),十几次心跳后就归零;
+    ///     而任何一帧的位置变化都远小于一个像素级。
     /// </summary>
     private void CalibrateDanmakuClock(double mediaSeconds)
     {
+        var stampNow = _dmWatch.Elapsed.TotalSeconds;
+        // 正数 = 外推值**落后**于真实媒体时间
+        var error = mediaSeconds - DanmakuClock();
+
+        if (Math.Abs(error) > DanmakuSeekResetThreshold)
+        {
+            // 跳转: 一次性对齐, 不做平滑
+            _dmClockResidual = 0;
+        }
+        else
+        {
+            // ★ ★ 重要: 这里算的是"剩余的 3/4", 而不是"本次吃掉的 1/4"。
+            //   写成 +error*k 是错的, 错在: 校准后 clock() = media + 0 + residual,
+            //   而 media 本身已经是真值 M。若 residual 取 +err*k, 就得到 M + err*k ——
+            //   既已经对齐到真值, 又多加了一个 err*k 的**越位**。
+            //   我们要的是"本次向真值靠近 k × err", 目标值 = M - (1-k)×err,
+            //   所以残差应该是**负**的: 把"尚未吃完的那 3/4"记成一个待消化的偏移。
+            _dmClockResidual = -error * (1.0 - DanmakuCalibrateGain);
+            // ★ 限幅: 残差是"每次重算"的, 本身不会累积; 但仍置一道护栏 ——
+            //   若因为读到异常大的 err 而恰好卡在阈值下方(没走硬重置那条路),
+            //   残差可能接近一整个秒数 —— 那时弹幕会像"慢慢漂过去", 反而比硬跳更糟。
+            if (_dmClockResidual > DanmakuSeekResetThreshold) _dmClockResidual = DanmakuSeekResetThreshold;
+            else if (_dmClockResidual < -DanmakuSeekResetThreshold) _dmClockResidual = -DanmakuSeekResetThreshold;
+        }
+
         _dmClockMedia = mediaSeconds;
-        _dmClockStamp = _dmWatch.ElapsedMilliseconds;
+        _dmClockStamp = stampNow;
+        // 能收到 TimeChanged 就说明确实在出帧在播。原实现也是这样顺带置位的, 保留。
         _dmClockRunning = true;
     }
 
     /// <summary>
-    /// 暂停/恢复时冻结/解冻弹幕时钟。
+    /// 暂停/恢复时冻结/解冻弹幕时钟(由 <c>_mp.Paused</c> 驱动)。
     ///
-    /// ★★★ **暂停时必须冻结在"当前外推值", 不能直接读 `_mp.Time`**(2026-11-11 用户报
-    ///   "暂停时弹幕会突然向后移动一点"): 校准是约 4Hz 的 TimeChanged 驱动的, 两次校准之间
-    ///   弹幕钟按墙钟外推; 若外推快于实际播放(缓冲/掉帧时 TimeChanged 间隔被拉长), 冻结那一刻
-    ///   `_mp.Time` 就落后于外推值 ⇒ 弹幕整体回跳一小段。冻结语义应当是"停在此刻所见",
-    ///   即当前的 DanmakuClock() 读数, 而不是重新取一次媒体时间。
-    /// ★ 恢复时**也**以暂停时的冻结值为基准直接续跑, 不重新读 `_mp.Time`:
-    ///   暂停没 seek 的话两者本就几乎相等, 而读 `_mp.Time` 若略小于冻结值,
-    ///   恢复瞬间弹幕又会回跳一次(与暂停回跳同机理)。真正需要纠偏的场景(seek)
-    ///   由 TimeChanged → CalibrateDanmakuClock 在 250ms 内自然收敛, 不必抢这一帧。
+    /// ★★★ **冻结时必须结算到"此刻所见", 不能直接读 `_mp.Time`**
+    ///   (2026-11-11 用户报"暂停时弹幕会突然向后移动一点"): 校准是约 4Hz 的 TimeChanged 驱动的,
+    ///   两次校准之间弹幕钟按墙钟外推; 若外推快于实际播放(缓冲/掉帧时 TimeChanged 间隔被拉长),
+    ///   冻结那一刻 `_mp.Time` 就落后于外推值 ⇒ 弹幕整体回跳一小段。
+    ///   冻结语义应当是"停在此刻所见", 而不是重新取一次媒体时间。
+    /// ★ 恢复时**也**以暂停时的冻结值为基准直接续跑: 暂停没 seek 的话两者本就几乎相等,
+    ///   而读 `_mp.Time` 若略小于冻结值, 恢复瞬间弹幕又会回跳一次(与暂停回跳同机理)。
+    ///   真正需要纠偏的场景(seek)由 TimeChanged → CalibrateDanmakuClock 在 250ms 内自然收敛。
     /// </summary>
     private void SetDanmakuClockRunning(bool running)
     {
-        if (running == _dmClockRunning || _closing || _mp == null) return;
-        // 两侧都不额外取媒体时间: 冻结取"此刻所见", 恢复从"冻结处"续跑。
-        // 基准重置到"现在"是必须的 —— Stopwatch 一直在走, 不重置恢复瞬间会前跳一大段。
-        _dmClockMedia = DanmakuClock();
-        _dmClockStamp = _dmWatch.ElapsedMilliseconds;
+        if (_closing || _mp == null) return;
+        var wasAdvancing = DanmakuClockAdvancing;
         _dmClockRunning = running;
+        if (DanmakuClockAdvancing != wasAdvancing) RebaseDanmakuClock();
+    }
+
+    /// <summary>
+    /// 缓冲开始 / 结束时冻结 / 解冻弹幕时钟。
+    ///
+    /// ★ 为什么缓冲要冻结: 缓冲期间媒体时间**不前进**, 而弹幕时钟按墙钟外推 ——
+    ///   于是弹幕一路往左飘出画面, 而画面停在原地, 观感就是"弹幕跑得比视频快"。
+    ///   冻结后 elapsed 不变, 弹幕自然停住; 缓冲结束继续按冻结处往前跑, 与画面重新对齐。
+    /// ★ 这里**不能**去改 <c>_mp.IsPlaying</c>: 缓冲期间它仍然是 true, 一并改会把状态说反。
+    /// </summary>
+    private void SetDanmakuClockBuffered(bool buffered)
+    {
+        if (_closing || _dmClockBuffered == buffered) return;
+        var wasAdvancing = DanmakuClockAdvancing;
+        _dmClockBuffered = buffered;
+        if (DanmakuClockAdvancing != wasAdvancing) RebaseDanmakuClock();
+    }
+
+    /// <summary>
+    /// 切换弹幕时钟的播放倍速。
+    ///
+    /// ★★★ **必须先结算旧时钟、再换倍率**(用户报"切倍速时弹幕会跳一下"的根因就在这):
+    ///   基准值要留在"此刻所见"上, 只把斜率换掉。若直接改倍率, 换算式里那个"墙钟经过"
+    ///   会立刻被新倍率重新乘一遍, 基准点不动 ⇒ 弹幕瞬移 (校准间隔 × 倍速差) 的一整段。
+    /// ★ 先结算还有个附带好处: 残差一并清零 —— 残差是针对**旧基准**算出来的平滑量,
+    ///   换了基准之后它已经失去意义, 留着会让切完倍速的第一帧凭空偏一点。
+    /// </summary>
+    private void SetDanmakuClockRate(double rate)
+    {
+        if (_closing || rate <= 0 || Math.Abs(rate - _dmClockRate) < 1e-9) return;
+        RebaseDanmakuClock();
+        _dmClockRate = rate;
+    }
+
+    /// <summary>
+    /// "走时 / 冻结"翻转的那一瞬间, 把时钟结算到"此刻所见"。
+    ///
+    /// ★ 放在翻转**之后**调用是安全的: 刚把 <c>_dmClockRunning</c> 置 false 时
+    ///   <see cref="DanmakuClock"/> 走的就是"基准 + 残差"的冻结式, 值与翻转前完全相等;
+    ///   刚置 true 时墙钟经过为 0, 外推项也是 0。所以这一句不会产生任何跳变。
+    /// </summary>
+    private void RebaseDanmakuClock()
+    {
+        _dmClockMedia = DanmakuClock();
+        _dmClockResidual = 0;
+        _dmClockStamp = _dmWatch.Elapsed.TotalSeconds;
     }
 
     /// <summary>屏幕上正在飞的一条弹幕</summary>
@@ -3221,8 +3489,9 @@ public partial class PlayerWindow : FluentWindow
         // 重算索引: 让游标落在"当前时间之后的第一条", 这样接下来的弹幕会正常滚出来,
         // 而不是把已经播过的部分再补一遍。
         _indexInLib = LowerBound(_danmaku, currentSeconds);
+        // ★ 连画布一起清: ResetLanes 已经走 ClearFlyingDanmaku, 画布子元素与活动记录是同一批东西的两个视角,
+        //   分开清时往往会失步(本次修的就是这个)。
         ResetLanes();
-        DanmakuCanvas.Children.Clear();
     }
 
     /// <summary>
@@ -3367,11 +3636,9 @@ public partial class PlayerWindow : FluentWindow
         //   SpawnClock 还停在跳转前的位置, elapsed 会变成负数/极大值 —— 前者被钳成 0
         //   (满屏弹幕突然全挤在右边缘), 后者直接被判定为"已飞完"集体闪没。
         //   收掉之后 DispatchDanmaku 会按新位置重新派发, 这才是"跳过去就该看到那边的弹幕"。
-        if (_flying.Count > 0)
-        {
-            foreach (var f in _flying) DanmakuCanvas?.Children.Remove(f.Element);
-            _flying.Clear();
-        }
+        // ★ 画布子元素 / 活动记录 / 逐帧推进器三样一起收, 收口只有 ClearFlyingDanmaku 一个
+        //   (理由见它的说明)。节流戳已经没有了, 所以这里也不必再"清戳"。
+        ClearFlyingDanmaku();
     }
 
     /// <summary>
@@ -3486,27 +3753,36 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 渲染一条弹幕。
+    /// 上屏一条弹幕(**弹幕上屏的总入口**)。
+    /// 返回 true = 已上屏(画布子元素与活动记录**都**登记了);
+    /// 返回 false = 被丢弃(超同屏上限、拿不到泳道/槽位、或这段文字画不出来)。
+    ///
     /// mode: 1/2/3 滚动(从右往左), 4 底部固定, 5 顶部固定。
     /// 其余少见模式(BAS/代码弹幕)统一按滚动处理, 避免出现空白占位。
     ///
     /// 性能上两条铁律(违反任何一条, 高弹幕量视频就会掉帧):
     ///   1. **不挂 Effect**: 每个带 DropShadowEffect 的元素都要独立做一次位图合成,
-    ///      几十条弹幕同屏就是几十次全像素处理。★ 曾经靠"半透明黑底衬"给描边感,
-    ///      现已按用户要求去掉(见下面那段的说明) —— 但**仍然不许挂 Effect**;
+    ///      几十条弹幕同屏就是几十次全像素处理。描边现在由**字形几何**的 Stroke 承担
+    ///      (见 BuildDanmakuGeometry), 走的是普通矢量路径, 不是位图合成 —— 铁律仍然成立。
     ///   2. **动画只动 RenderTransform**: 动 Canvas.Left 每帧都要走一遍 Canvas 布局,
     ///      动 TranslateTransform 只发生在合成线程的变换矩阵上, 完全不碰布局。
     /// </summary>
-    private void AddDanmaku(string text, int mode, double time, uint color = 0xFFFFFF)
+    private bool AddDanmaku(string text, int mode, double time, uint color = 0xFFFFFF)
     {
-        if (DanmakuCanvas == null || string.IsNullOrEmpty(text)) return;
-        if (DanmakuCanvas.ActualWidth <= 0 || DanmakuCanvas.ActualHeight <= 0) return;
-        // 屏幕弹幕上限, 防止高弹幕量视频把内存和渲染拖垮
-        if (DanmakuCanvas.Children.Count >= MaxOnScreenDanmaku) return;
+        if (DanmakuCanvas == null || string.IsNullOrEmpty(text)) return false;
+        if (DanmakuCanvas.ActualWidth <= 0 || DanmakuCanvas.ActualHeight <= 0) return false;
+
+        // ★★★ 同屏上限按**活动记录数**算, 不按画布子元素数(2026-10-13 修"上限形同虚设"):
+        //   "活动记录"(_flying)才是系统认为在飞的那批; 画布子元素是"当前挂在树上的那些"。
+        //   修复"登记了却不显示"那个 bug 之后的一段时间里, 这两个数是**不一致**的
+        //   (记录 1 / 元素 0), 于是按画布数当闸门时它恒为 0 ⇒ 上限永不触发
+        //   ⇒ 再密的弹幕也能无限往画布上堆。用活动记录数才是"登记进来的都要算账",
+        //   与上限本来的语义一致, 而且与"实际在飞的"严格相等(见 SpawnDanmaku 两者一起加)。
+        if (_flying.Count >= MaxOnScreenDanmaku) return false;
 
         // ★ 用弹幕时钟(已被 DispatchDanmaku 校准过), 不再读 `_mp.Time`:
         //   这里虽是低频路径, 但它与逐帧推进必须是**同一个时间源**, 否则新弹幕的出生点
-        //   和在飞弹幕算 elapsed 的基准会差一次 Stopwatch 走时, 表现为"新弹幕进场位置偏一点"。
+        //   和在飞弹幕算 elapsed 的基准会差一次外推, 表现为"新弹幕进场位置偏一点"。
         var currentSeconds = DanmakuClock();
         if (currentSeconds <= 0) currentSeconds = time;   // 还没起播(极少见): 退回这条弹幕自带的时间
 
@@ -3519,32 +3795,102 @@ public partial class PlayerWindow : FluentWindow
         //     泳道分配与"追尾校验"都拿这个宽度当"这条弹幕要占多宽"。
         //     去掉它会让相邻弹幕的横向间距归零, 密集时文字首尾相接糊成一片。
         //   ★ 不要为了"看不清"改回加底衬或挂 DropShadowEffect: 前者就是用户要去掉的东西,
-        //     后者违反上面第 1 条铁律(几十条同屏 = 几十次全像素合成)。
-        var border = new Border
-        {
-            Padding = new Thickness(6, 1, 6, 1),
-            // RenderTransform 在这里预置好, 滚动弹幕直接拿它做位移动画
-            RenderTransform = new TranslateTransform(0, 0),
-            Child = new TextBlock
-            {
-                Text = text,
-                Foreground = DanmakuBrush(color),
-                FontSize = DanmakuFontSize
-            }
-        };
+        //     后者违反上面第 1 条铁律(同屏 80 条 = 几十次全像素合成)。
+        //   ★ 描边是用户明确要求的("白底画面下也看得清"), 但它的实现方式被换过一次:
+        //     从"黑色粗字叠在原色字下面"换成了"同一份字形几何 Fill + 黑色 Stroke" ——
+        //     两个不同字重的字形宽度不同, 叠起来必然错影。详见 BuildDanmakuGeometry 附近。
+        var border = BuildDanmakuElement(text, color);
+        // 排不出几何(纯空白 / 无字形)就根本没什么可画的, 连登记都不登记
+        if (border == null) return false;
 
-        DanmakuCanvas.Children.Add(border);
         border.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         var width = Math.Max(1, border.DesiredSize.Width);
 
-        if (mode == 5 || mode == 4)
+        // ★★★ 分配泳道 / 槽位必须发生在**登记之前**: 抢不到位置就直接丢弃, 既不进画布
+        //   也不进活动记录。旧代码的失败分支写的是 DanmakuCanvas.Children.Remove(border),
+        //   可那时元素压根没进过画布, 那一句是彻底的空操作 —— 白排版一遍, 还不留任何痕迹。
+        return mode is 5 or 4
+            ? SpawnFixedDanmaku(border, width, mode, currentSeconds)
+            : SpawnRollingDanmaku(border, width, currentSeconds);
+    }
+
+    /// <summary>
+    /// 造一条弹幕的视觉元素(外框 + 单份字形几何)。返回 null = 排不出几何, 调用方放弃上屏。
+    ///
+    /// ★ 为什么描边和填充共用同一个 <c>Path</c>: 同一份 <see cref="Geometry"/> 既是 Fill
+    ///   的形状也是 Stroke 的路径, 两者逐点重合, 结构上不可能像"两层不同字重的字"那样错位。
+    /// ★ 彩色弹幕("彩色表情")也走这一条: 用户要求**保留原字形**, 衬边靠描边而不是换字重
+    ///   (换字重就是那个错影的老路)。所以这里对所有颜色一视同仁, 只是 Fill 取色不同。
+    /// ★ 描边粗细见 <see cref="DanmakuStrokeThickness"/>, 黑色笔刷见 <see cref="DanmakuStrokeBrush"/>。
+    /// </summary>
+    private Border? BuildDanmakuElement(string text, uint color)
+    {
+        var geometry = TryGetDanmakuGeometry(text, DanmakuFontSize, DanmakuFontFamily, DanmakuPixelsPerDip());
+        if (geometry == null) return null;   // 空几何(纯空白/无字形): 画不出东西
+
+        // ★★★ 描边与填充必须**分成两个 Path 叠起来**, 不能塞进同一个(2026-10-13 用户报"描边有点丑")。
+        //
+        //   病根在 WPF 的绘制次序: **同一个 Shape 上永远是先 Fill 再 Stroke**, 无法调换。
+        //   而 Stroke 是沿路径**中心线向两侧各扩 0.5×Thickness**, 于是向字里那半圈黑边
+        //   画在**填充之上** —— 每个笔画边缘都被啃掉 0.5px 并发暗。24px 的白字看着像
+        //   "灰边 + 糊边", 彩色弹幕更明显(红字变暗红边)。这跟"两层不同字重的字"那种错影
+        //   是两个毛病, 但观感上都叫"描边脏"。
+        //
+        //   正确做法(也是 B 站 / YouTube / Aegisub 的做法): **描边层在下、填充层在上**。
+        //   填充层把向内的半圈黑边完全盖住, **只留外侧那半圈可见** —— 于是描边看起来
+        //   是"字外面一圈干净的黑边", 而不是"字被黑边啃了一圈"。
+        //
+        //   为什么不用 Geometry.Combine 做真正的轮廓膨胀: 那要对每条弹幕的字形做一次
+        //   布尔运算(几十 KB 的路径), 复杂度比排版本身还高, 同屏 80 条直接掉帧。
+        //   两层共 Path 是纯矢量, 走的是普通渲染路径, 铁律(不挂 Effect)仍然成立。
+        //
+        //   ★ 两个 Path 共享**同一个** Geometry 实例(几何缓存里那一份), 所以多出来的
+        //     只是一个元素引用 + 一次额外绘制调用, 内存几乎不增。
+        var 填充层 = new System.Windows.Shapes.Path
         {
-            RenderFixed(border, mode, currentSeconds);
-        }
-        else
+            Data = geometry,
+            Fill = DanmakuBrush(color),
+        };
+
+        // ★ 关掉描边时**只建一个 Path**(就是原来的单层做法), 不建空的 Grid 也不建描边层 ——
+        //   同屏 80 条能省下 80 个元素与 80 次额外绘制, 而用户既然选了"关", 就不该为此付费。
+        if (!DanmakuOutlineOn)
         {
-            RenderRolling(border, width, currentSeconds);
+            return new Border
+            {
+                Padding = DanmakuPadding,
+                RenderTransform = new TranslateTransform(0, 0),
+                Child = 填充层,
+            };
         }
+
+        var 描边层 = new System.Windows.Shapes.Path
+        {
+            Data = geometry,
+            Stroke = DanmakuStrokeBrush,
+            // ★ 可见宽度 × 2: Stroke 向两侧各扩一半, 而向内那半圈被上面的填充层盖住,
+            //   所以**用户看到的只有向外那一半**。乘 2 是把用户设置的"可见宽度"翻译成
+            //   StrokeThickness, 而不是"设置里写 0.8、屏幕上却是一圈 0.4 的细线"。
+            StrokeThickness = DanmakuOutlineVisibleWidth * 2,
+            // ★ 斜切(Bevel)而不是圆角(Round): 字形轮廓里"人"的收笔、"永"的撇捺末端
+            //   本来就是设计好的尖角, Round 会把它们磨圆 —— 笔画看起来变细、字发"肉"。
+            //   Bevel 保留字体自己的收笔形状, 这才叫"描边"而不是"给字套了圈棉花"。
+            //   ★ 起点/终点帽不设: 字形轮廓是**闭合**回路, 线帽只在开放路径生效, 设了也没用。
+            StrokeLineJoin = PenLineJoin.Bevel,
+            StrokeMiterLimit = 1.5,
+        };
+
+        return new Border
+        {
+            Padding = DanmakuPadding,
+            // RenderTransform 在这里预置好, 滚动弹幕直接拿它做位移动画
+            RenderTransform = new TranslateTransform(0, 0),
+            Child = new Grid
+            {
+                // ★ 顺序即层级: 描边层必须**先**(在上层会被填充盖住, 那就等于没描边)
+                Children = { 描边层, 填充层 },
+            },
+        };
     }
 
     // ------------------------------------------------------------ 彩色弹幕
@@ -3589,20 +3935,183 @@ public partial class PlayerWindow : FluentWindow
         return b;
     }
 
+    // ---- 弹幕字形几何(描边)与它的缓存 ----
+    //
+    // ★★★ 描边为什么必须是"同一份几何的 Fill + Stroke"(2026-10-13 修"黑色粗字叠出来的错影"):
+    //   原实现是两层 TextBlock: 下层黑色 **Bold**、上层原色 Normal。
+    //   但**两个字重是两套不同的字形** —— 实测同一段文字普通字宽 183.47、粗字宽 198.92,
+    //   差 15.45 个单位。描边层的字比正文宽那么多, 叠上去必然两侧溢出、正文被啃掉一圈,
+    //   颜色越深越明显, 表现就是"重影 / 糊边"。
+    //   WPF 没有"同字形加粗描边"的现成控件, 正解是: **只排版一次**, 取字形轮廓 <see cref="Geometry"/>,
+    //   同一个 Path 上 Fill(原色) + Stroke(黑)/StrokeThickness(描边粗细)。
+    //   几何只有一份 ⇒ 填充与描边**逐点重合**, 结构上不可能错位。
+
     /// <summary>
-    /// 滚动弹幕: 分泳道 + 横向滚动。
-    ///
-    /// ★ 这里**不起任何 WPF 动画**, 只把这条弹幕登记进 <see cref="_flying"/>,
-    ///   位置由 <see cref="OnDanmakuRendering"/> 按视频时钟每帧算。理由见 _flying 的说明。
+    /// 描边笔刷: 纯黑, 冻结, 全局共享一份(同 <see cref="DanmakuWhiteBrush"/> 的理由)。
+    /// ★ 必须是**不透明**的黑: 半透明黑描边在白色画面上等于没描, 描边存在的意义就没了。
     /// </summary>
-    private void RenderRolling(Border border, double width, double currentSeconds)
+    private static readonly Brush DanmakuStrokeBrush = MakeFrozen(Colors.Black);
+
+    /// <summary>
+    /// 描边的**可见**宽度(设备无关像素)。从设置页读, 用户可调(2026-10-14)。
+    ///
+    /// ★ 为什么读设置而不是写死常量: 描边粗细是纯观感, 而"多粗好看"取决于字号、
+    ///   视频底色与个人口味 —— 24px 中文上合适的值, 到 32px 或者字幕区就是另一个量。
+    ///   写死等于替所有人决定一次(上一版就是这么定的 1.8, 用户报"有点丑")。
+    /// ★ 每次新建弹幕时读一次, 不缓存: 同屏上限 80 条, 读两次属性的开销可以忽略,
+    ///   而缓存会在"改设置"那一刻留下陈旧值, 表现是"改了没反应, 关掉重开才对"。
+    /// ★ 已由 <see cref="SettingsStore.UpdateDanmakuSettings"/> 夹在 0.4~1.6;
+    ///   这里再兜一道是为了防手改配置送进负数(那会让 Stroke 抛 ArgumentException)。
+    /// </summary>
+    private double DanmakuOutlineVisibleWidth
+        => Math.Clamp(Svc.Settings.DanmakuOutlineWidth, 0.3, 2.0);
+
+    /// <summary>描边开关。关掉时只建一个 Path(见 BuildDanmakuElement)</summary>
+    private bool DanmakuOutlineOn => Svc.Settings.DanmakuOutlineEnabled;
+
+    /// <summary>
+    /// 弹幕元素的 Padding。抽成属性是因为现在有**两条返回路径**(开描边 / 关描边),
+    /// 复制两遍的话将来改间距必漏一处。
+    /// </summary>
+    private static readonly Thickness DanmakuPadding = new(6, 1, 6, 1);
+
+    /// <summary>
+    /// 几何缓存上限。
+    /// ★ 为什么必须有界: 热门视频里几乎每条弹幕文本都不同, 键基数天然很大;
+    ///   而一份 24px 中文字形轮廓动辄几十 KB, 无上限的字典在长视频上是明确的内存泄漏。
+    ///   256 足够覆盖"一屏之内出现过的全部文本"(同屏上限就是 80)。
+    /// </summary>
+    private const int DanmakuGeometryCacheLimit = 256;
+
+    private readonly Dictionary<DanmakuGeometryKey, Geometry> _danmakuGeometryCache = new();
+    private readonly Queue<DanmakuGeometryKey> _danmakuGeometryOrder = new();
+
+    /// <summary>
+    /// 字形几何缓存的键: **文字 + 字体 + 字号 + 显示缩放**, 一样都不能少。
+    /// ★ 为什么要带"显示缩放"(PixelsPerDip): 排版时它参与字形网格的拟合与 hinting,
+    ///   125% / 150% 缩放下取到的轮廓与 100% **不是同一组点**。不把它放进键, 就会在
+    ///   "拖到另一块不同 DPI 的屏"之后继续用旧缩放生成的几何 —— 字会略微发虚。
+    ///   带进键之后, 换屏只是多几个新键, 旧键由有界缓存自然淘汰。
+    /// ★ 为什么用自定义键而不是把参数拼成一个字符串: 文本里本来就有各种标点,
+    ///   拼字符串要选分隔符还得担心文本里恰好含有它, 结构体键没有这类歧义。
+    /// </summary>
+    private readonly record struct DanmakuGeometryKey(string Text, string FontSource, double FontSize, double PixelsPerDip);
+
+    /// <summary>
+    /// 弹幕字体族。取的是**画布继承来的那个**, 而不是写死一个字体名。
+    ///
+    /// ★ 为什么要去继承链上取而不写死: 原实现用 TextBlock, 字体来自 WPF 的继承链 —— 全局隐式样式
+    ///   <c>TargetType="TextBlock"</c> **故意不设 FontFamily**(见 Themes/Styles.xaml 那段说明),
+    ///   所以弹幕拿到的是系统界面字体, 中文部分靠字体回退接上。
+    ///   改成几何之后字体变成了"排版参数", 一旦写死就与原样对不上(弹幕字形会变样)。
+    /// ★ 而且取的方式是 <c>System.Windows.Documents.TextElement.FontFamilyProperty</c>:它是**可继承**的附加属性,
+    ///   任意 DependencyObject 都能问到"我继承到的那个字体"。而 <c>Canvas</c> 本身没有 FontFamily 属性(那是 Control 上的),
+    ///   所以很多人会在这里直接写死字体名 —— 那就与原实现不一致了。
+    /// </summary>
+    private FontFamily DanmakuFontFamily
+    {
+        get
+        {
+            var canvas = DanmakuCanvas;
+            if (canvas != null && canvas.GetValue(System.Windows.Documents.TextElement.FontFamilyProperty) is FontFamily inherited)
+                return inherited;
+            return SystemFonts.MessageFontFamily;   // 画布还不存在时的合法兜底
+        }
+    }
+
+    /// <summary>
+    /// 当前显示缩放(DIP 对应的物理像素比)。几何缓存的键之一(见 <see cref="DanmakuGeometryKey"/>)。
+    /// 取不到就退 1.0 —— WPF 的排版对 1.0 是合法的, 宁可少一点锐度也不要抛异常。
+    /// </summary>
+    private double DanmakuPixelsPerDip()
+    {
+        try
+        {
+            // ★ 两种源类型不同(Canvas / Window), 但都是 Visual,
+            //   故一律抧成 Visual 再交给下面那个需要 Visual 的 API。
+            var source = (Visual?)DanmakuCanvas ?? this;
+            // ★ 取 PixelsPerDip 而不是 PixelsPerDipX: .NET Core/WPF 只暴露单个 PixelsPerDip,
+            //   那个 X/Y 名是 .NET Framework 的写法。它等于物理 DPI / 96。
+            var ppd = VisualTreeHelper.GetDpi(source).PixelsPerDip;
+            return ppd > 0 ? ppd : 1.0;
+        }
+        catch { return 1.0; }   // 取不到 DPI 的极端情形(元素已脱树等): 按 1.0 处理
+    }
+
+    /// <summary>
+    /// 取一条弹幕的字形几何(**带缓存**)。命中返回**同一个实例**, 未命中才排版生成。
+    /// 返回 null = 这段文字排不出几何(纯空白 / 无字形), 调用方据此放弃上屏。
+    ///
+    /// ★ 缓存为什么这么关键: <c>BuildGeometry</c> 是把整段文字转成轮廓点集的排版级开销,
+    ///   不是逐帧该干的事。而弹幕是"持续有新的进场", 同屏 80 条 × 每条活 8 秒 ——
+    ///   不缓存就是每秒几十次整段排版, 直接把逐帧推进拖垮(这正是"弹幕卡卡的"的成因)。
+    /// ★ Freeze: 几何生成完就不再改, 冻结后可被 N 个 Path 同时共享, 不触发任何
+    ///   依赖属性通知, 也不会因为"正被引用"而在改写时抛异常。逐帧只动 Transform, 不碰它。
+    /// </summary>
+    private Geometry? TryGetDanmakuGeometry(string text, double fontSize, FontFamily fontFamily, double pixelsPerDip)
+    {
+        var key = new DanmakuGeometryKey(text, fontFamily.Source, fontSize, pixelsPerDip);
+        if (_danmakuGeometryCache.TryGetValue(key, out var cached)) return cached;
+
+        var geometry = BuildDanmakuGeometry(text, fontSize, fontFamily, pixelsPerDip);
+        // 排不出来的不进缓存: 否则一批空白弹幕会把有效条目全挤掉(缓存是有界的)
+        if (geometry == null) return null;
+
+        geometry.Freeze();
+        _danmakuGeometryCache[key] = geometry;
+        _danmakuGeometryOrder.Enqueue(key);
+        // ★ 有界: 超上限就按"先入先出"淘汰最早的。弹幕文本几乎各不相同, 命中率本来就不高,
+        //   所以 FIFO 与 LRU 的实际差别可以忽略, 而 FIFO 不用维护链表, 便宜得多。
+        while (_danmakuGeometryOrder.Count > DanmakuGeometryCacheLimit)
+            _danmakuGeometryCache.Remove(_danmakuGeometryOrder.Dequeue());
+        return geometry;
+    }
+
+    /// <summary>
+    /// 排版一次文字, 把字形轮廓变成可填充、也可描边的 <see cref="Geometry"/>。
+    ///
+    /// ★ 为什么用 <see cref="FormattedText"/> 而不是 <c>GlyphRun</c>:
+    ///   FormattedText 自己处理**字体回退** —— 中文/emoji 在界面字体里没有字形, 它会自动
+    ///   落到系统里的中文字体。GlyphRun 则要求调用方先把每个字符映射到具体字体,
+    ///   而弹幕文本是任意内容, 那套映射等于把排版器重写一遍。
+    /// ★ 几何是按 (0,0) 为文字原点生成的, y 方向自然在基线之上(负值), 不用再平移:
+    ///   Path 自己会把几何按 Bounds 落位, 强行 Translate 反而会多一次几何变换。
+    /// </summary>
+    private static Geometry? BuildDanmakuGeometry(string text, double fontSize, FontFamily fontFamily, double pixelsPerDip)
+    {
+        if (string.IsNullOrEmpty(text)) return null;
+        var typeface = new Typeface(fontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+        var formatted = new FormattedText(
+            text,
+            System.Globalization.CultureInfo.CurrentUICulture,
+            FlowDirection.LeftToRight,
+            typeface,
+            fontSize,
+            Brushes.Black,
+            pixelsPerDip);
+        var geometry = formatted.BuildGeometry(new Point(0, 0));
+        // 空文本 / 全空白 ⇒ BuildGeometry 返回空几何, 直接当"画不出来"处理
+        if (geometry == null || geometry.IsEmpty()) return null;
+        return geometry;
+    }
+
+
+
+    /// <summary>
+    /// 滚动弹幕上屏: 分泳道 + 横向滚动。
+    /// 返回 false = 没抢到泳道, 这条被丢弃(**不进画布、不进活动记录**)。
+    ///
+    /// ★ 这里**不起任何 WPF 动画**, 位置由 <see cref="OnDanmakuRendering"/> 按弹幕时钟每帧算。
+    ///   理由见 _flying 的说明。
+    /// </summary>
+    private bool SpawnRollingDanmaku(Border border, double width, double currentSeconds)
     {
         var lane = AllocateRollingLane(width, currentSeconds);
         if (lane < 0)
         {
-            // 没有可用泳道 —— 宁可丢弃也不叠在一起(这正是"大量重叠"的根治点)
-            DanmakuCanvas.Children.Remove(border);
-            return;
+            // 没有可用泳道 —— 宁可丢弃也不叠在一起(这正是"大量重叠"的根治点)。
+            // ★ 不需要(也不应该)再去 Children.Remove: 元素还没进过画布, remove 是空操作。
+            return false;
         }
 
         // 记录该泳道的占用信息, 供后续追尾校验使用
@@ -3616,7 +4125,7 @@ public partial class PlayerWindow : FluentWindow
         var translate = new TranslateTransform(canvasWidth, 0);
         border.RenderTransform = translate;
 
-        TrackFlying(new FlyingDanmaku
+        SpawnDanmaku(new FlyingDanmaku
         {
             Element = border,
             Translate = translate,
@@ -3624,10 +4133,14 @@ public partial class PlayerWindow : FluentWindow
             TotalSeconds = DanmakuScrollSeconds,
             Width = width,
         });
+        return true;
     }
 
-    /// <summary>顶部/底部固定弹幕: 居中停留数秒后淡出(透明度同样由视频时钟算, 不用动画)</summary>
-    private void RenderFixed(Border border, int mode, double currentSeconds)
+    /// <summary>
+    /// 顶部/底部固定弹幕上屏: 居中停留数秒后淡出(透明度同样由弹幕时钟算, 不用动画)。
+    /// 返回 false = 顶/底位置全满, 这条被丢弃(**不进画布、不进活动记录**)。
+    /// </summary>
+    private bool SpawnFixedDanmaku(Border border, double width, int mode, double currentSeconds)
     {
         var canvasWidth = DanmakuCanvas.ActualWidth;
         var canvasHeight = DanmakuCanvas.ActualHeight * _danmakuAreaRatio;
@@ -3635,16 +4148,13 @@ public partial class PlayerWindow : FluentWindow
         var slotCount = Math.Max(1, (int)(canvasHeight / _laneHeight));
         var table = mode == 5 ? _topSlots : _bottomSlots;
         var slot = AllocateFixedSlot(table, currentSeconds, slotCount);
-        if (slot < 0)
-        {
-            DanmakuCanvas.Children.Remove(border);
-            return;
-        }
+        if (slot < 0) return false;   // 全满: 丢弃, 同上不进画布
 
-        border.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        var width = border.DesiredSize.Width;
+        // ★ width 由 AddDanmaku 测好后传进来: 这里**不再 Measure**。
+        //   顶部/底部弹幕每条都要走这一段, 而 Measure 的代价是把那段文本重新排版一遍 ——
+        //   上游刚测过的结果原样用, 一次都不多花。
+
         Canvas.SetLeft(border, Math.Max(0, (canvasWidth - width) / 2));
-
         // 顶部从上往下排, 底部从下往上排
         var top = mode == 5
             ? 6 + slot * _laneHeight
@@ -3656,7 +4166,7 @@ public partial class PlayerWindow : FluentWindow
         border.RenderTransform = translate;
         border.Opacity = 1;
 
-        TrackFlying(new FlyingDanmaku
+        SpawnDanmaku(new FlyingDanmaku
         {
             Element = border,
             Translate = translate,
@@ -3664,13 +4174,56 @@ public partial class PlayerWindow : FluentWindow
             TotalSeconds = DanmakuFixedSeconds,
             IsFixed = true,
         });
+        return true;
     }
 
-    /// <summary>登记一条在飞的弹幕, 并确保逐帧推进器已经挂上</summary>
-    private void TrackFlying(FlyingDanmaku f)
+    /// <summary>
+    /// 弹幕上屏的**唯一登记口**: 加进画布 + 登记活动记录 + 挂上逐帧推进器。
+    ///
+    /// ★★★ 为什么这三件事必须在这里、而且必须**一起**做
+    ///   (2026-10-13 用户报"加了一条弹幕后活动记录 1 条, 画布子元素 0 条, 弹幕根本没进画布"):
+    ///   <see cref="_flying"/> 是"活动记录", DanmakuCanvas.Children 是"画布子元素",
+    ///   CompositionTarget.Rendering 订阅是"逐帧推进器"。三者本该一一对应,
+    ///   而修复前是**各写一半**: 原 RenderRolling/RenderFixed 只做了
+    ///   "_flying.Add + StartDanmakuClock", **从头到尾没有把元素加进画布**。
+    ///   于是: 活动记录 +1、画布恒为 0、元素不在可视树里所以看不见、
+    ///   按画布子元素数算的同屏上限恒为 0 所以也永不生效 —— 一个 bug 引出四个症状。
+    /// ★ 顺序: **先入画布, 再登记**。万一中间抛异常, 结果是"少显示一条"(肉眼无感),
+    ///   而不是"记着账却没有画面"(就是这次的症状)。反过来就正好复现旧 bug。
+    /// ★ 只有**分配到泳道/槽位成功之后**才会走到这里 —— 拿不到位置的弹幕连登记都不登记,
+    ///   否则活动记录里会混进一堆从不显示的幽灵条目, 同屏上限也就被这些幽灵占满了。
+    /// </summary>
+    private void SpawnDanmaku(FlyingDanmaku f)
     {
-        _flying.Add(f);
-        StartDanmakuClock();
+        DanmakuCanvas?.Children.Add(f.Element);   // ① 画布子元素 —— 真正"显示"的那一步
+        _flying.Add(f);                            // ② 活动记录
+        StartDanmakuClock();                       // ③ 逐帧推进器
+    }
+
+    /// <summary>
+    /// 把在飞弹幕这套"三件套"一次收干净: 画布子元素、活动记录(<see cref="_flying"/>)、逐帧推进器。
+    ///
+    /// ★★★ 为什么必须有**唯一收口**, 而且要三样一起(同一个 bug 的另一半):
+    ///   逐帧推进到点时是"画布.Remove + _flying.RemoveAt", 跳转时是"画布.Remove(每个) + _flying.Clear",
+    ///   关弹幕时只有"画布.Clear", 换片时又只有"画布.Clear" —— 四处各清一半。
+    ///   只要有一处漏掉画布, 就会出现"看不见的元素还留在画布上占着位置"或者
+    ///   "活动记录已经空了但画布还挂着僵尸元素", 后者比原 bug 更难查。
+    ///   ⇒ 凡是要清弹幕的地方(跳转/换片/关弹幕/回收/关窗)一律调本方法, 别再自己写一遍。
+    /// ★ 收尾还要摘掉推进器: 活动记录空了就没有要推进的东西,
+    ///   而 CompositionTarget.Rendering 是静态事件, 不解绑就每帧都被空回调一次。
+    /// </summary>
+    private void ClearFlyingDanmaku()
+    {
+        var canvas = DanmakuCanvas;
+        if (canvas != null)
+        {
+            foreach (var f in _flying) canvas.Children.Remove(f.Element);
+            // 兜底: 画布是弹幕专用层(XAML 里没有任何声明式子元素), 所以清空是安全的。
+            // 万一历史上又失步过一次, 这里保证"清完之后屏幕上一定是干净的"。
+            if (canvas.Children.Count > 0) canvas.Children.Clear();
+        }
+        _flying.Clear();
+        StopDanmakuClock();
     }
 
     /// <summary>挂上逐帧推进器。CompositionTarget.Rendering 是**静态**事件, 必须在关窗时解绑</summary>
@@ -3689,10 +4242,11 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 逐帧推进所有在飞的弹幕。
+    /// 逐帧推进所有在飞的弹幕(由 <c>CompositionTarget.Rendering</c> 驱动, 跟着显示器刷新率走)。
     ///
-    /// ★ 时间的唯一来源是 _mp.Time(真实媒体时间, 毫秒精度), 不是墙钟。
-    ///   于是"视频暂停"这件事**根本不需要分支**: 媒体时间不前进 ⇒ elapsed 不变 ⇒ 位置不变。
+    /// ★ 时间的唯一来源是 <see cref="DanmakuClock"/>(基准媒体时间 + 墙钟外推 × 倍速),
+    ///   推出来与真实媒体时间同速, 而不是墙钟本身。
+    ///   于是"视频暂停"这件事*根本不需要分支*: 媒体时间不前进 ⇒ elapsed 不变 ⇒ 位置不变。
     ///   这正是原来用 DoubleAnimation 做不到的地方(那个走合成线程墙钟, 跟播放器无关)。
     ///
     /// 反过来在播放时它还顺带修好了另一件事: 弹幕现在与画面**帧同步**,
@@ -3708,6 +4262,24 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
         if (_closing) return;
+
+        // ★★ 撤销了 2026-10-13 加的那个"整数毫秒节流"(DanmakuFrameIntervalMs +
+        //   _lastDanmakuFrameMs)。它是个**负优化**, 实测把帧率按住了:
+        //     闸门是 `stamp - _last < 16.666`, 而 stamp 取的是**整数毫秒**
+        //     (Stopwatch.ElapsedMilliseconds), 于是每帧的间隔被量化成 16/17ms 交替,
+        //     60Hz 屏只能放行约一半的帧、120Hz 约 40 次/秒、144Hz 约 48 次/秒 ——
+        //     高刷屏反而比 60Hz 更慢。用户的原话是"现在 60Hz 和 120Hz 都只跑到约 40 次/秒"，
+        //     方向上没错, 只是它把"省下的那点重绘"换成了"弹幕位置一帧一帧地跳"。
+        //   而省下来的其实什么都不是: 弹幕横向最快也就"画面宽度 ÷ 8 秒"(满屏约 125px/s),
+        //   采样再密也看不出差别, 代价却是把弹幕与渲染节拍解耦 ⇒ 观感上就是卡。
+        //   ⇒ 现在**不做任何节流**: 显示时每一帧回调都推进一次, 位置永远是当帧的正确值。
+
+        // ★ 下面两种"整帧跳过"才是真正该省的无效工作(弹幕位置本来就不会变):
+        //   ① 暂停 / 缓冲: 弹幕时钟被冻结, elapsed 恒定 ⇒ 位移与透明度都不动, 整帧白算。
+        //   ② 窗口最小化: 画面根本没显示, 算出来的位移没有接收方。
+        //     (WPF 最小化时通常也不再触发 Rendering, 这里只是把"万一还在触发"兜住。)
+        if (!DanmakuClockAdvancing) return;
+        if (WindowState == WindowState.Minimized) return;
 
         // ★ 只读一次本地 Stopwatch, **一次原生调用都不做**(见 _dmWatch 那段说明)
         var now = DanmakuClock();
@@ -3742,11 +4314,10 @@ public partial class PlayerWindow : FluentWindow
         _danmakuOn = !_danmakuOn;
         Svc.Settings.UpdateDanmakuSettings(_danmakuOn, Svc.Settings.DanmakuAreaPercent, Svc.Settings.DanmakuSmartFilter);
         Svc.Toast.Show(_danmakuOn ? "弹幕已开启" : "弹幕已关闭");
-        if (!_danmakuOn)
-        {
-            DanmakuCanvas.Children.Clear();
-            ResetLanes();
-        }
+        // ★ 关掉弹幕时三样状态一起收: ResetLanes → ClearFlyingDanmaku 会拿掉画布子元素、
+        //   清空活动记录、并解绑逐帧推进器。只清画布的话,
+        //   推进器会留着空转一个晚期, 重开弹幕时会看见一帧的跳动。
+        ResetLanes();
         UpdateDanmakuButton();
     }
 
@@ -3791,14 +4362,15 @@ public partial class PlayerWindow : FluentWindow
         if (DanmakuAreaValue != null) DanmakuAreaValue.Text = Svc.Settings.DanmakuAreaPercent + "%";
         // 区域占比变了 => 可用泳道数变了, 必须重建泳道, 否则弹幕会溢出到区域外
         ResetLanes();
-        if (!_danmakuOn)
-        {
-            DanmakuCanvas.Children.Clear();
-            return;
-        }
+        if (!_danmakuOn) return;   // ★ 画布已由 ResetLanes → ClearFlyingDanmaku 清完, 不再重复清一遍
         // 智能屏蔽 / 关键词屏蔽都可能刚被改过: 用新规则重算一遍已加载的弹幕,
         // 让用户在设置页边打字边看到播放器里的即时效果。
         RefilterDanmaku();
+        // ★ 描边开关/粗细变了也要重画(2026-10-14): 已经上屏的那些元素是在**建的时候**
+        //   按当时的设置决定"一层还是两层、描边多粗"的, 改设置不会回头改它们。
+        //   不重画的话表现是"改了完全没反应, 关掉弹幕再打开才对" —— 用户会以为设置坏了。
+        //   代价: 重画要重新排版一遍已加载的弹幕, 但 RefilterDanmaku 本来就在做这件事,
+        //   所以合并进去没有额外开销(它内部会 ClearFlyingDanmaku 再重投)。
     }
 
     // ------------------------------------------------------------ 键盘
@@ -3838,31 +4410,45 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// "返回上一层"的统一处理(键盘 Esc / 鼠标侧键共用)。
     ///
-    /// 三层语义, **由内到外**逐级退, 与所有播放器一致:
-    ///   全屏中     → 先退全屏(而不是直接关窗口, 否则用户按一下就"连界面一起没了");
-    ///   已铺满窗口 → 再退铺满窗口(信息栏回来);
-    ///   都没有     → 关闭播放器回到主界面。
-    /// ★ 铺满窗口必须夹在中间: 它是最"内层"的一个显示模式(窗口尺寸都没变), 用户按 Esc 的
+    /// 四级语义, **由内到外**逐级退, 顺序固定:
+    ///   ① 全屏中           → 先退全屏(而不是直接关窗口, 否则用户按一下就"连界面一起没了");
+    ///   ② 右侧详情栏收起中 → 再把它展开回来(铺满窗口模式);
+    ///   ③ 二级评论详情可见 → 退回一级评论列表;
+    ///   ④ 都没有           → 关闭播放器回到主界面。
+    ///
+    /// ★ ② 必须夹在全屏与评论详情中间: 它是最"内层"的一个显示模式(窗口尺寸都没变), 用户按 Esc 的
     ///   预期是"先把我刚展开的这个视图收回去", 而不是"直接关掉播放器"。
     ///   少了这一级, 用户在铺满窗口状态下按 Esc 会直接关窗 —— 与真全屏下按 Esc 的行为不一致。
-    /// 两个入口必须走同一个方法, 不然很容易出现"Esc 是对的、侧键直接关窗"这种不一致。
+    ///
+    /// ★ ③ 是这次补上的: 早先的链只有 ①②④。用户正陷在某个爆款楼的回复里(实测这种楼能到
+    ///   六百多条), 按 Esc 播放器**直接关掉**, 连退回一级评论列表的机会都没有。
+    ///   关了窗口就得重新进视频重刷一遍评论, 而用户按下 Esc 的本意只是"看完这条, 回去"。
+    ///
+    /// ★ 判定顺序本身抽成了纯函数 <see cref="PlayerBack.Decide"/>: 这一串 if 一旦顺序写错,
+    ///   编译照样通过、肉眼又极难看出(少一级/多一级都不报错), 所以让它能被离屏探针逐级断言。
+    ///
+    /// 两个入口(Esc / 鼠标侧键)必须走同一个方法, 不然很容易出现"Esc 是对的、侧键直接关窗"这种不一致。
     /// </summary>
     private void HandleBackRequest()
     {
-        if (_isFullscreen)
+        switch (PlayerBack.Decide(_isFullscreen, _isFillWindow, CommentDetailPanel?.Visibility == Visibility.Visible))
         {
-            _isFullscreen = false;
-            ApplyFullscreen(false);
-            return;
+            case PlayerBackLevel.已退出全屏:
+                _isFullscreen = false;
+                ApplyFullscreen(false);
+                break;
+            case PlayerBackLevel.已展开详情栏:
+                _isFillWindow = false;
+                ApplyInfoPanelState();
+                UpdateFillWindowButton();
+                break;
+            case PlayerBackLevel.已返回评论列表:
+                CloseCommentDetail();
+                break;
+            default:
+                Close();
+                break;
         }
-        if (_isFillWindow)
-        {
-            _isFillWindow = false;
-            ApplyInfoPanelState();
-            UpdateFillWindowButton();
-            return;
-        }
-        Close();
     }
 
     /// <summary>
@@ -4249,11 +4835,249 @@ public partial class PlayerWindow : FluentWindow
         _isFillWindow = !_isFillWindow;
         ApplyInfoPanelState();
         UpdateFillWindowButton();
+        RestoreSizeForCurrentMode();
+
+        // ★ 切模式本身不是"用户调整了尺寸", 别让防抖把切换后的那一刻当成一次调整记下来。
+        //   不然后果很具体: 用户展开→收起→展开, 每次切换都重置 _lastNotedCollapsedW,
+        //   于是那组暂存值永远是"刚切过去时的尺寸", 跟用户真正摆出来的那个对不上。
+        _sizeSaveDebounce.Stop();
     }
+
+    /// <summary>
+    /// 切到收起 / 展开模式时, 把**该模式上一次摆出来的尺寸**套回去(2026-10-13)。
+    ///
+    /// ★ 为什么两种模式要各记各的: 收起时能缩到 320x200, 展开时最小 1100x600,
+    ///   两个模式的取值范围完全不重叠(见 SettingsStore.RememberPlayerWindowCollapsedSize)。
+    /// ★ 为什么不是"记位置": 用户只要大小, 位置交给 CenterScreen。
+    /// ★ 没有记忆就不动: 用当前尺寸保持不变, 而不是回落到默认值 —— 用户可能正在看一个
+    ///   刚调好的窗口, 不该因为切了一下模式就被重置。
+    /// </summary>
+    private void RestoreSizeForCurrentMode()
+    {
+        double w, h;
+        if (_isFillWindow)
+        {
+            w = Svc.Settings.PlayerWindowCollapsedWidth;
+            h = Svc.Settings.PlayerWindowCollapsedHeight;
+            if (!IsUsableCollapsedWindowSize(w, h)) return;
+        }
+        else
+        {
+            w = Svc.Settings.PlayerWindowWidth;
+            h = Svc.Settings.PlayerWindowHeight;
+            if (!IsUsablePlayerWindowSize(w, h)) return;
+        }
+
+        if (Math.Abs(Width - w) < 0.5 && Math.Abs(Height - h) < 0.5) return;
+        _clampingSize = true;
+        try
+        {
+            Width = w;
+            Height = h;
+            ClampSizeToWorkingArea();
+        }
+        finally { _clampingSize = false; }
+    }
+
+
+    // ============================================================ 尺寸记忆(2026-10-13 重做)
+
+    /// <summary>
+    /// "最近一次有效调整"是哪个窗口干的。
+    ///
+    /// ★ 为什么不能沿用 `Svc.Player.IsCurrent(this)`(原来 Closing 里的判据):
+    ///   它比的是"当前最新一次播放用的窗口", 那是**播放顺序**, 不是**调整顺序**。
+    ///   多窗口下的差别很具体: 用户先开 A 把它调好, 再开 B 随便看看, 然后**先关 A** ——
+    ///   A 不是 IsCurrent, 于是 A 精心调好的尺寸被丢掉; 之后再关 B, B 才是 IsCurrent,
+    ///   存下去的是 B 的默认尺寸。用户"把窗口调好然后关掉它"的直觉直接失效。
+    ///   正确判据是"关掉的这个窗口, 是不是最后一个被用户**调整过**的"。
+    /// ★ 用 WeakReference: 静态字段持有 PlayerWindow 会让窗口永远不被回收。
+    private static WeakReference<PlayerWindow>? _lastSizedWindow;
+
+    /// <summary>递增序号。与 WeakReference 一起判定"我是不是最后一个"</summary>
+    private static long _sizeTouchSeq;
+
+    /// <summary>本窗口最近一次被判定为"最后调整者"时的序号</summary>
+    private long _mySizeSeq;
+
+    /// <summary>
+    /// 尺寸变化防抖: 拖动窗口会连续报 SizeChanged, 每一次都落盘会把磁盘写爆。
+    /// ★ 不是 readonly: 它在 <see cref="InitSizeMemory"/> 里创建, 而那是构造函数调用到的方法 ——
+    ///   readonly 字段只允许在字段初始化器或构造函数**体内**赋值, 在别的方法里赋值编译不过
+    ///   (CS0191)。这个字段用 ! 初始化而不是 readonly, 换来的是"创建点只有一处"。
+    /// </summary>
+    private DispatcherTimer _sizeSaveDebounce = null!;
+
+    /// <summary>上一次记下的尺寸(用来判"没变就别动")</summary>
+    private double _lastNotedNormalW, _lastNotedNormalH;
+    private double _lastNotedCollapsedW, _lastNotedCollapsedH;
+
+    /// <summary>本窗口有没有被用户调整过。没调过的窗口关闭时不该覆盖别人的尺寸</summary>
+    private bool _sizeTouched;
+
+    /// <summary>
+    /// 正在按屏幕工作区夹尺寸。
+    ///
+    /// ★ 需要它是因为夹取本身会改 Width/Height ⇒ 触发 SizeChanged ⇒ 触发防抖 ⇒
+    ///   被当成"用户刚调整了尺寸"。那不是完全无害: 用户从没动过窗口, 但因为屏幕小而被夹过,
+    ///   关闭时照样会落盘一次 —— 写入的是**夹过的合法值**, 所以不至于出错, 但白折腾一趟,
+    ///   而且在多窗口场景下会让"谁最后动过"这个判据平白多一个不认账的赢家。
+    ///   一行标记就能让"系统替用户做的决定"不进这套记账。
+    /// </summary>
+    private bool _clampingSize;
+
+    /// <summary>
+    /// 起一个防抖计时器, 在构造函数里调用。
+    ///
+    /// ★ 为什么用"停止 300ms 后还响"的写法, 而不是在 SizeChanged 里直接记:
+    ///   拖动窗口边缘时 SizeChanged 每秒能报几十次。直接记 = 每秒几十次写 JSON。
+    ///   而且中途那些值大多是"用户正在拖", 不是"用户要的大小"。
+    /// </summary>
+    private void InitSizeMemory()
+    {
+        _sizeSaveDebounce = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(300),
+        };
+        _sizeSaveDebounce.Tick += (_, _) =>
+        {
+            _sizeSaveDebounce.Stop();
+            NoteSizeIfValid();
+        };
+        SourceInitialized += (_, _) => ClampSizeToWorkingArea();
+
+        // ★ 尺寸变化 → 重启防抖。注意是"重启"而不是"每次都排一个": 拖动窗口边缘时
+        //   SizeChanged 每秒能报几十次, 每次都排一个计时器会积压几百个待触发的回调,
+        //   关窗口时它们还在队列里, 于是"窗口关了还有代码在跑"。
+        SizeChanged += (_, _) =>
+        {
+            if (_closing || _clampingSize) return;
+            _sizeSaveDebounce.Stop();
+            _sizeSaveDebounce.Start();
+        };
+    }
+
+    /// <summary>
+    /// 用户刚改完尺寸(防抖 300ms 之后): 记成"这个窗口是最新的调整者"。
+    ///
+    /// ★ **不落盘**, 只更新本窗口的暂存值 —— 落盘统一放在关闭时做。
+    ///   理由: 用户调一下再调回来是很常见的操作, 中间那一下没必要写文件;
+    ///   而"关掉哪个窗口才落盘"这个决定, 必须由**关闭那一刻**的全局状态来定。
+    /// ★ 铺满/全屏/最小化一律不算: 那几种状态下 Width/Height 是"整块铺满"的值,
+    ///   记下来会让下次普通模式变成满屏大小。
+    /// </summary>
+    private void NoteSizeIfValid()
+    {
+        if (_closing || _isFullscreen || _clampingSize) return;
+        if (WindowState != WindowState.Normal) return;
+        if (!double.IsFinite(Width) || !double.IsFinite(Height) || Width <= 0 || Height <= 0) return;
+
+        if (_isFillWindow)
+        {
+            if (Math.Abs(Width - _lastNotedCollapsedW) < 0.5
+                && Math.Abs(Height - _lastNotedCollapsedH) < 0.5) return;
+            _lastNotedCollapsedW = Width;
+            _lastNotedCollapsedH = Height;
+        }
+        else
+        {
+            if (Math.Abs(Width - _lastNotedNormalW) < 0.5
+                && Math.Abs(Height - _lastNotedNormalH) < 0.5) return;
+            _lastNotedNormalW = Width;
+            _lastNotedNormalH = Height;
+        }
+
+        _sizeTouched = true;
+        _mySizeSeq = Interlocked.Increment(ref _sizeTouchSeq);
+        _lastSizedWindow = new WeakReference<PlayerWindow>(this);
+    }
+
+    /// <summary>
+    /// 恢复尺寸时按**目标屏幕工作区**夹一道。
+    ///
+    /// ★ 为什么必须夹: 尺寸是跟着设备走的, 显示器是跟着机器走的。用户 A 机器上把窗口拖成
+    ///   1920x1080, 拷到 B 机器(笔记本 1366x768)之后, 恢复出来的窗口**比整块屏幕还大** ——
+    ///   WPF 不会拦, 窗口直接顶出屏幕边界, 标题栏和关闭按钮跑到屏幕外面, 于是"打不开/关不掉"。
+    ///   表现是"升级之后就废了", 但根因只是尺寸没有夹。
+    /// ★ 只夹尺寸不记位置(用户要求): 位置交给 XAML 的 CenterScreen。
+    /// ★ 用鼠标当前所在的屏: 用户从副屏那边双击视频打开的, 窗口就该落在那边。
+    /// </summary>
+    private void ClampSizeToWorkingArea()
+    {
+        try
+        {
+            var wa = System.Windows.Forms.Screen.FromPoint(
+                        System.Windows.Forms.Cursor.Position).WorkingArea;
+            // 工作区是设备像素, 这里换算回 DIP(缩放 150% 的机器上差得很远)
+            var scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+            if (scale <= 0) scale = 1;
+            var maxW = wa.Width / scale;
+            var maxH = wa.Height / scale;
+            if (!double.IsFinite(maxW) || !double.IsFinite(maxH) || maxW <= 0 || maxH <= 0) return;
+            // 夹的时候别小于 MinWidth/MinHeight —— 那是布局放不下的硬下限
+            if (Width > maxW) Width = Math.Max(maxW, MinWidth);
+            if (Height > maxH) Height = Math.Max(maxH, MinHeight);
+        }
+        catch
+        {
+            // 取不到工作区(远程会话/权限)就用原值, 不因为夹取失败把窗口弄坏
+        }
+    }
+
+    /// <summary>
+    /// 关闭时把尺寸落盘。**唯一**写 PlayerWindowWidth/Height 的地方。
+    ///
+    /// ★ 三道门, 少一道都会出错:
+    ///   ① `_sizeTouched` —— 用户根本没碰过这个窗口, 不该让它覆盖别人调好的尺寸;
+    ///   ② `IsLastSizedWindow` —— 多窗口时只认"最后一个被调整的"那个,
+    ///      于是先关谁后关谁都不影响结果(反序关闭也不会丢);
+    ///   ③ 不看 IsCurrent —— 见 _lastSizedWindow 的说明, 那比的是播放顺序, 不是调整顺序。
+    /// ★ 收起模式的尺寸也一起存: 用户在收起状态下拖好窗口直接关掉(很常见 —— 看视频时
+    ///   顺手把窗口缩小), 以前这一路是丢的, 下次打开又回到老尺寸。
+    /// ★ 全屏关闭时普通尺寸原样保留: 全屏过程中 _sizeTouched 不会被置位, 暂存值没变,
+    ///   落盘写回去的还是用户自己摆的那个尺寸。
+    /// </summary>
+    private void SaveSizeMemoryIfNeeded()
+    {
+        if (!_sizeTouched) return;
+        // ★ WeakReference<T> 没有公开的 Target 属性(它在 netstandard 那个版本里只暴露
+        //   TryGetTarget), 直接读 .Target 编译不过。
+        if (_lastSizedWindow == null || !_lastSizedWindow.TryGetTarget(out var who) || !ReferenceEquals(who, this))
+            return;
+        if (_mySizeSeq != _sizeTouchSeq) return;
+
+        if (IsUsablePlayerWindowSize(_lastNotedNormalW, _lastNotedNormalH))
+            Svc.Settings.RememberPlayerWindowSize(_lastNotedNormalW, _lastNotedNormalH);
+        if (IsUsableCollapsedWindowSize(_lastNotedCollapsedW, _lastNotedCollapsedH))
+            Svc.Settings.RememberPlayerWindowCollapsedSize(_lastNotedCollapsedW, _lastNotedCollapsedH);
+    }
+
+    /// <summary>
+    /// 收起模式下那组尺寸能不能拿来复原。门槛用收起模式的最小尺寸
+    /// (FillWindowMinWidth/Height = 320x200), 与普通模式的 1100x600 **分开**。
+    /// </summary>
+    internal static bool IsUsableCollapsedWindowSize(double w, double h)
+        => double.IsFinite(w) && double.IsFinite(h)
+           && w >= FillWindowMinWidth && h >= FillWindowMinHeight;
 
     /// <summary>常规模式(信息栏展开)的窗口最小尺寸 —— 与 XAML 里的 MinWidth/MinHeight 保持一致</summary>
     private const double NormalWindowMinWidth = 1100;
     private const double NormalWindowMinHeight = 600;
+
+    /// <summary>
+    /// 一组"上次窗口尺寸"能不能拿去复原窗口(2026-10-13)。
+    ///
+    /// ★ 为什么门槛是**常规模式的最小尺寸**而不是"随便大于 0": 见构造函数里那段 ——
+    ///   WPF 碰到比 MinWidth 小的 Width **不会拒绝**, 它会把值**抬到** MinWidth。
+    ///   于是配置里一个 400x300 的脏值会开出一个 1100x600 的窗口, 用户看到的是"记忆坏了",
+    ///   而真实原因是我们把一个根本不该套的值套上去了。低于下限 ⇒ 当作没有记忆, 走默认值。
+    /// ★ 为什么显式挡 NaN/∞: 手改过的配置里出现过这类值。`&gt;=` 对 NaN 恰好也是 false,
+    ///   所以逻辑上不写也拦得住, 但写成显式条件是让"这里防的是什么"一眼可读,
+    ///   而不是留给下一个读代码的人去推。
+    /// </summary>
+    internal static bool IsUsablePlayerWindowSize(double w, double h)
+        => double.IsFinite(w) && double.IsFinite(h)
+           && w >= NormalWindowMinWidth && h >= NormalWindowMinHeight;
 
     /// <summary>视频列在常规模式下的最小宽度(与 XAML 的 MinWidth 一致); 信息栏收起后放开到 0</summary>
     private const double VideoColumnNormalMinWidth = 480;
@@ -5167,6 +5991,8 @@ public partial class PlayerWindow : FluentWindow
             {
                 if (_closing) return;
                 CommentList.ItemsSource = list;
+                // 列表换了一份(重拉/切排序), 旧锚点的下标已经指向别的评论, 留着会还原到错的那一条
+                DropCommentListAnchor();
                 _commentsLoaded = true;
                 _commentTotal = total;
                 CommentLoadingRing.Visibility = Visibility.Collapsed;
@@ -5238,6 +6064,31 @@ public partial class PlayerWindow : FluentWindow
     private CommentItem? _detailFocus;        // 详情卡片上展示的那一条
     private CommentItem? _replyTarget;        // 详情页输入框当前要回复谁; null = 发表普通评论
 
+    // ------------------------------------------------------------ 返回一级评论时的滚动锚点
+
+    /// <summary>进二级详情**之前**一级评论列表的滚动偏移(见 <see cref="SaveCommentListAnchor"/>)</summary>
+    private double _commentAnchorOffset;
+
+    /// <summary>进详情前首个可见条目在评论列表里的下标; -1 = 没记下来(退化成只用偏移量兜底)</summary>
+    private int _commentAnchorIndex = -1;
+
+    /// <summary>那个条目顶边离视口顶边还差多少(负数 = 已经往上滚过去一点)。只靠偏移量还原不准, 靠它补回来</summary>
+    private double _commentAnchorDelta;
+
+    /// <summary>已经排进调度器的锚点恢复还没跑(连点返回时别排一堆)</summary>
+    private bool _commentAnchorPending;
+
+    // ------------------------------------------------------------ 楼中楼回复: 闸门与换代
+
+    /// <summary>
+    /// 楼中楼回复的**分页状态机**: 代(换代作废) + 闸门(并发保护) + 接口准确总数 + 待重试页码。
+    ///
+    /// ★ 为什么是一个对象而不是散成几个字段: 这几样东西必须**成对生效** —— 换代与作废、
+    ///   闸门的开关、总数与页码的增减。拆散了就会重演"一处赋值盖掉另一处"的老毛病。
+    /// 收在一起, 谁想动都得走同一组方法, 而那一组方法能被离屏探针直接断言。
+    /// </summary>
+    private readonly ReplyThreadPaging _replyPaging = new();
+
     /// <summary>
     /// 点评论卡片里的**楼中楼方框** → 进详情页看这条评论的全部回复。
     /// 方框长在顶层评论下面, 所以线程根就是这条评论自己。
@@ -5251,6 +6102,14 @@ public partial class PlayerWindow : FluentWindow
 
     private void ShowCommentDetail(CommentItem threadRoot, CommentItem focus)
     {
+        // ★ 只有"从一级列表进详情"才记滚动锚点。详情页里换看另一条楼中楼时一级列表是收着的,
+        //   这时量到的偏移属于详情页, 返回时按它还原就还原到错的地方去了。
+        var fromList = CommentDetailPanel.Visibility != Visibility.Visible;
+        if (fromList) SaveCommentListAnchor();
+        // ★ 换一条楼中楼 = 换代: 上一条线程还没回来的页一律作废, 免得它把页码写进别的线程。
+        _replyPaging.Invalidate();
+        // 把这条线程当前的总数登记成"接口口径的准确总数"(账本的起点)
+        _replyPaging.Register(threadRoot);
         _detailThreadRoot = threadRoot;
         _detailFocus = focus;
         // Host 的 DataContext = 线程根: "相关回复共 N 条"/回复列表/加载更多都从它取
@@ -5277,37 +6136,177 @@ public partial class PlayerWindow : FluentWindow
     ///
     /// 上限 5 页(约 100 条): 爆款楼的回复能上四位数, 无上限地拉会把接口和界面一起拖住;
     /// 拉完后若还有剩, 详情页底部那个"展开更多"按钮仍在, 用户可以继续点。
-    /// 死循环保护: 服务端若重复返回同一页(去重后一条没新增)立即收手。
+    ///
+    /// ★ 这里只负责"循环", 一页回复的拉取/判定/合并全部交给 <see cref="LoadReplyPageAsync"/>,
+    ///   与手动"展开更多"共用同一把闸门、同一套冻结坐标与同一个成败判定。
+    /// ★ 为什么非 落地 就收手: 早先的 while 只看 HasMoreReplies。而失败时准确总数**不会**被下调,
+    ///   HasMoreReplies 就一直为 true, 于是这个循环会对着同一个失败的页连打 5 次 ——
+    ///   白打接口不说, 界面还会半闪半闪地看着像在加载。
     /// </summary>
     private async Task AutoCompleteThreadRepliesAsync(CommentItem root)
     {
         try
         {
-            var guard = 0;
-            while (!_closing && root.HasMoreReplies && guard++ < 5)
+            for (var round = 0; round < 5; round++)
             {
-                var (_, _, more) = await Svc.Api.GetReplyRepliesAsync(_aid, root.Rpid, pn: root.RepliesNextPage, ps: 20);
-                if (_closing) return;
-                if (more.Count == 0)
-                {
-                    // 服务端取不全: 用实际条数收口, 否则按钮会一直挂着
-                    root.ReplyCount = root.Replies.Count;
-                    break;
-                }
-                root.RepliesNextPage++;
-                var seen = new HashSet<long>(root.Replies.Select(x => x.Rpid));
-                var added = 0;
-                foreach (var r in more)
-                    if (r.Rpid > 0 && seen.Add(r.Rpid)) { root.Replies.Add(r); added++; }
-                if (added == 0) break;
+                if (_closing || !root.HasMoreReplies) break;
+                if (await LoadReplyPageAsync(root, auto: true) != ReplyThreadPaging.Outcome.落地) break;
             }
-            root.NotifyRepliesChanged();
         }
         catch (Exception ex)
         {
             // 自动补全是"锦上添花": 失败不能影响已经渲染出来的回复
             App.ReportError(ex);
         }
+    }
+
+    /// <summary>
+    /// 拉一页楼中楼回复的**唯一**入口: 自动补全与手动"展开更多回复"都走它。
+    ///
+    /// ★ 为什么必须只有一个入口(三条坑都是这么来的):
+    ///   ① 并发保护互不相识 —— 自动补全还在飞, 用户点"展开更多"会再发一个请求,
+    ///      两个请求回来的页序不确定, 轻则乱序重则重复。现在共用 <see cref="ReplyThreadPaging"/> 的同一把闸门。
+    ///   ② 谁都不看接口的 ok —— "没取到"与"确实没有"都表现为空列表, 于是失败被当成到底。
+    ///   ③ 谁都自己写 ReplyCount —— 一处赋值盖掉另一处(见 <see cref="ReplyThreadPaging.Exhaust"/> 的说明)。
+    ///
+    /// ★ 请求上下文的冻结: 发请求前把"视频 id + 线程 id + 页码 + 代号"一次性冻成不可变的
+    ///   <see cref="ReplyThreadPaging.ReqKey"/>, 回来时再逐项核对(见 <see cref="ReplyThreadPaging.Apply"/>)。
+    ///   早先两处都在 await 之后现读 <c>_aid</c> 与 <c>root.RepliesNextPage</c> —— 那读到的是**现在**的值,
+    ///   不是**发请求时**的值。用户在等接口的工夫换个视频, 上一个视频的第 2 页就会被当成
+    ///   当前视频的第 2 页写进界面, 用户看到的是"别人的回复串到了自己视频下面"。
+    /// </summary>
+    /// <param name="root">这条楼中楼的线程根</param>
+    /// <param name="auto">true = 自动补全(失败只记账不打扰); false = 用户点的(失败要告诉他)</param>
+    private async Task<ReplyThreadPaging.Outcome> LoadReplyPageAsync(CommentItem root, bool auto)
+    {
+        if (_closing || root.Rpid <= 0 || _aid <= 0) return ReplyThreadPaging.Outcome.作废;
+        // ★ 坐标先冻结, 从此不再回读任何可变字段
+        var key = _replyPaging.Freeze(_aid, root.Rpid, root.RepliesNextPage);
+        // ★ 共用闸门: 已经有一页在飞就**根本不发出去**。自动补全给用户手动让路, 用户连点也不重复发。
+        if (!_replyPaging.TryEnter()) return ReplyThreadPaging.Outcome.闸门占用;
+
+        bool ok;
+        string? err;
+        List<CommentItem> page;
+        try
+        {
+            var got = await Svc.Api.GetReplyRepliesAsync(key.Aid, key.RootRpid, pn: key.Page, ps: 20);
+            ok = got.ok; err = got.err; page = got.items;
+        }
+        catch (Exception ex)
+        {
+            // ApiClient 自己兜过一层, 这里是最后一道(防御性: 任何意外都不能让它把闸门永久占住)
+            App.ReportError(ex);
+            ok = false; err = ex.Message; page = new List<CommentItem>();
+        }
+        finally
+        {
+            _replyPaging.Leave();
+            root.IsLoadingReplies = false;
+        }
+
+        // 窗口已经关了: 碰界面就是碰一个正在拆的东西, 直接收手
+        if (_closing) return ReplyThreadPaging.Outcome.作废;
+
+        // 回来后核对: 代号、当前视频、线程 id 三项全对不上就整份丢掉
+        var outcome = _replyPaging.Apply(root, key, ok, page, _aid);
+        if (outcome == ReplyThreadPaging.Outcome.作废) return outcome;
+
+        // 失败时页码没前进、总数没减少, 只剩一个"待重试页码"。用户再点"展开更多"就是重试**同一页**。
+        // ★ 自动补全是后台行为, 失败只记账不弹提示 —— 弹一次 Toast 就把用户从正在看的视频里拽出来;
+        //   用户点的才提示, 并且把"第几页、点哪里重试"说出来, 否则他以为界面卡住了。
+        if (outcome == ReplyThreadPaging.Outcome.失败 && !auto)
+            Svc.Toast.Show($"第 {key.Page} 页回复没加载出来{(string.IsNullOrEmpty(err) ? "" : ": " + err)}, 点下方按钮重试同一页");
+        UpdateReplyStatus(root);
+        return outcome;
+    }
+
+    /// <summary>
+    /// 把楼中楼回复的加载状态写进详情页那行小字 —— 特别是**待重试的页码**。
+    ///
+    /// ★ 为什么非要这一行: 失败时"展开更多回复"按钮还在、文案也一个字没变(总数没被砍),
+    ///   用户根本分不清"再点一次是在重试"还是"界面坏了", 于是多半就直接关窗口了。
+    /// </summary>
+    private void UpdateReplyStatus(CommentItem? root)
+    {
+        if (DetailReplyStatusText == null) return;
+        var failedPage = root == null ? 0 : _replyPaging.FailedPage(root.Rpid);
+        if (failedPage > 0)
+        {
+            DetailReplyStatusText.Text = $"第 {failedPage} 页没加载出来, 点下方按钮重试同一页";
+            DetailReplyStatusText.Visibility = Visibility.Visible;
+            return;
+        }
+        DetailReplyStatusText.Text = "";
+        DetailReplyStatusText.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>丢掉一级评论列表的滚动锚点(列表换了一份, 旧下标已经指向别的评论)</summary>
+    private void DropCommentListAnchor()
+    {
+        _commentAnchorIndex = -1;
+        _commentAnchorOffset = 0;
+        _commentAnchorDelta = 0;
+    }
+
+    /// <summary>
+    /// 记住一级评论列表当前的滚动位置(偏移 + 首个可见条目的下标), 返回时照原样还原。
+    ///
+    /// ★ 为什么必须存: 一级评论列表实测能到 662 条。用户翻到第 500 条点进某条楼中楼, 看完按返回 ——
+    ///   不存的话列表直接弹回顶部, 用户看到的不是"我回来了", 而是"评论列表被清空了"。
+    ///   十有八九会当成 bug 关掉窗口重开, 白白重来一遍。
+    /// ★ 为什么存两个量: 只记 VerticalOffset 是不够的 —— 进详情期间 ScrollViewer 里的内容整个换掉了,
+    ///   同一个偏移落在新内容上完全是另一个位置。所以以"首个可见条目的下标"为主、偏移只作兜底。
+    /// ★ 下标必须连"它顶边离视口顶边差多少"一起记: 只记下标的话那条如果原本已经被滚掉半截,
+    ///   还原出来会对齐到它的顶边, 整条正好跳高了一小截, 观感上还是"莫名其妙跳了一下"。
+    /// </summary>
+    private void SaveCommentListAnchor()
+    {
+        DropCommentListAnchor();
+        if (CommentList == null || InfoScroll == null) return;
+        _commentAnchorOffset = InfoScroll.VerticalOffset;
+
+        // ★ ItemsControl 的容器是**按需生成**的, 还没生成的话一个都取不到, 先逼一轮布局出来
+        CommentList.UpdateLayout();
+        var gen = CommentList.ItemContainerGenerator;
+        if (gen == null || gen.Status != GeneratorStatus.ContainersGenerated) return;
+
+        var boxes = new List<(double Top, double Height)>();
+        for (var i = 0; i < CommentList.Items.Count; i++)
+        {
+            if (gen.ContainerFromIndex(i) is not FrameworkElement fe || fe.ActualHeight <= 0) { boxes.Add((0, 0)); continue; }
+            if (!fe.IsVisible) { boxes.Add((0, 0)); continue; }
+            boxes.Add((fe.TransformToAncestor(InfoScroll).Transform(new Point(0, 0)).Y, fe.ActualHeight));
+        }
+
+        var viewportTop = InfoScroll.VerticalOffset;
+        var viewportBottom = viewportTop + InfoScroll.ViewportHeight;
+        var picked = PlayerBack.PickFirstVisibleIndex(boxes, viewportTop, viewportBottom);
+        if (picked < 0) return;
+        _commentAnchorIndex = picked;
+        _commentAnchorDelta = boxes[picked].Top - viewportTop;
+    }
+
+    /// <summary>返回一级评论列表后把滚动位置还原(理由见 <see cref="SaveCommentListAnchor"/>)</summary>
+    private void RestoreCommentListAnchor()
+    {
+        _commentAnchorPending = false;
+        if (_closing || CommentList == null || InfoScroll == null) return;
+
+        var target = _commentAnchorOffset;
+        if (_commentAnchorIndex >= 0)
+        {
+            CommentList.UpdateLayout();
+            var gen = CommentList.ItemContainerGenerator;
+            if (gen != null && gen.Status == GeneratorStatus.ContainersGenerated
+                && gen.ContainerFromIndex(_commentAnchorIndex) is FrameworkElement fe)
+                target = fe.TransformToAncestor(InfoScroll).Transform(new Point(0, 0)).Y - _commentAnchorDelta;
+        }
+
+        // ★ 上下夹一下: ScrollableHeight 还是**列表恢复可见之前**那一轮布局算出来的, 直接赋值会被
+        //   WPF 静默夹到 0 —— 结果又变成"跳回顶部", 正好是要修的那个毛病。
+        InfoScroll.UpdateLayout();
+        InfoScroll.ScrollToVerticalOffset(Math.Clamp(target, 0, Math.Max(0, InfoScroll.ScrollableHeight)));
     }
 
     private void OnCommentDetailBack(object sender, RoutedEventArgs e) => CloseCommentDetail();
@@ -5321,10 +6320,21 @@ public partial class PlayerWindow : FluentWindow
         CommentDetailHost.DataContext = null;
         _detailThreadRoot = _detailFocus = null;
         ClearReplyTarget();
+        // ★ 返回一级评论 = 楼中楼回复请求全部换代。线程根本身还活在一级列表里, 旧请求回来时若还照收,
+        //   用户在列表页就会看到"评论在自己眼前动了一下"却不知道发生了什么。
+        _replyPaging.Invalidate();
+        UpdateReplyStatus(null);
         // tab 文案与返回链接一起还原
         TabComments.Content = "评论";
         BtnBackToComments.Visibility = Visibility.Collapsed;
         CommentList.Visibility = Visibility.Visible;
+        // ★ 把滚动位置还回去(662 条的列表跳回顶部, 用户会以为列表坏了)。挂在 Loaded 优先级上:
+        //   ScrollViewer 的可滚动范围要用"列表已经可见"之后那一轮布局才算得对。
+        if (!_commentAnchorPending)
+        {
+            _commentAnchorPending = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(RestoreCommentListAnchor));
+        }
     }
 
     // ------------------------------------------------------------ 视频合集
@@ -5747,13 +6757,23 @@ public partial class PlayerWindow : FluentWindow
     }
 
 
-    /// <summary>重新拉一条线程的第一页回复(发表成功后调用)。失败就保持原样, 不清空已有内容。</summary>
+    /// <summary>
+    /// 重新拉一条线程的第一页回复(发表成功后调用)。失败就保持原样, 不清空已有内容。
+    ///
+    /// ★ 这条路**覆盖**已加载的第 1 页(而不是追加), 所以它不走 <see cref="LoadReplyPageAsync"/> 那套分页判定,
+    ///   但两条纪律仍然一致:
+    ///   ① 坐标照样冻结再核对: 用户发完评论到重拉回来之间也可能换视频/换片, 那就整份丢掉。
+    ///   ② 准确总数**只上调不下调**: 服务端 rcount 有审核延迟, 刚发出去的那条可能还没算进去,
+    ///      此时宁可显示得比服务端多一点, 也不能让"总数 &lt; 已加载"把刚发的回复挤没。
+    /// </summary>
     private async Task ReloadThreadRepliesAsync(CommentItem root)
     {
         try
         {
-            var (_, _, list) = await Svc.Api.GetReplyRepliesAsync(_aid, root.Rpid, pn: 1, ps: 20);
-            if (_closing || list.Count == 0) return;
+            var key = _replyPaging.Freeze(_aid, root.Rpid, 1);
+            var (ok, _, list) = await Svc.Api.GetReplyRepliesAsync(key.Aid, key.RootRpid, pn: 1, ps: 20);
+            // 换代/换片/已关窗口 => 整份丢掉, 连页码都不动
+            if (_closing || !ok || list.Count == 0 || !_replyPaging.IsLive(key, _aid)) return;
             // 重拉只覆盖第一页: 页码复位, "展开更多"重新可用(已加载的第 2 页会被第一页取代)
             root.RepliesNextPage = 2;
             var seen = new HashSet<long>();
@@ -5763,6 +6783,7 @@ public partial class PlayerWindow : FluentWindow
             root.Replies.Clear();
             foreach (var r in merged) root.Replies.Add(r);
             if (root.ReplyCount < root.Replies.Count) root.ReplyCount = root.Replies.Count;
+            _replyPaging.Register(root);
             root.NotifyRepliesChanged();
         }
         catch (Exception ex)
@@ -5805,28 +6826,9 @@ public partial class PlayerWindow : FluentWindow
         if ((sender as FrameworkElement)?.DataContext is not CommentItem item) return;
         if (item.Rpid <= 0 || item.IsLoadingReplies) return;
 
-        item.IsLoadingReplies = true;
-        try
-        {
-            var (_, _, more) = await Svc.Api.GetReplyRepliesAsync(_aid, item.Rpid, pn: item.RepliesNextPage, ps: 20);
-            item.RepliesNextPage++;
-            if (_closing) return;
-
-            // 内联的那几条也在返回结果里, 用 rpid 去重再追加
-            var seen = new HashSet<long>(item.Replies.Select(x => x.Rpid));
-            foreach (var r in more)
-                if (r.Rpid > 0 && seen.Add(r.Rpid)) item.Replies.Add(r);
-
-            // 服务端也有取不全的情况(风控/已删除), 用实际条数收口,
-            // 否则按钮会永远停在"展开 N 条回复"上点不动
-            if (more.Count == 0 || item.Replies.Count >= item.ReplyCount)
-                item.ReplyCount = item.Replies.Count;
-            item.NotifyRepliesChanged();
-        }
-        finally
-        {
-            item.IsLoadingReplies = false;
-        }
+        // ★ 全部交给统一入口: 闸门、冻结坐标、查 ok、待重试页码、总数的收口都在里面, 这里不重复一遍。
+        //   失败时页码原地不动 ⇒ 用户再点一次, 请求的就是**同一个页码**, 天然就是重试。
+        await LoadReplyPageAsync(item, auto: false);
     }
 
     // ------------------------------------------------------------ 评论点赞
@@ -6515,6 +7517,22 @@ public partial class PlayerWindow : FluentWindow
             if (finalAid > 0 && finalCid > 0)
                 _ = Svc.HistorySync.ReportNowAsync(finalAid, finalCid, finalProgress);
 
+            // ---- 记下这次的窗口大小, 下次打开复原(2026-10-13 用户要求) ----
+            // ★ 必须在 _closing = true **之前**取: 那一行之后各类关闭清理才开始跑,
+            //   而 ApplyInfoPanelState 会改 MinWidth/MinHeight 与列宽, 那时量到的尺寸
+            //   已经不是用户摆出来的那个了。
+            // ★ 铺满窗口 / 全屏 / 最小化时**一律不记**: 那几种状态下 Width/Height 是
+            //   "整块铺满"的值, 存下来会让下次普通模式的窗口莫名其妙变成满屏大小。
+            //
+            // ★ 多窗口下还必须加"只认当前活跃那个"(2026-10-13 补): 多窗口模式允许同时开着
+            //   好几个播放器, 每个 PlayerWindow 关闭时都会走到这里。若谁关都写,
+            //   后关的那个(它多半还是默认尺寸, 因为用户根本没碰过)会把用户精心调好的
+            //   尺寸覆盖掉 —— 而用户下一次开窗口看到的偏偏是"没调过的那只"。
+            //   IsCurrent 为 true = 这个窗口是最新一次播放用的那个, 也就是用户"正在用的
+            //   那一个"。关掉它才代表"我这次用完了, 下次就照这个大小开"。
+            SaveSizeMemoryIfNeeded();
+            _sizeSaveDebounce.Stop();
+
             _closing = true;
 
             // 拖动尺寸监听订阅的是 CompositionTarget.Rendering —— 它是**静态**事件、不随窗口销毁,
@@ -6730,7 +7748,9 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void ReleaseHeavyContent()
     {
-        try { DanmakuCanvas?.Children.Clear(); } catch { }
+        // ★ 走 ClearFlyingDanmaku 而不是直接清画布: 关窗时 _flying 还挂着那辞弹幕元素,
+        //   只清画布等于把它们留在 _flying 里、下次 GC 之前一直占着。
+        try { ClearFlyingDanmaku(); } catch { }
         try { _danmaku.Clear(); } catch { }
         try { _danmakuRaw.Clear(); } catch { }
         _sponsorRaw = Array.Empty<SponsorSegment>();
@@ -6785,5 +7805,234 @@ public partial class PlayerWindow : FluentWindow
             File.AppendAllText(path, content);
         }
         catch { /* 静默 */ }
+    }
+}
+
+// ===========================================================================================
+// 评论区里两块"最容易改坏、又完全不依赖 WPF"的纯逻辑。
+//
+// ★ 为什么它们住在这个文件里而不是各自拆成新文件: 本次改动的硬约束是"只许碰
+//   PlayerWindow.xaml.cs 与 PlayerWindow.xaml", 拆出去就得改 BiliDesk.csproj 登记编译项。
+// ★ 为什么必须是 public 顶层类型(而不是 PlayerWindow 的私有成员): 离屏探针要能在**不起窗口**的
+//   前提下直接构造它们、喂假结果、逐项断言。顺带的好处是探针连 WPF 都不用初始化。
+// ===========================================================================================
+
+/// <summary>Esc / 鼠标侧键"退到哪一级"。四级, 由内到外</summary>
+public enum PlayerBackLevel
+{
+    /// <summary>刚退出全屏</summary>
+    已退出全屏,
+    /// <summary>刚把收起的右侧视频详情栏展开回来(铺满窗口模式)</summary>
+    已展开详情栏,
+    /// <summary>刚从二级评论详情退回一级评论列表</summary>
+    已返回评论列表,
+    /// <summary>已经无可退 —— 该关播放器了</summary>
+    应关闭播放器,
+}
+
+/// <summary>评论区的"退一级"判定与滚动锚点挑选</summary>
+public static class PlayerBack
+{
+    /// <summary>
+    /// 四级返回顺序的**纯判定**。抽出来有两个理由:
+    ///   ① 这一串 if 的顺序本身就是需求, 写错了编译照过、肉眼又极难发现(少一级/多一级都不报错),
+    ///      所以必须能被离屏探针逐级断言, 而不是靠"我写了这个 if"。
+    ///   ② 它得和真正的收尾动作(退全屏、恢复滚动、关窗)分开, 探针才能单独跑这一段。
+    /// </summary>
+    /// <param name="fullscreen">当前处于真全屏</param>
+    /// <param name="detailBarCollapsed">右侧视频详情栏处于收起状态(铺满窗口模式)</param>
+    /// <param name="commentDetailVisible">二级评论详情面板正在显示</param>
+    public static PlayerBackLevel Decide(bool fullscreen, bool detailBarCollapsed, bool commentDetailVisible)
+        => fullscreen ? PlayerBackLevel.已退出全屏
+         : detailBarCollapsed ? PlayerBackLevel.已展开详情栏
+         : commentDetailVisible ? PlayerBackLevel.已返回评论列表
+         : PlayerBackLevel.应关闭播放器;
+
+    /// <summary>
+    /// 从"每个条目相对 ScrollViewer 内容原点的顶边位置 + 高度"里挑出**首个可见**的那一条, 挑不出返回 -1。
+    ///
+    /// ★ 为什么连这段算术都要单独抽: 它是滚动锚点里唯一容易写错的地方 —— 视口上/下边界用
+    ///   严格小于还是小于等于、要不要跳过高度为 0 的(容器还没量出高度)、列表下方全部越界时
+    ///   该 break 还是该 continue, 三处各错一处, 结果都是"返回后落在差一条的位置"。
+    ///   662 条的列表差一条, 用户一眼就看出来跳了。
+    /// </summary>
+    /// <param name="boxes">按列表顺序排的 (顶边位置, 高度); 高度 &lt;= 0 表示这个条目还没量出来</param>
+    /// <param name="viewportTop">可视区顶边在滚动内容坐标里的位置</param>
+    /// <param name="viewportBottom">可视区底边在滚动内容坐标里的位置</param>
+    public static int PickFirstVisibleIndex(IReadOnlyList<(double Top, double Height)> boxes, double viewportTop, double viewportBottom)
+    {
+        for (var i = 0; i < boxes.Count; i++)
+        {
+            var (top, height) = boxes[i];
+            if (height <= 0) continue;              // 容器还没量出高度, 跳过而不是当它可见
+            // ★ 底边与视口顶边**正好相等**时也要跳过: 那种条目露出来的是 0 像素, 根本不算"可见"。
+            //   用 `<` 会把上一条认成首个可见, 还原后列表正好差一整条(662 条里差一条用户一眼就看出来)。
+            if (top + height <= viewportTop) continue;
+            // 整条都在视口下方; 列表自上而下排, 后面的只会更靠下 ⇒ 直接收工
+            if (top > viewportBottom) break;
+            return i;
+        }
+        return -1;
+    }
+}
+
+/// <summary>
+/// 楼中楼回复的分页状态机: 代(换代作废) + 闸门(并发保护) + 接口准确总数 + 待重试页码。
+///
+/// ★ 这里面**不认识 WPF**: 输入是"发请求前冻结下来的坐标 + 接口成没成功 + 这一页的内容",
+///   输出是"这一页能不能落地, 落地时把线程改成什么样"。于是离屏探针能直接 new 出来断言。
+///
+/// ★ 三条铁律, 每一条都对应一个真踩过的坑:
+///   ① 页码**只在真的落地之后**才前进。失败时原地不动 ⇒ 重试请求的就是同一页, 既不跳页也不重复追加。
+///   ② 接口给的准确总数**只在"成功且这一页一条新的都没有"这种确凿的到底场景下调**(见 <see cref="Exhaust"/>)。
+///   ③ 换代/换视频之后回来的结果**整份丢掉**, 连待重试页码都不记 —— 那条线程已经不是界面上那条了。
+/// </summary>
+public sealed class ReplyThreadPaging
+{
+    /// <summary>
+    /// 一轮请求的**全部坐标**。不可变 —— 发出去之后界面怎么改它都不会跟着改。
+    /// ★ 冻结的意义: 回来时再读 _aid / root.RepliesNextPage, 读到的是"现在"的值而不是
+    ///   "发请求时"的值, 于是上一个视频的第 2 页会被当成当前视频的第 2 页写进列表。
+    /// </summary>
+    public readonly record struct ReqKey(long Aid, long RootRpid, int Page, int Gen);
+
+    /// <summary>一页回复请求的结局</summary>
+    public enum Outcome
+    {
+        /// <summary>换代 / 换视频 / 已关窗口 ⇒ 整份丢掉</summary>
+        作废,
+        /// <summary>同一把闸门里已经有请求在飞 ⇒ 这次根本没发出去</summary>
+        闸门占用,
+        /// <summary>接口失败: 页码不动、总数不动, 只记下待重试的页码</summary>
+        失败,
+        /// <summary>成功但这一页一条新的都没有 ⇒ 确凿的到底, 允许把总数收口到已加载条数</summary>
+        到底,
+        /// <summary>成功且有新内容 ⇒ 页码前进、准确总线上抬</summary>
+        落地,
+    }
+
+    /// <summary>接口给的准确总数所对应的那一层"含义"的注释锚点, 见 <see cref="_exactTotal"/></summary>
+    private int _gen;                                // 换代计数。换视频/返回一级评论/换一条楼中楼都让它 +1
+    private bool _busy;                              // ★ 共用闸门: 自动补全与手动展开抢的是同一把
+    private readonly Dictionary<long, int> _exactTotal = new();    // rpid -> 接口给的准确总数
+    private readonly Dictionary<long, int> _failedPage = new();    // rpid -> 待重试的页码(未记 = 无)
+
+    /// <summary>当前代号</summary>
+    public int Gen => _gen;
+
+    /// <summary>此刻有没有楼中楼回复请求在飞(自动与手动共用这一把)</summary>
+    public bool Busy => _busy;
+
+    /// <summary>
+    /// 让所有还在飞的楼中楼回复请求当场作废(换视频 / 返回一级评论 / 换一条楼中楼时调)。
+    ///
+    /// ★ 闸门**故意不在这里清**: 那个请求确实还在网络上飞着, 让它自己跑完、自己在 finally 里放闸。
+    ///   这里偷偷放掉闸门, 等于放下一个请求跟它并发 —— 正是这个类要防的那件事。
+    /// </summary>
+    public void Invalidate()
+    {
+        _gen++;
+        _failedPage.Clear();
+    }
+
+    /// <summary>发请求**之前**把可变参数冻成不可变值(视频 id + 线程 id + 页码 + 代号)</summary>
+    public ReqKey Freeze(long aid, long rootRpid, int page) => new(aid, rootRpid, page, _gen);
+
+    /// <summary>这一轮还算不算数: 代号没前进, 且冻结的视频 id 仍然是当前视频</summary>
+    public bool IsLive(ReqKey k, long curAid) => k.Gen == _gen && k.Aid == curAid;
+
+    /// <summary>申请闸门。拿不到就说明已经有请求在飞, 这次**不要发出去**(自动与手动一律如此)</summary>
+    public bool TryEnter()
+    {
+        if (_busy) return false;
+        _busy = true;
+        return true;
+    }
+
+    /// <summary>放闸。只能由真正发出去的那一方在 finally 里调, 不能提前放</summary>
+    public void Leave() => _busy = false;
+
+    /// <summary>这条线程的待重试页码(0 = 没有待重试)</summary>
+    public int FailedPage(long rootRpid) => _failedPage.TryGetValue(rootRpid, out var p) ? p : 0;
+
+    /// <summary>这条线程的**接口准确总数**(-1 = 还没登记过)</summary>
+    public int ExactTotal(long rootRpid) => _exactTotal.TryGetValue(rootRpid, out var t) ? t : -1;
+
+    /// <summary>
+    /// 把线程当前的总数登记成"接口口径的准确总数"(进详情时 / 发表后重拉时各一次)。
+    /// 这只是给账本起个头, **不动**页码: 首页内联的那几条本来就来自第 1 页,
+    /// 下一页还得从第 1 页取(整页判重会把第 1 页误当成"到底")。
+    /// </summary>
+    public void Register(CommentItem root)
+    {
+        if (root.Rpid <= 0) return;
+        _exactTotal[root.Rpid] = root.ReplyCount;
+    }
+
+    /// <summary>
+    /// 判定并应用一页回复。**唯一**允许改动页码 / 准确总数的地方。
+    /// </summary>
+    /// <param name="root">这条楼中楼的线程根(要就地改它)</param>
+    /// <param name="k">发请求前冻结下来的坐标</param>
+    /// <param name="ok">接口成没成功(ok=false 时 <paramref name="page"/> 必然是空的)</param>
+    /// <param name="page">这一页的内容</param>
+    /// <param name="curAid">回来时窗口当前的视频 id</param>
+    public Outcome Apply(CommentItem root, ReqKey k, bool ok, IReadOnlyList<CommentItem> page, long curAid)
+    {
+        // ① 换代 / 换视频 / 线程对不上 / 已关窗口 ⇒ 整份丢掉, 连待重试页码都不记
+        if (root.Rpid <= 0 || k.RootRpid != root.Rpid || !IsLive(k, curAid)) return Outcome.作废;
+
+        // ② 接口失败 —— 本次改动最核心的一条:
+        //   页码**不前进**(重试就是同一页)、准确总数**不下调**(下调会让 HasMoreReplies 变 false,
+        //   "展开更多"按钮随之消失, 剩下的回复用户再也看不到、也没处重试), 只记下待重试的页码。
+        if (!ok)
+        {
+            _failedPage[k.RootRpid] = k.Page;
+            return Outcome.失败;
+        }
+
+        // ③ 成功: 首页内联的那几条也在这一页里, 用 rpid 去重再追加
+        var seen = new HashSet<long>(root.Replies.Select(x => x.Rpid));
+        var added = 0;
+        foreach (var r in page)
+            if (r != null && r.Rpid > 0 && seen.Add(r.Rpid)) { root.Replies.Add(r); added++; }
+        _failedPage.Remove(k.RootRpid);
+
+        // ④ 整页一条新的都没有: **成功**的空页才是确凿的"到底了"(失败的空页走不到这里)。
+        //   判定到底就立刻收手, 否则下一轮又会请求同一页、又是零新增, 白打接口还永远停不下来。
+        if (added == 0)
+        {
+            Exhaust(root);
+            return Outcome.到底;
+        }
+
+        // ⑤ 页码只在**真的落地之后**前进
+        root.RepliesNextPage = k.Page + 1;
+        // 准确总数只允许**上抬**: 自己刚发的回复已经进了已加载列表, 而服务端 rcount 有审核延迟。
+        // 反过来(总数 < 已加载)会让"展开更多"算成负数, 把刚发的回复从判断里挤掉。
+        if (root.ReplyCount < root.Replies.Count) root.ReplyCount = root.Replies.Count;
+        _exactTotal[k.RootRpid] = root.ReplyCount;
+        root.NotifyRepliesChanged();
+        return Outcome.落地;
+    }
+
+    /// <summary>
+    /// 确认"这条楼中楼确实到底了", 把准确总数**下调到已加载条数**, 让"展开更多"按钮消失。
+    ///
+    /// ★ 这是全代码里**唯一**允许下调准确总数的地方。早先有三处各写各的
+    ///   (自动补全 / 手动展开 都写 `ReplyCount = Replies.Count`, 发表后重拉又写第三遍),
+    ///   彼此覆盖只是表象, 更要命的是: 请求失败与"确实没有"都表现为空列表, 而当时谁都没看 ok,
+    ///   于是失败也走进"more.Count == 0"那一条 —— 准确总数被砍掉、按钮收起, 用户既看不到剩下的回复,
+    ///   也没有任何办法重试。跟关系页 _total 被分组人数覆盖是同一类病: 一个字段同时扛两种含义。
+    ///   这里把两个含义分开: 准确总数归 ReplyCount(接口口径), 已加载条数归 Replies.Count。
+    /// ★ 零就如实写 0: 装一个大数只会让"展开更多"永远挂着, 点了又只会得到空页。
+    /// </summary>
+    public void Exhaust(CommentItem root)
+    {
+        var loaded = root.Replies.Count;
+        if (root.ReplyCount > loaded) root.ReplyCount = loaded;
+        _exactTotal[root.Rpid] = root.ReplyCount;
+        _failedPage.Remove(root.Rpid);
+        root.NotifyRepliesChanged();
     }
 }
