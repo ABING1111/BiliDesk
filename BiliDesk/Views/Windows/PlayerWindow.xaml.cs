@@ -202,7 +202,14 @@ public partial class PlayerWindow : FluentWindow
     private const long TailQuietZoneMs = 10000;
 
     /// <summary>
-    /// 视频区手势层的常态底色(#01000000 —— 近透明但可命中鼠标, 见 VideoAreaRoot 的 XAML 注释)。
+    /// 视频区手势层的常态底色(#01000000 —— 近透明但可命中鼠标)。
+    ///
+    /// ★★ 2026-10-13 的回归教训: 我曾为了"盖住 letterbox 白底"把它改成**不透明黑**,
+    ///   结果用户报"视频播放时全黑"。层级搞反了 —— 这一层在 VideoView.Content
+    ///   (浮层窗口)里, 位于 vout HWND **之上**, 不透明会盖住**视频画面**而不是白底。
+    ///   想盖 vout 白底要用独立的遮罩层(EndOverlay / LoadingOverlay / 全屏黑幕那几层,
+    ///   平时 Collapsed), 手势层必须保持近透明。
+    ///
     /// EOF 时手势层会切黑盖住露出白底的 vout HWND(见 OnEndReached), 起播时用它还原。
     /// </summary>
     private static readonly Brush VideoAreaBackBrush = CreateVideoAreaBackBrush();
@@ -223,6 +230,9 @@ public partial class PlayerWindow : FluentWindow
 
     private static Brush CreateVideoAreaBackBrush()
     {
+        // 近透明黑(#01000000): 见 VideoAreaBackBrush 的说明 —— 绝不能改成不透明,
+        // 那会盖住视频画面(2026-10-13 实测回归: 用户看到整个画面全黑)。
+        // 之所以不是完全透明: 背景全透明时鼠标事件会穿透, 手势就收不到了。
         var b = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x01, 0, 0, 0));
         b.Freeze();
         return b;
@@ -477,11 +487,15 @@ public partial class PlayerWindow : FluentWindow
             LogAudioStateOnce();
             HideLoading();
             // 把 EOF 时切黑的手势层还原成近透明(见 OnEndReached 里切黑的原因):
-            // 新 input 的 vout 已经起来, 后面要能看见画面
-            VideoAreaRoot.Background = VideoAreaBackBrush;
-            // 同样要撤掉可能还压着的"全屏黑幕" —— 否则它会盖住刚起来的画面
-            _fullscreenCoverArmed = false;
-            _fullscreenCoverTimer?.Stop();
+            // 新 input 的 vout 已经起来, 后面要能看见画面。
+            // ★★ 必须走 <see cref="ReleaseFullscreenCover"/> 而不是直接赋值(2026-10-13 修):
+            //   原来这里是 `VideoAreaRoot.Background = VideoAreaBackBrush;` + 顺手把
+            //   `_fullscreenCoverArmed = false;` —— 两条都**绕过了 _resizeHold 闸门**。
+            //   后果: 拖边缘 resize 期间 LibVLC 反复重协商 vout, 每出一帧就触发一次 Playing
+            //   ⇒ 遮罩被撤掉、露出黑底, 下一轮重协商又压黑 —— 用户看到的就是
+            //   "视频区边缘黑/亮交替抽动"(同一道闸本来就是为了这个才加的, 见 ArmResizeCover)。
+            //   顺带还解释了"拖动时偶尔能看到一块白": 撤罩那一瞬 vout 还没帧, 白底露出来。
+            ReleaseFullscreenCover();
             UpdatePlayButton();
             StartControlsHideCountdown();   // 播放中才开始倒计时自动隐藏
             // 聆听态: 起播后把文案里的秒数对齐到真实位置(切流前后 _mp.Time 会有几十毫秒偏差),
@@ -2541,6 +2555,9 @@ public partial class PlayerWindow : FluentWindow
 
     private DispatcherTimer? _volumeOsdTimer;
 
+    /// <summary>倍速提示的淡出计时器(松手后"已恢复 1.0x"亮一下就靠它收场)</summary>
+    private DispatcherTimer? _speedOsdTimer;
+
     /// <summary>
     /// 滚轮调音量: 上滑 +5, 下滑 -5。
     ///
@@ -2629,6 +2646,58 @@ public partial class PlayerWindow : FluentWindow
     /// 所以给一个"音量 65%"的短提示; 连续调节时只重置计时器, 不重播淡入动画,
     /// 否则每滚一格都闪一下。
     /// </summary>
+    /// <summary>
+    /// 浮出倍速提示(长按快进开始 / 恢复 1x 时调用)。
+    ///
+    /// ★ 与音量提示的差别(所以没有复用 ShowVolumeHint):
+    ///   音量是"调一下、闪一下、自己淡出"; 倍速提示必须在**整个长按期间一直挂着** ——
+    ///   用户按住的那几秒里要始终知道"现在是 2 倍速, 松手会回去"。
+    ///   松手时再调一次本方法(<c>hold=false</c>), 文案换成"已恢复 1.0x"并淡出。
+    /// </summary>
+    /// <param name="text">提示文案, 如 "2.0x 快进中" / "已恢复 1.0x"</param>
+    /// <param name="hold">true = 常显不自动淡出(长按期间); false = 显示一下自己淡出</param>
+    private void ShowSpeedHint(string text, bool hold)
+    {
+        if (_closing || SpeedOsd == null) return;
+
+        SpeedOsdText.Text = text;
+        _speedOsdTimer?.Stop();
+        _speedOsdTimer = null;
+
+        // 每次都从"当前透明度"补到 1(同 ShowVolumeHint 的理由:
+        // 上一次的淡出可能还没跑完, 从当前值补最稳, 不会出现"提示淡到一半卡住")
+        SpeedOsd.Visibility = Visibility.Visible;
+        SpeedOsd.BeginAnimation(OpacityProperty, null);
+        SpeedOsd.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(Math.Min(1.0, SpeedOsd.Opacity), 1, TimeSpan.FromMilliseconds(120))
+            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop });
+
+        if (hold) return;   // 长按期间: 挂着等松手
+
+        // 松手了: 亮一下"已恢复"再淡出
+        _speedOsdTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
+        _speedOsdTimer.Tick += (_, _) =>
+        {
+            _speedOsdTimer?.Stop();
+            _speedOsdTimer = null;
+            if (_closing) return;
+            var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240))
+            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop };
+            fade.Completed += (_, _) =>
+            {
+                // 淡出期间用户可能又按住了(ShowSpeedHint 已重开): 那时不能藏
+                if (_closing || _speedOsdTimer != null) return;
+                // ★ 摘动画 + 归位(2026-10-13 清理动画 bug 时的同款问题):
+                //   DoubleAnimation 默认 Hold 会把 Opacity 钉在 0, 下次常显就整块透明。
+                SpeedOsd.BeginAnimation(OpacityProperty, null);
+                SpeedOsd.Opacity = 1;
+                SpeedOsd.Visibility = Visibility.Collapsed;
+            };
+            SpeedOsd.BeginAnimation(OpacityProperty, fade);
+        };
+        _speedOsdTimer.Start();
+    }
+
     private void ShowVolumeHint(int volume)
     {
         if (_closing || VolumeOsd == null) return;
@@ -2677,6 +2746,13 @@ public partial class PlayerWindow : FluentWindow
     {
         _volumeOsdTimer?.Stop();
         _volumeOsdTimer = null;
+    }
+
+    /// <summary>隐藏倍速提示并停掉它的计时器(关闭流程用)</summary>
+    private void StopSpeedOsd()
+    {
+        _speedOsdTimer?.Stop();
+        _speedOsdTimer = null;
     }
 
     private void OnSpeedClick(object sender, RoutedEventArgs e)
@@ -3139,6 +3215,10 @@ public partial class PlayerWindow : FluentWindow
             SyncDanmakuClockRate(FastForwardRate);
             try { _mp.SetRate(FastForwardRate); } catch { }
             if (SpeedText != null) SpeedText.Text = FastForwardRate.ToString("0.#") + "x";
+            // ★ 浮出倍速提示(2026-10-13 用户要求): 长按 2x 是无入口手势,
+            //   不提示的话用户只看到画面变快, 不知道发生了什么、也不知道松手会恢复。
+            //   hold=true: 整个长按期间一直挂着, 松手时由 Up 那边换成"已恢复"并淡出。
+            ShowSpeedHint(FastForwardRate.ToString("0.#") + "x 快进中", hold: true);
             // 长按触发了, 不再触发单击
             _singleClickTimer?.Stop();
         };
@@ -3181,6 +3261,9 @@ public partial class PlayerWindow : FluentWindow
             SyncDanmakuClockRate(1.0f);
             try { _mp.SetRate(1.0f); } catch { }
             if (SpeedText != null) SpeedText.Text = "1.0x";
+            // ★ 倍速提示收场: 换成"已恢复"亮一下再淡出 —— 手势有始有终,
+            //   用户才知道刚才那阵快进是自己按出来的、现在结束了。
+            ShowSpeedHint("已恢复 1.0x", hold: false);
             e.Handled = true;
             return;
         }
@@ -3215,6 +3298,9 @@ public partial class PlayerWindow : FluentWindow
             SyncDanmakuClockRate(1.0f);
             try { _mp.SetRate(1.0f); } catch { }
             if (SpeedText != null) SpeedText.Text = "1.0x";
+            // ★ 兜底路径也要收掉倍速提示: 鼠标移出时 Up 不会再来了,
+            //   不在这里收的话提示会一直挂在屏幕上(用户报过同类"提示不消失")。
+            ShowSpeedHint("已恢复 1.0x", hold: false);
         }
         // 离开视频区: 播放中直接藏(倒计时都不用等), 暂停时保持常显
         if (ShouldHideControls()) HideControls();
@@ -7049,6 +7135,7 @@ public partial class PlayerWindow : FluentWindow
             _localToastTimer?.Stop();
             _controlsHideTimer?.Stop();
             StopVolumeOsd();
+            StopSpeedOsd();
 
             // 先把覆盖层摘掉再隐藏窗口, 否则底部控制栏会以残影形式留在屏幕上
             DetachVideoOverlay();
@@ -7131,6 +7218,7 @@ public partial class PlayerWindow : FluentWindow
         // ★ 全部定时器在这里统一停 —— 漏掉任何一个都会让整个窗口漏掉(见 StopAllTimers 的说明)
         StopAllTimers();
         StopVolumeOsd();
+        StopSpeedOsd();
         // 正常路径下 _mp / VideoView 已在 TeardownAndCloseAsync 里释放过了,
         // 这里只兜底那些没走完正常关闭流程的情况(例如构造中途抛异常),
         // 避免对同一个 MediaPlayer 重复 Dispose。

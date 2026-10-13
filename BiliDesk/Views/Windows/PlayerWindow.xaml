@@ -792,10 +792,18 @@
             -->
             <Grid Grid.Column="0" Background="Black">
                 <vlc:VideoView x:Name="VideoView">
-                    <!-- 注意: 鼠标事件要求背景不能完全透明, 用 #01000000 -->
-                    <!-- 滚轮用 PreviewMouseWheel 挂在视频区的根 Grid 上: 隧道事件从根往叶子最先
-                         经过这里, 不会被底部控制栏里的 Slider / 清晰度 Popup 里的 ListBox 先截走;
-                         也只挂视频区(右侧信息面板的滚轮仍然该滚它自己的列表)。 -->
+                    <!-- ★★ 底色必须是 **#01000000(近透明, 不是纯黑!)** —— 2026-10-13 的教训:
+                         我曾把它改成 Background="Black" 想盖住 letterbox 白底, 结果**整个画面全黑**
+                         (用户报"视频播放时全黑")。原因是我把层级搞反了: 这一层在
+                         VideoView.Content 里, 也就是浮层窗口, 位于 vout HWND **之上** ——
+                         它一不透明, 盖住的是**视频画面**, 而不是我想填的 letterbox。
+                         ★ 正确做法(要盖 vout 白底时): 用**独立的、只在特定时机可见**的遮罩层,
+                           例如 EndOverlay / LoadingOverlay / 全屏黑幕那几层 —— 它们平时 Collapsed。
+                           手势层必须保持近透明, 否则画面永远出不来。
+                         ★ 近透明(而不是完全透明)是为了命中测试: 背景全透明时鼠标事件会穿透过去。
+                         ★ 滚轮用 PreviewMouseWheel 挂在这层根 Grid 上: 隧道事件从根往叶子最先
+                           经过这里, 不会被底部控制栏里的 Slider / 清晰度 Popup 里的 ListBox 先截走;
+                           也只挂视频区(右侧信息面板的滚轮仍然该滚它自己的列表)。 -->
                     <Grid x:Name="VideoAreaRoot" Background="#01000000"
                           PreviewMouseLeftButtonDown="OnVideoAreaMouseLeftDown"
                           PreviewMouseLeftButtonUp="OnVideoAreaMouseLeftUp"
@@ -920,6 +928,26 @@
                                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                FontSize="16" Foreground="White" VerticalAlignment="Center" />
                                     <TextBlock x:Name="VolumeOsdText" Text="80%" Margin="9,0,0,0"
+                                               FontSize="14" Foreground="White" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 倍速提示(长按快进时浮出, 2026-10-13 新增)。
+                                 用户要求"位于播放器偏上位置" —— VerticalAlignment=Top + Margin 顶部
+                                 留 90px, 与音量提示的居中错开, 两者同时出现也不会重叠。
+                                 ★ 为什么必须有: 长按 2x 是**无入口的手势**, 松手前用户只看到画面变快,
+                                   不知道发生了什么、也不知道马上会恢复。给一个"2.0x 快进中"的提示,
+                                   松手换成"已恢复 1.0x"再淡出, 手势就有了明确的开始与结束。
+                                 ★ IsHitTestVisible=False: 不能吃掉视频区的手势与滚轮(同音量提示)。
+                                 ★ ZIndex=98 与音量提示同级: 位置不重叠, 不必分高下。 -->
+                            <Border x:Name="SpeedOsd" HorizontalAlignment="Center" VerticalAlignment="Top"
+                                    Margin="0,90,0,0" Padding="15,10" CornerRadius="9"
+                                    Background="#B3000000" IsHitTestVisible="False"
+                                    Visibility="Collapsed" Opacity="0" Panel.ZIndex="98">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE7C1;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontSize="16" Foreground="White" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="SpeedOsdText" Text="2.0x" Margin="9,0,0,0"
                                                FontSize="14" Foreground="White" VerticalAlignment="Center" />
                                 </StackPanel>
                             </Border>
