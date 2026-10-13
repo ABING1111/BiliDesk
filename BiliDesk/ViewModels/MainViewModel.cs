@@ -25,7 +25,12 @@ public enum PageKey
     /// <summary>我的页(2026-09-26 新增: 资料+快捷入口+收藏夹; 收藏/历史从侧栏收进这里)</summary>
     Mine = 9,
     /// <summary>稍后再看(2026-09-28 新增: 入口是「我的」页的快捷入口, 不在导航栏上)</summary>
-    WatchLater = 10
+    WatchLater = 10,
+    /// <summary>
+    /// 关注 / 粉丝列表(2026-10-13 新增: 入口是「我的」页的三项统计, 不在导航栏上)。
+    /// 一个页面承载两种模式, 见 <see cref="Models.RelationMode"/> / RelationPage。
+    /// </summary>
+    Relation = 11
 }
 
 /// <summary>主窗口 ViewModel: 导航 + 登录状态</summary>
@@ -96,6 +101,8 @@ public class MainViewModel : ObservableObject
     ///
     /// **收藏/历史也不在导航栏上了**(2026-09-26 改版): 侧栏改为 首页/动态/我的/设置,
     /// 这两个入口收进「我的」页。
+    ///
+    /// **关注/粉丝同理**(2026-10-13): 入口是「我的」页那三项统计, 走同一个 RelationPage。
     /// </summary>
     public static readonly PageKey[] NavPages =
     {

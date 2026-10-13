@@ -11,6 +11,10 @@ namespace BiliDesk.Views.Pages;
 /// 「我的」页: 资料 + 统计 + 快捷入口 + 收藏夹卡片。
 /// 页面实例被 MainWindow 缓存, 每次切进来 Loaded 都会重拉一次数据 ——
 /// 硬币/经验/粉丝这类数字过期了看着难受, 而且本页请求量小, 重拉没有成本压力。
+///
+/// 2026-10-13: 动态/关注/粉丝三项统计改成可点(以前是纯展示), 各进各的二级页,
+/// 与「我的收藏」快捷入口同级。理由: 那三个数字摆在那儿却点不动, 用户想看的
+/// 就是"我关注了谁 / 谁关注了我 / 关注的 UP 更新了啥", 现在有一条明确的路过去。
 /// </summary>
 public partial class MinePage : UserControl
 {
@@ -45,6 +49,20 @@ public partial class MinePage : UserControl
     {
         if (Vm != null) _ = Vm.LoadFoldersAsync(force: true);
     }
+
+    // ---- 三项统计(2026-10-13 改成可点, 与「收藏」同级) ----
+
+    /// <summary>动态 → 动态页(关注 UP 的近期投稿, 见 FollowPage)</summary>
+    private void OnOpenDynamicClick(object sender, MouseButtonEventArgs e)
+        => App.MainVm.Navigate(PageKey.Follow);
+
+    /// <summary>关注 → 关系页(关注模式)</summary>
+    private void OnOpenFollowingClick(object sender, MouseButtonEventArgs e)
+        => SvcWindow.Main?.NavigateToRelation(RelationMode.Following);
+
+    /// <summary>粉丝 → 关系页(粉丝模式)</summary>
+    private void OnOpenFansClick(object sender, MouseButtonEventArgs e)
+        => SvcWindow.Main?.NavigateToRelation(RelationMode.Fans);
 
     /// <summary>点收藏夹卡片 → 收藏页并选中那个夹(经 MainWindow.OpenFavFolder 落地)</summary>
     private void OnFolderClick(object sender, MouseButtonEventArgs e)

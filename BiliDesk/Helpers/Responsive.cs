@@ -52,11 +52,21 @@ public static class Responsive
     /// <summary>Medium → Compact 的**退出**阈值（宽度缩到这儿以下才降档）</summary>
     public const double CompactExit = 1180;
 
-    /// <summary>Medium → Wide 的**进入**阈值</summary>
-    public const double WideEnter = 1540;
+    /// <summary>
+    /// Medium → Wide 的**进入**阈值。
+    ///
+    /// ★ 2026-10-13 由 1540 下调到 1400: 1540 这个数是**按 100% 缩放心算**定的, 但项目支持
+    ///   UI 缩放(Helpers/UiScale.cs), 而 1920×1080 @125% 是极常见配置 —— 那一档下窗口最大
+    ///   只有 1536 DIP, **永远差 4 个单位进不了 Wide**, 于是关注页永远停在 3 列, 右侧空出
+    ///   一大块(用户报"右边空太大")。1400 留出的余量够 125% 与 150% 两档。
+    /// ★ 只动了 Wide 这一组: Compact 那组没动(1060~1180 在任何缩放下都真实可达);
+    ///   真正依赖 Wide 档的只有关注页卡片墙(MinePage 快捷入口写的是 Compact=2|4,
+    ///   其余档位本来就都是 4), 其余页面走 CardWall 自己按容器宽度算列数。
+    /// </summary>
+    public const double WideEnter = 1400;
 
-    /// <summary>Wide → Medium 的**退出**阈值</summary>
-    public const double WideExit = 1520;
+    /// <summary>Wide → Medium 的**退出**阈值(与 <see cref="WideEnter"/> 保持 20px 迟滞死区)</summary>
+    public const double WideExit = 1380;
 
     /// <summary>
     /// 按宽度和当前档位算下一档。**纯函数** —— 可以在离屏探针里把整条拖动路径跑一遍验证不抖。

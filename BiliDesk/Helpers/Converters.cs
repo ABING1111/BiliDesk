@@ -125,8 +125,17 @@ public class HexToBrushConverter : IValueConverter
 /// <summary>
 /// 按"档位"取一个值，供**非动画**用途（典型是 <c>UniformGrid.Columns</c>）。
 ///
-/// 参数写法：<c>"Compact=2|4"</c> —— 前半段是"当值等于 Compact 时用 2"，`|` 后面是其余档位的值。
-/// 反过来写（"其它档位=4，Compact=2"）也能用，只要把 <c>Compact=2</c> 放前半段。
+/// 参数写法有两种：
+/// <list type="bullet">
+/// <item><description><b>三档及以上</b>：<c>"Compact=2;Medium=3;Wide=4"</c>（分号分隔，2026-10-13 新增）。</description></item>
+/// <item><description><b>旧的两档写法</b>：<c>"Compact=2|4"</c> —— 前半段是"当值等于 Compact 时用 2"，
+/// <c>|</c> 后面是<b>其余所有档位</b>共用的值。MinePage 的 QuickGrid 用的就是这个，别改坏。</description></item>
+/// </list>
+///
+/// ★ 为什么要新增分号写法（关注页卡片墙，2026-10-13）：旧格式表达不了"三个档位三个值"。而把三档
+///   硬塞进旧格式（<c>Compact=2|3|4</c>）后果很隐蔽 —— <c>spec[1]</c> 变成字符串 <c>"3|4"</c>，
+///   <c>Convert.ChangeType</c> 转 int 失败，于是走 <see cref="Binding.DoNothing"/>，
+///   <b>Columns 保持原值不动</b>。表现就是"响应式写了但永远不变"，而且不报任何错。
 ///
 /// ★ 为什么不能改用 <c>ObjectAnimationUsingKeyFrames</c> 去动 <c>Columns</c>：
 ///   <c>DiscreteObjectKeyFrame.Value</c> 的声明类型是 **object**，XAML 里的字面量 <c>2</c> 会被解析成
@@ -140,7 +149,23 @@ public class WidthClassToValueConverter : IValueConverter
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
         var current = value?.ToString() ?? string.Empty;
-        var spec = (parameter as string ?? string.Empty).Split('|');
+        var raw = parameter as string ?? string.Empty;
+
+        // ★ 三档写法(2026-10-13 新增, 关注页卡片墙): "Compact=2;Medium=3;Wide=4"。
+        //   当前档位没列出来就**不动**(DoNothing) —— 不猜也不给默认值: 猜错的表现
+        //   与"没生效"一模一样, 极难查。下面的 | 分支是两档旧写法, 语义保持不变。
+        if (raw.Contains(';'))
+        {
+            foreach (var seg in raw.Split(';', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var eqSeg = seg.IndexOf('=');
+                if (eqSeg > 0 && string.Equals(seg[..eqSeg].Trim(), current, StringComparison.Ordinal))
+                    return ToValue(seg[(eqSeg + 1)..].Trim(), targetType);
+            }
+            return Binding.DoNothing;
+        }
+
+        var spec = raw.Split('|');
 
         // 默认值 = `|` 后面那段；没写 `|` 就退回第一段
         var picked = spec.Length > 1 ? spec[1] : (spec.Length > 0 ? spec[0] : string.Empty);
@@ -153,11 +178,17 @@ public class WidthClassToValueConverter : IValueConverter
                 picked = head[(eq + 1)..];
         }
 
+        return ToValue(picked, targetType);
+    }
+
+    /// <summary>把字符串转成目标类型; 转不动就"不动"(DoNothing), 不抛进绑定系统</summary>
+    private static object ToValue(string text, Type targetType)
+    {
         try
         {
-            return string.IsNullOrEmpty(picked)
+            return string.IsNullOrEmpty(text)
                 ? Binding.DoNothing
-                : System.Convert.ChangeType(picked, targetType, CultureInfo.InvariantCulture);
+                : System.Convert.ChangeType(text, targetType, CultureInfo.InvariantCulture);
         }
         catch
         {

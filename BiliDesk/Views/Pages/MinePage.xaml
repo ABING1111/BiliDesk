@@ -4,11 +4,45 @@
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
              xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
              Background="{DynamicResource AppBackgroundBrush}">
+    <UserControl.Resources>
+        <!-- ★ 动态 / 关注 / 粉丝 三个入口共用一套外观(2026-10-13 抽出来的)。
+             原来三段各写一遍 <Border.Style>(圆角 10 / 透明底 / 悬停垫灰), 一共 60 多行;
+             而这三块**永远一起改** —— 有一块忘了改, 页面上就是三块长得不一样。
+             现在视觉只有这一处, 三段只各自留事件、提示文案与内容。 -->
+        <Style x:Key="StatEntryStyle" TargetType="Border">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="0,10" />
+            <Setter Property="Margin" Value="4,0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource ControlFillHoverBrush}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- 三块共用的"数字在上、标签在下"排版 -->
+        <Style x:Key="StatValueTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="19" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        </Style>
+        <Style x:Key="StatLabelTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+        </Style>
+    </UserControl.Resources>
     <!--
         「我的」页(2026-09-26 新增, 版式对齐 B 站网页版 space 首页):
         资料头(头像/昵称/等级/硬币/经验) → 动态/关注/粉丝 → 快捷入口 → 我的收藏夹卡片。
         快捷入口现有四个: 离线缓存 / 观看记录 / 我的收藏 / 稍后再看(2026-09-28 加)。
         我的订阅暂不做(用户拍板), 参考图里那个位置空着。
+
+        2026-10-13: 动态/关注/粉丝三项从纯展示改成可点(与「收藏」同级), 见下面那段的说明。
     -->
     <Grid helpers:Responsive.Enable="True">
 
@@ -130,29 +164,43 @@
                     </StackPanel>
                 </StackPanel>
 
-                <!-- == 动态 / 关注 / 粉丝(三等分, 数字在上、标签在下) == -->
-                <UniformGrid Columns="3" Margin="0,28,0,0">
-                    <StackPanel HorizontalAlignment="Center">
-                        <TextBlock Text="{Binding DynamicText}" FontSize="18" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextPrimaryBrush}" />
-                        <TextBlock Text="动态" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextTertiaryBrush}" />
-                    </StackPanel>
-                    <StackPanel HorizontalAlignment="Center">
-                        <TextBlock Text="{Binding FollowingText}" FontSize="18" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextPrimaryBrush}" />
-                        <TextBlock Text="关注" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextTertiaryBrush}" />
-                    </StackPanel>
-                    <StackPanel HorizontalAlignment="Center">
-                        <TextBlock Text="{Binding FollowerText}" FontSize="18" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextPrimaryBrush}" />
-                        <TextBlock Text="粉丝" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextTertiaryBrush}" />
-                    </StackPanel>
+                <!-- == 动态 / 关注 / 粉丝(三等分, 数字在上、标签在下) ==
+                     2026-10-13: 三项从"只能看数字"改成可点, 与「收藏」同级 ——
+                     点动态进动态页(关注 UP 的近期投稿), 点关注/粉丝进关系页看列表。
+                     整块垫一层 hover 底色(与快捷入口同款): StackPanel 自己有内容就能命中,
+                     但没背景时 hover 只覆盖文字那几条像素, 视觉上"点了没反应"。
+                     ★ 三个入口分别走不同页面, 但关注/粉丝共用 RelationPage(见 RelationMode) -->
+                <!-- ★ 三个入口的写法: 圆角 10 + 悬停垫底(外观全在 StatEntryStyle 里)。
+                     早先是一块**直角**的整幅灰底铺满三等分, 在浅色主题下就是三条生硬的
+                     横带, 而且和下面「快捷入口」那种圆角小块的观感完全不搭 ——
+                     同样是"可点的东西", 一处圆一处方, 看着像两套控件。
+                     ★ 别再往这段里加"悬停时数字变色"之类的效果: 这三块每次改版都是
+                     一起改的, 各写一份早晚会漏掉一块, 而漏掉的那块用户一眼就看出来。 -->
+                <UniformGrid Columns="3" Margin="0,26,0,0">
+                    <Border Style="{StaticResource StatEntryStyle}"
+                            MouseLeftButtonUp="OnOpenDynamicClick"
+                            ToolTip="查看关注的 UP 的动态">
+                        <StackPanel>
+                            <TextBlock Text="{Binding DynamicText}" Style="{StaticResource StatValueTextStyle}" />
+                            <TextBlock Text="动态" Style="{StaticResource StatLabelTextStyle}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource StatEntryStyle}"
+                            MouseLeftButtonUp="OnOpenFollowingClick"
+                            ToolTip="查看我关注的人">
+                        <StackPanel>
+                            <TextBlock Text="{Binding FollowingText}" Style="{StaticResource StatValueTextStyle}" />
+                            <TextBlock Text="关注" Style="{StaticResource StatLabelTextStyle}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource StatEntryStyle}"
+                            MouseLeftButtonUp="OnOpenFansClick"
+                            ToolTip="查看关注我的人">
+                        <StackPanel>
+                            <TextBlock Text="{Binding FollowerText}" Style="{StaticResource StatValueTextStyle}" />
+                            <TextBlock Text="粉丝" Style="{StaticResource StatLabelTextStyle}" />
+                        </StackPanel>
+                    </Border>
                 </UniformGrid>
 
                 <!-- == 快捷入口(四个: 离线缓存 / 观看记录 / 我的收藏 / 稍后再看)。
