@@ -2241,6 +2241,81 @@ public partial class PlayerWindow : FluentWindow
         try { if (_mp != null) _mp.Volume = v; } catch { }
     }
 
+    /// <summary>
+    /// 倍速切换后**补写一次音量**。
+    ///
+    /// ★★★ 为什么必须补写(2026-10-14 探针 bd-probe-ratevol 实测根因):
+    ///   LibVLC 的倍速是靠 **音频滤镜 scaletempo** 实现的(原生日志:
+    ///   `using audio filter module "scaletempo"`, `1.000 scale` → `2.000 scale`)。
+    ///   而滤镜链是 **aout(音频输出)的一部分** —— 倍速一变, libvlc 会把整条音频链拆掉重建:
+    ///      removing module "scaletempo"
+    ///      removing module "samplerate"
+    ///      removing module "float_mixer"
+    ///      keeping audio output
+    ///   重建期间 WASAPI 那一段不出声, 表现为"恢复一倍速后有几秒没声音"。
+    ///
+    /// ★ 为什么补写音量有用: 上面那三条是"滤镜模块"被拆, **aout 本身是保留的**
+    ///   (日志明确写 `keeping audio output`), 所以音量值不会真的归零 ——
+    ///   探针里 `mp.Volume` 读回始终是 80。真正丢声音的是**滤镜重建的那几帧窗口**:
+    ///   scaletempo 内部有一段 standing/queue 缓冲要重新填, 填满之前没有样本往外送。
+    ///   这个窗口补写音量关不掉, 但可以**顺手保证音量一定在**(防止某些片源上
+    ///   aout 真的被重建时音量被带回默认值), 所以这里做的是"保险"而不是"主治"。
+    ///
+    /// ★ 主治手段见 <see cref="SetRateWithAudioGuard"/>: 倍速切换期间先把音量**短暂压到 0**
+    ///   再恢复。理由: 那几秒里声音本来就是断续的(滤镜重建 + 缓冲区重填),
+    ///   与其让用户听到"沙沙的半截声", 不如干脆静音一下再原量回来 —— 观感上从
+    ///   "刺耳的断续"变成"安静一下后正常", 而且原量恢复由本方法保证。
+    /// </summary>
+    private void ReassertVolume()
+    {
+        if (_closing || _mp == null) return;
+        // seek 静音期间别抢: 那时的音量由 RestoreVolumeAfterSeek 收口
+        if (_seekMuteSavedVolume >= 0) return;
+        try { _mp.Volume = _volumeCache; } catch { /* 播放器已失效 */ }
+    }
+
+    /// <summary>
+    /// 带音频保护的倍速切换: 先把音量短暂压到 0, 换完倍速再补写回权威值。
+    ///
+    /// ★ 解决的用户问题: "长按二倍速后, 恢复一倍速时有几秒没声音"。
+    ///   根因是 scaletempo 滤镜链重建(见 <see cref="ReassertVolume"/> 的日志摘录),
+    ///   重建那几百毫秒到几秒里音频输出是断续的。
+    ///
+    /// ★ 为什么"先静音再恢复"比"直接切"好: 滤镜重建期用户听到的是**刺耳的断续声**
+    ///   (一半是旧倍速的尾音、一半是新倍速的头); 压到 0 再恢复, 听到的是
+    ///   "安静一下 → 正常速度正常音量", 后者更接近"松手了就正常了"的直觉。
+    ///
+    /// ★ 必须补写回 <see cref="_volumeCache"/> 而不是写死 80: 用户可能刚把音量
+    ///   调到 20 或 100(设置里还继承着), 写死会让音量悄悄变掉。
+    ///
+    /// ★ seek 静音期间直接走原生切换: 那时本来就没在出声, 不需要再压一次。
+    /// </summary>
+    private void SetRateWithAudioGuard(float rate)
+    {
+        if (_closing || _mp == null) return;
+
+        if (_seekMuteSavedVolume >= 0)
+        {
+            // 已经在 seek 静音里: 声音本来就收着, 直接切
+            try { _mp.SetRate(rate); } catch { }
+            ReassertVolume();
+            return;
+        }
+
+        var saved = _volumeCache;
+        try
+        {
+            // 1) 压到 0(用户主动调音量时 _seekMuteSavedVolume < 0, 这里不影响那本账)
+            if (saved > 0) _mp.Volume = 0;
+            // 2) 切倍速(滤镜链在这一步重建)
+            _mp.SetRate(rate);
+        }
+        catch { /* 切换失败也要把音量还回去, 不能把用户留在静音态 */ }
+
+        // 3) 立刻补写回权威音量
+        ReassertVolume();
+    }
+
     /// <summary>当前遮罩是不是我们自己弹的"正在缓冲"(据此判断能不能收掉)</summary>
     private bool IsShowingBuffering()
         => LoadingOverlay != null && LoadingText != null &&
@@ -2668,9 +2743,18 @@ public partial class PlayerWindow : FluentWindow
         // 上一次的淡出可能还没跑完, 从当前值补最稳, 不会出现"提示淡到一半卡住")
         SpeedOsd.Visibility = Visibility.Visible;
         SpeedOsd.BeginAnimation(OpacityProperty, null);
+        // ★★★ 淡入动画**绝不能写 FillBehavior=Stop**(2026-10-14 修"缓存中长按 2x,
+        //   缓存结束后倍速提示消失"): XAML 里 SpeedOsd 的基准值是 `Opacity="0"`,
+        //   而 Stop 语义是"播完动画把属性还原成**基准值**" —— 于是 120ms 淡入一结束,
+        //   Opacity 立刻掉回 0, 提示虽然 Visibility=Visible 却整块透明。
+        //   探针 bd-probe-speedosd 实测: 第一次显示 +180ms 后 Opacity=0.00。
+        //   ★ 这解释了为什么"第二次显示是好的": 上一次淡出的 Completed 里写了
+        //     `Opacity = 1`, 把基准值改成了 1, 之后所有淡入的 Stop 都还原到 1。
+        //     ⇒ 只有**每个进程的第一次显示**中招, 与"缓存期间长按"完全对得上
+        //       (缓存期间恰好是打开视频后的第一次长按)。
+        //   ★ 与 ShowVolumeHint 保持一致: 它的淡入也没写 FillBehavior(默认 Hold)。
         SpeedOsd.BeginAnimation(OpacityProperty,
-            new DoubleAnimation(Math.Min(1.0, SpeedOsd.Opacity), 1, TimeSpan.FromMilliseconds(120))
-            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop });
+            new DoubleAnimation(Math.Min(1.0, SpeedOsd.Opacity), 1, TimeSpan.FromMilliseconds(120)));
 
         if (hold) return;   // 长按期间: 挂着等松手
 
@@ -3213,7 +3297,9 @@ public partial class PlayerWindow : FluentWindow
             // 进入 2x 快进
             // 先同步弹幕时钟倍速(见 SyncDanmakuClockRate): 倍速一变就落定, 不等下一次校准
             SyncDanmakuClockRate(FastForwardRate);
-            try { _mp.SetRate(FastForwardRate); } catch { }
+            // ★ 走带音频保护的切换(2026-10-14 修"恢复一倍速有几秒没声音"):
+            //   scaletempo 滤镜链重建会有一段不出声, 先压静音再原量回来, 观感最干净。
+            SetRateWithAudioGuard(FastForwardRate);
             if (SpeedText != null) SpeedText.Text = FastForwardRate.ToString("0.#") + "x";
             // ★ 浮出倍速提示(2026-10-13 用户要求): 长按 2x 是无入口手势,
             //   不提示的话用户只看到画面变快, 不知道发生了什么、也不知道松手会恢复。
@@ -3259,7 +3345,10 @@ public partial class PlayerWindow : FluentWindow
             _longPressFired = false;
             // 先同步弹幕时钟倍速(见 SyncDanmakuClockRate): 倍速一变就落定, 不等下一次校准
             SyncDanmakuClockRate(1.0f);
-            try { _mp.SetRate(1.0f); } catch { }
+            // ★ 带音频保护的恢复(2026-10-14 修"恢复一倍速有几秒没声音"):
+            //   scaletempo 滤镜链要从 2x 形态拆回 1x 形态, 那一下不出声;
+            //   先压静音再原量回来, 用户听到的是"安静一下 → 正常"。
+            SetRateWithAudioGuard(1.0f);
             if (SpeedText != null) SpeedText.Text = "1.0x";
             // ★ 倍速提示收场: 换成"已恢复"亮一下再淡出 —— 手势有始有终,
             //   用户才知道刚才那阵快进是自己按出来的、现在结束了。
@@ -3296,7 +3385,8 @@ public partial class PlayerWindow : FluentWindow
             _longPressFired = false;
             // 先同步弹幕时钟倍速(见 SyncDanmakuClockRate): 倍速一变就落定, 不等下一次校准
             SyncDanmakuClockRate(1.0f);
-            try { _mp.SetRate(1.0f); } catch { }
+            // ★ 同 Up 那条路: 带音频保护恢复(见 SetRateWithAudioGuard)
+            SetRateWithAudioGuard(1.0f);
             if (SpeedText != null) SpeedText.Text = "1.0x";
             // ★ 兜底路径也要收掉倍速提示: 鼠标移出时 Up 不会再来了,
             //   不在这里收的话提示会一直挂在屏幕上(用户报过同类"提示不消失")。

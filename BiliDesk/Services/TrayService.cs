@@ -137,6 +137,32 @@ public class TrayService : IDisposable
         }
     }
 
+    /// <summary>
+    /// 发一条**系统通知**(托盘气泡)。
+    ///
+    /// ★ 为什么用它而不是再做一套通知: 项目已经为了"关闭到托盘"持有 WinForms 的
+    ///   NotifyIcon(见类注释), 气泡就是它自带的能力, 复用不会多占一个托盘图标。
+    ///   再引一套 UWP toast / CommunityToolkit 只为了这一条通知不划算。
+    ///
+    /// ★ 必须在托盘初始化过之后调才有用(<see cref="Initialize"/> 失败时 _icon 为 null)。
+    ///   失败一律静默 —— 通知是锦上添花, 绝不能因为它把下载流程带崩。
+    /// </summary>
+    /// <param name="title">标题, 建议 ≤ 40 字(气泡标题超长会被系统截断)</param>
+    /// <param name="message">正文, 建议 ≤ 80 字</param>
+    /// <param name="icon">图标类型, 默认 Info</param>
+    public void Notify(string title, string message,
+        System.Windows.Forms.ToolTipIcon icon = System.Windows.Forms.ToolTipIcon.Info)
+    {
+        try
+        {
+            _icon?.ShowBalloonTip(5000, title, message, icon);
+        }
+        catch
+        {
+            // 系统策略关掉气泡 / 托盘未初始化: 静默忽略(应用内 Toast 已经给过反馈了)
+        }
+    }
+
     private void ExitApp()
     {
         var app = Application.Current;

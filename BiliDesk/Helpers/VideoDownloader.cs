@@ -118,6 +118,11 @@ public static class VideoDownloader
             File.Move(part, path);
 
             Svc.Toast.Show("已保存 " + Path.GetFileName(path));
+            // ★ 系统通知(2026-10-14 用户要求"下载完成时给个系统通知"):
+            //   下载是**后台长任务**(几百兆要好几秒到几分钟), 用户这期间多半切去了别的窗口,
+            //   应用内 Toast 只在本程序的界面里可见, 切走就看不到了 —— 系统气泡能到他面前。
+            //   只在应用内 Toast 之外补这一条: 两者互补, 不重复也不漏。
+            TrayService.Instance.Notify("视频下载完成", Path.GetFileName(path));
             return path;
         }
         catch (Exception ex)
