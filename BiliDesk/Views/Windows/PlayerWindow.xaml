@@ -755,7 +755,7 @@
                            setter, 会吃掉 Button.Foreground(项目里反复踩的那个坑)。 -->
                     <Button x:Name="BtnFillWindow" Style="{StaticResource IconButtonStyle}"
                             Width="34" Height="34"
-                            ToolTip="铺满窗口" Click="OnFillWindowClick"
+                            ToolTip="铺满窗口 (收起右侧视频详情)" Click="OnFillWindowClick"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
                         <TextBlock x:Name="FillWindowGlyph" Text="&#xE9A6;"
                                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -1041,8 +1041,9 @@
                                         <!-- 音量 -->
                                         <TextBlock x:Name="VolumeIcon" Grid.Column="3" Text="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                    Foreground="#E6FFFFFF" FontSize="14" VerticalAlignment="Center" Margin="10,0,6,0" />
+                                        <!-- 音量(初值不写死: 构造函数按设置里的 PlayerVolume 摆, 见 SettingsStore.PlayerVolume) -->
                                         <Slider Grid.Column="4" x:Name="VolumeSlider" Style="{StaticResource PlayerSlider}"
-                                                Minimum="0" Maximum="100" Value="80" Width="78"
+                                                Minimum="0" Maximum="100" Width="78"
                                                 ValueChanged="OnVolumeChanged" />
 
                                         <!-- 倍速 -->
@@ -1218,6 +1219,108 @@
                                     </Grid>
                                 </StackPanel>
                             </Border>
+
+                            <!-- ============ 右侧详情栏 收起/展开把手(2026-10-12 新增) ============
+                                 ★ 为什么放在 VideoAreaRoot 里(而不是主窗口那层 Grid): VideoView 是
+                                   HwndHost, 主窗口里的 WPF 元素会被视频 HWND 整个盖住(airspace)——
+                                   只有 VideoView.Content 这棵子树渲染在"跟随视频区位置/大小的浮动
+                                   窗口"里, 既能浮在视频之上又能收到鼠标。控制栏/音量提示都在这里, 同理。
+                                 ★ 停靠在视频区右缘, 也就是与右侧信息栏的分界线。
+                                 ★ 箭头指向**面板运动的方向**(2026-10-12 按用户反馈修正, 别改反):
+                                   展开态(详情栏可见)显示 › —— 点它, 面板向右收起;
+                                   收起态显示 ‹ —— 点它, 面板从右边放回来。
+                                 ★ 必须**贴死**右缘(Margin=0): 留任何边距都会有一线视频从把手与
+                                   详情栏之间透出来, 看着就是"中间有缝"(2026-10-12 用户反馈)。
+                                 ★ 与顶栏「铺满窗口」是**同一个开关**( _isFillWindow, 见
+                                   ToggleFillWindow): 两个入口共用一份状态, 箭头与提示由
+                                   UpdateFillWindowButton 一起摆 —— 不会出现"把手说收起、
+                                   顶栏按钮说展开"各说各话。全屏时整个藏掉(信息栏已被强制收起,
+                                   点了不会有任何画面变化, 见 ApplyInfoPanelState)。
+                                 ★ 视觉(2026-10-12 按用户给的参考图改): 学参考浮钮的**浅色磨砂**
+                                   材质 —— 半透明白底 + 深色箭头, 而不是早期那套"深色胶囊 + 白字"
+                                   (那套是音量提示为压暗视频定的, 把手贴在白色详情栏边上用浅色更协调)。
+                                   细边 10% 黑: 平时看不出, 亮画面/白视频上用来勾出轮廓, 免得把手隐形。
+                                 ★ ZIndex=90: 在弹幕层(0)与控制栏之上、跳过提示(97)/音量提示(98)之下。
+                                 ★ 点击防护见 OnVideoAreaMouseLeftDown/Up: 那两兄弟是 Preview 隧道
+                                   事件, 挂在 VideoAreaRoot 上会**先于**本按钮收到点击, 不挡的话
+                                   点把手会顺带暂停一次。 -->
+                            <Button x:Name="BtnCollapsePanel" HorizontalAlignment="Right"
+                                    VerticalAlignment="Center" Margin="0"
+                                    Width="18" Height="64" Panel.ZIndex="90"
+                                    Focusable="False"
+                                    Click="OnCollapsePanelClick">
+                                <Button.Style>
+                                    <Style TargetType="Button">
+                                        <!-- ★ 走主题资源而不是写死颜色(2026-10-12 审查抓到的深色主题问题):
+                                             这个把手贴在**主题面板**边缘, 不是压在视频画面上的浮层 ——
+                                             写死浅色磨砂的话, 深色主题下它就是整块画面里唯一一块
+                                             纯白亮条。定义见 Themes\Colors.*.xaml 的 CollapseHandle* 键。 -->
+                                        <Setter Property="Background" Value="{DynamicResource CollapseHandleBrush}" />
+                                        <Setter Property="Cursor" Value="Hand" />
+                                        <Setter Property="SnapsToDevicePixels" Value="True" />
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="Button">
+                                                    <!-- 左缘贴视频、圆角开在左边(像个从视频里伸出来的拉手);
+                                                         右缘必须**直角且贴死**边界(Margin=0, 见上方注释) -->
+                                                    <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                                            BorderBrush="{DynamicResource CollapseHandleBorderBrush}"
+                                                            BorderThickness="1"
+                                                            CornerRadius="8,0,0,8">
+                                                        <ContentPresenter HorizontalAlignment="Center"
+                                                                          VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="Bd" Property="Opacity" Value="0.88" />
+                                                        </Trigger>
+                                                        <Trigger Property="IsPressed" Value="True">
+                                                            <Setter TargetName="Bd" Property="Opacity" Value="0.72" />
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </Button.Style>
+                                <TextBlock x:Name="CollapsePanelGlyph" Text="&#x203A;"
+                                           FontFamily="Segoe UI" FontSize="16" FontWeight="Bold"
+                                           Foreground="{DynamicResource CollapseHandleGlyphBrush}"
+                                           HorizontalAlignment="Center" />
+                            </Button>
+
+                            <!-- ============ 收起后的「评论」展开按钮(2026-10-13) ============
+                                 ★ 为什么必须再加这一个: 收起时 InfoPanel 整个 Collapsed
+                                   (见 ApplyInfoPanelState —— 收是整个 Collapsed, 不是列宽设 0,
+                                   因为里面挂着几百张评论卡, 每切一次都要重量一遍, 会卡一下),
+                                   于是**评论区连同刚加的「收起」按钮一起消失**。
+                                   剩下的叫回入口只有视频右缘那个 18px 的小把手, 而它贴在视频正中、
+                                   要把鼠标横穿整个画面才够得到 —— 等于"收起容易、回来难"。
+                                   这个按钮摆在右上角, 收起后的第一眼位置。
+                                 ★ 必须在 VideoAreaRoot 这棵子树里(理由同 BtnCollapsePanel:
+                                   主窗口那层的 WPF 元素会被视频 HWND 的 airspace 盖住)。
+                                 ★ 显隐只跟"已收起"绑定(见 ApplyCollapseHandleVisibility 里的
+                                   _isFillWindow 分支), 不跟控制栏那套走 —— 但控制栏隐藏
+                                   (沉浸模式)时同样要退场, 所以还是复用那一个入口。
+                                 ★ 样式复用 PlayerTextBtn: 它本来就是为"压在视频上"做的
+                                   (深色半透明底 + 白字), 用主题里的浅色按钮会看不清。
+                                 ★ 文字必须写显式 TextBlock 并绑 Foreground: 全局隐式 TextBlock
+                                   样式带 Foreground setter, 会吃掉继承下去的 #F2FFFFFF。
+                                 ★ 箭头 ‹ = 面板从右边放回来(2039, 与把手收起态同一个字形)。 -->
+                            <Button x:Name="BtnExpandInfoPanel" HorizontalAlignment="Right"
+                                    VerticalAlignment="Top" Margin="0,14,14,0"
+                                    Style="{StaticResource PlayerTextBtn}" Panel.ZIndex="90"
+                                    Visibility="Collapsed" Focusable="False"
+                                    Click="OnFillWindowClick"
+                                    ToolTip="展开右侧视频详情">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="&#x2039;" FontFamily="Segoe UI" FontSize="14"
+                                               Margin="0,0,5,0" VerticalAlignment="Center"
+                                               Foreground="#F2FFFFFF" />
+                                    <TextBlock Text="评论与详情" FontSize="12" VerticalAlignment="Center"
+                                               Foreground="#F2FFFFFF" />
+                                </StackPanel>
+                            </Button>
                         </Grid>
                 </vlc:VideoView>
             </Grid>
@@ -1547,18 +1650,17 @@
                                         <TextBlock x:Name="BtnPagesText" Text="分P" FontSize="15"
                                                    Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                                     </Button>
-                                    <!-- 返回评论列表: 进了"评论详情"才出现, 就摆在"评论详情"右边(用户指定)。
-                                         用按钮而不是文字链接 —— 这里是个"动作", 有底的按钮更好认、也更好点。 -->
-                                    <Button x:Name="BtnBackToComments" Grid.Column="4" Visibility="Collapsed"
-                                            Style="{StaticResource SubtleButtonStyle}"
-                                            Content="返回评论列表" FontSize="12"
-                                            Margin="10,0,0,0" Padding="10,4"
-                                            HorizontalAlignment="Left" VerticalAlignment="Center"
-                                            Click="OnCommentDetailBack"
-                                            ToolTip="回到评论列表" />
+                                    <!-- ★ 第 5 列原来放过两个按钮, 现在**空了**, 但列定义留着:
+                                          ① 「返回评论列表」(与"评论详情"tab 同行) —— 已按用户要求改成
+                                             右下角的圆形悬浮按钮, 见文件末尾 InfoPanel 里的 BtnBackToComments;
+                                          ② 「收起 ›」(靠右) —— 2026-10-13 加, 同日按用户要求**已删除**:
+                                             收起详情栏的入口在顶栏「铺满窗口」和视频右缘那个小把手就够了。
+                                             评论区这一行是「简介/评论/合集」这组选集 tab, 不该混进一个收起动作 ——
+                                             收起整块面板属于**窗口级**操作, 摆在这一行反而像是评论区的功能。
+                                          列留着是因为它吃掉剩余宽度、让前四列靠左; 空列没有副作用。 -->
+
                                 </Grid>
                             </Border>
-
                             <!-- ============ 分P 弹层(点「分P」滑出, 2026-10-11 新增) ============
                                  ★ 它挂在上面那个 Border **外面**(是同一个 StackPanel 里的兄弟),
                                    不是 Border 的子级 —— Border 只接受一个子级, 塞进去直接编译不过;
@@ -1969,10 +2071,16 @@
                                                 </ContentControl>
 
                                                 <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,12" />
-                                                <!-- 相关回复共 N 条(与 B 站 App 详情页文案一致) -->
+                                                <!-- 相关回复共 N 条(与 B 站 App 详情页文案一致)
+                                                     ★ 为什么不再按 HasReplies 藏起来:
+                                                       这一行显示的是**接口给的准确总数**("已加载条数"是另一回事,
+                                                       见 ReplyThreadPaging)。早先把准确总数砍成已加载条数的那几处
+                                                       已经收口了(只允许在"成功且整页无新增"时下调), 所以这里如实写:
+                                                       接口说 0 就显示"相关回复共 0 条",
+                                                       不靠"整行藏起来"假装这条评论没有回复 —— 那正好盖住了
+                                                       "接口确实说 0"和"总数被误砍成 0"这两种完全不同的情况。 -->
                                                 <TextBlock Text="{Binding ReplyCount, StringFormat=相关回复共 {0} 条}"
-                                                           FontSize="12" FontWeight="SemiBold" Margin="0,0,0,10"
-                                                           Visibility="{Binding HasReplies, Converter={StaticResource BoolToVis}}" />
+                                                           FontSize="12" FontWeight="SemiBold" Margin="0,0,0,10" />
                                                 <!-- 楼中楼回复: 每条带头像 + 等级/UP 标 + 赞踩回复 -->
                                                 <ItemsControl x:Name="DetailRepliesList" ItemsSource="{Binding Replies}">
                                                     <ItemsControl.ItemTemplate>
@@ -2035,7 +2143,16 @@
                                                         Style="{StaticResource LinkButtonStyle}"
                                                         FontSize="12" HorizontalAlignment="Left" Margin="0,4,0,0" Padding="0,2"
                                                         Click="OnLoadMoreRepliesClick"
+                                                        ToolTip="拉取下一页回复; 若上一页没加载出来, 点这里重试同一页"
                                                         Visibility="{Binding HasMoreReplies, Converter={StaticResource BoolToVis}}" />
+                                                <!-- 楼中楼回复的加载/重试状态: 文本由 code-behind 写(见 UpdateReplyStatus)。
+                                                     ★ 为什么非要这一行: 失败时"展开更多回复"按钮还在、文案一个字没变
+                                                       (准确总数没有被砍), 用户根本分不清"再点一次是在重试"
+                                                       还是"界面卡住了", 结果多半直接关窗口。
+                                                       写明"第几页没出来、点下方按钮重试同一页", 重试路径才可见。 -->
+                                                <TextBlock x:Name="DetailReplyStatusText" Visibility="Collapsed"
+                                                           Style="{StaticResource MetaTextStyle}"
+                                                           FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0" />
                                             </StackPanel>
                                     </Grid>
                                 </StackPanel>
@@ -2044,6 +2161,50 @@
                     </ScrollViewer>
                 </Border>
 
+                <!-- ============ 二级评论区 → 一级评论区 的返回: 右下角圆形悬浮按钮 ============
+                     2026-10-13 按用户要求改成圆形悬浮(原来是个排在 tab 行里的「返回评论列表」文字按钮)。
+
+                     ★ 为什么必须挂在 InfoPanel 这一层、而不是放进 ScrollViewer 里:
+                       它要**常驻**。评论详情动辄几百条回复, 放进滚动流里会跟着内容滚走 ——
+                       用户往下翻几屏就找不到"返回"了, 而返回恰恰是这种长列表里最该随时能按的。
+                       InfoPanel 这个 Grid 会把它的两个子元素(Border 与本按钮)**重叠**排布,
+                       所以按钮浮在滚动内容之上, 且完全不参与滚动。
+                     ★ 为什么用不透明的 FloatingFillBrush 而不是 AccentSoftFillBrush:
+                       AccentSoftFill 是半透明的(浅色主题 0x1C), 压在评论文字上会透出下面的字,
+                       按钮像是"脏了一块"。FloatingFill 是**不透明**版本(见 Colors.*.xaml 的说明),
+                       本来就是给"浮在内容上"用的那一组。深浅两套都是实色(浅 #E8EAED / 深 #2D2D2D)。
+                     ★ 尺寸 38 而非更大: 它会盖住右下角一小块评论内容, 这是常驻悬浮的固有代价;
+                       40 太大、28 又难点。边距 14 也一样是"少挡一点"与"不贴边"的折中。
+                     ★ 圆形用 CornerRadius=19(= 直径/2) 而不是 999 —— 后者在 WPF 里
+                       常常因为边框厚度算出略大于半径的形状, 边缘发虚。
+                     ★ 图标 E72B = ChevronLeft(向左尖括号), 与「关系」页那个悬浮返回按钮同款字形。
+                       Foreground 必须显式写: 全局隐式 TextBlock 样式带 Foreground setter,
+                       优先级高于继承, 不写就是固定深灰(浅色主题下压在浅底上勉强能看, 深色下就糊了)。
+                     ★ 底色/悬停/按下三态走 FloatingFill* 一组, 与首页右下角工具列按钮同款手感。
+                     ★ 显隐仍由 EnterCommentDetail / 退出详情那两处摆(见 code-behind),
+                       与 tab 文案("评论" ↔ "评论详情")在同一处切换, 不会两边打架。 -->
+                <!-- ★ 2026-10-13: 换成 Styles.xaml 里的 CircularFloatingBackButtonStyle, 与「我的关注/粉丝」页
+                     的右下角悬浮返回**同一个样式**。
+                     ★ 为什么必须共用而不是各写一份: 这两个按钮长得一模一样(同一个 ChevronLeft、
+                       同样圆形、同样压在内容右下角), 却是两次分别实现的 —— 结果关系页那个
+                       Focusable=False(键盘用户出不去), 播放器这个用 FloatingFillBrush
+                       (亚克力模式下变半透明, 底下的评论文字整片透上来)。共用一份之后这类
+                       漏改不可能再发生。
+                     ★ 尺寸从 38 变 46: 共享样式定的是 46(与关系页一致)。38 是当初"少挡一点
+                       评论内容"的折中, 但 46 与图标 18 之间的留白比例更好看, 且评论详情右下的
+                       内容密度低, 多挡一点换来的是"按钮更像个按钮"。
+                     ★ 显隐仍由 EnterCommentDetail / 退出详情那两处摆(见 code-behind),
+                       与 tab 文案("评论" ↔ "评论详情")在同一处切换, 不会两边打架。 -->
+                <Button x:Name="BtnBackToComments" Visibility="Collapsed"
+                        HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                        Margin="0,0,14,14" Panel.ZIndex="20"
+                        Style="{StaticResource CircularFloatingBackButtonStyle}"
+                        Click="OnCommentDetailBack"
+                        ToolTip="返回评论列表 (Esc)"
+                        AutomationProperties.Name="返回评论列表">
+                    <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Button>
                 <!-- ============ 合集面板(点 tab 行右侧的「合集」滑出, 2026-10-02 新增) ============
                      ★ 为什么是"盖在信息栏上的浮层"而不是"信息栏里的第四个 tab":
                        合集列表和简介/评论是**互斥**的内容, 走 tab 要动 GroupName=ContentTab 那套结构,

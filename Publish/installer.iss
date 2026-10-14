@@ -1,7 +1,13 @@
 ; ============================================================
 ; BiliDesk 安装器 (Inno Setup 6)
 ;
-; 前提: 先跑 发布.ps1 生成 "BiliDesk-安装器-files" (框架依赖版, 不含 .NET)。
+; 前提: 先跑 发布.ps1, 它会生成 Publish\BiliDesk-<版本>-installer\ 目录:
+;       installer.iss        ← 本文件的副本
+;       files\               ← 框架依赖版载荷(不含 .NET 运行时)
+;   ★ 为什么载荷在 files\ 子目录里而不是与 .iss 平级: 目录名带版本号, 而 .iss 里的
+;     Source 路径是**相对自身**写的 —— 平级的话那个路径就得跟着版本号变, 每次升版本都要
+;     手改一次 .iss, 而"忘了改"的后果是装出一个空壳安装器(装完什么都没有, 而且不报错)。
+;     放进固定的 files\ 子目录后, 这个路径**永不再变**。
 ; 本脚本把它打包成安装器, 并在安装前检测 .NET 桌面运行时 —— 8 及以上任何大版本
 ; 都可以(程序在 csproj 里配了 RollForward=Major, 没有运行时 8 时可直接跑在 10+ 上),
 ; 一个都没有才引导下载 .NET 10 桌面运行时(所以安装器本体能保持 ~30MB,
@@ -10,11 +16,11 @@
 ; 用 Inno Setup 打开本文件编译即可。
 ; ============================================================
 #define MyAppName "BiliDesk"
-#define MyAppVersion "1.2.5"
+#define MyAppVersion "1.2.8"
 #define MyAppPublisher "ABing"
 #define MyAppExeName "BiliDesk.exe"
-; 指向发布脚本生成的框架依赖目录(相对本 .iss 所在目录)
-#define MySourceDir "BiliDesk-安装器-files"
+; 指向发布脚本生成的框架依赖目录(相对本 .iss 所在目录, 名字固定不变, 见文件头说明)
+#define MySourceDir "files"
 
 [Setup]
 ; AppId 的字面 "{" 必须写成 "{{"(Inno 常量转义), 否则编译报 Unknown constant
@@ -40,7 +46,10 @@ ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
 ; 应用是 x64-only
 PrivilegesRequired=admin
-SetupIconFile=..\BiliDesk\Assets\app.ico
+; ★ 路径要跟着 .iss 的新位置改: .iss 从 Publish\ 搬进了 Publish\BiliDesk-<ver>-installer\,
+;   所以要回退**两级**才到仓库根。以前是回退一级 —— 在新结构下那个路径指向一个不存在的
+;   目录, 编译直接失败。
+SetupIconFile=..\..\BiliDesk\Assets\app.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 ; 安装向导语言。Inno 默认不带简体中文语言包 —— 想要中文向导的话：

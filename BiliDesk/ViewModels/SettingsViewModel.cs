@@ -668,6 +668,62 @@ public class SettingsViewModel : ObservableObject
             : $"每次起播都请求 {QualityPreference.LabelOf(Svc.Settings.PreferredQualityQn)}; " +
               "该清晰度不存在或没有权限时自动降到可用的下一档";
 
+    // ----------------- 默认音量 -----------------
+
+    /// <summary>
+    /// 默认音量(0~100)。每次打开播放器窗口时起播的音量;
+    /// 在播放器里用滚轮/滑块/↑↓/M 调过之后, 新值会写回这里 —— 所以它同时是"音量记忆"。
+    /// ★ 与画质不同, 这里可以直接绑 int: SettingsStore 有 <c>VolumeChanged</c> 事件,
+    ///   播放器里的调节会推通知回来(见构造函数里的订阅), 不存在"别处改了不刷新"的问题。
+    /// ★ 复用上游已有的 <c>PlayerVolume</c> 字段(音量继承), 不另开"默认音量/上次音量"两个值 ——
+    ///   两个值必然要争"起播时听谁的", 一个值才是用户要的"调过就一直是这样"。
+    /// </summary>
+    public int PlayerVolume
+    {
+        get => Svc.Settings.PlayerVolume;
+        set
+        {
+            if (value == Svc.Settings.PlayerVolume) return;
+            // ★ origin 留空(null = 设置页): 只有设置页发起才广播给所有播放器窗口,
+            //   某个播放器窗口发起时不该把别的窗口一起调(见 SettingsStore.VolumeChanged)。
+            Svc.Settings.SetPlayerVolume(value);
+        }
+    }
+
+    /// <summary>滑杆行副标题里的数值(与 DanmakuAreaText 同款)</summary>
+    public string PlayerVolumeText => PlayerVolume + "%";
+
+    /// <summary>滑杆上下限。绑 SettingsStore 的常量而不是在 XAML 里写字面量(范围只定义一处)</summary>
+    public double PlayerVolumeMin => SettingsStore.VolumeMin;
+    public double PlayerVolumeMax => SettingsStore.VolumeMax;
+
+    // ----------------- 多个播放器窗口 -----------------
+
+    /// <summary>
+    /// 是否允许同时打开多个播放器窗口。开启后每次播放都新建窗口(已打开的继续播,
+    /// 不会互相覆盖); 关闭则复用同一个窗口 —— 打开新视频会替换当前播放(旧行为)。
+    /// ★ 只影响"新窗口怎么来": 播放中改它不动已经开着的窗口(见 PlayerService.GetOrCreateWindow)。
+    /// </summary>
+    public bool MultiPlayerWindow
+    {
+        get => Svc.Settings.MultiPlayerWindow;
+        set
+        {
+            if (value == Svc.Settings.MultiPlayerWindow) return;
+            Svc.Settings.SetMultiPlayerWindow(value);
+            // ★ 必须推这个通知(2026-10-12 审查抓到): 副标题是**依赖属性的计算属性**,
+            //   两种模式文案完全相反。不通知的话勾选框变了、说明还写着旧模式的行为,
+            //   用户看到的是"勾了单窗口、说明却说每次新建"这种自相矛盾的说法。
+            //   (范式同 ApplyMaterial 里对 AcrylicMaterialHint 的处理。)
+            OnPropertyChanged(nameof(MultiPlayerWindowHint));
+        }
+    }
+
+    /// <summary>副标题把两种模式各自的行为写清楚 —— 这个开关的两种状态差异很大, 不写会误判</summary>
+    public string MultiPlayerWindowHint => Svc.Settings.MultiPlayerWindow
+        ? "每次播放都新建一个窗口, 已打开的视频继续播放"
+        : "复用同一个窗口, 打开新视频会替换当前播放";
+
     // ----------------- CDN(线路)设置 -----------------
     // 逻辑见 Services/CdnService.cs; 实测依据见该文件顶部注释
 
@@ -1023,6 +1079,69 @@ public class SettingsViewModel : ObservableObject
         }
     }
 
+    // ---- 描边(2026-10-14 新增, 用户要求"设置界面可以选择开启和粗细") ----
+
+    /// <summary>
+    /// 弹幕文字的黑色描边开关。
+    ///
+    /// ★ 为什么放在设置里而不是写死: 描边存在的理由是"白色画面上也看得清"(用户 2026-10-13
+    ///   的需求), 而它在深色画面上几乎看不出、还可能让字显脏。用户比我们知道自己的片单长什么样。
+    /// </summary>
+    public bool DanmakuOutlineEnabled
+    {
+        get => Svc.Settings.DanmakuOutlineEnabled;
+        set
+        {
+            if (value == Svc.Settings.DanmakuOutlineEnabled) return;
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled,
+                Svc.Settings.DanmakuAreaPercent,
+                Svc.Settings.DanmakuSmartFilter,
+                outlineEnabled: value);
+            OnPropertyChanged();
+            // ★ 联动: 关掉之后下面那根粗细滑杆就失去意义了, 必须一起变灰禁用 ——
+            //   否则界面上留着一根还能拖的滑杆, 而拖它什么都不会发生, 用户会以为设置坏了。
+            OnPropertyChanged(nameof(DanmakuOutlineWidthEnabled));
+        }
+    }
+
+    /// <summary>
+    /// 描边的**可见**宽度(0.4~1.6 DIP, 即字外面那一圈黑边有多厚)。
+    /// ★ 与播放器内部那个 StrokeThickness 差两倍: Stroke 向两侧各扩一半, 而向内那半圈
+    ///   被填充层盖住(见 PlayerWindow.BuildDanmakuElement)。设置里必须讲用户看到的那一半。
+    /// </summary>
+    public double DanmakuOutlineWidth
+    {
+        get => Svc.Settings.DanmakuOutlineWidth;
+        set
+        {
+            var v = Math.Clamp(value, 0.4, 1.6);
+            if (Math.Abs(v - Svc.Settings.DanmakuOutlineWidth) < 1e-6) return;
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled,
+                Svc.Settings.DanmakuAreaPercent,
+                Svc.Settings.DanmakuSmartFilter,
+                outlineWidth: v);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DanmakuOutlineWidthText));
+        }
+    }
+
+    /// <summary>滑杆上显示的档位名(比"0.8 DIP"好懂: 用户要的是"细/标准/粗")</summary>
+    public string DanmakuOutlineWidthText
+    {
+        get
+        {
+            var w = DanmakuOutlineWidth;
+            if (w < 0.6) return "细 · 字外约 0.4";
+            if (w < 1.0) return $"标准 · 字外约 {w:0.0}";
+            return w < 1.3 ? "粗 · 字外约 1.0" : "很粗 · 字外约 1.0 以上";
+        }
+    }
+
+    /// <summary>描边关掉时, 粗细滑杆一起禁用(见 DanmakuOutlineEnabled 的说明)</summary>
+    public bool DanmakuOutlineWidthEnabled => Svc.Settings.DanmakuOutlineEnabled;
+
     /// <summary>
     /// 弹幕关键词屏蔽(用户手写黑名单)。
     /// 用 TextChanged 慢一点也关系不大: 每敲一个字就重算规则并让播放器重新过滤,
@@ -1252,6 +1371,17 @@ public class SettingsViewModel : ObservableObject
         // ★ 缓存位置变化也可能来自别处(将来别的入口/多窗口), 统一在这里跟一次 ——
         //   只靠"点了按钮自己刷", 换个入口就会看到界面上的路径是旧的。
         Svc.Settings.DownloadDirChanged += RefreshCacheLocation;
+
+        // 播放器里调音量会写回设置(见 SettingsStore.SetPlayerVolume): 设置页开着时滑杆要跟着动,
+        // 否则用户会在设置页看到一个"假"的旧值。设置页实例随主窗口缓存整个应用生命周期
+        // (见 MainWindow.PageOf 的 _pages), 订阅不退也没有泄漏问题。
+        // ★ 参数是发起方(origin), 这里**用不到**它: 任何来源的音量变化都只更新本页显示,
+        //   真正"要不要广播给别的播放器"的判断在 PlayerWindow.OnVolumeSettingChanged 里。
+        Svc.Settings.VolumeChanged += _ =>
+        {
+            OnPropertyChanged(nameof(PlayerVolume));
+            OnPropertyChanged(nameof(PlayerVolumeText));
+        };
         _ = RefreshUserAsync();
         UpdateCacheSizeText();
         UpdateVideoCacheSizeText();

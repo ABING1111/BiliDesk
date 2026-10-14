@@ -1,0 +1,948 @@
+<UserControl x:Class="BiliDesk.Views.Pages.RelationPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             xmlns:models="clr-namespace:BiliDesk.Models"
+             Background="{DynamicResource AppBackgroundBrush}">
+    <!--
+        「关注 / 粉丝」页(2026-10-13 新增)。
+
+        入口是「我的」页的三项统计(动态 / 关注 / 粉丝), 与「收藏」同一层级:
+        都是"从当前页面点进去、看完返回"的二级界面, 所以走主导航而不是 EmbeddedHost
+        (收藏页也在导航体系里, 见 MainWindow.NavigateToSearch 那段的说明)。
+
+        ★ 三个入口, 而不是一个:
+          1) 「我的」页三项统计 —— 从外面进来的第一站;
+          2) 头部右侧那个「关注 / 粉丝」分段控件 —— **页内互切**。
+             早先只有第 1 条路, 于是"看完了想看另一个"必须先飘回「我的」页再点一次,
+             来回两次; 两种模式本来就是一个页面两个接口, 页内切一下是顺手的事。
+          3) 右下角悬浮返回。
+
+        ★ 返回是**右下角悬浮按钮**, 不在头部操作条里(用户要求):
+          关注列表能拉到几百条, 头部的返回按钮滚两屏就没了, 用户得先滚回顶部
+          才能出去。悬浮着则无论停在哪一行都能一键回「我的」页。
+          ⇒ 代价是内容区底部要多留一段(ScrollViewer 的下边距 24 → 88),
+            否则"已经到底啦"会被它压住。
+          ⇒ 放右下角而不是右上角: 右上角 y=4~36 是窗口自己的三个按钮(见 WindowButtons),
+            再往下就压住标题了。右下角是页面里唯一"永远没有别的东西"的位置。
+
+        ★ 卡片墙用 UniformGrid 而不是 helpers:CardWallPanel: 那个面板是给
+          视频卡定制的(按卡片宽度算列数、管虚拟化), UP 卡是定宽方块,
+          用它会摊薄间距还多一层测量。收藏夹卡片在「我的」页也是这么排的。
+    -->
+    <UserControl.Resources>
+        <!-- 悬停时给卡片的那道投影。只在 IsMouseOver 时挂上去(Effect 不参与 Measure,
+             不改变布局), 所以几百张卡片里同一时刻只有一张在算阴影, 滚动不受拖累。 -->
+        <DropShadowEffect x:Key="CardHoverShadow" BlurRadius="16" ShadowDepth="3"
+                          Opacity="0.14" Color="#000000" />
+        <DropShadowEffect x:Key="BackButtonShadow" BlurRadius="18" ShadowDepth="3"
+                          Opacity="0.22" Color="#000000" />
+
+        <!-- ============ 头部搜索框(紧凑版, 2026-10-13) ============
+             ★ 为什么**不复用** Styles.xaml 里的 SearchTextBoxStyle: 那个是给首页搜索卡
+               设计的 —— 44 高、宽胶囊, 而且聚焦时 Setter BorderThickness=2 + BorderBrush=AccentBrush,
+               是"我要输入了"的强提示。压到 30 高塞进头部之后, 那道 2px 粉框成了整个头部
+               最扎眼的东西, 而输入框本身只有 30 高 —— 2px 边框占了它 7% 的高度(用户报"很丑")。
+             ★ 这份改成: 高 28 / 圆角 8(与页面里卡片 12、分组项 6~7、图标按钮 8 同一套圆角
+               语言)/ 聚焦只把**描边**染成强调色且保持 1px, 不加粗、不加阴影。
+               克制 —— 头部是导航区, 输入框只是工具, 不该在这里喊。
+             ★ 圆角用 8 不用 15: 那个胶囊圆角是配 44 高的, 30 高还配 15 就成了橄榄球。
+             ★ Cursor=IBeam: TextBox 默认光标是箭头, 不像输入框。
+             ★ Foreground/CaretBrush 必须显式写: 全局隐式 TextBox 样式不一定覆盖到资源里的
+               样式, 而 TextBox 的前景若继承成默认黑, 深色主题下浅底上会看不清。 -->
+        <!-- ============ 头部搜索框(2026-10-13, 第三版) ============
+             ★ 前两版都被用户判"丑"。两处的病根其实是**边框**, 逐条记下来免得再犯:
+               ① 第一版复用首页 SearchTextBoxStyle: 44 高胶囊, 聚焦时 BorderThickness=2
+                  + AccentBrush。压到 30 高后那道 2px 粉框占了输入框 7% 的高度, 是全头部
+                  最扎眼的东西;
+               ② 第二版自写样式, 聚焦时把描边染成 AccentBorderFillBrush —— 换了个颜色,
+                  **病根没变**: 边界本身就不该在这个位置出现。粉/灰一律不要。
+               所以这一版**彻底没有边框**(BorderThickness=0), 只靠**底色**表达状态。
+               头部是导航区, 输入框只是个筛选项, 它的存在感应该低于旁边的分段控件。
+
+             ★ 文字对齐(第二版真 bug, 探针没抓到, 用户截图看出来的):
+               ControlTemplate 里那个 PART_ContentHost ScrollViewer 只接了 Padding 当 Margin,
+               **没接 HorizontalContentAlignment** ⇒ TextBox 上设的 Left 完全没人听,
+               文字按 ScrollViewer 的默认居中排 —— 表现就是输入的词浮在框正中间。
+               现在显式转发。
+
+             ★ 底色三态: 常态 InputBackground(半透明白, 与页面底几乎同色) → hover 极淡灰
+               → 聚焦 纯实的 CardBackground。聚焦那档是唯一"变明显"的一步, 而且是
+               变**白**不是变粉, 在浅色主题下与常态的差别约 5% 明度, 不跳。
+             ★ 圆角 8 / 高 28: 与页面里卡片 12、分组项 6~7、图标按钮 8 同一套语言。 -->
+        <Style x:Key="RelationSearchBox" TargetType="TextBox">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource TextPrimaryBrush}" />
+            <!-- ★ 自动化名称: 读屏软件靠它报"这是一个搜索框"。没有它的话整块会被念成
+                 "编辑框", 用户不知道编辑的是关注列表。 -->
+            <Setter Property="MinWidth" Value="180" />
+            <!-- ★ 常态底色用 ControlFillDefaultBrush 而不是 InputBackgroundBrush:
+                 去掉边框之后, 框就"只剩一块底色"了, 而 InputBackground(#B3FFFFFF)压在
+                 页面底(#B3F3F3F3)上只差约 3% 明度 —— 输入框会等于消失(浅色主题实测)。
+                 ControlFillDefault(#0A000000 / #0FFFFFFF) 叠上去是明显的浅灰/深灰块,
+                 两套主题下都看得见, 又比"带边框"安静。 -->
+            <Setter Property="Background" Value="{DynamicResource ControlFillDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="32,0,30,0" />
+            <!-- ★ 36 高(2026-10-13): 与同排的模式切换段、刷新按钮统一。
+                 原先是 28 —— 同一排里 28 / 38 / 30 三个高度, 肉眼就能看出没对齐,
+                 而"没对齐"是"这页看着很业余"最主要的一条来源。 -->
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Cursor" Value="IBeam" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Bd" CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                SnapsToDevicePixels="True">
+                            <!-- ★ HorizontalAlignment 必须转发: 不接这一句,
+                                 TextBox.HorizontalContentAlignment=Left 就是空的,
+                                 文字会按 ScrollViewer 默认的居中排(第二版的真 bug)。 -->
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                          Margin="{TemplateBinding Padding}"
+                                          VerticalAlignment="Center"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ControlFillHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource CardBackgroundBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ★ 左栏分组项(2026-10-13 重做)。
+             上一版是"整行铺满强调色底 + 粗体"，在 176px 宽的一列里, 那块横色带成了整列的
+             视觉重心 —— 截图里第一眼看到的是一条粉色横杠, 而不是"全部"这两个字。改法:
+               · 选中底色**变淡**(NavItemHover → 淡粉), 靠**左侧 3px 强调竖条**表达选中,
+                 视觉重心落在竖向, 与"一列可点项"的形态一致;
+               · 去掉 SemiBold —— 加粗会让粉底上的字糊成一团, 竖条已经足够说明"选了";
+               · 项距 2 → 4(原来贴得太紧, 一列 10 项看起来像一堵墙);
+               · 计数离名字更近(见下面的 MaxWidth), 不再被推到最右端。
+             悬停沿用动态页左栏的 NavItemHoverBrush, 圆角与那里一致。 -->
+        <Style x:Key="GroupTabStyle" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Padding" Value="12,0,8,0" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <Grid>
+                                <!-- 选中竖条。Collapsed 不占位, 所以只在选中时才把内容往右推 -->
+                                <Border x:Name="Bar" Width="3" Height="14" CornerRadius="2"
+                                        HorizontalAlignment="Left" VerticalAlignment="Center"
+                                        Background="{DynamicResource AccentBrush}"
+                                        Visibility="Collapsed" />
+                                <ContentPresenter Margin="{TemplateBinding Padding}"
+                                                  VerticalAlignment="Center"
+                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource NavItemHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource AccentSoftFillBrush}" />
+                                <Setter TargetName="Bar" Property="Visibility" Value="Visible" />
+                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 「全部」与「分组」两项共用同一张模板 —— 所以它必须是一个 DataTemplate 资源,
+             不能各写一份(各写一份的话, 以后改选中态必漏一处)。 -->
+        <DataTemplate x:Key="GroupItemTemplate">
+            <!-- ★ IsChecked 双向绑 IsSelected: 单向的话, VM 换选中项时勾不会跟着挪。
+                 ★ Click 里换分组, 不靠 IsChecked 变更: 那样"程序改选中"(如切模式退回全部)
+                   也会白打一次请求。 -->
+            <!-- ★ 这里有**两个坑**, 都是 2026-10-13 探针实测踩出来的, 改之前先读这段:
+                 ① 刻意**不设** GroupName: RadioButton 的同名分组只在**同一个逻辑父容器**内
+                    互斥, 而「全部」在 ContentControl 里、分组在 ItemsControl 的 ItemTemplate 里 ——
+                    是两棵不同的逻辑树, GroupName 管不着它们。加上之后探针里一个都没选中。
+                 ② IsChecked 必须 **OneWay**(不是 TwoWay): TwoWay 下 RadioButton 的 IsChecked
+                    一变就写回 IsSelected, 与 WPF 自带的"点一下就独占选中"逻辑叠在一起,
+                    实测点「ASMR」之后 **「全部」和「ASMR」同时是选中态**(探针打印: 2 个选中)。
+                    改成单向之后 UI 只**反映** VM 状态, 交互全靠下面的 Click 去改 VM,
+                    互斥由 RelationViewModel.SelectedGroup 的 setter 独家保证(它是唯一真相源,
+                    换选中时会把旧项 IsSelected 清掉、新项置上)。 -->
+            <RadioButton Style="{StaticResource GroupTabStyle}"
+                         IsChecked="{Binding IsSelected, Mode=OneWay}"
+                         Click="OnGroupClick">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="{Binding DisplayName}"
+                               FontSize="13" TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                    <!-- ★ 计数不再被推到最右端: 给名字列一个 MaxWidth, 名字短时两项就靠在一起,
+                         长名才省略。原来是 `*` + Auto 两列, 短名字(ASMR/吃货)与长名字(特别关注)
+                         的计数会差出半个栏宽, 右对齐看起来参差不齐。 -->
+                    <TextBlock Grid.Column="1" Text="{Binding CountText}"
+                               FontSize="11" Margin="10,0,0,0"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                </Grid>
+            </RadioButton>
+        </DataTemplate>
+
+        <!-- ============ 单张 UP 卡片(2026-10-13 提出成资源) ============
+             ★ 为什么提成资源: 卡片墙改成"行虚拟化"之后, 卡片模板被**两层** ItemsControl 引用
+               —— 外层是行(Row), 内层才是行里的卡片。写两遍必然有一处漏改,
+               而漏改的那一处会表现为"只有最后一行/只有部分卡片的样子不对", 极难查。 -->
+        <DataTemplate x:Key="RelationCardTemplate">
+                                <!-- 一个 UP 卡片: 头像 + 名字 + 关系徽章 + 认证/签名。
+                                     右键菜单在头像上(与动态页左栏一致), 卡片主体点一下进主页。 -->
+                                <!-- ★ 不再写死 Width/Height: 交给 UniformGrid 均分列宽。
+                                     只用 Margin 造成格与格之间的缝(Margin 在 UniformGrid 的
+                                     每格里生效, 效果等价于 WrapPanel 的外边距)。 -->
+                                <!-- ★ 不再写 MinHeight: 头像 46 + 上下 padding 就是卡片高度,
+                                     无签名/无认证时按内容收紧 —— 早先那个 74 是给"最坏情况"
+                                     预留的, 于是没有简介的 UP(签名与认证都空)卡片里就空着一行。 -->
+                                <!-- ★ 高度写死 88(2026-10-13): 以前是"内容多高就多高",
+                                     于是**八行签名能把整墙卡片撑到 158px** —— 左边一行矮卡片、
+                                     右边一行高卡片, 网格被撑出参差不齐的空洞。签名/认证在
+                                     FollowUser 里已经归一成单行(SignDisplay/VerifyText), 这两个
+                                     TextBlock 也都是单行省略, 所以 88 = 头像 46 + 上下留白足够,
+                                     内容再长也不会溢出。
+                                     ★ 上下 padding 用 10 而不是 11: (88 - 46 - 1)/2 = 20.5,
+                                       20 才是整数, 卡片边框才不会在 125% 缩放下出现半像素虚线。 -->
+                                <Border Margin="0,0,12,12" Padding="14,10" Height="88"
+                                        CornerRadius="12" Cursor="Hand" Focusable="True"
+                                        MouseLeftButtonUp="OnCardClick"
+                                        KeyDown="OnCardKeyDown">
+                                    <!-- ★ 常态的 BorderBrush/Thickness 必须写在 Style 的 Setter 里,
+                                         **不能**同时写在 Border 属性上: 属性值(本地值)的优先级
+                                         高于属性触发器, 一旦两边都写, 下面 IsMouseOver 里改
+                                         BorderBrush 的那个 Setter 就永远不生效 —— 表现为
+                                         "鼠标移上去卡片不描边"。 -->
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+                                            <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
+                                            <Setter Property="BorderThickness" Value="1" />
+                                            <!-- 悬停: 底色变灰 + 描边染上强调色 + 卡片上浮 2px + 一道投影。
+                                                 四件事叠在一起才是"这块能点"的完整反馈; 只改底色的话
+                                                 在浅色主题下几乎看不出变化。 -->
+                                            <Style.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter Property="Background"
+                                                            Value="{DynamicResource ControlFillHoverBrush}" />
+                                                    <Setter Property="BorderBrush"
+                                                            Value="{DynamicResource AccentBorderFillBrush}" />
+                                                    <Setter Property="RenderTransform">
+                                                        <Setter.Value>
+                                                            <TranslateTransform Y="-2" />
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                    <Setter Property="Effect" Value="{StaticResource CardHoverShadow}" />
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <!-- 原点上移: 悬停时是整张卡往上飘, 不是内容在卡里挪动 -->
+                                    <Border.RenderTransformOrigin>
+                                        <Point X="0.5" Y="0.5" />
+                                    </Border.RenderTransformOrigin>
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- 头像。右键 = 看大图 / 存本地(与动态页同款菜单) -->
+                                        <Border Grid.Column="0" Width="46" Height="46" CornerRadius="23"
+                                                Background="{DynamicResource AccentSoftFillBrush}"
+                                                ClipToBounds="True"
+                                                VerticalAlignment="Center"
+                                                helpers:Cover.Source="{Binding Face}">
+                                            <Border.ContextMenu>
+                                                <!-- ★ Opened 是"取消关注"这一项显隐的唯一入口:
+                                                     ContextMenu 不在逻辑树/可视化树上(实测
+                                                     logicalParent 与 visualParent 都是 null),
+                                                     所以 XAML 里写 RelativeSource AncestorType=UserControl
+                                                     的绑定状态是 Unattached —— 等于没写, 那一项会一直
+                                                     可见, 粉丝模式下点它只会被 VM 的守卫悄悄挡住,
+                                                     看起来就是"菜单有个点了没反应的项"。 -->
+                                                <ContextMenu Opened="OnCardMenuOpened">
+                                                    <MenuItem Header="打开 UP 主页" Click="OnVisitClick">
+                                                        <MenuItem.Icon>
+                                                            <TextBlock Text="&#xE8A7;"
+                                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                       FontSize="13" VerticalAlignment="Center" />
+                                                        </MenuItem.Icon>
+                                                    </MenuItem>
+                                                    <MenuItem Header="查看头像大图" Click="OnViewAvatar">
+                                                        <MenuItem.Icon>
+                                                            <TextBlock Text="&#xE8A7;"
+                                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                       FontSize="13" VerticalAlignment="Center" />
+                                                        </MenuItem.Icon>
+                                                    </MenuItem>
+                                                    <MenuItem Header="下载头像到本地" Click="OnDownloadAvatar">
+                                                        <MenuItem.Icon>
+                                                            <TextBlock Text="&#xE896;"
+                                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                       FontSize="13" VerticalAlignment="Center" />
+                                                        </MenuItem.Icon>
+                                                    </MenuItem>
+                                                    <!-- 取消关注只在关注模式出现(粉丝模式取消它语义是错的)。
+                                                         显隐见 OnCardMenuOpened, 不在这里绑 Visibility。
+                                                         Tag 是给 OnCardMenuOpened 找这一项用的标记
+                                                         (x:Name 在 DataTemplate 里的 ContextMenu 上
+                                                          不生成 code-behind 字段, CS0103) -->
+                                                    <MenuItem Header="取消关注" Tag="Unfollow"
+                                                              Click="OnUnfollowClick">
+                                                        <MenuItem.Icon>
+                                                            <TextBlock Text="&#xE711;"
+                                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                       FontSize="13" VerticalAlignment="Center" />
+                                                        </MenuItem.Icon>
+                                                    </MenuItem>
+                                                </ContextMenu>
+                                            </Border.ContextMenu>
+                                            <!-- 兜底人形: Cover.Source 把图画在 Background 上,
+                                                 子元素永远叠在图上面, 所以拉图失败时会看见它 -->
+                                            <TextBlock Text="&#xE77B;"
+                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                       FontSize="19"
+                                                       Foreground="{DynamicResource AccentTextBrush}"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center" />
+                                        </Border>
+
+                                        <Grid Grid.Column="1" Margin="13,0,6,0" VerticalAlignment="Center">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <!-- ★ 昵称独占弹性列(Grid.Column=0), 徽章独占另一列(Column=1)。
+                                                 早先昵称写的是 Grid.ColumnSpan="2", 于是它和徽章**同一格**,
+                                                 长昵称会从徽章底下穿过去 —— 用户截图里
+                                                 "见微知影 / bilibili 知名短剧UP主" 那两行就是这么撞的。 -->
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding Name}"
+                                                       FontSize="13.5" FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Name}"
+                                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+
+                                            <!-- 关系徽章: 「互相关注」「已关注」「TA 关注了我」。
+                                                 ★ 只给有决策价值的那些(见 ApiClient 的两个
+                                                   RelationBadgeOf*), 关注列表里满屏的
+                                                   单向关注刻意不给标签 —— 否则几百个一样的
+                                                   标签会把真正显眼的「互相关注」淹掉。 -->
+                                            <Border Grid.Row="0" Grid.Column="1" Margin="8,0,0,0"
+                                                    VerticalAlignment="Top" CornerRadius="4"
+                                                    Padding="6,1"
+                                                    Background="{DynamicResource AccentSoftFillBrush}"
+                                                    Visibility="{Binding HasRelation,
+                                                                 Converter={StaticResource BoolToVis}}">
+                                                <TextBlock Text="{Binding RelationText}" FontSize="10"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource AccentTextStrongBrush}" />
+                                            </Border>
+
+                                            <!-- ★ 认证与签名竖着排, 不叠在同一个格子里。
+                                                 早先两个 TextBlock 都写 Grid.Row="1", 于是
+                                                 "有认证又有签名"的人两段文字**重叠**成一团糊字。
+                                                 换成竖排 StackPanel: 全都为空时它自然高 0,
+                                                 Row 的 Auto 也就缩回去, 不留空行。 -->
+                                            <StackPanel Grid.Row="1" Orientation="Vertical" Margin="0,3,0,0">
+                                                <!-- 认证信息(机构/个人认证)。没有就整行隐藏 -->
+                                                <TextBlock Text="{Binding VerifyText}" FontSize="11"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding VerifyFull}"
+                                                           Foreground="{DynamicResource AccentTextBrush}"
+                                                           Visibility="{Binding HasVerify,
+                                                                        Converter={StaticResource BoolToVis}}" />
+                                                <!-- 签名。粉丝接口不给这个字段, 空串时整行隐藏
+                                                     (见 FollowUser.Sign 的说明) -->
+                                                <!-- ★ 绑 SignDisplay 而不是 Sign: Sign 里带真实换行(见
+                                                     FollowUser.SignDisplay 的说明), 直接绑会把卡片撑高。
+                                                     完整原文仍在 ToolTip 里, 鼠标停上去看得到。 -->
+                                                <TextBlock Text="{Binding SignDisplay}" FontSize="11"
+                                                           Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding SignFull}"
+                                                           Foreground="{DynamicResource TextTertiaryBrush}"
+                                                           Visibility="{Binding HasSign,
+                                                                        Converter={StaticResource BoolToVis}}" />
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- 悬停时浮现的箭头: 纯视觉提示"点这一块能进去"。
+                                             常态 Opacity=0, 不占视觉重量。 -->
+                                        <TextBlock Grid.Column="2" Text="&#xE76C;"
+                                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                   FontSize="13" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}">
+                                            <!-- ★ 常态透明度只写在 Style 的 Setter 里, **不要**再补一个
+                                                 属性值 Opacity="0"。两份"常态"声明并存时, 后来的人
+                                                 会以为 trigger 里的 Setter="1" 盖不住属性值,
+                                                 于是不敢改 —— 而实际上去掉属性值最省心, 不用去翻
+                                                 WPF 那张长长的优先级表。 -->
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Opacity" Value="0" />
+                                                    <Style.Triggers>
+                                                        <!-- ★ 必须绑**卡片根 Border** 的 IsMouseOver, 不能用 TextBlock
+                                                             自己的(2026-10-13 修): TextBlock 没有 Background,
+                                                             默认不参与命中测试 —— 它那个 IsMouseOver 永远是 false,
+                                                             箭头等于永远画不出来, 而且不报任何错。
+                                                             AncestorType=Border 取的是**祖先链上最近的 Border**: 头像是
+                                                             同一 Grid 里的兄弟(不是祖先), 所以命中的正是这张卡
+                                                             片的外框。 -->
+                                                        <DataTrigger Value="True"
+                                                                     Binding="{Binding IsMouseOver,
+                                                                               RelativeSource={RelativeSource AncestorType=Border}}">
+                                                            <Setter Property="Opacity" Value="1" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                </Border>
+        </DataTemplate>
+
+    </UserControl.Resources>
+
+    <!-- ★ helpers:Responsive.Enable="True": 给这一页开响应式档位(Compact/Medium/Wide),
+         卡片墙的 UniformGrid 列数就靠它。挂在最外层这个 Grid 上, 见 Helpers/Responsive.cs。 -->
+    <Grid helpers:Responsive.Enable="True">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- ============ 头部(2026-10-13 重排为三列) ============
+             ★ 为什么改成"弹性标题 / 搜索 / 操作组"三列而不是把搜索塞进右边那一堆:
+               原来的做法是"标题 StackPanel 右边留 240 的空, 搜索+切换+刷新挤在右边"。
+               那个 240 是**猜**出来的 —— 加了搜索框之后右边实际要 150+230+38+间距 ≈ 450,
+               留 240 根本挡不住, 于是副标题一长就顶进搜索框底下(用户报"右边空太大"的同源问题)。
+               现在三列各自按内容占位, 标题列吃掉剩余空间, 不再靠留白对账。
+             ★ 搜索与操作控件**统一 36 高**(原来是 28 / 38 / 30 三个高度),
+               圆角统一 8, 间距 12 —— 同一排里三个不同高度的控件看着就是"没对齐"。
+             ★ 窄窗口(Compact 档)搜索框换到第二行: 1060 的最小宽度下三列仍排得开,
+               但窗口再窄一点(或 UI 缩放 150%)标题就会被挤到换行, 所以留了这一手。 -->
+        <Grid Grid.Row="0" Margin="36,18,36,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" MinHeight="52">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MinWidth="140" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- 左: 图标 + 标题 + 数量 + 副标题 -->
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <StackPanel Orientation="Horizontal">
+                        <Border Width="34" Height="34" CornerRadius="17" VerticalAlignment="Center"
+                                Background="{DynamicResource AccentSoftFillBrush}">
+                            <TextBlock Text="{Binding TitleIcon}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="16" Foreground="{DynamicResource AccentTextBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <TextBlock Text="{Binding TitleText}" Style="{StaticResource PageTitleStyle}"
+                                   Margin="12,0,0,0" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding CountText}" VerticalAlignment="Center" Margin="8,0,0,0"
+                                   Foreground="{DynamicResource AccentTextBrush}" FontSize="15"
+                                   FontWeight="SemiBold" />
+                    </StackPanel>
+                    <!-- 说明文字: 把"这个数字从哪来"讲清楚。加载中/没数据时它是空的 -->
+                    <TextBlock Text="{Binding SubtitleText}" Style="{StaticResource MetaTextStyle}"
+                               Margin="46,3,0,0" TextTrimming="CharacterEllipsis"
+                               Visibility="{Binding SubtitleText, Converter={StaticResource StrToVis}}" />
+                </StackPanel>
+
+                <!-- 中: 搜索框(宽窗口位置)。搜的是"我关注/粉丝里的人", 不是全站 UP。
+                     ★ B 站的 followings 接口**不接受关键字参数**(实测只认 vmid/pn/ps/order/tagid),
+                       全站搜 UP 走的是另一个接口, 出来的人大半不在你的关注列表里。
+                       所以搜索 = 对**已加载**的条目做客户端过滤, 没命中时 VM 会自动再翻几页
+                       (见 RelationViewModel.RunSearchBatchAsync, 有页数上限与"继续搜索")。 -->
+                <Grid Grid.Column="1" Width="260" Height="36" Margin="0,0,12,8"
+                      VerticalAlignment="Center" x:Name="SearchBoxWideHost">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers>
+                                <!-- Compact 档时让位给第二行的那一份(见下面的 SearchBoxNarrow) -->
+                                <DataTrigger Value="True"
+                                             Binding="{Binding (helpers:Responsive.Class),
+                                                       RelativeSource={RelativeSource AncestorType=UserControl},
+                                                       Converter={StaticResource EnumEquals},
+                                                       ConverterParameter=Compact}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <TextBox x:Name="SearchBoxWide" Style="{StaticResource RelationSearchBox}"
+                             Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="{Binding SearchTip}"
+                             AutomationProperties.Name="搜索关注的人" />
+                    <!-- 左边的放大镜。Padding 左 32 是给它留的位置(见 RelationSearchBox) -->
+                    <TextBlock Text="&#xE721;" IsHitTestVisible="False"
+                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="13" Foreground="{DynamicResource TextTertiaryBrush}"
+                               HorizontalAlignment="Left" VerticalAlignment="Center"
+                               Margin="11,0,0,0" />
+                    <!-- placeholder: 空框不写提示就看不出是干什么用的。WPF 的 TextBox 没有
+                         Placeholder 属性, 叠一层 TextBlock, 靠 SearchText 为空时显示。 -->
+                    <TextBlock Text="{Binding SearchPlaceholder}" IsHitTestVisible="False" FontSize="13"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               VerticalAlignment="Center" Margin="32,0,30,0">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SearchText}" Value="">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <!-- 右侧清空: 只在有内容时出现, 空按钮占位反而碍眼 -->
+                    <Button Width="26" Height="26" HorizontalAlignment="Right"
+                            VerticalAlignment="Center" Margin="0,0,4,0"
+                            Style="{StaticResource BareIconButtonStyle}"
+                            ToolTip="清空搜索" AutomationProperties.Name="清空搜索"
+                            Visibility="{Binding SearchText,
+                                                Converter={StaticResource StrToVis},
+                                                FallbackValue=Collapsed}"
+                            Command="{Binding ClearSearchCommand}">
+                        <TextBlock Text="&#xE711;" FontSize="11"
+                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </Button>
+                </Grid>
+
+                <!-- 右: 页内模式切换 + 刷新。双向绑到 VM 的 SelectedMode(IsChecked ↔ 枚举):
+                     用户点谁就等价于 InitAsync(那个模式), 与从「我的」页进来走同一条路,
+                     所以标题/列表/右键菜单不会出现"两套状态"。 -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,0,0,8"
+                            VerticalAlignment="Center">
+                    <Border Background="{DynamicResource ControlFillDefaultBrush}"
+                            CornerRadius="8" Padding="3" Height="36" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Style="{StaticResource SegmentRadioStyle}" GroupName="RelationModeTabs"
+                                         Content="关注" Padding="16,6"
+                                         AutomationProperties.Name="按关注列出"
+                                         IsChecked="{Binding SelectedMode, Mode=TwoWay,
+                                                     Converter={StaticResource EnumEquals},
+                                                     ConverterParameter=Following}" />
+                            <RadioButton Style="{StaticResource SegmentRadioStyle}" GroupName="RelationModeTabs"
+                                         Content="粉丝" Padding="16,6"
+                                         AutomationProperties.Name="按粉丝列出"
+                                         IsChecked="{Binding SelectedMode, Mode=TwoWay,
+                                                     Converter={StaticResource EnumEquals},
+                                                     ConverterParameter=Fans}" />
+                        </StackPanel>
+                    </Border>
+                    <Button Style="{StaticResource IconButtonStyle}" Margin="12,0,0,0"
+                            Width="36" Height="36" VerticalAlignment="Center"
+                            Command="{Binding RefreshCommand}" ToolTip="刷新 (F5)"
+                            AutomationProperties.Name="刷新关注或粉丝列表">
+                        <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="15" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <!-- ★ 第二行左侧: 搜索范围说明 + 「继续搜索」。
+                 放在头部而不是列表底部, 是因为它描述的是**搜索框**的行为(搜到哪儿了),
+                 离搜索框越近越好按; 而列表底部那块留给"已经到底啦/重试"这类列表状态。
+                 ★ ShowSearchContinue 为 false 时(SearchText 为空/正在搜/没有下一页)整块隐藏。 -->
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="46,0,12,6"
+                        VerticalAlignment="Center"
+                        Visibility="{Binding IsSearching, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="{Binding SearchScopeText}" Style="{StaticResource MetaTextStyle}"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                <Button Content="继续搜索" Margin="12,0,0,0" Padding="12,4" FontSize="11.5"
+                        Style="{StaticResource AccentButtonStyle}" VerticalAlignment="Center"
+                        Command="{Binding ContinueSearchCommand}"
+                        Visibility="{Binding ShowSearchContinue, Converter={StaticResource BoolToVis}}" />
+            </StackPanel>
+
+            <!-- 窄窗口时搜索框独占第二行右端。★ 为什么不复用上面那一份而是整个搬过来:
+                 VisualState 只能改属性值, 改不了"这个元素归哪一列/哪一行" ——
+                 想让同一个控件换位置, 就得让它同时存在于两个位置, 各由一个 DataTrigger 显隐。 -->
+            <Grid Grid.Row="1" Width="260" Height="36" Margin="0,10,0,4"
+                  HorizontalAlignment="Right" x:Name="SearchBoxNarrowHost">
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Value="True"
+                                         Binding="{Binding (helpers:Responsive.Class),
+                                                   RelativeSource={RelativeSource AncestorType=UserControl},
+                                                   Converter={StaticResource EnumEquals},
+                                                   ConverterParameter=Compact}">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+                <TextBox x:Name="SearchBoxNarrow" Style="{StaticResource RelationSearchBox}"
+                         Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                         ToolTip="{Binding SearchTip}"
+                         AutomationProperties.Name="搜索关注的人" />
+                <TextBlock Text="&#xE721;" IsHitTestVisible="False"
+                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="13" Foreground="{DynamicResource TextTertiaryBrush}"
+                           HorizontalAlignment="Left" VerticalAlignment="Center" Margin="11,0,0,0" />
+                <TextBlock Text="{Binding SearchPlaceholder}" IsHitTestVisible="False" FontSize="13"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           VerticalAlignment="Center" Margin="32,0,30,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SearchText}" Value="">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <Button Width="26" Height="26" HorizontalAlignment="Right"
+                        VerticalAlignment="Center" Margin="0,0,4,0"
+                        Style="{StaticResource BareIconButtonStyle}"
+                        ToolTip="清空搜索" AutomationProperties.Name="清空搜索"
+                        Visibility="{Binding SearchText,
+                                            Converter={StaticResource StrToVis},
+                                            FallbackValue=Collapsed}"
+                        Command="{Binding ClearSearchCommand}">
+                    <TextBlock Text="&#xE711;" FontSize="11"
+                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                </Button>
+            </Grid>
+        </Grid>
+
+        <!-- 内容 -->
+        <!-- ★ 两列: 左边是关注分组(仅关注模式), 右边是卡片墙(2026-10-13 新增)。
+             分组列是 Auto: 粉丝模式下整列 Collapsed, 自动收成 0, 卡片区不会多出一条空白。 -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 未登录 -->
+            <StackPanel Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="420"
+                        Visibility="{Binding NotLoggedIn, Converter={StaticResource BoolToVis}}">
+                <Border Width="76" Height="76" CornerRadius="38" HorizontalAlignment="Center"
+                        Background="{DynamicResource ControlFillDefaultBrush}">
+                    <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="34" Foreground="{DynamicResource TextTertiaryBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock Text="登录后才能查看你的关注与粉丝" Margin="0,16,0,16" FontSize="14"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           HorizontalAlignment="Center" TextAlignment="Center" />
+                <Button Content="登录哔哩哔哩" Style="{StaticResource AccentButtonStyle}"
+                        HorizontalAlignment="Center" Padding="22,9"
+                        Command="{Binding LoginCommand}" />
+            </StackPanel>
+
+            <!-- 加载中(整页) -->
+            <StackPanel Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding Loading, Converter={StaticResource BoolToVis}}">
+                <controls:LoadingRing Width="30" Height="30" HorizontalAlignment="Center" />
+                <TextBlock Text="正在加载…" Style="{StaticResource MetaTextStyle}"
+                           Margin="0,12,0,0" HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- 错误(阻断态: 一个都没加载出来才占满整页。
+                 ★ 这里只接"加载失败"; 翻页失败与取消关注失败**故意不落在这个状态里**,
+                   它们只是一次瞬时失败, 拿列表换一张错误页不划算 —— 见 VM 的说明。 -->
+            <StackPanel Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="480"
+                        Visibility="{Binding Error, Converter={StaticResource StrToVis}}">
+                <Border Width="68" Height="68" CornerRadius="34" HorizontalAlignment="Center"
+                        Background="{DynamicResource ControlFillDefaultBrush}">
+                    <TextBlock Text="&#xE7BA;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="30" Foreground="{DynamicResource DangerTextBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock Text="{Binding Error}" Foreground="{DynamicResource TextSecondaryBrush}"
+                           FontSize="13" HorizontalAlignment="Center" TextWrapping="Wrap"
+                           TextAlignment="Center" Margin="0,16,0,0" MaxWidth="420" />
+                <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                        HorizontalAlignment="Center" Margin="0,18,0,0" Padding="26,8"
+                        Command="{Binding RefreshCommand}"
+                        Visibility="{Binding Loading, Converter={StaticResource InvBoolToVis}}" />
+            </StackPanel>
+
+            <!-- ============ 左栏: 关注分组(2026-10-13 按用户要求新增, 当日重做视觉) ============
+                 ★ 为什么只给关注模式显示: B 站只给"我关注的人"建了关注分组
+                   (接口 /x/relation/tags 实测确认), 粉丝那边没有这个概念 —— 给粉丝页
+                   也摆一列空分组毫无意义, 整列 Collapsed 之后卡片区会自动补满宽度。
+                 ★ 分组数据来自 B 站你自己的设置, 不是本地分类: 实测本机 10 项, 最多的一档
+                   567 人。「特别关注」(-10) 与「默认分组」(0) 是 B 站自带的两个魔法值,
+                   ApiClient 里已按"特别关注最前、默认分组当兜底排最后"排好序。
+                 ★ 「全部」**不混进分组列表**(VM 的 AllGroup 单独一个属性): 它没有 tagid,
+                   是纯客户端概念。摆成"上面一格 + 一条分隔线 + 下面一堆分组",
+                   语义(撤销筛选)和视觉(分组区)都分得开, 不必靠底色去区分两类东西。
+                 ★ 右缘一条竖分隔线: 左边是"导航"、右边是"内容", 没有这条线它们糊成一片。 -->
+            <!-- ★ Visibility **必须显式挂 Converter**: 试过省掉写成
+                 Visibility="{Binding ShowGroupPanel}", WPF 直接报
+                 "Cannot create default converter to perform 'one-way' conversions between
+                 types 'Boolean' and 'Visibility'" —— bool→Visibility 不是 WPF 的内建绑定转换,
+                 只有在 XAML 里作为"属性字面量"时才隐式生效(那是 TypeConverter, 不是绑定转换器)。
+                 所以 BoolToVis 那个键是它唯一的依赖, 别删。
+                 ★ Width 164 + Margin 左 20: 这条列的宽度只在关注模式有意义, 粉丝模式整列
+                   Collapsed, Grid 的 Auto 列随之收成 0, 卡片区自动补满。 -->
+            <Border Grid.Column="0" Width="164" Margin="20,4,0,0" Padding="0,0,12,0"
+                    Visibility="{Binding ShowGroupPanel, Converter={StaticResource BoolToVis}}">
+                <Border BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,1,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- 「全部」: 独立一格。点击它 = 撤销分组筛选 -->
+                        <ContentControl Grid.Row="0" Margin="0,0,0,8"
+                                        Content="{Binding AllGroup}"
+                                        ContentTemplate="{StaticResource GroupItemTemplate}" />
+
+                        <!-- 分隔线: 把"全部"与"我建的分组"分成两段 -->
+                        <Border Grid.Row="1" Height="1" Margin="0,0,0,8"
+                                Background="{DynamicResource DividerBrush}" />
+
+                        <!-- 分组列表 -->
+                        <TextBlock Grid.Row="2" Text="我的分组" Margin="8,0,0,6"
+                                   Style="{StaticResource MetaTextStyle}" FontSize="11.5" />
+                        <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl ItemsSource="{Binding Groups}" x:Name="GroupList"
+                                      KeyDown="OnGroupListKeyDown"
+                                      ItemTemplate="{StaticResource GroupItemTemplate}" />
+                        </ScrollViewer>
+
+                        <!-- 分组接口失败时的说明。刻意不写成整页错误: 分组拉不到时
+                             「全部」照样能用(用户点它之前就已经看到列表了),
+                             一张错误页把列表顶掉才是本末倒置。 -->
+                        <TextBlock Grid.Row="4" Text="{Binding GroupError}"
+                                   Style="{StaticResource MetaTextStyle}" FontSize="11"
+                                   TextWrapping="Wrap" Margin="8,10,0,12"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   Visibility="{Binding ShowGroupError, Converter={StaticResource BoolToVis}}" />
+                    </Grid>
+                </Border>
+            </Border>
+            <!-- ===== UP 卡片墙(2026-10-13 改成**行虚拟化**) =====
+                 ★ 为什么必须虚拟化: 652 个关注 = 652 个控件**全部**被创建并测量, 哪怕它们
+                   全在视口外 —— 实测整墙高度能到几千像素, 滚动帧率被布局拖垮。
+                   UniformGrid 本身**不支持虚拟化**(它在 Measure/Arrange 里把所有子项都算一遍),
+                   所以这条路走不通。
+                 ★ 现在的做法: VM 先把数据按列数切成一「行」(Models/RelationUserRow),
+                   外面套 <c>VirtualizingStackPanel VirtualizationMode="Recycling"</c>。
+                   视口外的**整行**被回收(连里面 1~4 张卡一起销毁), 于是控件数量只跟
+                   **视口高度**走, 不跟总条数走 —— 1000 个人与 100 个人的控件数几乎一样。
+                 ★ ScrollViewer 必须在 <c>ItemsControl.Template</c> 里面, 而且
+                   <c>CanContentScroll="True"</c>。VirtualizingStackPanel 通过 IScrollInfo
+                   拿滚动位置, CanContentScroll=False 时它拿不到, 会退化成"全都测量",
+                   而且**不报任何错** —— 只表现为"加了虚拟化但没变快"。
+                 ★ 卡片模板提成资源 RelationCardTemplate, 因为它现在被**两层** ItemsControl
+                   引用(外层是行, 内层才是行里的卡片)。
+                 ★ 空态块与搜索空态**不在这块里**: 它们是"整列居中"的静态块, 放进虚拟化列表
+                   会被当成一行参与行计数, 还得算高度。 -->
+            <Grid Grid.Column="1" Margin="20,4,36,10" x:Name="WallHost"
+                  Visibility="{Binding Error, Converter={StaticResource InvStrToVis}}">
+
+                <!-- 空列表说明(加载成功但一条都没有)。显隐走 VM 的 ShowEmptyBlock 而不是
+                     绑 Users.Count —— 它把"加载中 / 未登录 / 出错"这三种"暂时空"也排除掉了。 -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding ShowEmptyBlock, Converter={StaticResource BoolToVis}}">
+                    <Border Width="72" Height="72" CornerRadius="36" HorizontalAlignment="Center"
+                            Background="{DynamicResource ControlFillDefaultBrush}">
+                        <TextBlock Text="{Binding EmptyIcon}"
+                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="32" Foreground="{DynamicResource TextTertiaryBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Text="{Binding EmptyText}" FontSize="14"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               HorizontalAlignment="Center" Margin="0,16,0,0" />
+                    <TextBlock Text="可以在「我的」页刷新统计, 或点右上角重新加载"
+                               Style="{StaticResource MetaTextStyle}"
+                               HorizontalAlignment="Center" Margin="0,8,0,0" />
+                </StackPanel>
+
+                <!-- 搜索无结果: 与"一条都没关注"是两回事(原因不同、给的建议也不同),
+                     所以单开一块。★ 底下多一条"继续搜索": 搜索有每批 5 页的额度,
+                     搜完还没找到就该让用户自己决定要不要再翻一批, 而不是只留一句"没找到"。 -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460"
+                            Visibility="{Binding ShowSearchEmpty, Converter={StaticResource BoolToVis}}">
+                    <Border Width="72" Height="72" CornerRadius="36" HorizontalAlignment="Center"
+                            Background="{DynamicResource ControlFillDefaultBrush}">
+                        <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="30" Foreground="{DynamicResource TextTertiaryBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Text="{Binding SearchEmptyText}" FontSize="13"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               HorizontalAlignment="Center" TextAlignment="Center"
+                               TextWrapping="Wrap" Margin="0,16,0,0" />
+                    <Button Content="继续搜索" Style="{StaticResource AccentButtonStyle}"
+                            HorizontalAlignment="Center" Margin="0,14,0,0" Padding="24,8"
+                            Command="{Binding ContinueSearchCommand}"
+                            Visibility="{Binding ShowSearchContinue, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="换个关键词试试, 或点上面的搜索框改一下"
+                               Style="{StaticResource MetaTextStyle}"
+                               HorizontalAlignment="Center" Margin="0,10,0,0" />
+                </StackPanel>
+
+                <!-- ★ 卡片墙本体 -->
+                <ItemsControl ItemsSource="{Binding Rows}"
+                              Visibility="{Binding ShowCardWall, Converter={StaticResource BoolToVis}}">
+                    <ItemsControl.Template>
+                        <ControlTemplate TargetType="ItemsControl">
+                            <ScrollViewer CanContentScroll="True" Focusable="False"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          ScrollChanged="OnListScrollChanged">
+                                <ItemsPresenter />
+                            </ScrollViewer>
+                        </ControlTemplate>
+                    </ItemsControl.Template>
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <!-- ★ Recycling: 离屏的行**复用**容器而不是销毁再建,
+                                 否则来回快速滚动会持续地实例化/回收, 卡顿反而更明显。 -->
+                            <VirtualizingStackPanel Orientation="Vertical" VirtualizationMode="Recycling" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type models:RelationUserRow}">
+                            <!-- 行内水平均分。★ Columns 来自行自己的 DataContext
+                                 (ItemsPanel 的根元素继承的是 ItemsControl 的 DataContext,
+                                 也就是这一行的 RelationUserRow), 不是外层的窗口档位。 -->
+                            <ItemsControl ItemsSource="{Binding Items}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Rows="1" Columns="{Binding Columns}" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <StaticResource ResourceKey="RelationCardTemplate" />
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- ===== 底部状态浮层(2026-10-13 从"流内一行"改成"压在内容上") =====
+                     ★ 为什么不能留在内容流里: 那行字一旦跟着滚动, 就要靠给 ScrollViewer 加下边距
+                       来避开右下角的返回按钮 —— 于是内容底下永远横着一条空白带,
+                       而那恰恰**不是**悬浮该有的样子(用户 2026-10-13 明确指出:
+                       "这一行照样是没有东西啊, 你单独一行叫什么悬浮")。
+                       现在它是绝对定位的浮层, 不占布局, 也不用留白。
+                     ★ 靠左: 右下角是返回按钮的位置, 两者各占一边, 互不遮挡。 -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom" HorizontalAlignment="Left"
+                            Margin="10,0,0,8" Panel.ZIndex="5">
+                    <controls:LoadingRing Width="18" Height="18"
+                                         Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="加载中…" Margin="8,0,0,0"
+                               VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}"
+                               Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}" />
+
+                    <!-- "已经到底啦"。★ 只有真到底才出现(见 ShowEndHint), 翻页失败不冒充到底。 -->
+                    <Border CornerRadius="12" Padding="12,5" Background="{DynamicResource FloatingFillBrush}"
+                            BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1"
+                            Visibility="{Binding ShowEndHint, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="已经到底啦" Style="{StaticResource MetaTextStyle}" />
+                            <TextBlock Text=" · B 站的粉丝接口最多返回前 150 位"
+                                       Style="{StaticResource MetaTextStyle}"
+                                       Visibility="{Binding ShowLoadMoreHint,
+                                                    Converter={StaticResource BoolToVis}}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 翻页失败: 列表还在(不换成整页错误), 尾部给一条可点的重试。
+                         页码在失败时压根没前进, 所以重试就是**同一页**, 不跳页也不重复追加。 -->
+                    <Border CornerRadius="12" Padding="10,4,4,4" Background="{DynamicResource FloatingFillBrush}"
+                            BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1"
+                            Visibility="{Binding ShowPageRetry, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding PageRetryText}" Style="{StaticResource MetaTextStyle}"
+                                       VerticalAlignment="Center" />
+                            <Button Content="重试" Margin="10,0,0,0" Padding="12,4"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Command="{Binding RetryPageCommand}" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </Grid>
+
+        <!-- ============ 返回「我的」: 右下角**圆形**悬浮按钮(2026-10-13) ============
+             ★ 为什么从胶囊改成圆形(用户要求): 原来是个 ~120x38 的长条 + 文字, 横着占一条,
+               在右下角看着像一块"贴在内容上的牌子", 视觉重量比它该有的大得多 ——
+               页面里那么多卡片, 一个常驻的横条会一直把视线往右下角拽。
+               圆形 + 纯箭头(56x56) 是同一套语言(播放器「返回评论列表」那个圆钮就是这么做的),
+               常驻控件就该"尽量轻"。
+             ★ 常驻, 不随内容滚动: 关注列表能拉到几百条, 放在头部的话滚两屏就没了。
+               所以它挂在**内容 Grid 之外** ⇒ 浮在滚动内容之上, 且只在关系页出现。
+             ★ 底色用 FloatingFillBrush 而不是 CardBackgroundBrush: 这个键是**不透明**版本
+               (浅 #E8EAED / 深 #2D2D2D), 本来就是给"浮在内容上"用的; CardBackground 在深色
+               主题下是 #2E2E2E, 和 #2D2D2D 几乎一样, 按钮会糊进背景里看不出边界。
+               细边 + 投影负责把它从内容里"托"起来。
+             ★ CornerRadius=23 = 直径/2。用 999 这类大值在 WPF 里会因为边框厚度算出略大于半径的
+               形状, 边缘发虚 —— 圆就老老实实用直径的一半。
+             ★ 图标 E72B = ChevronLeft, 与播放器那个返回钮同款字形。文字去掉了, 动作靠
+               ToolTip 说明("返回「我的」页 (Esc)")—— 常驻浮层上再挂一行字就成了牌子。
+             ★ Esc 快捷键见 code-behind 的 OnPreviewKeyDown。 -->
+        <Button Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                Margin="0,0,28,28" Panel.ZIndex="10"
+                Style="{StaticResource CircularFloatingBackButtonStyle}"
+                Click="OnBackToMineClick" ToolTip="返回「我的」页 (Esc)"
+                AutomationProperties.Name="返回我的页">
+            <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                       FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Button>
+    </Grid>
+</UserControl>

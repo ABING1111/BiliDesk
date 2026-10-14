@@ -59,14 +59,31 @@ public class ApiClient
 
     // ---------------------------------------------------------------- 基础请求
 
+    /// <summary>
+    /// 「这次请求已被调用方取消」的 code(2026-10-13 新增)。
+    ///
+    /// ★ 为什么不让 OperationCanceledException 直接往外抛: 页面切走/换账号/刷新时,
+    ///   调用方会用 CancellationTokenSource 把在飞的关系请求掐掉 —— 那不是失败, 是**主动放弃**。
+    ///   若让它冒泡, 上层要么把它写进 Error(用户在界面上看到一条"请求失败", 而他明明
+    ///   是自己点了刷新), 要么到处 try/catch。这里统一收敛成一个专属 code,
+    ///   调用方判到它就安静收手, 既不报错也不弹提示。
+    /// ★ -999 是自造值, 与 B 站真实 code 空间(正数与 -101/-352 等)不冲突。
+    /// </summary>
+    public const int CodeCanceled = -999;
+
+    /// <summary>判断一次调用是不是"被取消"了(而不是真的失败)</summary>
+    public static bool IsCanceled(int code) => code == CodeCanceled;
+
     private async Task<(int code, string? msg, JsonElement? data)> GetJsonAsync(
         string url, Dictionary<string, string>? ps, bool sign = false, bool allowRetry = true,
-        string? referer = null, bool fingerprint = true, string payloadKey = "data")
+        string? referer = null, bool fingerprint = true, string payloadKey = "data",
+        CancellationToken ct = default)
     {
         ps ??= new Dictionary<string, string>();
+        ct.ThrowIfCancellationRequested();
         if (sign)
         {
-            var mixin = await GetMixinKeyAsync();
+            var mixin = await GetMixinKeyAsync(ct);
             if (mixin == null) return (-400, "WBI 密钥获取失败", null);
             SignParams(ps, mixin);
         }
@@ -86,8 +103,10 @@ public class ApiClient
             // Referer 逐请求设置: 部分接口(如空间)校验 Referer 域名
             req.Headers.TryAddWithoutValidation("Referer", referer ?? "https://www.bilibili.com/");
 
-            using var resp = await _http.SendAsync(req);
-            var text = await resp.Content.ReadAsStringAsync();
+            // ★ ct 一路传到 SendAsync/ReadAsStringAsync: 切模式/换账号/刷新时靠它把在飞的
+            //   请求**掐掉**, 而不是让它们跑完再把结果丢掉(那样只是白等, 还占着风控额度)。
+            using var resp = await _http.SendAsync(req, ct);
+            var text = await resp.Content.ReadAsStringAsync(ct);
             int code;
             string? msg;
             JsonElement? data;
@@ -117,9 +136,14 @@ public class ApiClient
                 //   不该留下设备痕迹)。它一旦撞上 -403, 重试就会突然**带上**指纹, 把"匿名访问"
                 //   变成"带设备指纹访问", 正好与该调用点的用意相反。参数原样传下去才不会走样。
                 return await GetJsonAsync(url, ps, sign: true, allowRetry: false,
-                    referer: referer, fingerprint: fingerprint, payloadKey: payloadKey);
+                    referer: referer, fingerprint: fingerprint, payloadKey: payloadKey, ct: ct);
             }
             return (code, msg, data);
+        }
+        catch (OperationCanceledException)
+        {
+            // 见 CodeCanceled 的说明: 这是"主动放弃", 不是错误, msg 一律留空
+            return (CodeCanceled, null, null);
         }
         catch (HttpRequestException ex)
         {
@@ -133,9 +157,9 @@ public class ApiClient
 
     // ---------------------------------------------------------------- WBI 签名
 
-    private async Task<string?> GetMixinKeyAsync()
+    private async Task<string?> GetMixinKeyAsync(CancellationToken ct = default)
     {
-        if (_wbiKeys == null) await RefreshWbiKeysAsync();
+        if (_wbiKeys == null) await RefreshWbiKeysAsync(ct);
         if (_wbiKeys == null) return null;
 
         var (img, sub) = _wbiKeys!.Value;
@@ -144,13 +168,13 @@ public class ApiClient
         return mixin.ToString();
     }
 
-    private async Task RefreshWbiKeysAsync()
+    private async Task RefreshWbiKeysAsync(CancellationToken ct = default)
     {
         try
         {
             // 注意: nav 接口未登录时返回 -101, 但 data 里仍带有 wbi 密钥, 不能判 code==0
             var (_, _, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/web-interface/nav", null);
+                "https://api.bilibili.com/x/web-interface/nav", null, ct: ct);
             if (data == null) return;
 
             if (data.Value.TryGetProperty("wbi_img", out var wi) &&
@@ -219,7 +243,7 @@ public class ApiClient
     /// 并把拿到的那一对**落盘**(见 SessionManager.SetBuvid4)。
     /// 于是正常使用下, 一台设备的身份是稳定的。
     /// </summary>
-    public async Task EnsureBuvidAsync()
+    public async Task EnsureBuvidAsync(CancellationToken ct = default)
     {
         // 内存里这一对齐全, 直接用
         if (!string.IsNullOrEmpty(_buvid3) && !string.IsNullOrEmpty(_buvid4)) return;
@@ -235,7 +259,7 @@ public class ApiClient
         try
         {
             var (code, _, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/frontend/finger/spi", null);
+                "https://api.bilibili.com/x/frontend/finger/spi", null, ct: ct);
             if (code == 0 && data != null)
             {
                 // ★ 只补**缺的那一半**, 已有的绝不覆盖。
@@ -648,12 +672,171 @@ public class ApiClient
         }
     }
 
-    /// <summary>关注列表(关注的 UP 主)。vmid=自己 mid, pn=页码, ps=每页数量(<=50)</summary>
-    public async Task<(bool ok, string? err, List<FollowUser>? list)> GetFollowingsAsync(long vmid, int pn = 1, int ps = 30)
+    /// <summary>
+    /// 拉取"我关注的 UP 主"的**自定义分组**(2026-10-13 新增, 关注页左栏那列分类)。
+    ///
+    /// ★ 接口: `GET /x/relation/tags?pn=1&amp;ps=100` —— 2026-10-13 实测通过, 返回
+    ///   `[{tagid, name, count, tip}]`。注意两个魔法值: **-10 = 特别关注**、**0 = 默认分组**。
+    /// ★ 关键: 这个接口**只给分组元信息, 不含成员 mid**。所以选中某个分组之后必须再打
+    ///   <see cref="GetFollowingsByTagAsync"/> 才能拿到那一组的人 —— 两步是分开的, 不要试图
+    ///   在这里一并取回(实测 `/x/relation/tags?tagid=X` 会**忽略** tagid 参数, 原样返回全部分组)。
+    /// ★ 必须登录: 匿名会返回 -101。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<FollowGroup>? groups)> GetFollowGroupsAsync(
+        CancellationToken ct = default)
     {
         try
         {
-            await EnsureBuvidAsync();
+            await EnsureBuvidAsync(ct);
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/relation/tags",
+                new Dictionary<string, string> { ["pn"] = "1", ["ps"] = "100" }, ct: ct);
+            // ★ ok=false + **err 为 null** = 这一轮被调用方取消了(见 CodeCanceled)。
+            //   关系页约定用它区分"切走了"与"失败了", 别在这里写错误文案。
+            if (code == CodeCanceled) return (false, null, null);
+            if (code != 0 || data == null)
+            {
+                var errMsg = msg ?? $"请求失败 (code {code})";
+                if (code == -101) errMsg = "请先登录";
+                else if (string.IsNullOrWhiteSpace(errMsg)) errMsg = $"请求失败 (code {code})";
+                return (false, errMsg, null);
+            }
+
+            var groups = new List<FollowGroup>();
+            if (data.Value.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in data.Value.EnumerateArray())
+                {
+                    var g = new FollowGroup
+                    {
+                        TagId = GetInt(e, "tagid"),
+                        Name = GetStr(e, "name"),
+                        Count = GetInt(e, "count"),
+                        Tip = GetStr(e, "tip")
+                    };
+                    groups.Add(g);
+                }
+            }
+            // 「特别关注」永远排最前, 其余按名称排 —— 接口给的是创建顺序, 界面上更该按"最想看的在前"。
+            // 「默认分组」(tagid=0) 是 B 站给每个用户的兜底组, 数量通常最大, 排最后当兜底。
+            groups = groups
+                .OrderBy(g => g.TagId == -10 ? 0 : g.TagId == 0 ? 2 : 1)
+                .ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return (true, null, groups);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null);
+        }
+    }
+
+    /// <summary>
+    /// 拉取**某个关注分组下**的 UP 主(2026-10-13 实测通过)。
+    ///
+    /// ★ 接口: `GET /x/relation/tag?mid=&lt;自己 mid&gt;&amp;tagid=&lt;分组 id&gt;&amp;pn=&amp;ps=`。
+    ///   返回的 list 项字段与 <see cref="GetFollowingsAsync"/> 基本一致(mid/uname/face/sign/
+    ///   official_verify/attribute), **额外多一个 `tag` 字段**(当前观察到的值都是空串, 用不上)。
+    /// ★ 为什么要单独一个方法, 而不给 GetFollowingsAsync 加个 tagid 参数:
+    ///   实测 `GET /x/relation/followings?...&amp;tagid=X` 会**静默忽略** tagid —— 返回的还是全量!
+    ///   (不报错、不为空, 只是 tagid 无效, 这种接口最坑: 代码看起来"传了参数", 实际没过滤。)
+    ///   所以过滤只能走 `/x/relation/tag` 这个另一个路径。
+    /// ★ <paramref name="tagId"/> 传 <see cref="FollowGroup.AllTagId"/>(=-1) 时**不行** ——
+    ///   那是给界面用的虚拟分组, 服务端不认。要看全部就走 <see cref="GetFollowingsAsync"/>。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<FollowUser>? list)> GetFollowingsByTagAsync(
+        long vmid, int tagId, int pn = 1, int ps = 30, CancellationToken ct = default)
+    {
+        try
+        {
+            await EnsureBuvidAsync(ct);
+            var ps2 = new Dictionary<string, string>
+            {
+                ["mid"] = vmid.ToString(),
+                ["tagid"] = tagId.ToString(),
+                ["pn"] = Math.Max(1, pn).ToString(),
+                ["ps"] = Math.Min(Math.Max(ps, 1), 50).ToString(),
+                ["order"] = "desc"
+            };
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/relation/tag", ps2, ct: ct);
+            if (code == CodeCanceled) return (false, null, null);   // 取消: err 留空作标记
+            if (code != 0 || data == null)
+            {
+                var errMsg = msg ?? $"请求失败 (code {code})";
+                if (code == -101) errMsg = "请先登录";
+                else if (string.IsNullOrWhiteSpace(errMsg)) errMsg = $"请求失败 (code {code})";
+                return (false, errMsg, null);
+            }
+
+            // ★★★ 这个接口返回的是**裸数组**: data 本身就是 [{mid,...}, ...],
+            //   不是 { list: [...] }。所以**必须先判 ValueKind** 再去摸字段 ——
+            //   JsonElement.TryGetProperty 作用在数组上会抛
+            //   "The requested operation requires an element of type 'Object',
+            //    but the target element has type 'Array'", 那个异常又会被下面的
+            //   catch 吞成一句英文错误直接糊在界面上(2026-10-13 用户点「cf」时实拍到)。
+            //   之前的写法是"先 TryGetProperty("list")、不行再兜底读数组",
+            //   顺序正好反了 —— 第一步就抛, 兜底那层永远走不到。
+            //   两个形状都留着兼容: 万一哪天 B 站把它改成 {list:[...]} 也不至于直接废掉。
+            var users = new List<FollowUser>();
+            if (data.Value.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in data.Value.EnumerateArray())
+                {
+                    var u = ParseFollowUser(e);
+                    if (u != null) users.Add(u);
+                }
+            }
+            else if (data.Value.ValueKind == JsonValueKind.Object
+                     && data.Value.TryGetProperty("list", out var arr)
+                     && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in arr.EnumerateArray())
+                {
+                    var u = ParseFollowUser(e);
+                    if (u != null) users.Add(u);
+                }
+            }
+            return (true, null, users);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null);
+        }
+    }
+
+    /// <summary>
+    /// 关注列表 / 分组列表两种接口里**共有**的 UP 项解析(2026-10-13 抽出来的)。
+    /// 两边返回的字段几乎一样(分组接口多一个用不上的 `tag`), 不抽出来就得抄两遍,
+    /// 而抄两遍的代价是"改了徽章逻辑忘了改另一边"。
+    /// </summary>
+    private static FollowUser? ParseFollowUser(JsonElement e)
+    {
+        var u = new FollowUser
+        {
+            Mid = GetLong(e, "mid"),
+            Name = GetStr(e, "uname"),
+            Face = UrlUtil.Normalize(GetStr(e, "face")),
+            Sign = GetStr(e, "sign")
+        };
+        if (e.TryGetProperty("official_verify", out var ov) && ov.ValueKind == JsonValueKind.Object)
+        {
+            u.VerifyType = GetInt(ov, "type");
+            u.VerifyDesc = GetStr(ov, "desc");
+        }
+        u.Attribute = GetAttrOrUnknown(e);
+        u.RelationText = RelationBadgeOfFollowings(u.Attribute);
+        // mid<=0 或名字空的一律丢掉: 那是接口塞进来的占位项, 画成一张空卡片更难看。
+        return u.Mid > 0 && !string.IsNullOrEmpty(u.Name) ? u : null;
+    }
+
+    /// <summary>关注列表(关注的 UP 主)。vmid=自己 mid, pn=页码, ps=每页数量(<=50)</summary>
+    public async Task<(bool ok, string? err, List<FollowUser>? list)> GetFollowingsAsync(
+        long vmid, int pn = 1, int ps = 30, CancellationToken ct = default)
+    {
+        try
+        {
+            await EnsureBuvidAsync(ct);
             var ps2 = new Dictionary<string, string>
             {
                 ["vmid"] = vmid.ToString(),
@@ -662,7 +845,8 @@ public class ApiClient
                 ["order"] = "desc"
             };
             var (code, msg, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/relation/followings", ps2);
+                "https://api.bilibili.com/x/relation/followings", ps2, ct: ct);
+            if (code == CodeCanceled) return (false, null, null);   // 取消: err 留空作标记
             if (code != 0 || data == null)
             {
                 var errMsg = msg ?? $"请求失败 (code {code})";
@@ -675,19 +859,9 @@ public class ApiClient
             {
                 foreach (var e in arr.EnumerateArray())
                 {
-                    var u = new FollowUser
-                    {
-                        Mid = GetLong(e, "mid"),
-                        Name = GetStr(e, "uname"),
-                        Face = UrlUtil.Normalize(GetStr(e, "face")),
-                        Sign = GetStr(e, "sign")
-                    };
-                    if (e.TryGetProperty("official_verify", out var ov) && ov.ValueKind == JsonValueKind.Object)
-                    {
-                        u.VerifyType = GetInt(ov, "type");
-                        u.VerifyDesc = GetStr(ov, "desc");
-                    }
-                    if (u.Mid > 0 && !string.IsNullOrEmpty(u.Name)) users.Add(u);
+                    // 走共用的 ParseFollowUser: 分组接口那边也是它, 两边逻辑必须一致
+                    var u = ParseFollowUser(e);
+                    if (u != null) users.Add(u);
                 }
             }
             return (true, null, users);
@@ -697,6 +871,116 @@ public class ApiClient
             return (false, ex.Message, null);
         }
     }
+
+    /// <summary>
+    /// 粉丝列表(关注我的人)。vmid=自己 mid, pn=页码, ps=每页数量(<=50)。
+    ///
+    /// ★ 与 <see cref="GetFollowingsAsync"/> 为什么是两个方法而不是一个带开关的:
+    ///   B 站这两个列表走不同接口(followings / fans), **返回结构不一样** ——
+    ///   粉丝的 list 项里没有 sign(签名), 而且 total 只在粉丝接口给(关注接口不给)。
+    ///   合成一个方法就得让调用方处理"这个字段有时有有时没有", 不如分开各自说清楚。
+    /// ★ 分页上限是 5 页: 实测 pn=6 起服务端返回 code=63000「前方风控」/空 list,
+    ///   与 ps 取 20 还是 50 无关。所以调用方按 <see cref="RelationViewModel.MaxPage"/> 收手,
+    ///   不要无限翻(见 RelationViewModel 的说明)。
+    /// ★ 必须登录: 匿名访问返回 -101(这里已转成"请先登录"); 风控时返回 -352/63000,
+    ///   message 常常是空的, 所以兜底文案要自己写, 不能只透传 msg。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<FollowUser>? list, long total)> GetFansAsync(
+        long vmid, int pn = 1, int ps = 30, CancellationToken ct = default)
+    {
+        try
+        {
+            await EnsureBuvidAsync(ct);
+            var ps2 = new Dictionary<string, string>
+            {
+                ["vmid"] = vmid.ToString(),
+                ["pn"] = Math.Max(1, pn).ToString(),
+                ["ps"] = Math.Clamp(ps, 1, 50).ToString(),
+                ["order"] = "desc"
+            };
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/relation/fans", ps2, ct: ct);
+            if (code == CodeCanceled) return (false, null, null, 0);   // 取消: err 留空作标记
+            if (code != 0 || data == null)
+            {
+                var errMsg = msg ?? $"请求失败 (code {code})";
+                if (code == -101) errMsg = "请先登录";
+                else if (code == -352 || code == 63000) errMsg = "被 B 站风控拦截, 请稍后再试";
+                else if (string.IsNullOrWhiteSpace(errMsg)) errMsg = $"请求失败 (code {code})";
+                return (false, errMsg, null, 0);
+            }
+
+            var users = new List<FollowUser>();
+            long total = 0;
+            if (data.Value.TryGetProperty("list", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in arr.EnumerateArray())
+                {
+                    var u = new FollowUser
+                    {
+                        Mid = GetLong(e, "mid"),
+                        Name = GetStr(e, "uname"),
+                        Face = UrlUtil.Normalize(GetStr(e, "face")),
+                        // ★ 粉丝接口**没有** sign 字段(见方法注释), 取不到就是空串。
+                        //   这里刻意不写 GetStr(e, "sign"): 空串由 FollowUser.HasSign 兜住,
+                        //   写上也一样是空, 不如在注释里说清楚它为什么是空的。
+                        Sign = ""
+                    };
+                    if (e.TryGetProperty("official_verify", out var ov) && ov.ValueKind == JsonValueKind.Object)
+                    {
+                        u.VerifyType = GetInt(ov, "type");
+                        u.VerifyDesc = GetStr(ov, "desc");
+                    }
+                    u.Attribute = GetAttrOrUnknown(e);
+                    u.RelationText = RelationBadgeOfFans(u.Attribute);
+                    if (u.Mid > 0 && !string.IsNullOrEmpty(u.Name)) users.Add(u);
+                }
+            }
+            if (data.Value.TryGetProperty("total", out var t) && t.ValueKind == JsonValueKind.Number)
+                total = t.GetInt64();
+            return (true, null, users, total);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null, 0);
+        }
+    }
+
+    /// <summary>
+    /// 读 <c>attribute</c>, 字段缺失时给 -1(**不是** <see cref="GetInt"/> 的默认 0)。
+    ///
+    /// ★ 这里必须单独写一遍, 因为 0 是一个有意义的值(attribute=0 就是"互相关注"),
+    ///   而 <see cref="GetInt"/> 对缺失字段一律返回 0 —— 直接用它的话,
+    ///   接口哪天少给这个字段, 页面上就会整整齐齐挂满"互相关注"的假徽章, 而且没人会发现。
+    /// </summary>
+    private static int GetAttrOrUnknown(JsonElement e)
+        => e.TryGetProperty("attribute", out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetInt32()
+            : -1;
+
+    /// <summary>
+    /// 关注列表(followings)的关系徽章文案。
+    /// ★ 单向关注**不给徽章**: 整页几百个"我关注了他"对用户没有信息量,
+    ///   满屏同样的标签只会把真正值得看的「互相关注」「TA 关注了我」淹掉。
+    /// </summary>
+    private static string RelationBadgeOfFollowings(int attribute) => attribute switch
+    {
+        0 => "互相关注",
+        6 => "TA 关注了我",
+        _ => ""
+    };
+
+    /// <summary>
+    /// 粉丝列表(fans)的关系徽章文案。
+    /// ★ 这里跟关注列表**故意不对称**: 粉丝页的「我已关注」有实际决策价值
+    ///   (要不要回关), 所以哪怕单向也标出来; 而关注页的「我已关注」没有决策价值, 不标。
+    /// </summary>
+    private static string RelationBadgeOfFans(int attribute) => attribute switch
+    {
+        0 => "互相关注",
+        2 => "已关注",
+        _ => ""
+    };
 
     private static VideoItem? ParseRecommendItem(JsonElement e)
     {
@@ -2117,12 +2401,14 @@ public class ApiClient
     ///   其中 MainViewModel.RefreshUserAsync 靠它判断登录态 —— 分不清两者时,
     ///   网络抖一下也会被当成"登录过期", 界面上直接显示"登录状态已过期"。
     /// </summary>
-    public async Task<(bool ok, string? err, UserState? data)> GetUserStateAsync()
+    public async Task<(bool ok, string? err, UserState? data)> GetUserStateAsync(
+        CancellationToken ct = default)
     {
         try
         {
             var (code, msg, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/web-interface/nav", null);
+                "https://api.bilibili.com/x/web-interface/nav", null, ct: ct);
+            if (code == CodeCanceled) return (false, null, null);   // 取消: err 留空作标记
             if (code != 0 || data == null) return (false, msg ?? $"nav 请求失败 (code {code})", null);
 
             var d = data.Value;
@@ -2191,12 +2477,14 @@ public class ApiClient
     /// nav/stat 一次给齐三个数, 动态数字段是 dynamic_count。
     /// ★ 2026-10-01 去掉 (-1,-1,-1) 哨兵, 改为 (ok, err, ...) —— 同 GetRelationStatAsync。
     /// </summary>
-    public async Task<(bool ok, string? err, long following, long follower, long dynamicCount)> GetUserNavStatAsync()
+    public async Task<(bool ok, string? err, long following, long follower, long dynamicCount)> GetUserNavStatAsync(
+        CancellationToken ct = default)
     {
         try
         {
             var (code, msg, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/web-interface/nav/stat", null);
+                "https://api.bilibili.com/x/web-interface/nav/stat", null, ct: ct);
+            if (code == CodeCanceled) return (false, null, 0, 0, 0);   // 取消: err 留空作标记
             if (code != 0 || data == null) return (false, msg ?? $"nav/stat 请求失败 (code {code})", 0, 0, 0);
             return (true, null,
                 GetLong(data.Value, "following"),

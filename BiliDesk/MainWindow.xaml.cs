@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows;
@@ -83,6 +83,8 @@ public partial class MainWindow : FluentWindow
             PageKey.Messages => new MessagesPage { DataContext = new MessagesViewModel() },
             // 分区页(也不在导航栏上): 入口是左上角 logo 的分区面板
             PageKey.Region => new RegionPage { DataContext = new RegionViewModel() },
+            // 关注/粉丝(2026-10-13 新增, 不在导航栏上): 入口是「我的」页的三项统计
+            PageKey.Relation => new RelationPage { DataContext = new RelationViewModel() },
             // 稍后再看(也不在导航栏上): 入口是「我的」页的快捷入口
             _ => new WatchLaterPage { DataContext = new WatchLaterViewModel() }
         };
@@ -375,6 +377,27 @@ public partial class MainWindow : FluentWindow
         Activate();
     }
 
+    /// <summary>
+    /// 从「我的」页点「关注」或「粉丝」: 切到关系页并按模式加载。
+    ///
+    /// ★ 为什么必须先 InitAsync 再 Navigate(与 <see cref="OpenFavFolder"/> 同一顺序):
+    ///   Navigate 会同步触发切页, 页面一上屏就开始转圈; 先把模式喂给 VM,
+    ///   请求才和"用户看到加载中"同一时刻出发。反过来先 Navigate 的话,
+    ///   页面会先按默认模式(关注)显示一帧, 再被换成粉丝模式 —— 视觉上就是"闪一下另一种列表"。
+    /// ★ 同一个 VM 实例复用(页面被 _pages 缓存), 模式不同才会重新拉;
+    ///   重复点同一个统计项不产生新请求(见 RelationViewModel.InitAsync)。
+    /// </summary>
+    public void NavigateToRelation(RelationMode mode)
+    {
+        if (PageOf(PageKey.Relation) is RelationPage page && page.DataContext is RelationViewModel vm)
+            _ = vm.InitAsync(mode);
+        _vm.Navigate(PageKey.Relation);
+
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    // ------------------------------------------------------------ 分区面板(点 logo 展开)
     // ------------------------------------------------------------ 分区面板(点左上角 logo 展开)
 
     private bool _partitionOpen;

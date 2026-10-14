@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
+using BiliDesk.Views;   // VolumeChanged / SetPlayerVolume 的 origin 参数是 PlayerWindow
 
 namespace BiliDesk.Services;
 
@@ -145,6 +146,30 @@ public class SettingsStore
     /// <summary>高级弹幕(mode 7 高级 / 8 代码 / 9 BAS)</summary>
     public bool DanmakuFilterAdvanced { get; set; } = true;
 
+    // ---- 描边(2026-10-14 新增, 用户要求"设置界面可以选开启和粗细") ----
+
+    /// <summary>
+    /// 弹幕文字要不要带黑色描边。
+    /// ★ 为什么默认开: 描边存在的原意是"白色画面上也看得清"(用户 2026-10-13 提的需求)。
+    ///   而它在深色画面上几乎看不出, 所以开着几乎无害 —— 真正需要关的用户是"深色视频多、
+    ///   觉得黑边让字显脏"的那种, 交给开关而不是替他决定。
+    /// </summary>
+    public bool DanmakuOutlineEnabled { get; set; } = true;
+
+    /// <summary>
+    /// 描边的**可见**宽度(设备无关像素), 即字**外面**那一圈黑边有多厚。
+    ///
+    /// ★★★ 为什么存"可见宽度"而不是内部的 <c>StrokeThickness</c>(它是可见宽度的两倍):
+    ///   WPF 的 Stroke 沿路径中心线**向两侧各扩一半**, 而当前的两层画法(描边层在下、
+    ///   填充层在上, 见 PlayerWindow.BuildDanmakuElement)把**向内的那一半完全盖住**,
+    ///   用户看到的只有向外那一半。于是对用户讲"1.8 的描边"毫无意义 —— 他看到的是 0.9。
+    ///   存可见宽度还有个长远好处: 将来若改成真正的轮廓膨胀(Geometry.Combine),
+    ///   这个数字的语义不变, 用户的设置不会突然变粗一倍。
+    /// ★ 合法范围 0.4 ~ 1.6。低于 0.4 在 24px 中文上等于没有; 高于 1.6 笔画会被啃粗。
+    /// </summary>
+    public double DanmakuOutlineWidth { get; set; } = 0.8;
+
+    /// <summary>弹幕不透明度(20~100)。★ 缺这条时白字压在亮画面上完全看不见</summary>
     /// <summary>弹幕不透明度(20~100)。★ 缺这条时白字压在亮画面上完全看不见</summary>
     public int DanmakuOpacityPercent { get; set; } = 80;
 
@@ -172,6 +197,85 @@ public class SettingsStore
     /// 老配置没有这个字段 → 反序列化保持属性初始化值 → 自动落到默认档。
     /// </summary>
     public int PreferredQualityQn { get; set; } = QualityPreference.DefaultQn;
+
+    /// <summary>
+    /// 是否允许同时打开多个播放器窗口(默认**开**)。
+    ///
+    /// · 开: 每次播放(视频/直播/本地文件)都**新建**一个播放器窗口, 已开着的窗口继续播
+    ///   各自的 —— 用户可以一边看 A 一边点开 B, 不会互相覆盖;
+    /// · 关: 复用同一个播放器窗口(旧行为), 打开新视频会替换当前播放。
+    ///
+    /// ★ 只影响"新窗口怎么来": 播放中改它不会动已经开着的窗口(下次播放才按新值走),
+    ///   所以不需要广播事件 —— 与「默认画质」同款(见 <see cref="SetPreferredQuality"/> 的说明)。
+    /// ★ 默认开的理由: 复用窗口会覆盖正在看的视频, 是用户明确不要的行为;
+    ///   想要旧行为的在设置页关掉即可(见 <see cref="SetMultiPlayerWindow"/>)。
+    /// ★ 读取点只有一个: PlayerService.GetOrCreateWindow。
+    /// </summary>
+    public bool MultiPlayerWindow { get; set; } = true;
+
+    // ------------------------------------------------------------ 播放器窗口尺寸记忆
+    //
+    // ★ 用户要求(2026-10-13): 上一次把播放器窗口拖成多大, 下一次打开就是多大。
+    //
+    // ★ **只记大小, 不记位置**: 双屏/拔掉外接屏之后, 记下来的坐标可能落在已经不存在的
+    //   屏幕上 ⇒ 窗口开在"看不见的地方", 用户得自己拖出来。多屏位置记忆要配合
+    //   "当前显示器是否还挂着"来判断, 那是另一件事, 这里不做。
+    //
+    // ★ 0 / 负数一律当"没有记忆", 走 XAML 里的默认尺寸。老配置没有这两个字段时
+    //   属性初始化值就是 0, 天然兼容, 不需要版本号。
+    public double PlayerWindowWidth { get; set; }
+    public double PlayerWindowHeight { get; set; }
+
+    /// <summary>
+    /// 收起详情栏模式下的窗口大小。★ 与上面两个是**不同模式的不同量**, 不能共用 ——
+    /// 理由见 <see cref="RememberPlayerWindowCollapsedSize"/>。
+    /// </summary>
+    public double PlayerWindowCollapsedWidth { get; set; }
+    public double PlayerWindowCollapsedHeight { get; set; }
+
+    /// <summary>
+    /// 记下窗口当前大小。
+    ///
+    /// ★ 这里只做"**能不能存**"的判断, 不做"能不能用"的判断 —— 后者是
+    ///   PlayerWindow.IsUsablePlayerWindowSize 的活, 而且它得用**窗口自己的**最小尺寸
+    ///   (1100x600)去判。为什么不合并: 这一层不认识 WPF 的窗口类型, 把界面常量抄一份
+    ///   过来早晚会长歪, 一旦长歪症状是"存的是 A 值、按 B 值筛", 极难查。
+    /// ★ 这层只拦两类值: **非有限数**(NaN / ±∞; 手改配置或将来某个 bug 都可能写进来,
+    ///   一旦存进 JSON, 下次启动读出来照样非有限, 会一路传到窗口上)与**非正数**。
+    ///   常规模式 1100x600 那道下限不在这里判 —— 存都存下来了, 套不套是窗口的事。
+    /// ★ 调用方(PlayerWindow)在 Closing 时已过滤掉铺满/全屏/最小化与非当前窗口:
+    ///   那几种状态下量到的是"整块铺满"的尺寸, 存下来会让下次普通模式变成满屏大小。
+    /// </summary>
+    public void RememberPlayerWindowSize(double width, double height)
+    {
+        if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)
+            return;   // 无效值不写
+        if (Math.Abs(width - PlayerWindowWidth) < 0.5
+            && Math.Abs(height - PlayerWindowHeight) < 0.5) return;   // 没变就别触发落盘
+        PlayerWindowWidth = width;
+        PlayerWindowHeight = height;
+        Save();
+    }
+
+    /// <summary>
+    /// 记下**收起右侧详情栏**(铺满窗口)状态下的窗口大小(2026-10-13 新增)。
+    ///
+    /// ★ 为什么必须与普通模式**分开存**, 而不是一个字段两个模式共用:
+    ///   收起模式下允许缩到 320x200, 展开时最小是 1100x600 —— 两个模式的取值范围完全不重叠。
+    ///   共用一个字段的结果是"用户在收起状态下把窗口缩到 500x400, 关掉, 下次以普通模式打开"
+    ///   得到一个 500x400 的窗口, 而 WPF 会把它**抬到** 1100x600; 反过来则是"展开时调好的
+    ///   大尺寸, 收起时被原样套上, 视频区小得看不见"。两个方向都表现为"尺寸记忆坏了"。
+    /// </summary>
+    public void RememberPlayerWindowCollapsedSize(double width, double height)
+    {
+        if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)
+            return;
+        if (Math.Abs(width - PlayerWindowCollapsedWidth) < 0.5
+            && Math.Abs(height - PlayerWindowCollapsedHeight) < 0.5) return;
+        PlayerWindowCollapsedWidth = width;
+        PlayerWindowCollapsedHeight = height;
+        Save();
+    }
 
     /// <summary>
     /// 首页「推荐」用哪套算法。★ 2026-10-03 起**固定为网页版**, 该字段仅为兼容老配置保留 ——
@@ -242,8 +346,29 @@ public class SettingsStore
     ///   满格), 每个视频都要重调一遍纯属折腾。0 也照样存 —— 那是用户主动静音的,
     ///   下次打开还该是静音(与"静音键"的语义一致)。
     /// ★ 与 <see cref="Models.AppSettings.PlayerVolume"/> 是读写契约, 两处必须一致。
+    /// ★ 2026-10-12 起它同时是设置页的「默认音量」项(可直接预置, 不必先播一次);
+    ///   范围常量见 <see cref="VolumeMin"/>/<see cref="VolumeMax"/>, 变更事件见
+    ///   <see cref="VolumeChanged"/>(带发起方, 多窗口下才不会互相串音量)。
     /// </summary>
     public int PlayerVolume { get; set; } = 80;
+
+    /// <summary>音量可调范围(含)。设置页滑杆上下限、Load 兜底、setter 夹取全引这两个常量,
+    /// 不在别处重复写字面量(与 AppSettings.PlayerVolume 是读写契约)。</summary>
+    public const int VolumeMin = 0;
+    /// <inheritdoc cref="VolumeMin"/>
+    public const int VolumeMax = 100;
+
+    /// <summary>
+    /// 音量变更。事件参数 = **发起方**(null = 设置页/外部, 非 null = 那个播放器窗口)。
+    ///
+    /// ★ 为什么必须带来源(2026-10-12 审查发现, 多窗口下的真 bug):
+    ///   多播放器窗口同时开着时, 每个窗口都订阅本事件。如果无脑广播, 在 B 窗口调音量 →
+    ///   写回设置 → 事件 → **A 窗口也跟着变**(两个窗口一起被调), 与"音量是长期偏好"
+    ///   的语义不符 —— 用户在 A 里听的声音不该被 B 动。
+    ///   带来源后: 设置页发起 ⇒ 广播给所有窗口(这是用户明确要求"全部生效"的);
+    ///   某个播放器发起 ⇒ 只写回设置供**下次**开窗使用, 不打扰其他窗口。
+    /// </summary>
+    public event Action<PlayerWindow?>? VolumeChanged;
 
     /// <summary>
     /// 上次用的搜索类别(见 <see cref="Models.ContentKind"/>: 0=视频 1=直播间 2=番剧)。
@@ -267,14 +392,21 @@ public class SettingsStore
     }
 
     /// <summary>
-    /// 设置播放器音量并落盘。0~100 之外的值被夹回范围内(老配置可能存着越界值)。
+    /// 设置播放器音量并落盘, 并按需广播。0~100 之外的值被夹回范围内(老配置可能存着越界值)。
+    ///
+    /// <paramref name="origin"/> = 谁发起的这次修改(null = 设置页/外部, 非 null = 某个播放器窗口)。
+    /// ★ 它决定事件怎么被消费, 别随手传 null: 多窗口下"在 B 窗口调音量却把 A 也调了"
+    ///   就是漏传 origin 造成的(见 <see cref="VolumeChanged"/> 的说明)。
+    /// ★ 同值短路不只是省磁盘: 程序性回写(Playing 补写、事件触发后的同步)因此不会
+    ///   产生额外落盘, 也不需要调用方判重。
     /// </summary>
-    public void SetPlayerVolume(int volume)
+    public void SetPlayerVolume(int volume, PlayerWindow? origin = null)
     {
-        var v = Math.Clamp(volume, 0, 100);
+        var v = Math.Clamp(volume, VolumeMin, VolumeMax);
         if (PlayerVolume == v) return;
         PlayerVolume = v;
         Save();
+        VolumeChanged?.Invoke(origin);
     }
 
     /// <summary>
@@ -383,6 +515,21 @@ public class SettingsStore
         DanmakuFilterFixed = s.DanmakuFilterFixed;
         DanmakuFilterColorful = s.DanmakuFilterColorful;
         DanmakuFilterAdvanced = s.DanmakuFilterAdvanced;
+    // ★★ 描边(2026-10-14 新增)的两个字段都要**纠正老配置**, 不能照抄:
+    //   bool 的默认值是 false, 而"描边开着"才是我们要的默认 —— 老配置里根本没这个键,
+    //   反序列化给的就是 false。照抄的话每个老用户升级后描边都会**凭空消失**, 而且
+    //   界面上那个开关也是关的, 用户只会觉得"这版本把描边删了"。
+    //   判据用"有没有这个键"最准, 但 AppSettings 是普通 POCO 拿不到原始 JSON,
+    //   所以退一步用值判断: 老配置只可能是 false(从未开过), 新配置关掉也是 false ——
+    //   两者无法区分, 因此这里选择"以默认值为准, 关掉由用户自己再关一次"。
+    //   代价只有一个: 从 1.2.7 升上来、且**主动关过**描边的用户, 升级后描边会回来一次。
+    //   这个代价远小于"所有人都丢描边"。
+    DanmakuOutlineEnabled = s.DanmakuOutlineEnabled || DanmakuOutlineEnabled;
+    // 宽度同理: 老配置里没有这个键 ⇒ 0 ⇒ 替换成默认 0.8 而不是夹到下界 0.4,
+    //   因为 0.4 那一档的描边在白底上几乎看不见, 等于"有开关但没效果"。
+    DanmakuOutlineWidth = Math.Clamp(
+        s.DanmakuOutlineWidth > 0.01 ? s.DanmakuOutlineWidth : DanmakuOutlineWidth,
+        0.4, 1.6);
 
         // ★ 新增的弹幕外观三项(2026-10-12): 老配置没有这些字段, 会拿到属性初始化值
         //   (80 / 100 / 2), 正好就是设计默认值, 不需要版本兼容。
@@ -396,6 +543,19 @@ public class SettingsStore
         // ★ 默认画质要 Normalize: 手改过的配置可能有 0 / 已下线的档位 / 串到别处
         //   的值, 直接流进取流请求会变成一个谁也不认识的 qn(表现为画质莫名其妙)。
         PreferredQualityQn = QualityPreference.Normalize(s.PreferredQualityQn);
+
+        // 多窗口开关: 老配置缺字段时靠属性初始化值(true), 不需要版本兼容。
+        MultiPlayerWindow = s.MultiPlayerWindow;
+
+        // 播放器窗口尺寸记忆: 老配置缺字段时为 0, PlayerWindow.IsUsablePlayerWindowSize
+        // 会当成"没有记忆"走默认尺寸。
+        // ★ 不在这里做有效性过滤: 脏值原样读进来, 由套用侧(IsUsablePlayerWindowSize)统一判断,
+        //   否则"读取时清理"与"套用时判断"两处规则会长歪 —— 而套用侧那道门槛还依赖
+        //   窗口的 MinWidth, 那是个界面常量, 这一层拿不到也不该拿。
+        PlayerWindowWidth = s.PlayerWindowWidth;
+        PlayerWindowHeight = s.PlayerWindowHeight;
+        PlayerWindowCollapsedWidth = s.PlayerWindowCollapsedWidth;
+        PlayerWindowCollapsedHeight = s.PlayerWindowCollapsedHeight;
 
         // ★ 算法选择已删除(2026-10-03): 固定网页版, 不再从配置读 ——
         //   老配置里存着 App 的会被纠正(那一档实测对第三方客户端不提供个性化),
@@ -428,8 +588,8 @@ public class SettingsStore
             ? s.DisclaimerVersion
             : (s.DisclaimerAccepted ? 1 : 0);
 
-        // 音量继承: 老配置没这个字段 ⇒ 保持默认 80。越界值夹回 0~100。
-        PlayerVolume = Math.Clamp(s.PlayerVolume, 0, 100);
+        // 音量继承: 老配置没这个字段 ⇒ 保持默认 80。越界值夹回 VolumeMin~VolumeMax。
+        PlayerVolume = Math.Clamp(s.PlayerVolume, VolumeMin, VolumeMax);
 
         // 上次的搜索类别: 老配置没这个字段 ⇒ 视频(与搜索页初始类别一致)。
         SearchKind = Enum.IsDefined(typeof(ContentKind), s.LastSearchKind)
@@ -466,10 +626,17 @@ public class SettingsStore
         DanmakuFilterFixed = DanmakuFilterFixed,
         DanmakuFilterColorful = DanmakuFilterColorful,
         DanmakuFilterAdvanced = DanmakuFilterAdvanced,
+        DanmakuOutlineEnabled = DanmakuOutlineEnabled,
+        DanmakuOutlineWidth = DanmakuOutlineWidth,
         DanmakuOpacityPercent = DanmakuOpacityPercent,
         DanmakuFontScalePercent = DanmakuFontScalePercent,
         DanmakuSpeedLevel = DanmakuSpeedLevel,
         PreferredQualityQn = PreferredQualityQn,
+        MultiPlayerWindow = MultiPlayerWindow,
+        PlayerWindowWidth = PlayerWindowWidth,
+        PlayerWindowHeight = PlayerWindowHeight,
+        PlayerWindowCollapsedWidth = PlayerWindowCollapsedWidth,
+        PlayerWindowCollapsedHeight = PlayerWindowCollapsedHeight,
         RecommendSource = RecommendSource,
         AccentColor = AccentColor,
         SponsorBlockEnabled = SponsorBlockEnabled,
@@ -676,6 +843,18 @@ public class SettingsStore
     }
 
     /// <summary>
+    /// 改"多个播放器窗口"并落盘。
+    /// ★ 不需要广播事件: 它只在**新建播放器窗口那一刻**被读(见 PlayerService.GetOrCreateWindow),
+    ///   已经开着的窗口不受影响 —— 与「默认画质」「免登录 1080P」同款, 下次播放即按新值走。
+    /// </summary>
+    public void SetMultiPlayerWindow(bool value)
+    {
+        if (MultiPlayerWindow == value) return;
+        MultiPlayerWindow = value;
+        Save();
+    }
+
+    /// <summary>
     /// 切换**窗口背景材质**并落盘, 广播给所有已打开的窗口。
     ///
     /// ★ 2026-10-06 起这一个方法同时承担"开关 + 变体选择"(四种材质平级):
@@ -828,6 +1007,7 @@ public class SettingsStore
         string? blockKeywords = null, bool? colorful = null,
         bool? filterScroll = null, bool? filterFixed = null,
         bool? filterColorful = null, bool? filterAdvanced = null,
+        bool? outlineEnabled = null, double? outlineWidth = null,
         int? opacityPercent = null, int? fontScalePercent = null, int? speedLevel = null)
     {
         var nextKeywords = blockKeywords ?? DanmakuBlockKeywords;
@@ -836,6 +1016,11 @@ public class SettingsStore
         var nextFFixed = filterFixed ?? DanmakuFilterFixed;
         var nextFColorful = filterColorful ?? DanmakuFilterColorful;
         var nextFAdvanced = filterAdvanced ?? DanmakuFilterAdvanced;
+        // 描边(2026-10-14 新增): 同样走"可选覆盖", 调用点只传自己关心的那一项。
+        // ★ 宽度要夹到区间: 滑杆给的是 0.4~1.6, 但手改配置或将来某个 bug 都可能送进
+        //   区间外的值, 而一个负宽度会让 Stroke 抛 ArgumentException, 直接把弹幕线程带崩。
+        var nextOutlineW = Math.Clamp(outlineWidth ?? DanmakuOutlineWidth, 0.4, 1.6);
+        var nextOutlineOn = outlineEnabled ?? DanmakuOutlineEnabled;
         // 三个外观项同样走"传 null 表示不改": 播放器调滑杆时只想改不透明度,
         // 要是顺手把字号/速度重置回默认, 用户会觉得"我刚调好的速度又变了"。
         var nextOpacity = Math.Clamp(opacityPercent ?? DanmakuOpacityPercent, 0, 100);
@@ -850,6 +1035,8 @@ public class SettingsStore
             || nextFFixed != DanmakuFilterFixed
             || nextFColorful != DanmakuFilterColorful
             || nextFAdvanced != DanmakuFilterAdvanced
+            || nextOutlineOn != DanmakuOutlineEnabled
+            || Math.Abs(nextOutlineW - DanmakuOutlineWidth) > 1e-6
             || nextOpacity != DanmakuOpacityPercent
             || nextFont != DanmakuFontScalePercent
             || nextSpeed != DanmakuSpeedLevel
@@ -862,6 +1049,8 @@ public class SettingsStore
         DanmakuFilterFixed = nextFFixed;
         DanmakuFilterColorful = nextFColorful;
         DanmakuFilterAdvanced = nextFAdvanced;
+        DanmakuOutlineEnabled = nextOutlineOn;
+        DanmakuOutlineWidth = nextOutlineW;
         DanmakuOpacityPercent = nextOpacity;
         DanmakuFontScalePercent = nextFont;
         DanmakuSpeedLevel = nextSpeed;
