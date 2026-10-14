@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
@@ -53,8 +53,11 @@ public partial class HomePage : UserControl
             HookSearchCard();
             // 分段标签的下划线要等布局出来才摆得对(首次布局前 ActualWidth 都是 0);
             // 派到 Loaded 优先级 = 排在本次布局之后, 且首次摆放不带动画
-            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(
-                () => MoveTabIndicator(CurrentTabFromVm() ?? HomeTabKind.Recommend, animate: false)));
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+            {
+                // 首次摆放(不带动画)。布局前 ActualWidth 还是 0, 所以必须等布局跑完。
+                MoveTabIndicator(CurrentTabFromVm() ?? HomeTabKind.Recommend, animate: false);
+            }));
         };
         // 主题可能被设置页改掉, 这里跟着更新图标。
         // 只在构造函数里订阅一次、不解绑: 本页实例被 MainWindow 长期缓存, 生命周期等同于应用,
@@ -63,7 +66,13 @@ public partial class HomePage : UserControl
         // 筛选条件变化时让筛选按钮自己显示"已启用"状态
         FilterService.Instance.PropertyChanged += OnFilterChanged;
         // 窗口缩放时若搜索卡正开着, 要让它重新对中(RenderTransform 是绝对位移, 不跟布局走)
-        SizeChanged += (_, _) => RelayoutSearchCard();
+        SizeChanged += (_, _) =>
+        {
+            RelayoutSearchCard();
+            // ★ 窗口尺寸变了 ⇒ 标签位置变了 ⇒ 下划线要重新摆一次(它靠实测坐标定位)。
+            //   不重摆的话, 窗口一缩放线就停在旧位置上了。
+            if (_tabIndicatorPlaced) MoveTabIndicator(CurrentTabFromVm() ?? HomeTabKind.Recommend, animate: false);
+        };
         // 输入任何文字时占位提示要立刻渐隐(聚焦淡出在 GotFocus 里, 这里管"打了字又删光")
         SearchKeywordBox.TextChanged += (_, _) => RefreshSearchPlaceholder();
         // 屏蔽面板改到工具列左边后(Placement=Left), 垂直方向要自己底对齐: 面板(≈340px)比
@@ -320,8 +329,9 @@ public partial class HomePage : UserControl
         UpdateBackToTop(ScrollOf(tab));
         // 分段标签的下划线跟着选中项走
         MoveTabIndicator(tab);
+        // ★ 2026-10-12 用户要求"彻底移除浮动动画" —— 切 tab 现在**没有任何转场动画**,
+        //   只切显隐与下划线。早先的"闪白幕布"与"卡片上浮"都已删除。
     }
-
     /// <summary>
     /// 保证某个 tab 的列表已经挂上分帧填充器。**每个 tab 只建一次**, 之后永远复用 ——
     /// 这就是"切 tab 不重建"的关键(旧版在 ShowTab 里每次都 Attach/Detach)。
@@ -370,7 +380,20 @@ public partial class HomePage : UserControl
         _ => null
     };
 
-    /// <summary>把选中下划线挪到某个标签下面。animate=false 用于首次摆放(不该有"滑进来"的动画)。</summary>
+    /// <summary>
+    /// 把选中下划线挪到某个标签下面。animate=false 用于首次摆放(不该有"滑进来"的动画)。
+    ///
+    /// ★ 下划线的宽度是**固定的 20px**(见 HomePage.xaml), 所以这里只需要动 X 一个属性 ——
+    ///   这正是"改回下划线"最大的好处: 药丸版本要同时动"位置 + 宽度", 而那是 WPF 里
+    ///   最容易出错的组合(宽度动画的起点会读到被动画接管的旧值, 表现为"方块从最左边飞来";
+    ///   改用 ScaleX 又有缩放锚点偏移的坑, 5 个标签里只有宽度变化的那两档会偏)。
+    ///   宽度固定 ⇒ 不存在"位置与宽度不同步"这件事, 一条 DoubleAnimation 就够了。
+    ///
+    /// ★ 位置必须**实测**(TransformToAncestor): 五个标签文字长短不同(推荐/热门 两字,
+    ///   排行榜/追番 三个), 宽度不一样, 靠固定间距推不出来。
+    /// ★ 线要**在文字下面居中**: 所以 X 要在标签左边距上再加 (标签宽 − 线宽)/2。
+    ///   少加这一项, 线会贴到标签左边缘, 看起来像"没对齐"。
+    /// </summary>
     private void MoveTabIndicator(HomeTabKind tab, bool animate = true)
     {
         var target = TabButtonOf(tab);
@@ -381,24 +404,38 @@ public partial class HomePage : UserControl
             return;
         }
 
-        var x = target.TransformToAncestor(HomeTabs).Transform(new Point(0, 0)).X
-                + (target.ActualWidth - TabIndicator.Width) / 2;
+        // 标签左边距(相对标签行) + 居中偏移。下划线是 TabsRow 的子元素、标签行的兄弟,
+        // 两者都没有 Margin, 所以坐标原点一致, 直接可用。
+        var left = target.TransformToAncestor(HomeTabs).Transform(new Point(0, 0)).X
+                   + (target.ActualWidth - TabIndicator.Width) / 2;
 
         if (!animate || !_tabIndicatorPlaced)
         {
-            // 先清动画再落值: 否则会被上一次残留的动画值顶掉
-            TabIndicatorTrans.BeginAnimation(TranslateTransform.XProperty, null);
-            TabIndicatorTrans.X = x;
+            ClearIndicatorAnimations();
+            TabIndicatorTrans.X = left;
             _tabIndicatorPlaced = true;
             return;
         }
 
+        // ★★ 顺序很关键: **先读当前 X, 再清动画**。
+        //   反过来先清动画, X 会立刻回落到"上次动画开始前的本地值"(0),
+        //   于是新动画从 0 起步 —— 表现就是"线先跳到最左边再滑回来"(实测从
+        //   排行榜切到别的档时会看到线从左上角飞过来, 因为 0 就是最左)。
+        //   先读则拿到的是"上一次动画的当前值", 正是我们要的连续起点。
+        var from = TabIndicatorTrans.X;
+        ClearIndicatorAnimations();
         TabIndicatorTrans.BeginAnimation(TranslateTransform.XProperty,
-            new DoubleAnimation(TabIndicatorTrans.X, x, TimeSpan.FromMilliseconds(TabIndicatorMs))
+            new DoubleAnimation(from, left, TimeSpan.FromMilliseconds(TabIndicatorMs))
             {
+                // ★ EaseOut: 起步快、收尾缓。位移动画用缓出比线性"更有质感" ——
+                //   线性看起来像生硬地平移, 缓出像是滑过去停在目标上。
                 EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
             });
     }
+
+    /// <summary>清掉下划线上残留的位移动画</summary>
+    private void ClearIndicatorAnimations()
+        => TabIndicatorTrans.BeginAnimation(TranslateTransform.XProperty, null);
 
     /// <summary>当前 VM 认为选中的 tab(显隐由它驱动, 这里只做"读"用途)</summary>
     private HomeTabKind? CurrentTabFromVm()
@@ -430,6 +467,19 @@ public partial class HomePage : UserControl
 
     /// <summary>工具栏刷新键 + 错误条里的「重试」都走这一条</summary>
     private void OnRefreshClick(object sender, RoutedEventArgs e) => _ = RefreshCurrentTabAsync();
+
+    /// <summary>
+    /// 「分区」入口(2026-10-12 用户要求"放左下角", 入口与展开位置一致)。
+    ///
+    /// ★ 按钮在 **MainWindow 的左侧导航栏底部**(XAML 里), 这里只负责接收点击:
+    ///   它属于**窗口级**功能(分区面板盖住整个窗口、含导航栏), 而不是首页的内容,
+    ///   所以按钮不该放在 HomePage 的右下角工具栏里。
+    /// ★ 用 <see cref="SvcWindow.Main"/> 而不是"往上找父窗口":
+    ///   MainWindow 嵌在 PageHost(一个 ContentControl)里时, 父级链上未必有 MainWindow 那个类型;
+    ///   SvcWindow 是 App 启动时登记的全局引用, 哪儿都能拿到。
+    /// ★ 主窗口不可用时(启动早期/探针环境)静默跳过: 分区面板是导航增强, 缺了不该抛。
+    /// </summary>
+    public void OpenPartitionFromNav() => SvcWindow.Main?.OpenPartition();
 
     /// <summary>通用: 滚动到底部 / 内容不够一屏时, 自动加载更多</summary>
     private async Task TriggerAutoLoad(ScrollViewer sv, HomeViewModel vm)
@@ -612,8 +662,6 @@ public partial class HomePage : UserControl
     /// <summary>搜索框聚焦时描边淡入的最终不透明度(2026-09-26 起是描边、不再是光晕)</summary>
     private const double SearchRingOpacity = 1.0;
 
-    /// <summary>平移段时长。位移有好几百像素, 太短会"闪一下就到位"</summary>
-    private const int SearchPanMs = 300;
     /// <summary>展开段时长(紧接平移之后)</summary>
     private const int SearchExpandMs = 340;
     /// <summary>收起时先让内容淡出, 这段之后尺寸才开始缩 —— 反过来能看见内容被挤扁</summary>
@@ -1027,6 +1075,7 @@ public partial class HomePage : UserControl
             });
     }
 }
+
 
 /// <summary>
 /// 分帧挂载器: 把"ItemsSource 一挂就在一次布局里同步生成全部卡片容器"拆成

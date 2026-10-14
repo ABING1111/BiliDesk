@@ -202,7 +202,14 @@ public partial class PlayerWindow : FluentWindow
     private const long TailQuietZoneMs = 10000;
 
     /// <summary>
-    /// 视频区手势层的常态底色(#01000000 —— 近透明但可命中鼠标, 见 VideoAreaRoot 的 XAML 注释)。
+    /// 视频区手势层的常态底色(#01000000 —— 近透明但可命中鼠标)。
+    ///
+    /// ★★ 2026-10-13 的回归教训: 我曾为了"盖住 letterbox 白底"把它改成**不透明黑**,
+    ///   结果用户报"视频播放时全黑"。层级搞反了 —— 这一层在 VideoView.Content
+    ///   (浮层窗口)里, 位于 vout HWND **之上**, 不透明会盖住**视频画面**而不是白底。
+    ///   想盖 vout 白底要用独立的遮罩层(EndOverlay / LoadingOverlay / 全屏黑幕那几层,
+    ///   平时 Collapsed), 手势层必须保持近透明。
+    ///
     /// EOF 时手势层会切黑盖住露出白底的 vout HWND(见 OnEndReached), 起播时用它还原。
     /// </summary>
     private static readonly Brush VideoAreaBackBrush = CreateVideoAreaBackBrush();
@@ -223,6 +230,9 @@ public partial class PlayerWindow : FluentWindow
 
     private static Brush CreateVideoAreaBackBrush()
     {
+        // 近透明黑(#01000000): 见 VideoAreaBackBrush 的说明 —— 绝不能改成不透明,
+        // 那会盖住视频画面(2026-10-13 实测回归: 用户看到整个画面全黑)。
+        // 之所以不是完全透明: 背景全透明时鼠标事件会穿透, 手势就收不到了。
         var b = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x01, 0, 0, 0));
         b.Freeze();
         return b;
@@ -394,6 +404,9 @@ public partial class PlayerWindow : FluentWindow
         DanmakuAreaPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
                 RightAlignPopup(DanmakuAreaPopup, BtnDanmakuArea)));
+        // ★ 两个弹层的"开着"状态本身就是判据(见 AnyPlayerPopupOpen), 不需要订阅 Closed。
+        //   2026-10-13 第一版在这里订阅过 Closed 记时间窗, 实测证明 Closed 晚于视频区的
+        //   Up(70ms), 时间窗一次都没生效过 —— 已删除。
         // 主题无需在此订阅: FluentWindow 基类已监听 ThemeChanged 并重建窗体 chrome,
         // 播放器自身的 DynamicResource 会随之自动刷新。之前这里多订阅了一次且从不退订,
         // 导致每个关闭过的播放器窗口都无法被 GC 回收。
@@ -402,6 +415,21 @@ public partial class PlayerWindow : FluentWindow
         _danmakuColorful = Svc.Settings.DanmakuColorful;
         _danmakuAreaRatio = Svc.Settings.DanmakuAreaPercent / 100.0;
         Svc.Settings.DanmakuSettingsChanged += OnDanmakuSettingsChanged;
+        // 外观三项(不透明度/字号/速度)在此**首次**从设置里读出来。
+        // 构造函数里字段还是编译期默认值(80% / 100% / 适中), 不走这一步的话,
+        // 那些把旧值存进配置的用户(比如不透明度存的是 40%)开播放器会先按默认值起播,
+        // 直到下一次改动才纠正 —— 表现为"设置里明明是 40%, 播放器却先亮一下再变暗"。
+        ApplyDanmakuLook();
+        UpdateDanmakuLookTexts();
+
+        // 相关视频卡片点一下就换片(2026-10-12)。命令在 XAML 的 DataTemplate 里绑,
+        // 所以必须是窗口的**属性**(DataContext 就是 this), RelativeSource 才找得到。
+        PlayRelatedCommand = new Helpers.RelayCommand(PlayRelated);
+
+        // 简介折叠要在**宽度确定之后**才判得出"要不要显示展开按钮", 而那一刻还没布局完
+        // (Loaded 时 ActualWidth 可能仍是 0)。SizeChanged 才是可靠信号。
+        DescText.SizeChanged += (_, _) => UpdateDescFold();
+
         // 跳过赞助片段: 开关/类别一变就重算(关掉要立刻停, 改类别要立刻生效)
         Svc.Settings.SponsorBlockChanged += OnSponsorSettingsChanged;
         // 设置页改默认音量: 正在播的也立刻生效(与弹幕设置同款语义, 见 OnVolumeSettingChanged)
@@ -489,11 +517,15 @@ public partial class PlayerWindow : FluentWindow
             LogAudioStateOnce();
             HideLoading();
             // 把 EOF 时切黑的手势层还原成近透明(见 OnEndReached 里切黑的原因):
-            // 新 input 的 vout 已经起来, 后面要能看见画面
-            VideoAreaRoot.Background = VideoAreaBackBrush;
-            // 同样要撤掉可能还压着的"全屏黑幕" —— 否则它会盖住刚起来的画面
-            _fullscreenCoverArmed = false;
-            _fullscreenCoverTimer?.Stop();
+            // 新 input 的 vout 已经起来, 后面要能看见画面。
+            // ★★ 必须走 <see cref="ReleaseFullscreenCover"/> 而不是直接赋值(2026-10-13 修):
+            //   原来这里是 `VideoAreaRoot.Background = VideoAreaBackBrush;` + 顺手把
+            //   `_fullscreenCoverArmed = false;` —— 两条都**绕过了 _resizeHold 闸门**。
+            //   后果: 拖边缘 resize 期间 LibVLC 反复重协商 vout, 每出一帧就触发一次 Playing
+            //   ⇒ 遮罩被撤掉、露出黑底, 下一轮重协商又压黑 —— 用户看到的就是
+            //   "视频区边缘黑/亮交替抽动"(同一道闸本来就是为了这个才加的, 见 ArmResizeCover)。
+            //   顺带还解释了"拖动时偶尔能看到一块白": 撤罩那一瞬 vout 还没帧, 白底露出来。
+            ReleaseFullscreenCover();
             UpdatePlayButton();
             StartControlsHideCountdown();   // 播放中才开始倒计时自动隐藏
             // 聆听态: 起播后把文案里的秒数对齐到真实位置(切流前后 _mp.Time 会有几十毫秒偏差),
@@ -596,6 +628,215 @@ public partial class PlayerWindow : FluentWindow
         _ = LoadVideoAsync();
     }
 
+    // ------------------------------------------------------------ 简介折叠 + 相关视频(2026-10-12)
+
+    /// <summary>点相关视频卡片: 换成那个视频</summary>
+    public RelayCommand PlayRelatedCommand { get; }
+
+    /// <summary>简介是否处于"展开"态。默认 false = 折叠(短简介看不出来, 长简介默认收起)。</summary>
+    private bool _descExpanded;
+
+    /// <summary>相关视频的加载代次: 换片后作废上一片的在飞请求</summary>
+    private int _relatedGen;
+
+    /// <summary>简介折叠后的最大高度(与 XAML 里 DescCollapsedHeight 同一个数)</summary>
+    private const double DescCollapsedHeight = 108;
+
+    /// <summary>
+    /// 「展开简介」按钮。
+    ///
+    /// ★★ 判据必须是"文本**不限高**时需要多高", 所以 Measure 之前**必须先把 MaxHeight 摘掉**:
+    ///   WPF 的 Measure 会遵守 MaxHeight —— 折叠态下 MaxHeight 就是 108,
+    ///   于是 DesiredSize.Height 拿回来恒等于 108, 与阈值比较永远不成立
+    ///   ⇒ 按钮**永远不出现**(实测: 40 行简介 + 展开按钮 Collapsed + DesiredHeight=108)。
+    ///   这个坑很隐蔽: 逻辑读起来完全合理, 只有真跑一次界面才暴露。
+    /// ★ 所以下面那三步的顺序不能换: 备份 → 摘掉 → 量 → 装回。
+    /// ★ 另一个容易写错的替代品是读 ActualHeight: 折叠态下它也被 MaxHeight 夹住,
+    ///   同样永远判不出"超没超"。必须用无上限的那次测量。
+    /// ★ 宽度未知(窗口还没布局)时直接隐藏按钮: 那时的 0 宽度会算出 0 高度,
+    ///   判成"不溢出"就对了, 但纯属巧合, 所以这里显式处理而不是让它自然走完。
+    /// </summary>
+    private void UpdateDescFold()
+    {
+        if (DescText == null || BtnDescFold == null) return;
+
+        var width = DescText.ActualWidth;
+        if (width <= 1)
+        {
+            // 还没量到宽度: 先不显示。等布局跑完由 SizeChanged 再调一次。
+            BtnDescFold.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        // ★ 临时摘掉 MaxHeight 再量 —— 见方法说明。try/finally 不能省:
+        //   Measure 抛异常时若没装回去, 简介就会永远失去高度上限(撑满整屏)。
+        var savedMax = DescText.MaxHeight;
+        var needed = 0d;
+        try
+        {
+            DescText.MaxHeight = double.PositiveInfinity;
+            DescText.Measure(new Size(width, double.PositiveInfinity));
+            needed = DescText.DesiredSize.Height;
+        }
+        finally
+        {
+            DescText.MaxHeight = _descExpanded
+                ? (needed > DescCollapsedHeight ? needed : DescCollapsedHeight)
+                : DescCollapsedHeight;
+        }
+
+        // +1 容差: 亚像素误差会让"刚好 6 行"被误判成没超, 按钮该出时不出。
+        var overflows = needed > DescCollapsedHeight + 1;
+        BtnDescFold.Visibility = overflows ? Visibility.Visible : Visibility.Collapsed;
+        // 短简介没有"展开"可言, 状态复位, 否则下次换片会带着一个无意义的展开态
+        if (!overflows) _descExpanded = false;
+
+        ApplyDescFoldText();
+    }
+
+    /// <summary>
+    /// 「展开/收起」那行文字的**唯一**写法点(文案 + 符号一起换方向)。
+    ///
+    /// ★ 为什么单独抽出来: 符号(⌄/⌃)与文案必须在**同一次**调用里同步更新,
+    ///   而它们分属两个不同的对象(TextBlock 与 Run)。留在 UpdateDescFold 里就地写没问题,
+    ///   但一旦以后新增第二个入口(比如键盘快捷键/右键菜单)忘了改符号方向,
+    ///   就会出现"点了展开, 文字说收起、箭头还朝下"这种自相矛盾的按钮。
+    /// </summary>
+    private void ApplyDescFoldText()
+    {
+        if (BtnDescFoldLabel != null) BtnDescFoldLabel.Text = _descExpanded ? "收起简介" : "展开简介";
+        // ⌄ = 往下展开, ⌃ = 往上收起
+        if (BtnDescFoldGlyph != null) BtnDescFoldGlyph.Text = _descExpanded ? "⌃" : "⌄";
+        if (BtnDescFold != null) BtnDescFold.ToolTip = _descExpanded ? "收起简介" : "展开完整简介";
+    }
+
+    /// <summary>展开/收起简介</summary>
+    private void OnDescFoldClick(object sender, RoutedEventArgs e)
+    {
+        _descExpanded = !_descExpanded;
+        UpdateDescFold();
+        // 展开后要把焦点挪开: 按钮在浅色主题下有焦点框, 停在上挺难看;
+        // 而且按空格(播放/暂停)会打在按钮上而不是视频。
+        DescText.Focus();
+    }
+
+    /// <summary>
+    /// 载入当前视频的相关视频。
+    ///
+    /// ★★ 2026-10-13 用户报"相关视频只有 8 个, 添加更多视频, 往下滑刷新":
+    ///   接口一次就返 40 条且翻页无效(实测 ps/pn 都不影响, 见 GetRelatedAsync 的说明),
+    ///   所以这里把**全量 40 条**存在 <see cref="_relatedAll"/>, 界面只挂前
+    ///   <see cref="RelatedPageSize"/> 条; 滚到附近时由 <see cref="ShowMoreRelated"/>
+    ///   再补一批。列表用 ObservableCollection, 追加即刷新, 不重排已有卡片。
+    /// </summary>
+    private async Task LoadRelatedAsync(string bvid)
+    {
+        if (_closing || string.IsNullOrEmpty(bvid)) return;
+
+        // 直播/本地文件没有"相关视频"这回事(见 LoadLiveAsync 里对 DescText 的处理)
+        if (RelatedPanel == null || RelatedList == null) return;
+
+        var gen = ++_relatedGen;
+
+        // 先清空再转圈: 不清的话上一次的卡片会一直挂在界面上, 而那批推荐与当前视频无关。
+        _relatedAll = new List<VideoItem>();
+        _relatedShown = 0;
+        RelatedList.ItemsSource = null;
+        RelatedPanel.Visibility = Visibility.Visible;
+        RelatedLoadingRing.Visibility = Visibility.Visible;
+        RelatedHint.Text = "正在加载…";
+
+        var (ok, err, items) = await Svc.Api.GetRelatedAsync(bvid);
+        // 代次比对: 换片后这批结果就不属于当前视频了, 丢掉(与 ClearDanmaku 那套同款闸门)
+        if (_closing || gen != _relatedGen) return;
+
+        RelatedLoadingRing.Visibility = Visibility.Collapsed;
+        RelatedHint.Text = "";
+
+        if (!ok || items == null || items.Count == 0)
+        {
+            // ★ 失败/为空时把整块藏起来, 而不是留一个空标题 + 一句报错:
+            //   "相关视频"下面是空的比不显示更糟(看着像功能坏了)。
+            //   真的想给用户一个交代, 那该走 Toast, 而这属于后台补充信息, 不该打扰。
+            RelatedPanel.Visibility = Visibility.Collapsed;
+            // 只写 errors.txt 不弹窗: 相关视频是后台补充信息, 失败不该打断看片。
+            // 包一层 Exception 是因为 App.ReportError 只收 Exception(它的唯一用途就是落盘),
+            // 这里不去动那个公共签名 —— 加一个 string 重载会让人以为"失败可以不记录"。
+            App.ReportError(new InvalidOperationException($"相关视频加载失败({bvid}): {err ?? "未知错误"}"));
+            return;
+        }
+
+        _relatedAll = items;
+        // 先挂第一批(与旧行为一致: 打开播放器先看到 8 条, 不一下铺满 40 条)
+        _relatedShown = Math.Min(RelatedPageSize, items.Count);
+        RelatedList.ItemsSource = items.GetRange(0, _relatedShown);
+    }
+
+    /// <summary>
+    /// 信息栏滚动: 滚到相关视频附近时把下一批补上(用户要求"往下滑刷新出更多相关视频")。
+    ///
+    /// ★ 判据是"相关视频列表的**底部**离视口底部还有不到一屏", 不是"滚到底":
+    ///   等用户真的滚到最底才补, 会先出现"列表空了半屏"的空白期, 看着像没有了。
+    /// ★ 只在往下滚的方向补: 往上滚回来时不该再 append(已经补过的就在那儿)。
+    ///   <see cref="ShowMoreRelated"/> 本身幂等, 这里加方向判断是省掉无谓的 ItemsSource 重挂 ——
+    ///   每次重挂都会让 ItemsControl 重新生成全部容器, 一屏卡片会闪一下。
+    /// </summary>
+    private void OnInfoScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (_closing || _relatedShown >= _relatedAll.Count) return;
+        // 换片后 _relatedAll 是空的, 上面的闸门已经挡住; 这里再确认面板是显示的,
+        // 免得在"简介 tab"下也补(相关视频属于简介 tab, 评论 tab 下整块是隐藏的)。
+        if (RelatedPanel == null || RelatedPanel.Visibility != Visibility.Visible) return;
+        // 往上滚不补
+        if (e.VerticalChange < 0) return;
+
+        if (sender is not ScrollViewer sv) return;
+        // 相关视频列表在可视区里的位置: 它的底部距 ScrollViewer 内容底部还有多远
+        var targetBottom = RelatedList.TransformToVisual(sv)
+            .Transform(new Point(0, RelatedList.ActualHeight)).Y;
+        // 距"还要再滚一屏才看得见"的阈值内就补下一批
+        if (targetBottom - (sv.VerticalOffset + sv.ViewportHeight) < sv.ViewportHeight)
+            ShowMoreRelated();
+    }
+
+    /// <summary>相关视频每批展示几条(滚动到附近时按这个量追加)</summary>
+    private const int RelatedPageSize = 8;
+
+    /// <summary>当前视频的相关视频**全量**(接口一次给 40 条; 界面只挂前 <see cref="_relatedShown"/> 条)</summary>
+    private List<VideoItem> _relatedAll = new();
+
+    /// <summary>当前已经挂到界面上的条数; 换片时归零</summary>
+    private int _relatedShown;
+
+    /// <summary>
+    /// 再展示一批相关视频(信息栏滚到相关视频附近时调)。
+    ///
+    /// ★ 幂等 + 到顶即停: 已经全展示完时什么都不做, 不会重复 append。
+    /// ★ 换片后 <see cref="_relatedAll"/> 是空的, 这里直接返回 —— 不会把上一片的
+    ///   推荐补进新片的列表(那是"点下去跳到不相干视频"的老 bug)。
+    /// </summary>
+    private void ShowMoreRelated()
+    {
+        if (_closing || _relatedShown >= _relatedAll.Count) return;
+        var next = Math.Min(_relatedShown + RelatedPageSize, _relatedAll.Count);
+        var shown = _relatedAll.GetRange(0, next);
+        _relatedShown = next;
+        RelatedList.ItemsSource = shown;
+    }
+
+    /// <summary>相关视频卡片的点击: 切到那个 bvid</summary>
+    private void PlayRelated(object? param)
+    {
+        // ★ 必须真的转成 string 再用: CommandParameter 从 XAML 过来是 object,
+        //   直接拿它和 _currentBvid 比是**引用比较** —— 编译器会警告 CS0252,
+        //   而运行时几乎永远不相等, 表现为"点了相关视频没反应"。
+        var bvid = param as string;
+        if (_closing || string.IsNullOrEmpty(bvid)) return;
+        // 点自己没意义(接口那边已经滤掉了, 这里再挡一道是防"同一片快速点两次")
+        if (bvid == _currentBvid) return;
+        PlayVideo(bvid);
+    }
+
     /// <summary>
     /// 打开一个直播间。
     /// 与点播的区别: 直播没有总时长/进度、没有弹幕回放、也没有三连与历史进度上报,
@@ -634,6 +875,9 @@ public partial class PlayerWindow : FluentWindow
             UpNameText.Text = "直播间 " + roomId;
             UpDescText.Text = "B 站直播";
             DescText.Text = "这是一个直播间。直播没有进度条与历史记录, 互动按钮在直播中不可用。";
+            // 直播没有"相关视频"(接口只认视频稿件 bvid), 直接把整块藏掉,
+            // 否则会停在上一片残留的推荐列表上 —— 那是**别的视频**的推荐。
+            ClearRelatedPanel();
             UpAvatarBox.Background = (Brush)FindResource("AccentSoftFillBrush");
             UpAvatarFallback.Visibility = Visibility.Visible;
 
@@ -685,6 +929,28 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
+    /// 清空并隐藏「相关视频」整块。
+    ///
+    /// ★ 必须在每条**没有在线上下文的**播放路径上调用(直播 / 本地文件 / 换片起点):
+    ///   否则上一批推荐会一直挂在界面上, 而那批是**别的视频**的推荐 ——
+    ///   点下去跳到不相干的视频, 却没有任何迹象说明它过期了。
+    /// ★ 顺带把代次 +1: 让还在飞的请求回来时立刻作废, 不会把旧结果又灌进来。
+    /// </summary>
+    private void ClearRelatedPanel()
+    {
+        _relatedGen++;
+        // 换片/切直播: 缓存也一起丢。不清的话 OnInfoScrollChanged 里的闸门
+        // (_relatedShown >= _relatedAll.Count) 会看到上一片还有"没展示完"的条数,
+        // 于是把上一片的推荐补进新片的列表 —— 那是"点下去跳到不相干视频"的老 bug。
+        _relatedAll = new List<VideoItem>();
+        _relatedShown = 0;
+        if (RelatedList != null) RelatedList.ItemsSource = null;
+        if (RelatedPanel != null) RelatedPanel.Visibility = Visibility.Collapsed;
+        if (RelatedLoadingRing != null) RelatedLoadingRing.Visibility = Visibility.Collapsed;
+        if (RelatedHint != null) RelatedHint.Text = "";
+    }
+
+    /// <summary>
     /// 播放本地文件(离线缓存页用)。
     /// 与在线播放的区别: 不查视频信息/播放地址、不加载弹幕、不上报历史、不查点赞收藏状态 ——
     /// 本地文件没有这些上下文。所以这里直接构造一个 FromPath 的 Media 丢给播放器。
@@ -697,6 +963,8 @@ public partial class PlayerWindow : FluentWindow
         _isLocalPlayback = true;
         _isLive = false;
         ResetForNewMedia();
+        // 本地文件没有 bvid, 自然也没有相关视频
+        ClearRelatedPanel();
         LoadLocalFile(path);
     }
 
@@ -754,6 +1022,10 @@ public partial class PlayerWindow : FluentWindow
         ApplyPreferredQuality();
         _danmaku.Clear();
         _danmakuRaw.Clear();
+        // 相关视频同属"上一条视频"的界面内容: 换片瞬间就必须清掉, 不能等新片的
+        // 异步请求回来 —— 那中间几百毫秒里, 界面上挂着的还是**上一条**的推荐,
+        // 用户一点就跳到一个跟当前标题完全对不上的视频。
+        ClearRelatedPanel();
         // SponsorBlock: 上一片的片段数据与"已处理"记录全部作废。
         // 掐掉那个查询同样重要 —— 否则上一个视频的响应回来了会写进新视频的状态。
         CancelSponsorFetch();
@@ -981,6 +1253,10 @@ public partial class PlayerWindow : FluentWindow
         nameof(_danmakuColorful),    // 彩色弹幕是设置项
         nameof(_danmakuAreaRatio),   // 弹幕显示区域是设置项
         nameof(_laneHeight),         // 泳道高随字号走, 跟着设置走
+        // ★ 上游登记的弹幕外观/时长字段同样是"用户偏好 + 设置驱动的派生量", 一起留。
+        //   与 _danmakuAreaRatio 同一类: 三项 + 泳道高都是设置驱动的量。
+        nameof(_danmakuFontSize), nameof(_danmakuOpacity), nameof(_danmakuSpeedLevel),
+        nameof(_danmakuScrollSeconds), nameof(_danmakuFixedSeconds),
         // ---- 窗口尺寸记忆(2026-10-13 新增)的暂存值 ----
         // ★ 归到 PersistentFields 而不是 PerMediaStateFields: 它们记的是"这个窗口被调成多大",
         //   生命周期跟着**窗口**而不是片源。放进每片清单会在换片时被清掉, 而换片根本不该
@@ -1478,18 +1754,30 @@ public partial class PlayerWindow : FluentWindow
         UpNameText.Text = string.IsNullOrEmpty(detail.Owner) ? "UP 主" : detail.Owner;
         UpDescText.Text = "UP 主 mid: " + detail.OwnerMid;
         DescText.Text = string.IsNullOrEmpty(detail.Desc) ? "这个 UP 主很懒, 什么都没写~" : detail.Desc;
+        // ★ 换片 ⇒ 折叠态必须复位: 否则在 A 片点开简介, 换到 B 片时它是展开的,
+        //   而 B 片简介很短 —— 展开按钮又不显示, 用户会以为"按钮坏了"。
+        _descExpanded = false;
+        // 宽度可能还没变(信息栏固定 400px), SizeChanged 这次不会触发, 得主动判一次
+        UpdateDescFold();
+
+        // 相关视频: 与详情一起取, 走后台, 不挡起播(见 LoadRelatedAsync 的代次闸门)
+        _ = LoadRelatedAsync(detail.Bvid);
 
         UpdateButtonState();
         // 切换视频时重置各操作按钮状态(随后的异步查询会刷新为真实值)
         _isLiked = false;
         _isFollowed = false;
-        _isCoined = detail.HasCoined;
+        // ★ 投币态**不能**取自详情(那个字段根本不存在, 见 GetCoinCountAsync 的说明),
+        //   这里先复位, 真实值由随后的 RefreshCoinStateAsync 异步补上。
+        _isCoined = false;
         // 计数直接来自详情(view 接口的 stat), 比旧的"点赞/投币/收藏"三个字信息量大
         _likeCount = detail.LikeCount;
         _coinCount = detail.CoinCount;
         _favCount = detail.FavoriteCount;
         UpdateActionCounts();
         SetFavorited(false);
+        // 与点赞同款: 详情带不来"本人是否投过币", 换片后单独查一次, 否则投币键恒灰
+        _ = RefreshCoinStateAsync();
         // 「稍后再看」的点亮态不在这里复位 —— 它统一在 ResetForNewMedia 里清,
         // 因为直播/本地文件那两条路根本不会走到这里。
         UpdateFollowButton();
@@ -2375,6 +2663,9 @@ public partial class PlayerWindow : FluentWindow
 
     private DispatcherTimer? _volumeOsdTimer;
 
+    /// <summary>倍速提示的淡出计时器(松手后"已恢复 1.0x"亮一下就靠它收场)</summary>
+    private DispatcherTimer? _speedOsdTimer;
+
     /// <summary>
     /// 滚轮调音量: 上滑 +5, 下滑 -5。
     ///
@@ -2483,6 +2774,58 @@ public partial class PlayerWindow : FluentWindow
     /// 所以给一个"音量 65%"的短提示; 连续调节时只重置计时器, 不重播淡入动画,
     /// 否则每滚一格都闪一下。
     /// </summary>
+    /// <summary>
+    /// 浮出倍速提示(长按快进开始 / 恢复 1x 时调用)。
+    ///
+    /// ★ 与音量提示的差别(所以没有复用 ShowVolumeHint):
+    ///   音量是"调一下、闪一下、自己淡出"; 倍速提示必须在**整个长按期间一直挂着** ——
+    ///   用户按住的那几秒里要始终知道"现在是 2 倍速, 松手会回去"。
+    ///   松手时再调一次本方法(<c>hold=false</c>), 文案换成"已恢复 1.0x"并淡出。
+    /// </summary>
+    /// <param name="text">提示文案, 如 "2.0x 快进中" / "已恢复 1.0x"</param>
+    /// <param name="hold">true = 常显不自动淡出(长按期间); false = 显示一下自己淡出</param>
+    private void ShowSpeedHint(string text, bool hold)
+    {
+        if (_closing || SpeedOsd == null) return;
+
+        SpeedOsdText.Text = text;
+        _speedOsdTimer?.Stop();
+        _speedOsdTimer = null;
+
+        // 每次都从"当前透明度"补到 1(同 ShowVolumeHint 的理由:
+        // 上一次的淡出可能还没跑完, 从当前值补最稳, 不会出现"提示淡到一半卡住")
+        SpeedOsd.Visibility = Visibility.Visible;
+        SpeedOsd.BeginAnimation(OpacityProperty, null);
+        SpeedOsd.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(Math.Min(1.0, SpeedOsd.Opacity), 1, TimeSpan.FromMilliseconds(120))
+            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop });
+
+        if (hold) return;   // 长按期间: 挂着等松手
+
+        // 松手了: 亮一下"已恢复"再淡出
+        _speedOsdTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
+        _speedOsdTimer.Tick += (_, _) =>
+        {
+            _speedOsdTimer?.Stop();
+            _speedOsdTimer = null;
+            if (_closing) return;
+            var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240))
+            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop };
+            fade.Completed += (_, _) =>
+            {
+                // 淡出期间用户可能又按住了(ShowSpeedHint 已重开): 那时不能藏
+                if (_closing || _speedOsdTimer != null) return;
+                // ★ 摘动画 + 归位(2026-10-13 清理动画 bug 时的同款问题):
+                //   DoubleAnimation 默认 Hold 会把 Opacity 钉在 0, 下次常显就整块透明。
+                SpeedOsd.BeginAnimation(OpacityProperty, null);
+                SpeedOsd.Opacity = 1;
+                SpeedOsd.Visibility = Visibility.Collapsed;
+            };
+            SpeedOsd.BeginAnimation(OpacityProperty, fade);
+        };
+        _speedOsdTimer.Start();
+    }
+
     private void ShowVolumeHint(int volume)
     {
         if (_closing || VolumeOsd == null) return;
@@ -2507,12 +2850,18 @@ public partial class PlayerWindow : FluentWindow
             _volumeOsdTimer?.Stop();
             _volumeOsdTimer = null;
             if (_closing) return;
-            var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240));
+            var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240))
+            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop };
             fade.Completed += (_, _) =>
             {
                 // 淡出期间用户又调了一次 -> ShowVolumeHint 已经重开计时器并重播淡入,
                 // 这时绝对不能把浮层藏掉(表现就是"滚轮调音量提示闪一下就不见了")
                 if (_closing || _volumeOsdTimer != null) return;
+                // ★ 摘动画 + 归位(2026-10-13 修): 原来这里是裸 Collapsed,
+                //   而 DoubleAnimation 默认 FillBehavior=Hold ⇒ Opacity 被钉死在 0,
+                //   下次滚轮时浮层虽 Visible 却整块透明 —— 提示像"消失"了一样。
+                VolumeOsd.BeginAnimation(OpacityProperty, null);
+                VolumeOsd.Opacity = 1;
                 VolumeOsd.Visibility = Visibility.Collapsed;
             };
             VolumeOsd.BeginAnimation(OpacityProperty, fade);
@@ -2527,6 +2876,13 @@ public partial class PlayerWindow : FluentWindow
         _volumeOsdTimer = null;
     }
 
+    /// <summary>隐藏倍速提示并停掉它的计时器(关闭流程用)</summary>
+    private void StopSpeedOsd()
+    {
+        _speedOsdTimer?.Stop();
+        _speedOsdTimer = null;
+    }
+
     private void OnSpeedClick(object sender, RoutedEventArgs e)
     {
         if (_mp == null) return;
@@ -2539,6 +2895,8 @@ public partial class PlayerWindow : FluentWindow
             _ => 1.0f
         };
         // ★ 必须走 ApplyPlayerRate: 改了原生倍速就得同步改弹幕时钟的倍率, 且是"先结算旧时钟、再换倍率"。
+        //   上游写的是 SyncDanmakuClockRate(next) + _mp.SetRate(next) —— 等价, 但拆成两处后
+        //   少一处调用就会漏同步, 而漏同步的表现是"倍速切了, 弹幕还按 1x 走", 很难查。
         ApplyPlayerRate(next);
         if (SpeedText != null) SpeedText.Text = next.ToString("0.#") + "x";
     }
@@ -2607,6 +2965,41 @@ public partial class PlayerWindow : FluentWindow
             _fillingQualityMenu = false;
         }
     }
+
+    /// <summary>
+    /// 清晰度 / 弹幕区域弹层是否**有任意一个开着**。
+    ///
+    /// ★ 为什么需要它(2026-10-13 用户报"点清晰度 → 点空白处收起 → 视频变 2 倍速"):
+    ///   这两个 Popup 是 <c>StaysOpen="False"</c>, 而 Popup 是**独立 HWND**。
+    ///   实测(探针 bd-probe-coin, 真实 Win32 鼠标点击, 时间戳):
+    ///     <code>
+    ///     12:14:38.955  VIDEO UP                ← 只有 Up, 没有 Down!
+    ///     12:14:38.975  *** POPUP CLOSED ***    ← Closed 晚 20ms
+    ///     </code>
+    ///   ⇒ 三个"当前状态"信号在 Up 到达时**全部不可用**:
+    ///     · <c>Popup.IsOpen</c> 已被 WPF 自己的收起逻辑置成 false;
+    ///     · <c>Mouse.LeftButton</c> 已回报 Released;
+    ///     · <c>Popup.Closed</c> 还没来。
+    ///   ⇒ 第一版写在 Closed 里的时间窗是**死代码**(等它记上, Up 早跑完了),
+    ///     第二版的 IsOpen 判据同样挡不住这一次 Up。
+    ///
+    ///   ★ 真正可靠的判据是**手势配对**: 关闭弹层那一次点击, 它的 Down 被弹层 HWND
+    ///     吃掉, 只有 Up 漏进视频区 —— 也就是"没有配对 Down 的 Up"。
+    ///     这种 Up 一律丢弃即可, 且**不依赖任何事件顺序**。
+    /// </summary>
+    private bool AnyPlayerPopupOpen
+        => (QualityPopup != null && QualityPopup.IsOpen)
+        || (DanmakuAreaPopup != null && DanmakuAreaPopup.IsOpen);
+
+    /// <summary>
+    /// 视频区手势是否已经由一次 **Down** 正式起步。
+    ///
+    /// ★ 唯一可靠的弹层余波判据(见 <see cref="AnyPlayerPopupOpen"/> 里的实测记录):
+    ///   弹层开着时按下的那一下不算视频区手势(它属于浮层), 所以这里必须为 false;
+    ///   否则随后漏进来的 Up 会被当成一次完整的"单击", 于是**收起清晰度列表会把视频暂停**,
+    ///   更糟的是漏进来的 Down 会起长按计时器 → 500ms 后 SetRate(2.0) 无故快进。
+    /// </summary>
+    private bool _videoGestureActive;
 
     private void OnQualityClick(object sender, RoutedEventArgs e)
     {
@@ -2712,6 +3105,72 @@ public partial class PlayerWindow : FluentWindow
         if (DanmakuAreaValue != null) DanmakuAreaValue.Text = pct + "%";
         // 持久化到全局设置(设置页与播放器双向同步)
         Svc.Settings.UpdateDanmakuSettings(Svc.Settings.DanmakuEnabled, pct, Svc.Settings.DanmakuSmartFilter);
+    }
+
+    // ------------------------------------------------------------ 弹幕外观三项(2026-10-12)
+
+    /// <summary>
+    /// 三个外观滑杆的统一入口。
+    ///
+    /// ★ 为什么不直接写 Svc.Settings.UpdateDanmakuSettings 之后各改各的:
+    ///   这三项**都要重算运行时状态**(ApplyDanmakuLook), 而重算的第一步就是比较新旧值。
+    ///   于是最省事也最不容易漏的写法就是: 先落设置(它会广播 OnDanmakuSettingsChanged,
+    ///   那里已经调了 ApplyDanmakuLook), 自己只负责把"这一行的数值文字"刷新掉。
+    ///   两条路径(设置页改 / 播放器改)因此走的是同一段重算逻辑, 不会出现两边算法漂移。
+    ///
+    /// ★ 必须防回灌: 滑杆赋值也会触发 ValueChanged。同步控件时那个标志是必需的,
+    ///   否则一次同步 → 一次事件 → 一次保存 → 一次广播 → 又同步, 虽然值同值不会死循环,
+    ///   但每次开窗都会白白写一遍配置文件。
+    /// </summary>
+    private void OnDanmakuOpacityChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (DanmakuOpacityValue != null) DanmakuOpacityValue.Text = ((int)e.NewValue) + "%";
+        if (_syncingDanmakuLook) return;
+        Svc.Settings.UpdateDanmakuSettings(
+            Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent, Svc.Settings.DanmakuSmartFilter,
+            opacityPercent: (int)e.NewValue);
+    }
+
+    private void OnDanmakuFontChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (DanmakuFontValue != null) DanmakuFontValue.Text = ((int)e.NewValue) + "%";
+        if (_syncingDanmakuLook) return;
+        Svc.Settings.UpdateDanmakuSettings(
+            Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent, Svc.Settings.DanmakuSmartFilter,
+            fontScalePercent: (int)e.NewValue);
+    }
+
+    private void OnDanmakuSpeedChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        var level = (int)e.NewValue;
+        // 显示的是"适中/较快"这类人话, 不是数字 —— 与用户给的截图一致
+        if (DanmakuSpeedValue != null) DanmakuSpeedValue.Text = Helpers.DanmakuMotion.SpeedLabel(level);
+        if (_syncingDanmakuLook) return;
+        Svc.Settings.UpdateDanmakuSettings(
+            Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent, Svc.Settings.DanmakuSmartFilter,
+            speedLevel: level);
+    }
+
+    /// <summary>把外观三项的滑杆/数值同步到当前设置(开窗与设置页改动后各调一次)</summary>
+    private void UpdateDanmakuLookTexts()
+    {
+        var s = Svc.Settings;
+        // 回灌保护: 下面的赋值会触发 ValueChanged, 那三个处理器会写设置
+        _syncingDanmakuLook = true;
+        try
+        {
+            if (DanmakuOpacitySlider != null) DanmakuOpacitySlider.Value = s.DanmakuOpacityPercent;
+            if (DanmakuOpacityValue != null) DanmakuOpacityValue.Text = s.DanmakuOpacityPercent + "%";
+            if (DanmakuFontSlider != null) DanmakuFontSlider.Value = s.DanmakuFontScalePercent;
+            if (DanmakuFontValue != null) DanmakuFontValue.Text = s.DanmakuFontScalePercent + "%";
+            if (DanmakuSpeedSlider != null) DanmakuSpeedSlider.Value = s.DanmakuSpeedLevel;
+            if (DanmakuSpeedValue != null)
+                DanmakuSpeedValue.Text = Helpers.DanmakuMotion.SpeedLabel(s.DanmakuSpeedLevel);
+        }
+        finally
+        {
+            _syncingDanmakuLook = false;
+        }
     }
 
     // ------------------------------------------------------------ 视频区边缘缩放
@@ -2874,12 +3333,19 @@ public partial class PlayerWindow : FluentWindow
         // 跳过提示条上的点击(「撤回」按钮)同样不算视频区手势 ——
         // 它是覆盖层里除了控制栏之外唯一会吃掉左键的自绘元素, 不挡住就会"点撤回顺带切一次播放/暂停"。
         if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
+        // ★ 弹层开着 ⇒ 这次按下属于浮层, 视频区手势**不起步**。
+        //   这是整套防护的地基(见 _videoGestureActive 的说明): 不起步, 随后漏进来的
+        //   那个孤立 Up 才会因为"没有配对 Down"而被丢掉。
+        if (AnyPlayerPopupOpen) { _videoGestureActive = false; return; }
+        // 记下"这一下是我起的" —— Up 里靠它识别弹层余波
+        _videoGestureActive = true;
         // (收起把手的守卫在方法最前面, 因为它还要抢在边缘缩放判定之前 —— 见那里的说明。)
 
         // 双击: 立即全屏, 取消所有挂起的单击/长按动作, 并抑制后续 Up 的单击排队
         if (e.ClickCount >= 2)
         {
             _suppressSingleClick = true;
+            _videoGestureActive = false;   // 这一下已被双击消费, 不再等 Up 配对
             _singleClickTimer?.Stop();
             _longPressTimer?.Stop();
             _longPressFired = false;
@@ -2898,8 +3364,15 @@ public partial class PlayerWindow : FluentWindow
             _longPressTimer!.Stop();
             _longPressFired = true;
             // 进入 2x 快进
-            ApplyPlayerRate(FastForwardRate);   // ★ 倍速一改就同步弹幕时钟倍率(见 ApplyPlayerRate)
+            // ★ 走 ApplyPlayerRate 而不是裸 SetRate: 倍速一变就落定弹幕时钟, 不等下一次校准。
+            //   顺序也在里面 —— 先结算旧时钟再 SetRate, 反过来的话 ApplyPlayerRate 第一句
+            //   的时钟外推会按旧倍率跑, 那一下就是用户看到的"顿一下"。
+            ApplyPlayerRate(FastForwardRate);
             if (SpeedText != null) SpeedText.Text = FastForwardRate.ToString("0.#") + "x";
+            // ★ 浮出倍速提示(2026-10-13 用户要求): 长按 2x 是无入口手势,
+            //   不提示的话用户只看到画面变快, 不知道发生了什么、也不知道松手会恢复。
+            //   hold=true: 整个长按期间一直挂着, 松手时由 Up 那边换成"已恢复"并淡出。
+            ShowSpeedHint(FastForwardRate.ToString("0.#") + "x 快进中", hold: true);
             // 长按触发了, 不再触发单击
             _singleClickTimer?.Stop();
         };
@@ -2914,6 +3387,21 @@ public partial class PlayerWindow : FluentWindow
         //   既没停 _longPressTimer, 也没走到恢复 1x 的分支 —— 视频就一直卡在 2x,
         //   要等下一次按下或鼠标离开才复位。把手紧贴视频右缘, 正是长按后顺手滑过去的落点。
         //   那些守卫只是"别顺手暂停", 与倍速恢复无关, 不该拦住它。
+
+        // 与 Down 对称: 控制栏上的点击不触发单击暂停
+        if (ControlBar != null && ControlBar.IsMouseOver) return;
+        // ★ 与 Down 对称: 跳过提示条上的「撤回」点击也不触发单击暂停
+        if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
+        // ★★ 弹层余波(2026-10-13 第三轮修正, 前两轮都没修对):
+        //   关闭清晰度/弹幕弹层那一次点击, Down 被弹层 HWND 吃掉, 只有 Up 漏进视频区。
+        //   实测它到达时 IsOpen 已 false、Mouse.LeftButton 已 Released、Closed 还没来
+        //   —— 三个"当前状态"信号全不可用(完整时间戳见 _videoGestureActive 的说明)。
+        //   唯一可靠判据: **没有配对 Down 的 Up**。视频区手势由 Down 起步,
+        //   没起步就来的 Up 必然是浮层漏过来的, 直接丢。
+        //   不丢的后果有两个: 排一个"单击暂停"(收起列表视频自己暂停了);
+        //   万一 Down 也漏进来, 长按计时器 500ms 后 SetRate(2.0) 无故快进。
+        if (!_videoGestureActive) { e.Handled = true; return; }
+        _videoGestureActive = false;
         _longPressTimer?.Stop();
 
         // 与 Down 对称: 压在视频上的浮层(控制栏/跳过提示/收起把手/评论展开按钮)的点击
@@ -2932,8 +3420,14 @@ public partial class PlayerWindow : FluentWindow
         if (_longPressFired)
         {
             _longPressFired = false;
-            ApplyPlayerRate(1.0);   // ★ 恢复 1x 同样要同步弹幕时钟倍率(见 ApplyPlayerRate)
+            // ★ 走 ApplyPlayerRate 而不是裸 SetRate: 倍速一变就落定弹幕时钟, 不等下一次校准。
+            //   顺序也在里面 —— 先结算旧时钟再 SetRate, 反过来的话 ApplyPlayerRate 第一句
+            //   的时钟外推会按旧倍率跑, 那一下就是用户看到的"顿一下"。
+            ApplyPlayerRate(FastForwardRate);
             if (SpeedText != null) SpeedText.Text = "1.0x";
+            // ★ 倍速提示收场: 换成"已恢复"亮一下再淡出 —— 手势有始有终,
+            //   用户才知道刚才那阵快进是自己按出来的、现在结束了。
+            ShowSpeedHint("已恢复 1.0x", hold: false);
             e.Handled = true;
             return;
         }
@@ -2958,11 +3452,20 @@ public partial class PlayerWindow : FluentWindow
         _longPressTimer?.Stop();
         _singleClickTimer?.Stop();
         _suppressSingleClick = false;
+        // ★ 手势状态一并复位: 鼠标移出去了, 这一次按下就不再属于视频区,
+        //   之后即使漏一个 Up 进来也会因为"没有配对 Down"被正确丢掉。
+        _videoGestureActive = false;
         if (_longPressFired)
         {
             _longPressFired = false;
-            ApplyPlayerRate(1.0);   // ★ 恢复 1x 同样要同步弹幕时钟倍率(见 ApplyPlayerRate)
+            // ★ 走 ApplyPlayerRate 而不是裸 SetRate: 倍速一变就落定弹幕时钟, 不等下一次校准。
+            //   顺序也在里面 —— 先结算旧时钟再 SetRate, 反过来的话 ApplyPlayerRate 第一句
+            //   的时钟外推会按旧倍率跑, 那一下就是用户看到的"顿一下"。
+            ApplyPlayerRate(FastForwardRate);
             if (SpeedText != null) SpeedText.Text = "1.0x";
+            // ★ 兜底路径也要收掉倍速提示: 鼠标移出时 Up 不会再来了,
+            //   不在这里收的话提示会一直挂在屏幕上(用户报过同类"提示不消失")。
+            ShowSpeedHint("已恢复 1.0x", hold: false);
         }
         // 离开视频区: 播放中直接藏(倒计时都不用等), 暂停时保持常显
         if (ShouldHideControls()) HideControls();
@@ -3160,28 +3663,64 @@ public partial class PlayerWindow : FluentWindow
     // 现在把显示区域切成固定高度的"泳道"(lane), 每条滚动弹幕占据一条泳道;
     // 分配时选择"最早可用"的泳道, 并校验与同泳道前一条弹幕的间距,
     // 保证同一泳道里后一条不会追上(追尾)前一条。
-    private double _laneHeight = DanmakuFontSize * DanmakuLaneRatio;   // 单条泳道高度(随字号联动)
+    private double _laneHeight = DefaultLaneHeight();   // 单条泳道高度(随字号联动)
     private double[]? _laneFreeAt;                 // 每条泳道的"可用时间点"(秒, 播放时间轴)
     private double[]? _laneLastWidth;              // 每条泳道最后一条弹幕的宽度
     private double _lastLaneCalcWidth;             // 上次计算泳道时的画布宽度(尺寸变化时重算)
     private double _lastLaneCalcHeight;
 
-    // 滚动弹幕在屏幕上横穿的时长(秒)。B 站惯用 8 秒, 弹幕密集时略短可提升吞吐。
-    private const double DanmakuScrollSeconds = 8.0;
-    // 同屏弹幕总上限(滚动 + 顶部固定 + 底部固定, 内存/渲染保护)。
-    // ★ 按**活动记录数**判定, 不按画布子元素数 —— 见 AddDanmaku 里那段的说明。
-    private const int MaxOnScreenDanmaku = 80;
-    // 顶部/底部固定弹幕的停留时长
-    private const double DanmakuFixedSeconds = 4.0;
+    // ---- 外观与时长(2026-10-12 上游新增; 2026-10-14 合并: 由常量改为字段) ----
+    //
+    // ★ 三者的落点各不相同, 所以各有各的重算代价, 别一股脑"改了就清画布":
+    //   · 字号    → 改字号必须**重建泳道**: 泳道高是字号推出来的, 不重建的话
+    //               新弹幕按新字号画、泳道却还是旧高度, 弹幕就会上下叠在一起
+    //               (这正是 DanmakuLaneRatio 那条注释要防的历史 bug)。
+    //   · 速度    → 横穿时长变了, 泳道的"可用时间"与追尾校验全部作废, 也必须重建,
+    //               否则新弹幕会被按旧速度判成"追上了前一条"而被整批丢弃。
+    //   · 不透明度 → 只改基线透明度, 不影响布局, 因此可以**就地改**, 不必清屏;
+    //               这一条对"用户正在拖滑杆"很关键 —— 拖一次就闪一次是不能接受的。
+    private int _danmakuSpeedLevel = 2;                      // 速度档位
+    /// <summary>滚动弹幕横穿时长(秒)。B 站惯用 8 秒; 由速度档位换算, 用户可在设置里调</summary>
+    private double _danmakuScrollSeconds = Helpers.DanmakuMotion.ScrollSeconds(2);
+    /// <summary>顶部/底部固定弹幕的停留时长(秒), 同理由速度档位换算</summary>
+    private double _danmakuFixedSeconds = Helpers.DanmakuMotion.FixedSeconds(2);
+    private double _danmakuFontSize = DefaultFontSize();     // 当前实际字号
+    private double _danmakuOpacity = 0.8;                    // 基线不透明度 0~1
 
     /// <summary>
-    /// 弹幕字号(2026-10-11 用户要求"弹幕字体调大一些": 18 → 24)。
-    ///
+    /// 同步弹幕外观滑杆时的回灌保护。
+    /// 见 <see cref="UpdateDanmakuLookTexts"/>: 赋 Value 会触发 ValueChanged。
+    /// </summary>
+    private bool _syncingDanmakuLook;
+
+    /// <summary>基准弹幕字号(倍率 100% 时的值)</summary>
+    private const double DanmakuBaseFontSize = 24;
+
+    private static double DefaultFontSize() => DanmakuBaseFontSize;
+
+    /// <summary>默认泳道高(字号 × 系数)。字段初始化器要用到, 所以给个静态入口。</summary>
+    private static double DefaultLaneHeight()
+        => DanmakuBaseFontSize * DanmakuLaneRatio;
+
+
+    // ★★★ 滚动/固定弹幕的时长不再是常量(2026-10-12 加了「弹幕速度」设置),
+    //   改为按当前档位算出来存在 _danmakuScrollSeconds / _danmakuFixedSeconds,
+    //   见 Helpers.DanmakuMotion.ScrollSeconds / FixedSeconds(那边是纯函数, 可单测)。
+    //   ★ 下面所有用旧常量名的地方都必须换成实例字段 —— 漏一处就是"速度滑块拖了没反应"。
+    // 屏幕上的滚动弹幕上限(内存/渲染保护)
+    private const int MaxOnScreenDanmaku = 80;
+
+    /// <summary>基准弹幕字号(2026-10-11 用户要求"弹幕字体调大一些": 18 → 24)。</summary>
+    /// <remarks>
     /// 原来这个值直接写在 AddDanmaku 里, 而泳道高 _laneHeight 又另写了一个 28 ——
     /// 两个数没有任何关联, 调字号必得漏掉泳道, 于是弹幕上下压在一起。现在两者都由
     /// <see cref="DanmakuLaneRatio"/> 推出来, 改字号只需要改这一处。
-    /// </summary>
-    private const double DanmakuFontSize = 24;
+    /// ★ 2026-10-12 起它不再是"写死的值", 而是 100% 档位的基准, 实际字号
+    ///   = 本值 × (用户的字号百分比 / 100), 见 <see cref="_danmakuFontSize"/>。
+    /// ★ 2026-10-13 删掉了这里的别名常量 `DanmakuFontSize`(它只是 = DanmakuBaseFontSize,
+    ///   全项目无引用): 两个名字指同一个值, 改字号时"该改哪一个"会让人停一下。
+    ///   真正的定义在文件上方(见 DanmakuBaseFontSize)。
+    /// </remarks>
 
     /// <summary>泳道高 = 字号 × 该系数(留出上下各约四分之一行距, 密集时才不会糊成一片)</summary>
     private const double DanmakuLaneRatio = 1.5;
@@ -3266,6 +3805,32 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool _dmClockBuffered;
 
+    /// <summary>
+    /// 还原完滚动位置后, 让那条评论闪两下(2026-10-14 合并上游时吸收)。
+    ///
+    /// ★ 为什么要"位置对了还要闪": 锚点能把用户带回**原来那条评论**, 但那一屏里
+    ///   几十条长得差不多 —— 只滚动过去, 用户仍不知道是哪一条, 于是会以为"没回到原处"。
+    ///   闪一下就是把答案**指出来**(与"查看对话"同一个理由)。
+    /// ★ 找不到锚点就**什么都不做**: 排序换过、或那条已被删除时它确实不在列表里,
+    ///   这时弹提示反而打扰 —— 回到顶部是合理退路。
+    /// ★ FillBehavior=Stop 是必须的: 默认 Hold 会让动画把 Opacity 停在末值(0.35),
+    ///   用户看到的是"这条评论变透明了, 而且再也回不来" —— 因为它从此被动画接管,
+    ///   连可见性切换都拉不回 1.0。Stop 表示动画结束后属性**回到本地值**(1)。
+    /// </summary>
+    private void FlashCommentAnchor()
+    {
+        var idx = _commentAnchorIndex;
+        if (idx < 0 || _closing || CommentList == null) return;
+        if (CommentList.ItemContainerGenerator.ContainerFromIndex(idx) is not FrameworkElement fe) return;
+        var flash = new DoubleAnimation(1, 0.35, TimeSpan.FromMilliseconds(140))
+        {
+            AutoReverse = true,
+            RepeatBehavior = new RepeatBehavior(2),
+            FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop,
+        };
+        fe.BeginAnimation(OpacityProperty, flash);
+    }
+
     /// <summary>普通校准时一次只吃掉这个比例的误差, 其余留给下一次心跳 —— 平滑纠偏, 不硬跳。</summary>
     private const double DanmakuCalibrateGain = 0.25;
 
@@ -3282,6 +3847,13 @@ public partial class PlayerWindow : FluentWindow
     /// ★ <see cref="_dmClockResidual"/> 是平滑纠偏的残差, 正常播放时为 0;
     ///   它让"校准"不再表现为硬跳(见 <see cref="CalibrateDanmakuClock"/>)。
     /// ★ 冻结态(暂停/缓冲)返回的是"基准 + 残差", 也就是冻结那一刻所见, 不含任何外推项。
+    ///
+    /// ★★ 与上游的关系(2026-10-14 合并时说明): 上游(2026-10-12)把这条算式挪进了
+    ///   <c>Helpers.DanmakuMotion.Extrapolate</c> 以便单测, 动机是对的, 但那一版只有
+    ///   "基准 + 墙钟 + 倍速"三项, **没有残差平滑, 也没有缓冲冻结** —— 而这两条正是
+    ///   "倍速下弹幕一顿一顿"(每 250ms 被硬校准拽回去一次)与"缓冲时弹幕继续跑"的根因。
+    ///   所以这里保留四项版本, 不采纳上游那三项。算式本身仍是可测的: 探针对倍率、
+    ///   冻结、平滑、跳转四条路径分别对拍。
     /// </summary>
     private double DanmakuClock() => DanmakuClockAdvancing
         ? _dmClockMedia + (_dmWatch.Elapsed.TotalSeconds - _dmClockStamp) * _dmClockRate + _dmClockResidual
@@ -3330,6 +3902,15 @@ public partial class PlayerWindow : FluentWindow
 
         _dmClockMedia = mediaSeconds;
         _dmClockStamp = stampNow;
+        // ★ 这里**刻意不读** _mp.Rate(上游 2026-10-12 是每次校准都读一次原生 Rate,
+        //   靠"约 4Hz 的校准顺带把倍率刷回来")。本版改成: 倍速**切换的那一刻**由
+        //   ApplyPlayerRate 显式同步 _dmClockRate(先结算旧时钟, 再改倍率, 再 SetRate)。
+        //   为什么不再靠校准兜底:
+        //     ① 语义更准 —— "切换时同步"没有 250ms 的窗口, 而"靠下次校准刷回来"意味着
+        //        这 250ms 里时钟仍按**旧倍率**外推, 倍速越大偏得越多;
+        //     ② 少一处原生调用 —— 校准是低频路径, 但这条路径一旦碰到原生库缺失就直接抛
+        //        DllNotFoundException, 会把**整批弹幕**的时钟校准一起带走(离屏探针就撞上了)。
+        //   倍率的初值仍是 1.0, 由 ApplyPlayerRate 在第一次设置倍速时更新。
         // 能收到 TimeChanged 就说明确实在出帧在播。原实现也是这样顺带置位的, 保留。
         _dmClockRunning = true;
     }
@@ -3398,6 +3979,25 @@ public partial class PlayerWindow : FluentWindow
         _dmClockMedia = DanmakuClock();
         _dmClockResidual = 0;
         _dmClockStamp = _dmWatch.Elapsed.TotalSeconds;
+    }
+
+    /// <summary>
+    /// 倍速刚被改变时立刻同步弹幕时钟的倍速(而不是等下一次 4Hz 校准)。
+    ///
+    /// ★ 为什么需要它: <see cref="_dmClockRate"/> 是在校准里刷新的, 而校准约 250ms 一次。
+    ///   用户点"倍速"那一瞬到下一次校准之间, 弹幕仍按旧倍速外推 —— 2x 时约 250ms 的
+    ///   位置偏差, 下一次校准会**突然拽回去**, 那一顿仍然看得见。
+    ///   ★ 做法与暂停/恢复同款: 先把当前外推值**落定**(重置基准), 再换速率 ——
+    ///     这样位置连续, 只是速度从这一刻起变了, 不会有跳变。
+    ///   ★ 必须在**改 Rate 之前**调用: 否则读到的还是旧速率, 等于没换。
+    /// </summary>
+    private void SyncDanmakuClockRate(float newRate)
+    {
+        if (_closing || _mp == null) return;
+        // 先把"此刻所见"落成新的校准点(位置连续), 再换速率
+        _dmClockMedia = DanmakuClock();
+        _dmClockStamp = _dmWatch.ElapsedMilliseconds;
+        _dmClockRate = newRate > 0 ? newRate : 1.0;
     }
 
     /// <summary>屏幕上正在飞的一条弹幕</summary>
@@ -3689,9 +4289,9 @@ public partial class PlayerWindow : FluentWindow
         var canvasWidth = DanmakuCanvas.ActualWidth;
         if (canvasWidth <= 0) return -1;
 
-        // 弹幕从左(或右)走到完全离开所需时间 = DanmakuScrollSeconds
-        // 速度(像素/秒) = (canvasWidth + width) / DanmakuScrollSeconds
-        var speed = (canvasWidth + width) / DanmakuScrollSeconds;
+        // 弹幕从左(或右)走到完全离开所需时间 = _danmakuScrollSeconds(随速度档位变)
+        // 速度(像素/秒) = (canvasWidth + width) / _danmakuScrollSeconds
+        var speed = (canvasWidth + width) / _danmakuScrollSeconds;
 
         var bestLane = -1;
         var bestFreeAt = double.MaxValue;
@@ -3720,8 +4320,8 @@ public partial class PlayerWindow : FluentWindow
             var remaining = freeAt - currentSeconds;
             // 前一条弹幕此刻的左边缘位置(近似: 按自身速度反推)
             var prevWidth = _laneLastWidth != null && i < _laneLastWidth.Length ? _laneLastWidth[i] : width;
-            var prevSpeed = (canvasWidth + prevWidth) / DanmakuScrollSeconds;
-            var prevElapsed = DanmakuScrollSeconds - remaining;
+            var prevSpeed = (canvasWidth + prevWidth) / _danmakuScrollSeconds;
+            var prevElapsed = _danmakuScrollSeconds - remaining;
             var prevLeft = canvasWidth - prevElapsed * prevSpeed;
             // 后一条从 canvasWidth 出发; 只要前一条的右边缘(prevLeft + prevWidth) 与
             // 后一条的左边缘(canvasWidth) 之间留有安全间距, 就不会视觉重叠
@@ -3745,7 +4345,7 @@ public partial class PlayerWindow : FluentWindow
         {
             if (table.All(x => x.slot != s))
             {
-                table.Add((currentSeconds + DanmakuFixedSeconds, s));
+                table.Add((currentSeconds + _danmakuFixedSeconds, s));
                 return s;
             }
         }
@@ -3799,7 +4399,11 @@ public partial class PlayerWindow : FluentWindow
         //   ★ 描边是用户明确要求的("白底画面下也看得清"), 但它的实现方式被换过一次:
         //     从"黑色粗字叠在原色字下面"换成了"同一份字形几何 Fill + 黑色 Stroke" ——
         //     两个不同字重的字形宽度不同, 叠起来必然错影。详见 BuildDanmakuGeometry 附近。
-        var border = BuildDanmakuElement(text, color);
+        //   ★ 顺带吸收上游(2026-10-12)的两项外观设置: 基线不透明度与字号。
+        //     字号要传进几何排版(缓存键本来就含字号), 不透明度设在 Border 上——
+        //     固定弹幕的淡出是在这个基线上**再乘一个系数**(见 OnDanmakuRendering),
+        //     所以这里设一次就够, 之后不必再动。
+        var border = BuildDanmakuElement(text, color, _danmakuOpacity);
         // 排不出几何(纯空白 / 无字形)就根本没什么可画的, 连登记都不登记
         if (border == null) return false;
 
@@ -3823,9 +4427,11 @@ public partial class PlayerWindow : FluentWindow
     ///   (换字重就是那个错影的老路)。所以这里对所有颜色一视同仁, 只是 Fill 取色不同。
     /// ★ 描边粗细见 <see cref="DanmakuStrokeThickness"/>, 黑色笔刷见 <see cref="DanmakuStrokeBrush"/>。
     /// </summary>
-    private Border? BuildDanmakuElement(string text, uint color)
+    private Border? BuildDanmakuElement(string text, uint color, double opacity)
     {
-        var geometry = TryGetDanmakuGeometry(text, DanmakuFontSize, DanmakuFontFamily, DanmakuPixelsPerDip());
+        // ★ 字号用上游的 _danmakuFontSize(2026-10-12 新增的可调档位)而不是写死的 DanmakuFontSize:
+        //   几何缓存的键本来就含字号, 所以用户拖字号滑杆时缓存自然换键, 不会串到别的档位上。
+        var geometry = TryGetDanmakuGeometry(text, _danmakuFontSize, DanmakuFontFamily, DanmakuPixelsPerDip());
         if (geometry == null) return null;   // 空几何(纯空白/无字形): 画不出东西
 
         // ★★★ 描边与填充必须**分成两个 Path 叠起来**, 不能塞进同一个(2026-10-13 用户报"描边有点丑")。
@@ -3859,6 +4465,10 @@ public partial class PlayerWindow : FluentWindow
             return new Border
             {
                 Padding = DanmakuPadding,
+            // ★ 基线不透明度(上游 2026-10-12 新增): 压在亮画面上的白字太实反而晃眼。
+            //   固定弹幕的淡出是在这个基线上**再乘一个系数**(见 OnDanmakuRendering),
+            //   所以这里设一次就够, 之后不必再动。
+            Opacity = opacity,
                 RenderTransform = new TranslateTransform(0, 0),
                 Child = 填充层,
             };
@@ -3883,6 +4493,8 @@ public partial class PlayerWindow : FluentWindow
         return new Border
         {
             Padding = DanmakuPadding,
+            // ★ 基线不透明度(上游 2026-10-12), 理由同关描边那一路
+            Opacity = opacity,
             // RenderTransform 在这里预置好, 滚动弹幕直接拿它做位移动画
             RenderTransform = new TranslateTransform(0, 0),
             Child = new Grid
@@ -4076,10 +4688,20 @@ public partial class PlayerWindow : FluentWindow
     ///   而弹幕文本是任意内容, 那套映射等于把排版器重写一遍。
     /// ★ 几何是按 (0,0) 为文字原点生成的, y 方向自然在基线之上(负值), 不用再平移:
     ///   Path 自己会把几何按 Bounds 落位, 强行 Translate 反而会多一次几何变换。
+    ///
+    /// ★★ 字号必须在这里兜一道底(2026-10-14 合并上游时补): 字号从编译期常量
+    ///   `DanmakuFontSize` 变成了**实例字段** `_danmakuFontSize`(为了支持设置里调档位)。
+    ///   实例字段就可能是 0 或负数 —— 换片复位把它清掉却没重算、或某个早退分支
+    ///   在字段初始化之前就走到这里, 都会发生。而
+    ///   <see cref="FormattedText"/> 对字号 &lt;= 0 是**直接抛 ArgumentOutOfRangeException**,
+    ///   它一路冒到弹幕分发循环 ⇒ **这批剩下的弹幕全部不上屏**, 而且界面上没有任何提示。
+    ///   一个"用户看不见"的故障比"字小一点"严重得多, 所以宁可退回基准字号。
     /// </summary>
     private static Geometry? BuildDanmakuGeometry(string text, double fontSize, FontFamily fontFamily, double pixelsPerDip)
     {
         if (string.IsNullOrEmpty(text)) return null;
+        if (!double.IsFinite(fontSize) || fontSize <= 0.5) fontSize = DanmakuBaseFontSize;
+        if (!double.IsFinite(pixelsPerDip) || pixelsPerDip <= 0) pixelsPerDip = 1.0;
         var typeface = new Typeface(fontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
         var formatted = new FormattedText(
             text,
@@ -4115,7 +4737,7 @@ public partial class PlayerWindow : FluentWindow
         }
 
         // 记录该泳道的占用信息, 供后续追尾校验使用
-        _laneFreeAt![lane] = currentSeconds + DanmakuScrollSeconds;
+        _laneFreeAt![lane] = currentSeconds + _danmakuScrollSeconds;
         if (_laneLastWidth != null) _laneLastWidth[lane] = width;
 
         Canvas.SetTop(border, 6 + lane * _laneHeight);
@@ -4130,7 +4752,7 @@ public partial class PlayerWindow : FluentWindow
             Element = border,
             Translate = translate,
             SpawnClock = currentSeconds,
-            TotalSeconds = DanmakuScrollSeconds,
+            TotalSeconds = _danmakuScrollSeconds,
             Width = width,
         });
         return true;
@@ -4171,7 +4793,7 @@ public partial class PlayerWindow : FluentWindow
             Element = border,
             Translate = translate,
             SpawnClock = currentSeconds,
-            TotalSeconds = DanmakuFixedSeconds,
+            TotalSeconds = _danmakuFixedSeconds,
             IsFixed = true,
         });
         return true;
@@ -4293,7 +4915,13 @@ public partial class PlayerWindow : FluentWindow
 
             if (f.IsFixed)
             {
-                f.Element.Opacity = Helpers.DanmakuMotion.FixedOpacity(elapsed, f.TotalSeconds);
+                // ★★★ 必须**乘**基线不透明度, 不能直接赋值(2026-10-12 加不透明度时踩到):
+                //   原来这一行是把 Opacity 直接设成淡出系数(0~1)。用户一旦把"不透明度"调到
+                //   80%, 固定弹幕到了淡出阶段就会被这一行**覆盖回 100%** —— 表现为
+                //   "滑杆拖了没用, 只有滚动弹幕变淡, 顶/底的始终全不透明"。
+                //   现在 Opacity = 用户基线 × 淡出系数, 两个设置才真正叠加。
+                f.Element.Opacity = _danmakuOpacity
+                    * Helpers.DanmakuMotion.FixedOpacity(elapsed, f.TotalSeconds);
             }
             else
             {
@@ -4360,6 +4988,12 @@ public partial class PlayerWindow : FluentWindow
         if (DanmakuAreaSlider != null) DanmakuAreaSlider.Value = Svc.Settings.DanmakuAreaPercent;
         if (DanmakuAreaText != null) DanmakuAreaText.Text = Svc.Settings.DanmakuAreaPercent + "%";
         if (DanmakuAreaValue != null) DanmakuAreaValue.Text = Svc.Settings.DanmakuAreaPercent + "%";
+
+        // 外观三项(不透明度/字号/速度)。每项的重算代价不同, 由 ApplyDanmakuLook 内部判断,
+        // 这里统一调一次即可 —— 播放器和设置页改的是同一批字段, 不该各写一套同步。
+        ApplyDanmakuLook();
+        UpdateDanmakuLookTexts();
+
         // 区域占比变了 => 可用泳道数变了, 必须重建泳道, 否则弹幕会溢出到区域外
         ResetLanes();
         if (!_danmakuOn) return;   // ★ 画布已由 ResetLanes → ClearFlyingDanmaku 清完, 不再重复清一遍
@@ -4371,6 +5005,53 @@ public partial class PlayerWindow : FluentWindow
         //   不重画的话表现是"改了完全没反应, 关掉弹幕再打开才对" —— 用户会以为设置坏了。
         //   代价: 重画要重新排版一遍已加载的弹幕, 但 RefilterDanmaku 本来就在做这件事,
         //   所以合并进去没有额外开销(它内部会 ClearFlyingDanmaku 再重投)。
+    }
+
+    /// <summary>
+    /// 把「不透明度 / 字号 / 速度」三项设置落到运行时, 并只做**必要**的重算。
+    ///
+    /// ★ 为什么不一律"改了就清屏重建":
+    ///   · 不透明度: 就地改每个在飞弹幕的 Opacity 即可。不清屏 ——
+    ///     用户是**拖着滑杆**在调的, 每动一格就闪一次是不能接受的。
+    ///   · 字号/速度: 会让泳道表与追尾校验失效, 必须重建并清掉旧弹幕,
+    ///     否则要么弹幕叠在一起, 要么新弹幕被旧判定整批丢弃(看起来就是"弹幕没了")。
+    ///
+    /// 三项都没变时直接返回 —— 设置页里改"关键词屏蔽"也会走到这里, 不该白清一次屏。
+    /// </summary>
+    private void ApplyDanmakuLook()
+    {
+        var s = Svc.Settings;
+        var nextOpacity = Helpers.DanmakuMotion.OpacityFromPercent(s.DanmakuOpacityPercent);
+        var nextFont = Helpers.DanmakuMotion.FontSizeFromPercent(s.DanmakuFontScalePercent, DanmakuBaseFontSize);
+        var nextLevel = Math.Clamp(s.DanmakuSpeedLevel,
+            Helpers.DanmakuMotion.MinSpeedLevel, Helpers.DanmakuMotion.MaxSpeedLevel);
+
+        var opacityChanged = Math.Abs(nextOpacity - _danmakuOpacity) > 0.001;
+        var fontChanged = Math.Abs(nextFont - _danmakuFontSize) > 0.01;
+        var speedChanged = nextLevel != _danmakuSpeedLevel;
+
+        if (!opacityChanged && !fontChanged && !speedChanged) return;
+
+        _danmakuOpacity = nextOpacity;
+        _danmakuFontSize = nextFont;
+        _danmakuSpeedLevel = nextLevel;
+        _danmakuScrollSeconds = Helpers.DanmakuMotion.ScrollSeconds(nextLevel);
+        _danmakuFixedSeconds = Helpers.DanmakuMotion.FixedSeconds(nextLevel);
+
+        // 字号变了必须同步泳道高 —— 这是历史 bug 的根(DanmakuLaneRatio 那条注释)
+        _laneHeight = _danmakuFontSize * DanmakuLaneRatio;
+
+        // 不透明度不需要清屏: 基线字段改完, 在飞的弹幕在下一帧自然按新基线渲染
+        // (固定弹幕的 Opacity 每帧被"基线 × 淡出系数"覆写, 所以只改基线就够)。
+
+        if (fontChanged || speedChanged)
+        {
+            // 布局变了, 在飞的那些按旧尺寸/旧速度继续飞会突然错位, 一并清掉
+            ResetLanes();
+            DanmakuCanvas.Children.Clear();
+            _flying.Clear();
+            if (_danmakuOn) StartDanmakuClock();
+        }
     }
 
     // ------------------------------------------------------------ 键盘
@@ -5208,6 +5889,25 @@ public partial class PlayerWindow : FluentWindow
         // 查不到就保持原状(别把按钮图标刷成"未赞"), 但把原因记一笔便于排查
         if (!ok) WriteLibVLCDebug($"\n[HasLiked] 查询失败 aid={_aid}\n");
         else _isLiked = liked;
+        if (!_closing) UpdateActionCounts();
+    }
+
+    /// <summary>
+    /// 查询真实的投币状态并刷新按钮点亮态。
+    ///
+    /// ★ 为什么必须单独查一次: 详情接口(view)**不给**"本人是否投过币"这个信息
+    ///   (见 <see cref="ApiClient.GetCoinCountAsync"/> 里那段实测记录), 所以换片之后
+    ///   `_isCoined` 不能继续取自详情 —— 那正是"投过币、重开视频后键还是灰的"的根因。
+    /// ★ 与 <see cref="RefreshLikeStateAsync"/> 同构: 失败时保持原状(不把已点亮的刷成灰),
+    ///   只记一笔便于排查。
+    /// ★ 只在已登录且是点播时查: 本地文件/直播没有投币这回事, 查了也是白问一次接口。
+    /// </summary>
+    private async Task RefreshCoinStateAsync()
+    {
+        if (_aid <= 0 || !Svc.Session.HasLogin || _isLocalPlayback || _isLive) return;
+        var (ok, _, coins) = await Svc.Api.GetCoinCountAsync(_aid);
+        if (!ok) { WriteLibVLCDebug($"\n[Coined] 查询失败 aid={_aid}\n"); return; }
+        _isCoined = coins > 0;
         if (!_closing) UpdateActionCounts();
     }
 
@@ -6315,6 +7015,12 @@ public partial class PlayerWindow : FluentWindow
     private void CloseCommentDetail()
     {
         if (CommentDetailPanel.Visibility != Visibility.Visible) return;
+        // ★ 记下"刚才在看哪一条", 供返回后滚回去用(见 SaveCommentListAnchor)。
+        //   必须在清空 _detailThreadRoot **之前**取, 否则信息就没了。
+        // ★ 上游在这里存的是 _commentReturnRpid(只记 rpid), 合并时删掉了: 本版的
+        //   SaveCommentListAnchor 存的是"偏移 + 首个可见条目下标 + 该条目顶边与视口顶边的差值",
+        //   比只记 rpid 更准(排序变过、或者详情页里展开了楼中楼导致列表重排时仍能回到原处),
+        //   闪烁提示由 FlashCommentAnchor 接手 —— 职责已经拆开, 不留半截字段。
         CommentDetailPanel.Visibility = Visibility.Collapsed;
         CommentDetailCard.Content = null;
         CommentDetailHost.DataContext = null;
@@ -6335,6 +7041,10 @@ public partial class PlayerWindow : FluentWindow
             _commentAnchorPending = true;
             Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(RestoreCommentListAnchor));
         }
+        // ★ 上游(2026-10-13)另有一套按 rpid 找回并闪一下的实现, 已吸收其**视觉提示**部分:
+        //   只靠"位置还原对了"用户仍不知道是哪一条(与"查看对话"同一个理由),
+        //   所以额外闪两下 —— 锚点负责**准**, 闪烁负责**认**。
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(FlashCommentAnchor));
     }
 
     // ------------------------------------------------------------ 视频合集
@@ -7063,15 +7773,29 @@ public partial class PlayerWindow : FluentWindow
         if (_closing) return;
         LocalToastText.Text = msg;
         LocalToastBorder.Visibility = Visibility.Visible;
+        // ★ 淡入前必须先摘掉上一次的动画 + 归位: 连发两条 Toast 时(投币成功又来一条提示),
+        //   上一次的淡出动画可能还挂着。不摘的话新淡入的起点读到的是"动画当前值"
+        //   (可能已经是 0), 于是这条 Toast 是从 0 淡到 0.95 —— **等于看不见**。
+        LocalToastBorder.BeginAnimation(OpacityProperty, null);
+        LocalToastBorder.Opacity = 0.95;
         LocalToastBorder.BeginAnimation(OpacityProperty,
-            new DoubleAnimation(0.95, 1, TimeSpan.FromMilliseconds(160)));
+            new DoubleAnimation(0.95, 1, TimeSpan.FromMilliseconds(160))
+            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop });
         _localToastTimer?.Stop();
         _localToastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.4) };
         _localToastTimer.Tick += (_, _) =>
         {
             _localToastTimer.Stop();
-            var a = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(280));
-            a.Completed += (_, _) => LocalToastBorder.Visibility = Visibility.Collapsed;
+            var a = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(280))
+            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop };
+            a.Completed += (_, _) =>
+            {
+                // ★ 淡出结束后把动画摘掉并归位: 不摘的话 Opacity 被动画钉在 0,
+                //   下一条 Toast 即使 Visible 也完全不显示(整块透明)。
+                LocalToastBorder.BeginAnimation(OpacityProperty, null);
+                LocalToastBorder.Opacity = 0.95;
+                LocalToastBorder.Visibility = Visibility.Collapsed;
+            };
             LocalToastBorder.BeginAnimation(OpacityProperty, a);
         };
         _localToastTimer.Start();
@@ -7567,6 +8291,7 @@ public partial class PlayerWindow : FluentWindow
             _localToastTimer?.Stop();
             _controlsHideTimer?.Stop();
             StopVolumeOsd();
+            StopSpeedOsd();
 
             // 先把覆盖层摘掉再隐藏窗口, 否则底部控制栏会以残影形式留在屏幕上
             DetachVideoOverlay();
@@ -7649,6 +8374,7 @@ public partial class PlayerWindow : FluentWindow
         // ★ 全部定时器在这里统一停 —— 漏掉任何一个都会让整个窗口漏掉(见 StopAllTimers 的说明)
         StopAllTimers();
         StopVolumeOsd();
+        StopSpeedOsd();
         // 正常路径下 _mp / VideoView 已在 TeardownAndCloseAsync 里释放过了,
         // 这里只兜底那些没走完正常关闭流程的情况(例如构造中途抛异常),
         // 避免对同一个 MediaPlayer 重复 Dispose。

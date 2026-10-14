@@ -6,7 +6,13 @@
              Background="{DynamicResource AppBackgroundBrush}">
     <!--
         分区页(2026-09-26): 点左上角 logo 的分区面板里的一项, 就切到这里。
-        结构与首页一致 —— 大标题 + VideoCard 卡片墙; 数据是 ranking/v2 的分区榜(一份, 无翻页)。
+        结构与首页一致 —— 大标题 + 卡片操作 + VideoCard 卡片墙。
+
+        ★★ 2026-10-13 数据源定为"热门"(用户报"分区内容现在全是垃圾视频"):
+           走 ApiClient.GetRegionFeedAsync —— ranking/v2 分区榜为主(质量好),
+           被它拒掉的 rid(资讯 202)才回退 newlist。选型过程见那个方法的注释。
+        ★ 没有"加载更多": 两个接口的 pn 都被服务端忽略(实测返回完全相同条目),
+          一次 50~95 条就是全部。刷新靠标题行右上角那颗按钮 = 重新请求一次。
     -->
     <Grid>
         <Grid.RowDefinitions>
@@ -14,12 +20,26 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 标题行: 分区名 + 一句说明(和首页"首页 + 问候语"同一个位置关系) -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="36,20,36,0">
-            <TextBlock Text="{Binding RegionName}" Style="{StaticResource PageTitleStyle}" />
-            <TextBlock Text="分区排行榜" Margin="14,0,0,6" VerticalAlignment="Bottom"
-                       Style="{StaticResource MetaTextStyle}" />
-        </StackPanel>
+        <!-- 标题行: 分区名 + 一句说明 + 刷新(和首页"首页 + 问候语"同一个位置关系) -->
+        <Grid Margin="36,20,36,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                <TextBlock Text="{Binding RegionName}" Style="{StaticResource PageTitleStyle}" />
+                <TextBlock Text="热门 · 最新" Margin="14,0,0,6" VerticalAlignment="Bottom"
+                           Style="{StaticResource MetaTextStyle}" />
+            </StackPanel>
+            <!-- ★ 刷新按钮(2026-10-13 用户要求"内容可以刷新"):
+                 分区接口**不支持翻页**(实测 pn=1/2/3 返回完全相同的条目), 所以没有"加载更多",
+                 刷新 = 重新请求一次, 拿到服务端此刻的快照。 -->
+            <Button Grid.Column="1" Style="{StaticResource IconButtonStyle}"
+                    VerticalAlignment="Bottom" Margin="0,0,0,2"
+                    Command="{Binding RefreshCommand}" ToolTip="刷新本分区">
+                <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+            </Button>
+        </Grid>
 
         <Grid Grid.Row="1" Margin="36,14,36,0">
             <!-- 加载中 -->

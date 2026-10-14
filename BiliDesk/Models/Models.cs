@@ -154,8 +154,6 @@ public class VideoDetail
     public long CoinCount { get; set; }
     public long FavoriteCount { get; set; }
     public long ShareCount { get; set; }
-    /// <summary>当前登录用户是否已对该视频投过币(view 接口的 coin 字段, 登录后才有意义)</summary>
-    public bool HasCoined { get; set; }
     public long Pubdate { get; set; }
     public long Aid { get; set; }
     public long Cid { get; set; }
@@ -1421,6 +1419,18 @@ public class AppSettings
 
     /// <summary>高级弹幕(mode 7 高级 / 8 代码 / 9 BAS)</summary>
     public bool DanmakuFilterAdvanced { get; set; } = true;
+
+    /// <summary>
+    /// 弹幕不透明度(20~100)。★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**,
+    /// 两处必须一致 —— 老配置缺这个字段时靠属性初始化值拿到 80, 不需要版本兼容。
+    /// </summary>
+    public int DanmakuOpacityPercent { get; set; } = 80;
+
+    /// <summary>弹幕字号倍率(50~300)。与 SettingsStore 同名属性是读写契约。</summary>
+    public int DanmakuFontScalePercent { get; set; } = 100;
+
+    /// <summary>弹幕速度档位(0 最慢 ~ 4 最快)。与 SettingsStore 同名属性是读写契约。</summary>
+    public int DanmakuSpeedLevel { get; set; } = 2;
 
     /// <summary>
     /// 默认画质(qn)。用户在设置页**开始播放前**预先选定的清晰度档位,

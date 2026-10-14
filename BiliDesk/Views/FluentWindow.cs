@@ -138,17 +138,32 @@ public class FluentWindow : Window
             var wantMica = Svc.Settings.AcrylicBackground &&
                            material is BackdropMaterial.Mica or BackdropMaterial.MicaAlt;
 
-            var acrylicOn = false;
+            // ★★★ 两个材质分支都必须**取返回值** —— 返回值 = "这个窗口的材质到底有没有真的挂上"。
+            //   ★ 2026-10-12 修"云母下投币窗/收藏夹选择窗背景透出壁纸"(用户截图):
+            //     这里原先**只有亚克力分支取返回值, 云母分支把返回值丢了**,
+            //     而下面 `_acrylicActive = acrylicOn || wantMica` 照旧为 true —— 于是:
+            //       · 这两个窗口都是**系统标准窗口**(XAML 没写 WindowStyle/WindowChrome),
+            //         SetAcrylicBackdrop 对它们在**下发材质之前**就 return false
+            //         (DwmInterop.cs: 对标准窗口扩展客户区玻璃会把内容区压黑, 见那里的说明);
+            //       · ⇒ 材质**一个像素都没下上**, 窗口底却被设成 alpha=0 全透明;
+            //       · ⇒ 页面层只有 70% 不透明的 AppBackgroundBrush, 剩下 30% **没有任何东西兜底**,
+            //         直接透出桌面壁纸/后面的窗口 —— 就是截图里那层"灰蒙蒙"。
+            //     ★ 为什么只在云母下看出来: 亚克力分支取了返回值 ⇒ 已回落到实色底(2026-10-05
+            //       修"浅色亚克力下收藏界面发黑"时补上的), 云母分支漏了同一步。
+            //   ★ 判据必须是**返回值**而不是 `wantMica`/`wantAcrylic`: 那两个只表示"用户想要什么",
+            //     与"本窗口给不给得起"是两件事。取返回值才能让下面老老实实回落到实色底。
+            var materialOn = false;
             if (wantAcrylic)
-                acrylicOn = DwmInterop.SetAcrylicBackdrop(this, material);
+                materialOn = DwmInterop.SetAcrylicBackdrop(this, material);
             else if (wantMica)
                 // ★ 云母: 照样把材质下发给 DWM —— **这一步就是"启用云母"**。
                 //   这里**绝不能**调 DisableMica, 那样等于把刚要开的云母又关掉。
-                DwmInterop.SetAcrylicBackdrop(this, material);
+                materialOn = DwmInterop.SetAcrylicBackdrop(this, material);
 
-            // ★ 这里存的是"材质是否开启"(亚克力 **或** 云母), 不只是亚克力:
-            //   两者都用窗口底透明, 所以失焦时都要改实色底(否则 DWM 会把材质回落成灰)。
-            _acrylicActive = acrylicOn || wantMica;
+            // ★ 这里存的是"材质是否**真的**挂上了"(不只是用户想要): 后面靠它决定窗口底透明还是实色。
+            //   注意它同时覆盖亚克力与云母 —— 两者都用窗口底透明, 所以失焦时都要改实色底
+            //   (否则 DWM 会把材质回落成灰)。
+            _acrylicActive = materialOn;
 
             // ★★★ 云母的窗口底色**也必须透明**(2026-11-12 用户报"云母依然没有生效"):
             //   DWM 的材质画在窗口内容**之下**, 窗口 Background 一旦不透明就把它完全盖住 ——
@@ -160,6 +175,9 @@ public class FluentWindow : Window
             //     云母下页面底保持 70% 就够 —— 既露出云母, 又不至于让 DWM 的灰压过主题色。
             //   ★ "发灰"那个老问题**不是**靠窗口底不透明解决的: 真正要防的是**失焦**时 DWM
             //     自己把材质回落成灰, 那由 UpdateAcrylicWindowBase 按激活态处理, 与这里无关。
+            // ★ 这一段现在**只对"材质真的挂上了"的窗口**成立(见上面 materialOn):
+            //   系统标准窗口(投币/收藏夹选择/登录/浏览器/免责声明/更新提示)拿不到材质,
+            //   于是走到下面的 else 分支拿实色底, 绝不再出现"没材质却全透明"。
             if (_acrylicActive)
             {
                 // 窗口底透明, 让 DWM 的合成层露出来, 页面那层再叠上去。
@@ -192,7 +210,13 @@ public class FluentWindow : Window
         }
     }
 
-    /// <summary>本窗口当前是否**真的**启用了亚克力(即 SetAcrylicBackdrop 返回 true)</summary>
+    /// <summary>
+    /// 本窗口是否**真的**挂上了材质(即 <c>SetAcrylicBackdrop</c> 返回 true)。
+    /// ★ 名字里的"acrylic"是历史遗留(那时候只有亚克力一种材质); 现在它同时覆盖**云母**。
+    /// ★ 判据是"返回值"而不是"用户想要哪种材质" —— 系统标准窗口(无 WindowChrome)
+    ///   拿不到材质, 必须在这里如实为 false, 否则窗口底会被设成全透明、整窗透出桌面
+    ///   (见 ApplyChrome 里 2026-10-12 那段说明)。
+    /// </summary>
     private bool _acrylicActive;
 
     /// <summary>

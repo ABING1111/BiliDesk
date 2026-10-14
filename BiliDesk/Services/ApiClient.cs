@@ -460,7 +460,120 @@ public class ApiClient
             new Dictionary<string, string> { ["ps"] = "20", ["pn"] = pn.ToString() });
     }
 
-    /// <summary>全站排行榜(rid=0 = 全站, 与分区榜同一个接口)</summary>
+    /// <summary>
+    /// 分区内容(**混合排序**: 分区热门为主干 + 最新投稿混入)。分区页走这个。
+    ///
+    /// ★★ 2026-10-13 终选(用户从三条取舍里选了"混合排序")。选型过程与实测数据:
+    ///
+    ///   | 接口 | 分区关联 | 质量信号 | 时间跨度 |
+    ///   |---|---|---|---|
+    ///   | ranking/v2 | 精确按 rid | 真实播放量(动画最低 33.7 万) | **全部 559~577 天前** |
+    ///   | newlist | 精确按 rid | stat.view 只有 0~8 | **只有"此刻最新 50 条"**(ps 锁死 50) |
+    ///   | popular/precious(入站必刷) | 用二级分区,一级 rid 命中 **0/19** | 极高(中位 1638 万) | 1150~6191 天前 |
+    ///   | rcmd(个性化) | **不带 tid**,无法按分区筛 | 真实 | 正常 |
+    ///
+    ///   ⇒ 没有任何单一接口能同时满足"分区关联 + 质量 + 近期", 所以**混起来**:
+    ///   · 主干 = ranking(保证质量下限与分区精确性);
+    ///   · 混入 = newlist 的最新投稿(保证列表里有"当下在发生的内容");
+    ///   · 按比例交错, 而不是把新内容堆到末尾 —— 堆末尾等于藏起来, 用户仍觉得"全是老视频"。
+    ///
+    /// ★ 混入比例 <see cref="FreshSharePercent"/>: 太高会退回"全是垃圾视频", 太低则看不到新内容。
+    /// ★ rid=202(资讯)被 ranking 硬拒收(-400), 此时 ranking 主干为空, 自动退化成纯 newlist
+    ///   —— 那本来就是资讯这类时效性分区的合理形态。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRegionFeedAsync(int tid)
+    {
+        var (rankOk, rankErr, ranked) = await GetRegionRankAsync(tid);
+        // ranking 拒收这个 rid: 退回纯最新流(实测只有资讯 202 属于这一类)
+        if (!rankOk || ranked == null || ranked.Count == 0) return await GetRegionListAsync(tid);
+
+        // 拿到最新投稿; 失败也不影响主流程(ranking 已经够看了)
+        var (_, _, fresh) = await GetRegionListAsync(tid);
+
+        // 交错: 每 FreshSharePercent 条留一个位置给新内容
+        var merged = Interleave(ranked, fresh ?? new List<VideoItem>(), FreshSharePercent);
+        return (true, null, merged);
+    }
+
+    /// <summary>新内容在混合列表里的占比(每 100 条里占多少)。见 <see cref="GetRegionFeedAsync"/>。</summary>
+    private const int FreshSharePercent = 40;
+
+    /// <summary>
+    /// 把"主干列表"与"新内容列表"按比例交错合并, 并按 aid 去重。
+    ///
+    /// ★ 为什么要交错而不是"主干 + 追加在末尾":
+    ///   追加在末尾等于把新内容**藏在最下面**, 用户往下滑之前看到的全是老视频,
+    ///   观感与"全是老视频"没区别。交错让新内容均匀出现在整页里。
+    ///
+    /// ★ 去重按 aid(服务端主键): 两个接口完全可能同时收录同一条视频
+    ///   (榜单热门往往也是最新投稿), 不去重会出现两张一模一样的卡片。
+    /// </summary>
+    private static List<VideoItem> Interleave(List<VideoItem> main, List<VideoItem> fresh, int freshPercent)
+    {
+        if (freshPercent <= 0 || fresh.Count == 0) return main;
+        if (main.Count == 0) return fresh;
+
+        var result = new List<VideoItem>(main.Count + fresh.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var mainIdx = 0; var freshIdx = 0;
+
+        // 每插入 1 条新的, 要跟 freshShare 条主干 —— 走位计数而不是取模, 避免末尾扎堆
+        var sinceFresh = 0;
+        while (mainIdx < main.Count || freshIdx < fresh.Count)
+        {
+            var wantFresh = sinceFresh >= freshPercent;
+            if (wantFresh && freshIdx < fresh.Count)
+            {
+                var f = fresh[freshIdx++];
+                if (seen.Add(f.Bvid)) result.Add(f);
+                sinceFresh = 0;
+                continue;
+            }
+            if (mainIdx < main.Count)
+            {
+                var m = main[mainIdx++];
+                if (seen.Add(m.Bvid)) result.Add(m);
+                sinceFresh++;
+                continue;
+            }
+            // 主干走完了, 剩下的新内容全接上
+            while (freshIdx < fresh.Count)
+            {
+                var f = fresh[freshIdx++];
+                if (seen.Add(f.Bvid)) result.Add(f);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 分区内容流(**最新投稿**)。只在 <see cref="GetRegionFeedAsync"/> 的回退分支里用。
+    ///
+    /// 接口: <c>GET /x/web-interface/newlist?rid={tid}&amp;pn=1&amp;ps=50</c>,
+    /// 数据在 <c>data.archives[]</c> —— 与 popular/ranking 的条目**完全同构**,
+    /// 所以直接复用 <see cref="GetVideoListAsync"/> + <see cref="ParseVideoItem"/>。
+    ///
+    /// ★★ 为什么不当主源(2026-10-13 用户报"分区内容现在全是垃圾视频"):
+    ///   它是最新投稿, 没有质量筛选; 且 <c>stat.view</c> 恒为 0, 想按播放量补一层
+    ///   筛选也做不到(实测阈值 1000 就把全部 50 条筛光)。
+    /// ★★ 翻页做不到: <c>ps</c> 有效, <c>pn</c> 被忽略(pn=1/2/3 条目完全相同)。
+    /// </summary>
+    public Task<(bool ok, string? err, List<VideoItem>? items)> GetRegionListAsync(int tid)
+    {
+        return GetVideoListAsync(
+            "https://api.bilibili.com/x/web-interface/newlist",
+            new Dictionary<string, string>
+            {
+                ["rid"] = tid.ToString(),
+                ["pn"] = "1",
+                ["ps"] = "50"      // 接口上限实测 50; 再多也是 50
+            },
+            jsonProp: "archives");
+    }
+
+    /// <summary>
+    /// 全站排行榜(rid=0 = 全站, 与分区榜同一个接口)。
+    /// </summary>
     public Task<(bool ok, string? err, List<VideoItem>? items)> GetRankingAsync() => GetRegionRankAsync(0);
 
     /// <summary>
@@ -1011,8 +1124,10 @@ public class ApiClient
                 detail.FavoriteCount = GetLong(st, "favorite");
                 detail.ShareCount = GetLong(st, "share");
             }
-            // 用户互动状态(登录后才有): 是否已投币
-            detail.HasCoined = GetInt(d, "coin") == 1;
+            // ★★ 这里以前写的是 `GetInt(d, "coin") == 1`, 而 view 接口**没有**这个字段
+            //   (data.stat.coin 是全站投币总数, 不是本人的状态) ⇒ 恒为 false,
+            //   于是"投过币、重开视频后投币键还是灰的"(2026-10-13)。
+            //   真实状态改由 <see cref="GetCoinCountAsync"/> 单独查询, 调用方在拿到 aid 后拉一次。
             detail.Aid = GetLong(d, "aid");
             detail.Pubdate = GetLong(d, "pubdate");
 
@@ -1191,6 +1306,80 @@ public class ApiClient
         }
 
         return item;
+    }
+
+    /// <summary>
+    /// 相关视频推荐(播放器信息栏简介下方那一列, 2026-10-12 新增)。
+    ///
+    /// 接口: <c>/x/web-interface/archive/related</c>(B 站播放器右侧「相关推荐」同源)。
+    /// 已由 .probes/bd-probe-related 实测核对过响应形状, 有两点与直觉相反:
+    ///
+    /// ★ `data` **直接就是数组**, 不是 `{ list: [...] }`。
+    ///   照着热门那套去取 `data.list` 会静默拿到"0 条"—— 请求成功、页面却永远空着,
+    ///   是一类极难往接口头上想的失败。所以两种形状都认。
+    /// ★ 条目字段与 popular **完全同构**(owner{mid,name,face} / stat{view,danmaku,...} /
+    ///   top-level bvid/pic/title/duration/pubdate), 因此直接复用
+    ///   <see cref="ParseVideoItem"/>, 不必再写一份解析器 —— 写两份必然漂移。
+    ///   duration 单位是秒(实测 133 / 134), 与 popular 一致; 番剧 PGC 那套是毫秒, 别混。
+    ///
+    /// ★★ 2026-10-13 用户报"相关视频只有 8 个, 添加更多视频, 往下滑刷新":
+    ///   实测(探针 bd-probe-coin, 逐组 ps/pn 对照):
+    ///     · ps=12 / 40 / 50 **返回的条数完全一样, 都是 40** —— 服务端忽略了 ps,
+    ///       一次就把 40 条全给;
+    ///     · pn=1 与 pn=2 拿到的也是同一批 40 条 ⇒ **翻页没有意义**,
+    ///       拉第二页只会得到重复内容(自己跟自己重复, 比不拉更难查)。
+    ///   所以"更多"的正解是: 一次拿全 40 条, 由界面**分批展示**(先 8 条,
+    ///   滚到附近再补下一批), 而不是"滚到底再请求一次"。
+    ///
+    /// 需要设备指纹: 与 view 一样, 无 cookie 时会被风控拦下(返回非 0 码)。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRelatedAsync(string bvid)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(bvid)) return (false, "缺少视频 BV 号", null);
+            await EnsureBuvidAsync();
+
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/web-interface/archive/related",
+                // ps 写 40 只是"表明意图": 实测服务端恒返 40 条, 这个值不影响结果(见上面那段)
+                new Dictionary<string, string> { ["bvid"] = bvid, ["pn"] = "1", ["ps"] = "40" });
+            if (code != 0 || data == null)
+                return (false, msg ?? $"获取相关视频失败 (code {code})", null);
+
+            // data 可能直接是数组, 也可能是 { list: [...] }; 两种都认, 见上面的说明
+            JsonElement arr;
+            var root = data.Value;
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                arr = root;
+            }
+            else if (root.TryGetProperty("list", out var l) && l.ValueKind == JsonValueKind.Array)
+            {
+                arr = l;
+            }
+            else
+            {
+                return (true, null, new List<VideoItem>());   // 形状不认识: 空列表而不是崩
+            }
+
+            var items = new List<VideoItem>();
+            foreach (var e in arr.EnumerateArray())
+            {
+                var item = ParseVideoItem(e);
+                if (item == null) continue;
+                // ★ 自身可能混在结果里(实测会), 点它等于原地重播 —— 先挡一道,
+                //   免得列表末尾莫名出现"当前视频"且点了没反应。
+                if (item.Bvid == bvid) continue;
+                items.Add(item);
+            }
+            return (true, null, items);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "获取相关视频失败: " + ex.Message, null);
+        }
     }
 
     /// <summary>
@@ -2932,6 +3121,45 @@ public class ApiClient
         {
             App.ReportError(ex);
             return (false, "查询点赞状态失败: " + ex.Message, false);
+        }
+    }
+
+    /// <summary>
+    /// 查询当前用户对该视频**已投了几枚币**(0 = 没投过)。
+    ///
+    /// ★★ 2026-10-13 用户报"投过币、关掉重开, 投币键还是灰的"——真根因是
+    ///   <c>GetVideoAsync</c> 里那句 <c>GetInt(d, "coin") == 1</c> 读的字段**根本不存在**。
+    ///   实测(探针 bd-probe-coin, 带真实登录 Cookie):
+    ///     · <c>/x/web-interface/view</c> 的 data 里**没有** coin / req_user 这类用户态字段,
+    ///       只有 <c>data.stat.coin</c> —— 那是**全站投币总数**(实测 128 万), 与本账号无关;
+    ///     · 真正管用的是 <c>/x/web-interface/archive/coins</c>, 返回
+    ///       <c>{"code":0,"data":{"multiply":N}}</c>, N 就是本人投的枚数(0/1/2)。
+    ///   决定性验证: 真投 1 枚后, 同一个 aid 的 multiply 由 0 变成 1(探针已跑通)。
+    ///   ⇒ 判断"曾经投过币"必须走这里, 不能靠详情接口。
+    ///
+    /// ★ 返回**枚数**而不是 bool: 单稿件上限 2 枚, 界面上"已投 1 枚还想再投 1 枚"
+    ///   是有意义的场景, bool 会把这个信息丢掉。
+    /// </summary>
+    public async Task<(bool ok, string? err, int coins)> GetCoinCountAsync(long aid)
+    {
+        try
+        {
+            if (aid <= 0) return (false, "缺少视频 aid", 0);
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/web-interface/archive/coins",
+                new Dictionary<string, string> { ["aid"] = aid.ToString() });
+            if (code != 0 || data == null) return (false, msg ?? $"查询投币状态失败 (code {code})", 0);
+            // data.multiply: 本人已投枚数(实测 0/1)
+            if (data.Value.ValueKind == JsonValueKind.Object &&
+                data.Value.TryGetProperty("multiply", out var m) && m.ValueKind == JsonValueKind.Number)
+                return (true, null, m.GetInt32());
+            // 字段缺失时按"没投过"处理, 不能让按钮卡在"已投"上 —— 那会让用户再也投不了
+            return (true, null, 0);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "查询投币状态失败: " + ex.Message, 0);
         }
     }
 

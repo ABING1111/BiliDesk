@@ -11,10 +11,10 @@ public static class DwmInterop
 {
     private const int DwmwaUseImmersiveDarkMode = 20;
     private const int DwmwaSystemBackdropType = 38;
-    /// <summary>DWMWA_NCRENDERING_POLICY: 控制 DWM 是否绘制非客户区(系统标题栏/按钮)</summary>
-    private const int DwmwaNcRenderingPolicy = 2;
-    private const int DwmNcrpUseWindowStyle = 0;   // DWMNCRP_USEWINDOWSTYLE(默认)
-    private const int DwmNcrpDisabled = 1;         // DWMNCRP_DISABLED
+    // ★ DWMWA_NCRENDERING_POLICY(2) 及其取值常量已删除(2026-10-13 死代码清理):
+    //   全项目无任何引用 —— 本窗口是 WindowStyle=None + 自绘标题栏, DWM 本来就不画
+    //   非客户区, 那个策略开关从来用不上。Win32 语义记在这里:
+    //     DWMWA_NCRENDERING_POLICY = 2; DWMNCRP_USEWINDOWSTYLE = 0; DWMNCRP_DISABLED = 1
     private const int DwmwaWindowCornerPreference = 33;
     // ★ DWMWA_USE_HOSTBACKDROPBRUSH(17) 的常量已删除(2026-10-06): 它曾被误当成"失焦防回落"的开关,
     //   探针 A/B 证明它与失焦行为**完全无关**(是"让我自己用 Composition 画 host backdrop"的开关)。
@@ -142,8 +142,9 @@ public static class DwmInterop
     // ------------------------------------------------------------ 全局亚克力(实验性)
 
     /// <summary>DWMWA_SYSTEMBACKDROP_TYPE 的取值(与 Models.BackdropMaterial 的枚举值一一对应)</summary>
+    // DWMSBT: 1=None 2=Mica 3=Acrylic 4=Tabbed —— 这里只用得到 None(关材质时),
+    // Acrylic 等取值由 (int)material 直接透传, 不必逐个建常量。
     private const int DwmsbtNone = 1;
-    private const int DwmsbtAcrylic = 3;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Margins

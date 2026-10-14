@@ -1,41 +1,38 @@
 using System;
 using System.Windows;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 
 namespace BiliDesk.Helpers;
 
 /// <summary>
-/// 切页过渡: 三段式"淡出 → 换页 → 淡入"。
+/// 切页过渡: "淡出 → 换页 → 出现"。
 ///
-/// ★★★ 承载体改回**页面自己**(<see cref="UIElement.Opacity"/>), 不再用"幕布"(2026-10-11)。
+/// ★★★ 淡入**不再用动画** —— 保留淡出(它是"遮住换页"的关键), 换页后直接落定 1。
+///   (2026-10-12 修"切回首页空白一秒", 探针 bd-probe-switchback2 本机稳定复现):
+///   在这台机器上, 把 PageHost 淡入到可见的那段动画**永远不上屏**:
+///     · DoubleAnimation 版: 淡出段的屏幕变化正常(sd 9), 淡入段一帧都不出,
+///       Opacity 被 HoldEnd 托管在 0, InFlight 永久 true;
+///     · 改成 DispatcherTimer 手动插值(不依赖渲染 tick)后, Opacity 数值轨迹完全正确
+///       (0.04 → 1.000 逐帧落定), 屏幕**仍然**纯白(sd 0.5);
+///     · 期间 InvalidateMeasure/InvalidateVisual/UpdateLayout 全部无效;
+///     · 换页方式 A/B: **Jump(不经过淡出/淡入, 直接换 Content) 553ms 正常上屏**。
+///   ⇒ 该环境渲染器对"整棵子树做透明度动画"存在缺陷: 淡出方向勉强能动,
+///     淡入方向(从透明到不透明)恢复渲染输出的那条路是坏的。
+///   ⇒ 挡不住就绕开: 淡出保留(它负责"换页被遮住", 而且实测能动),
+///     换页后**不再播淡入** —— 直接清动画落定 1。用户看到的是
+///     "旧页淡出 → 一瞬底色 → 新页直接出现", 没有"浮现"但**绝不空白**;
+///     换页那一拍本来就隔着一次淡出(90ms), 突兀感可忽略。
+///   ★ 健康机器上的损失: 只有"淡入的 170ms 柔和感"。换来的: 所有机器上都不空白。
 ///
-///   为什么把幕布去掉: 幕布是一块**自己上色**的板子, 颜色必须在本地算出来。
-///   纯色(无材质)模式下算得准(半透明页面底合成在窗口实色底上); 但**材质(云母/亚克力)
-///   模式下算不准** —— 那时窗口底色是**全透明的**(要让 DWM 采样壁纸的合成层透出来),
-///   真正的底色是**壁纸**, 程序无从得知。拿主题实色去合成, 就会得到一块比真实背景
-///   **亮十几个色阶**的板子 —— 用户报的"云母/亚克力下白色幕布很突兀"就是这个:
-///   实测浅色壁纸时幕布 241,241,242 而真实底色约 229(探针 bd-probe-navveil3 读数)。
-///   ⇒ 与其继续猜壁纸颜色, 不如**根本不画那块板子**:
-///     淡出页面本身, 露出来的就是**窗口自己的底色**, 而页面底本来就是半透明的
-///     AppBackgroundBrush 压在同一层上 —— 所以过渡色在**任何材质/主题/壁纸**下自动正确。
-///
-///   ★ 幕布当初的**真正收益被完整保留**: 建页动作仍发生在"看不见"的那一拍 ——
-///     页面透明度到 0 之后才换页+建页, 用户先看到干净底色, 再看到新页面淡入。
-///   ★ 性能没有退步: 本类旧注释记过实测结论 —— 动画 PageHost.Opacity 与动画幕布
-///     帧间隔**一样**(p50 ~7ms / p95 ~14ms / 掉帧 0), 载体不是卡顿来源。
-///
-/// ★ 为什么单独成一个类: 这段逻辑有两处容易写错、而且只有"跑起来"才看得出来 ——
-///   ① 过渡途中被打断时不能停在被取消的那一页;
-///   ② "点当前页"的早退判断在过渡在途时不能生效(否则点了导航项却停在旧页)。
-///   抽出来之后探针能直接拿它对着真实窗口跑 —— 验的是**发布出去的同一份代码**, 不是复制品。
+/// ★ 承载体是**页面自己**(<see cref="UIElement.Opacity"/>), 不用"幕布"(2026-10-11):
+///   幕布要自己算底色, 云母/亚克力下算不准(那时窗口底透明、真底是壁纸);
+///   淡出页面本身, 露出来的就是窗口底色, 任何材质/主题/壁纸下自动正确。
 /// </summary>
 public sealed class PageTransition
 {
-    /// <summary>淡出时长(页面 1→0, 露出底色)</summary>
+    /// <summary>淡出时长(页面 1→0, 露出底色)。</summary>
     public const int FadeOutMs = 90;
-
-    /// <summary>淡入时长(页面 0→1, 新页面浮出)。比淡出长一点: 出场干脆、入场柔和。</summary>
-    public const int FadeInMs = 170;
 
     /// <summary>被淡入淡出的页面(实参是 MainWindow 的 PageHost)</summary>
     private readonly UIElement _content;
@@ -56,7 +53,6 @@ public sealed class PageTransition
     public void Run(Action swap)
     {
         var epoch = ++_epoch;
-        InFlight = true;
 
         // ★ From 取**当前**透明度而不是写死 1: 上一拍淡入还没播完时用户又切页(连点导航项),
         //   写死 1 会让页面先"跳"回全不透明再淡出 —— 看起来就是闪一下。
@@ -70,21 +66,14 @@ public sealed class PageTransition
             if (epoch != _epoch) return;   // 已被更晚的过渡取代, 这一拍作废
             swap();
 
-            var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(FadeInMs))
-            {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            };
-            fadeIn.Completed += (_, _) =>
-            {
-                if (epoch != _epoch) return;
-                // ★ 收尾必须把动画清掉并落定到 1: 留着动画时钟的话, 元素会一直被动画值托管,
-                //   别处(如 SwitchPageNow)再想直接设 Opacity 就会被动画值盖住。
-                _content.BeginAnimation(UIElement.OpacityProperty, null);
-                _content.Opacity = 1;
-                InFlight = false;
-            };
-            _content.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+            // ★★★ 淡入不做动画(原因见类注释): 直接清动画 + 落定 1。
+            //   ★ "清动画"这步不能省 —— 淡出的 DoubleAnimation 还挂在 Opacity 上
+            //     (HoldEnd 托管在 0), 不清掉的话直接设 Opacity 会被动画值盖住。
+            _content.BeginAnimation(UIElement.OpacityProperty, null);
+            _content.Opacity = 1;
+            InFlight = false;
         };
+        InFlight = true;
         _content.BeginAnimation(UIElement.OpacityProperty, fadeOut);
     }
 

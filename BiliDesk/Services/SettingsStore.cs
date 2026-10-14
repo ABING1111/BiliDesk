@@ -169,6 +169,26 @@ public class SettingsStore
     /// </summary>
     public double DanmakuOutlineWidth { get; set; } = 0.8;
 
+    /// <summary>弹幕不透明度(20~100)。★ 缺这条时白字压在亮画面上完全看不见</summary>
+    /// <summary>弹幕不透明度(20~100)。★ 缺这条时白字压在亮画面上完全看不见</summary>
+    public int DanmakuOpacityPercent { get; set; } = 80;
+
+    /// <summary>弹幕字号(缩放百分比, 50~300)。★ 与泳道高联动, 见 DanmakuLaneRatio</summary>
+    public int DanmakuFontScalePercent { get; set; } = 100;
+
+    /// <summary>
+    /// 弹幕速度档位(0 最慢 ~ 4 最快)。
+    ///
+    /// ★ 为什么用**整数档位**而不是"倍数/百分比":
+    ///   B 站客户端也是档位(慢/较快/适中/快/极快), 而弹幕的横穿时长直接决定
+    ///   同一条泳道能不能塞下两条(见 AllocateRollingLane 的追尾校验)。
+    ///   存成百分比看着更"精确", 但换算出来的秒数会出现 7.7s 这种值,
+    ///   滑杆每动一格观感几乎不变, 用户只会觉得"滑块失灵"。
+    ///   整数档 → 一一对应的秒数, 改动幅度看得见。
+    /// 升序: 档位越大越快。
+    /// </summary>
+    public int DanmakuSpeedLevel { get; set; } = 2;
+
     /// <summary>
     /// 默认画质(qn)。用户在设置页**开始播放前**预先选定的清晰度,
     /// 之后每次点开视频/换集都用它起播; 该档不可用时自动降级(见 ApiClient.GetPlayUrlAsync)。
@@ -511,6 +531,15 @@ public class SettingsStore
         s.DanmakuOutlineWidth > 0.01 ? s.DanmakuOutlineWidth : DanmakuOutlineWidth,
         0.4, 1.6);
 
+        // ★ 新增的弹幕外观三项(2026-10-12): 老配置没有这些字段, 会拿到属性初始化值
+        //   (80 / 100 / 2), 正好就是设计默认值, 不需要版本兼容。
+        //   仍要夹取: 手改过的配置可能有越界值(0 / 999), 不夹的话滑杆会贴边而观感与数值对不上。
+        DanmakuOpacityPercent = Math.Clamp(s.DanmakuOpacityPercent, 0, 100);
+        DanmakuFontScalePercent = Math.Clamp(s.DanmakuFontScalePercent, 50, 300);
+        DanmakuSpeedLevel = Math.Clamp(s.DanmakuSpeedLevel,
+            Helpers.DanmakuMotion.MinSpeedLevel, Helpers.DanmakuMotion.MaxSpeedLevel);
+
+
         // ★ 默认画质要 Normalize: 手改过的配置可能有 0 / 已下线的档位 / 串到别处
         //   的值, 直接流进取流请求会变成一个谁也不认识的 qn(表现为画质莫名其妙)。
         PreferredQualityQn = QualityPreference.Normalize(s.PreferredQualityQn);
@@ -597,8 +626,11 @@ public class SettingsStore
         DanmakuFilterFixed = DanmakuFilterFixed,
         DanmakuFilterColorful = DanmakuFilterColorful,
         DanmakuFilterAdvanced = DanmakuFilterAdvanced,
-    DanmakuOutlineEnabled = DanmakuOutlineEnabled,
-    DanmakuOutlineWidth = DanmakuOutlineWidth,
+        DanmakuOutlineEnabled = DanmakuOutlineEnabled,
+        DanmakuOutlineWidth = DanmakuOutlineWidth,
+        DanmakuOpacityPercent = DanmakuOpacityPercent,
+        DanmakuFontScalePercent = DanmakuFontScalePercent,
+        DanmakuSpeedLevel = DanmakuSpeedLevel,
         PreferredQualityQn = PreferredQualityQn,
         MultiPlayerWindow = MultiPlayerWindow,
         PlayerWindowWidth = PlayerWindowWidth,
@@ -975,7 +1007,8 @@ public class SettingsStore
         string? blockKeywords = null, bool? colorful = null,
         bool? filterScroll = null, bool? filterFixed = null,
         bool? filterColorful = null, bool? filterAdvanced = null,
-        bool? outlineEnabled = null, double? outlineWidth = null)
+        bool? outlineEnabled = null, double? outlineWidth = null,
+        int? opacityPercent = null, int? fontScalePercent = null, int? speedLevel = null)
     {
         var nextKeywords = blockKeywords ?? DanmakuBlockKeywords;
         var nextColorful = colorful ?? DanmakuColorful;
@@ -988,6 +1021,12 @@ public class SettingsStore
         //   区间外的值, 而一个负宽度会让 Stroke 抛 ArgumentException, 直接把弹幕线程带崩。
         var nextOutlineW = Math.Clamp(outlineWidth ?? DanmakuOutlineWidth, 0.4, 1.6);
         var nextOutlineOn = outlineEnabled ?? DanmakuOutlineEnabled;
+        // 三个外观项同样走"传 null 表示不改": 播放器调滑杆时只想改不透明度,
+        // 要是顺手把字号/速度重置回默认, 用户会觉得"我刚调好的速度又变了"。
+        var nextOpacity = Math.Clamp(opacityPercent ?? DanmakuOpacityPercent, 0, 100);
+        var nextFont = Math.Clamp(fontScalePercent ?? DanmakuFontScalePercent, 50, 300);
+        var nextSpeed = Math.Clamp(speedLevel ?? DanmakuSpeedLevel,
+            Helpers.DanmakuMotion.MinSpeedLevel, Helpers.DanmakuMotion.MaxSpeedLevel);
         var changed = enabled != DanmakuEnabled
             || areaPercent != DanmakuAreaPercent
             || smartFilter != DanmakuSmartFilter
@@ -998,6 +1037,9 @@ public class SettingsStore
             || nextFAdvanced != DanmakuFilterAdvanced
             || nextOutlineOn != DanmakuOutlineEnabled
             || Math.Abs(nextOutlineW - DanmakuOutlineWidth) > 1e-6
+            || nextOpacity != DanmakuOpacityPercent
+            || nextFont != DanmakuFontScalePercent
+            || nextSpeed != DanmakuSpeedLevel
             || !string.Equals(nextKeywords, DanmakuBlockKeywords, StringComparison.Ordinal);
         DanmakuEnabled = enabled;
         DanmakuAreaPercent = Math.Clamp(areaPercent, 25, 100);
@@ -1009,6 +1051,9 @@ public class SettingsStore
         DanmakuFilterAdvanced = nextFAdvanced;
         DanmakuOutlineEnabled = nextOutlineOn;
         DanmakuOutlineWidth = nextOutlineW;
+        DanmakuOpacityPercent = nextOpacity;
+        DanmakuFontScalePercent = nextFont;
+        DanmakuSpeedLevel = nextSpeed;
         DanmakuBlockKeywords = nextKeywords;
         Save();
         if (changed) DanmakuSettingsChanged?.Invoke();

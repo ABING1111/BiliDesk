@@ -1,3 +1,4 @@
+﻿
 <UserControl x:Class="BiliDesk.Views.Pages.HomePage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -143,13 +144,21 @@
                 Background="Transparent"
                 MouseLeftButtonDown="OnDragAreaMouseLeftButtonDown" />
 
-        <!-- 分段标签 + 选中下划线。
-             选中态是"字变强调色 + 下方一根短横线", 线由页面在切换时用动画滑到新标签下面
-             (见 HomePage.xaml.cs 的 MoveTabIndicator)。
+        <!-- 分段标签 + 选中下划线(2026-10-12 用户要求"tab 改回下划线形式")。
+             形态: 五个文字标签横排, 选中那个**文字变强调色 + 下方一根短横线**,
+             切换时线从旧位置**滑到**新位置(见 HomePage.xaml.cs 的 MoveTabIndicator)。
 
-             为什么把标签套进一个 Grid: 下划线要浮在标签行底部、按选中标签的实际位置定位 ——
-             四个标签文字长短不同(推荐/热门 vs 排行榜), 位置只能实测, 不能靠固定间距推。 -->
-        <Grid x:Name="TabsRow" Grid.Row="1" Margin="36,18,0,8" HorizontalAlignment="Left">
+             ★ 为什么放弃"药丸"版本改回下划线:
+               药丸要做"宽度连续变化", 就得让位置与宽度**同时**动, 而那是 WPF 里最容易
+               出错的组合(宽度动画的起点会读到被接管的旧值, 表现为"从最左边飞来";
+               缩放替代宽度又有锚点偏移问题)。下划线的宽度是**固定的 20px**,
+               切换时只需要动一个 X ⇒ 不可能出现"飞过来", 观感也更轻。
+             ★ 标签行宽度**按内容**且靠左(用户之前要求"不要伸长铺满"): 用 StackPanel,
+               整行宽度 = 五个标签自然宽度之和, 不占用整行。
+             ★ 下划线单独画一个 Border 而不是给每个标签各画一条:
+               要"一根线在动", 它就必须是**独立于标签**的元素(否则是五条线轮流闪)。 -->
+        <Grid x:Name="TabsRow" Grid.Row="1" Margin="36,18,36,8" HorizontalAlignment="Left">
+            <!-- 标签行: 靠左排列, 间距由每个按钮自己的 Margin 给(除第一个外都 4)。 -->
             <StackPanel x:Name="HomeTabs" Orientation="Horizontal">
                 <RadioButton x:Name="RecommendTab" Style="{StaticResource UnderlineTabStyle}"
                              Content="推荐" />
@@ -166,14 +175,19 @@
                              Content="追番" Margin="4,0,0,0" />
             </StackPanel>
 
-            <!-- 选中下划线: 固定 20x3 的圆角短线。宽度写死有两个好处: 与参考图里"线比文字短"的比例一致,
-                 而且只需要动画 X 一个属性(宽度不变就不会忽胖忽瘦)。IsHitTestVisible=False: 它浮在
-                 标签下沿, 不能把点击吃掉。 -->
+            <!-- 选中下划线: 固定 20×3 的圆角短线, 浮在标签行底部。
+                 ★ 宽度写死有两个好处: ① 与"线比文字短"的设计比例一致;
+                   ② 只需要动画 X —— 宽度不变就不会有"位置与宽度不同步"的坑。
+                 ★ 位置: 靠 VerticalAlignment=Bottom 贴在标签行下沿。
+                   标签的 Padding 下边留了 14px(见 UnderlineTabStyle), 那 14px
+                   就是**给这根线留的位置** —— 线落在文字下方、整个标签框之内,
+                   既压不到文字也不会被挤出布局。
+                 ★ IsHitTestVisible=False: 它浮在标签下沿, 不能把点击吃掉。 -->
             <Border x:Name="TabIndicator" Width="20" Height="3" CornerRadius="1.5"
                     Background="{DynamicResource AccentBrush}" IsHitTestVisible="False"
-                    HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="0,0,0,4">
+                    HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="0,0,0,5">
                 <Border.RenderTransform>
-                    <TranslateTransform x:Name="TabIndicatorTrans" />
+                    <TranslateTransform x:Name="TabIndicatorTrans" X="0" />
                 </Border.RenderTransform>
             </Border>
         </Grid>
@@ -817,5 +831,6 @@
                 </Border>
             </Grid>
         </Border>
+
     </Grid>
 </UserControl>
