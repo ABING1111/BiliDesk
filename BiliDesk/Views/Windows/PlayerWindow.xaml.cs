@@ -1017,7 +1017,10 @@ public partial class PlayerWindow : FluentWindow
         // 评论总数属于"上一条视频" —— 不清的话换了片子那句"共 N 条评论"还挂着旧数字,
         // 而排序入口的可见性正是跟着它走的。排序**方式**(_commentSort)不清: 那是用户习惯。
         _commentTotal = 0;
+        // 评论数同理是"上一条视频"的: 不清的话 tab 会短暂挂着上一条的条数
+        _commentCount = 0;
         UpdateCommentSortUi(visible: false);
+        RefreshCommentTabLabel();
         // 换片时把评论详情也收掉(tab 文案与返回链接一并还原),
         // 否则新片子一进来右侧就挂着上一条视频的评论详情页
         if (CommentDetailPanel != null) CloseCommentDetail();
@@ -1171,7 +1174,7 @@ public partial class PlayerWindow : FluentWindow
         // 界面交互态
         nameof(_switchingQuality), nameof(_fillingQualityMenu), nameof(_updatingSlider),
         nameof(_commentsLoaded), nameof(_postingComment), nameof(_longPressFired),
-        nameof(_commentTotal),
+        nameof(_commentTotal), nameof(_commentCount),
         nameof(_suppressSingleClick), nameof(_controlsHidden), nameof(_isFullscreen),
         // 合集: 「这个视频有没有合集」属于"这一片"的属性, 换片必须重算。
         // 不清的话换了普通视频入口还挂着, 点开是个空面板。
@@ -1684,6 +1687,10 @@ public partial class PlayerWindow : FluentWindow
         VideoTitleText.Text = displayTitle;
         ViewCountText.Text = VideoItem.FormatCount(detail.ViewCount);
         DanmakuCountText.Text = VideoItem.FormatCount(detail.DanmakuCount);
+        // 评论数: 数据行与「评论」tab 共用这一个值(见 _commentCount 的说明)
+        _commentCount = detail.CommentCount;
+        CommentCountText.Text = VideoItem.FormatCount(detail.CommentCount);
+        RefreshCommentTabLabel();
         PubDateText.Text = detail.Pubdate > 0
             ? DateTimeOffset.FromUnixTimeSeconds(detail.Pubdate).LocalDateTime.ToString("yyyy-MM-dd")
             : "";
@@ -5663,6 +5670,33 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>当前视频的根评论总数(来自接口 cursor.all_count, 不是本页条数)</summary>
     private long _commentTotal;
 
+    /// <summary>
+    /// 当前视频的**评论总数**(view 接口 stat.reply, 含楼中楼), 用来在「评论」tab 和数据行上标条数。
+    ///
+    /// ★ 为什么不复用 <see cref="_commentTotal"/>: 两者**口径不同** ——
+    ///   stat.reply 是该视频下所有评论(含楼中楼回复), cursor.all_count 只算根评论。
+    ///   合成一个字段的话, 进评论区拉完列表那一下数字会自己变小, 看着像 bug。
+    ///   所以那个继续供"共 N 条评论"用, 这个只负责 tab/数据行 —— 它随详情到手, 不用等评论接口。
+    /// </summary>
+    private long _commentCount;
+
+    /// <summary>评论数后缀(前导空格); 拿不到时为 "", 界面就是干净的"评论"。</summary>
+    private string CommentCountSuffix()
+        => _commentCount > 0 ? " " + VideoItem.FormatCount(_commentCount) : "";
+
+    /// <summary>
+    /// 刷新「评论」tab 的文案: 列表态 "评论 N", 详情态 "评论详情 N"。
+    ///
+    /// ★ 两个态的文案只在**这里**写: 原来 ShowCommentDetail/CloseCommentDetail 各写死一份,
+    ///   现在多了条数后缀, 分散着改必然出现"返回列表后 suffix 没了"这类不一致。
+    /// </summary>
+    private void RefreshCommentTabLabel()
+    {
+        if (TabComments == null) return;
+        var inDetail = CommentDetailPanel?.Visibility == Visibility.Visible;
+        TabComments.Content = (inDetail ? "评论详情" : "评论") + CommentCountSuffix();
+    }
+
     private async Task LoadCommentsAsync(bool force = false)
     {
         if (_closing) return;
@@ -5778,8 +5812,9 @@ public partial class PlayerWindow : FluentWindow
         // Host 的 DataContext = 线程根: "相关回复共 N 条"/回复列表/加载更多都从它取
         CommentDetailHost.DataContext = threadRoot;
         CommentDetailCard.Content = focus;
-        // tab 文案随状态走: 进详情后"评论"变"评论详情", 返回链接就摆在它右边(用户指定)
-        TabComments.Content = "评论详情";
+        // tab 文案随状态走: 进详情后"评论"变"评论详情", 返回链接就摆在它右边(用户指定);
+        // 条数后缀跟着一起刷(见 RefreshCommentTabLabel)
+        RefreshCommentTabLabel();
         BtnBackToComments.Visibility = Visibility.Visible;
         // 评论区只有一个输入框(列表页顶部那个), 进详情页它自动切成"回复 @这层楼"
         // (用户规则: 在详情页评论 = 给这层楼评论); 点提示条上的"取消"才改回发新楼层。
@@ -5846,8 +5881,8 @@ public partial class PlayerWindow : FluentWindow
         CommentDetailHost.DataContext = null;
         _detailThreadRoot = _detailFocus = null;
         ClearReplyTarget();
-        // tab 文案与返回链接一起还原
-        TabComments.Content = "评论";
+        // tab 文案与返回链接一起还原(条数后缀仍在)
+        RefreshCommentTabLabel();
         BtnBackToComments.Visibility = Visibility.Collapsed;
         CommentList.Visibility = Visibility.Visible;
         // ★ 用户报"从某条评论的回复返回后, 列表回到顶部, 得重新下拉找那条评论"

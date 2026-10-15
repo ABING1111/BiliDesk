@@ -150,6 +150,13 @@ public class VideoDetail
     public long ViewCount { get; set; }
     public long LikeCount { get; set; }
     public long DanmakuCount { get; set; }
+    /// <summary>
+    /// 评论总数(view 接口的 stat.reply, 含楼中楼回复)。
+    /// ★ 与评论接口返回的 cursor.all_count **口径不同**(后者只算根评论), 别互相顶替。
+    ///   用它是因为它**随详情一起到手** —— 数据行和「评论」tab 要在一进播放页就显示条数,
+    ///   那时还没拉评论列表, 只能靠它。见 PlayerWindow._commentCount。
+    /// </summary>
+    public long CommentCount { get; set; }
     /// <summary>投币数 / 收藏数 / 分享数(操作栏"图标 + 数量"那套用; view 接口的 stat 里拿)</summary>
     public long CoinCount { get; set; }
     public long FavoriteCount { get; set; }

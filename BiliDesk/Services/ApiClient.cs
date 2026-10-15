@@ -835,6 +835,7 @@ public class ApiClient
                 detail.ViewCount = GetLong(st, "view");
                 detail.LikeCount = GetLong(st, "like");
                 detail.DanmakuCount = GetLong(st, "danmaku");
+                detail.CommentCount = GetLong(st, "reply");
                 // 操作栏要显示计数(2026-09-26 改成"图标 + 数量"那套)
                 detail.CoinCount = GetLong(st, "coin");
                 detail.FavoriteCount = GetLong(st, "favorite");
