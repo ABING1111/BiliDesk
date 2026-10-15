@@ -1232,15 +1232,22 @@
                             <!-- 标题 + 数据 -->
                             <TextBlock x:Name="VideoTitleText" FontSize="17" FontWeight="SemiBold"
                                        TextWrapping="Wrap" Text="视频标题" LineHeight="24" />
-                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <!-- ★ WrapPanel 而非 StackPanel(2026-10-15, 加评论数时改):
+                                 这行现在是「播放 · 弹幕 · 评论 · 日期」四项, 信息栏只有 400px,
+                                 播放/弹幕/评论都是"1.2万"这种长度时一行放不下 —— StackPanel 会径直
+                                 溢出被裁掉(隐藏后半截), WrapPanel 会自己折到第二行。 -->
+                            <WrapPanel Margin="0,8,0,0">
                                 <TextBlock x:Name="ViewCountText" Style="{StaticResource MetaTextStyle}" Text="--" />
                                 <TextBlock Text=" 播放" Style="{StaticResource MetaTextStyle}" />
                                 <TextBlock Text=" · " Style="{StaticResource MetaTextStyle}" Margin="6,0" />
                                 <TextBlock x:Name="DanmakuCountText" Style="{StaticResource MetaTextStyle}" Text="--" />
                                 <TextBlock Text=" 弹幕" Style="{StaticResource MetaTextStyle}" />
                                 <TextBlock Text=" · " Style="{StaticResource MetaTextStyle}" Margin="6,0" />
+                                <TextBlock x:Name="CommentCountText" Style="{StaticResource MetaTextStyle}" Text="--" />
+                                <TextBlock Text=" 评论" Style="{StaticResource MetaTextStyle}" />
+                                <TextBlock Text=" · " Style="{StaticResource MetaTextStyle}" Margin="6,0" />
                                 <TextBlock x:Name="PubDateText" Style="{StaticResource MetaTextStyle}" Text="--" />
-                            </StackPanel>
+                            </WrapPanel>
                             <!-- UP 主卡片 -->
                             <Border Background="{DynamicResource CardBackgroundBrush}"
                                     BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"

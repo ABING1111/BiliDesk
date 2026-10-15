@@ -767,13 +767,28 @@ public class ApiClient
             if (string.IsNullOrEmpty(item.Bvid)) return null;
             item.Title = GetStr(e, "title").StripHtml();
             item.Cover = UrlUtil.Normalize(GetStr(e, "pic"));
-            // UP 主名 + mid: 卡片下方的 UP 主名要能点进他的主页
+            // UP 主名 + mid: 卡片下方的 UP 主名要能点进他的主页。
+            // ★ 两种下发写法都要认(实测 2026-10-15):
+            //   · 热门/排行/收藏: owner{ name, mid } 嵌一层;
+            //   · 空间投稿(arc/search 的 vlist): author + mid **平铺**, 没有 owner 这一层 ——
+            //     只读 owner 的话这里的 Author 会一直是空串, 卡片上就只剩一个孤零零的"·"。
             if (e.TryGetProperty("owner", out var o))
             {
                 item.Author = GetStr(o, "name");
-                item.OwnerMid = GetLong(o, "mid");
+                item.OwnerMid = GetLongLoose(o, "mid");
             }
-            item.Duration = VideoItem.FormatSeconds(GetInt(e, "duration"));
+            if (string.IsNullOrEmpty(item.Author)) item.Author = GetStr(e, "author");
+            if (item.OwnerMid <= 0) item.OwnerMid = GetLongLoose(e, "mid");
+            // 风控降级接口(recArchivesByKeywords)用的是 upMid, 两者都认
+            if (item.OwnerMid <= 0) item.OwnerMid = GetLongLoose(e, "upMid");
+
+            // 时长: `duration` 的单位是**秒**; 空间投稿给的是 "03:57" 这种成品文本(`length`)。
+            // ★ 读不到时**留空串**而不是 FormatSeconds(0) 的 "--:--": 空串由界面隐藏角标,
+            //   "--:--" 是一个看起来像数据的假值(空间页每张卡都挂这个)。
+            item.Duration = GetInt(e, "duration") > 0
+                ? VideoItem.FormatSeconds(GetInt(e, "duration"))
+                : GetStr(e, "length");
+
             if (e.TryGetProperty("stat", out var st))
             {
                 if (st.TryGetProperty("view", out var v) && v.ValueKind == JsonValueKind.Number)
@@ -784,8 +799,13 @@ public class ApiClient
                 if (st.TryGetProperty("like", out var lk) && lk.ValueKind == JsonValueKind.Number)
                     item.LikeCount = lk.GetInt64();
             }
-            if (e.TryGetProperty("pubdate", out var p) && p.ValueKind == JsonValueKind.Number)
-                item.Pubdate = p.GetInt64();
+            // 空间投稿把计数平铺在条目上(play / video_review), 不套 stat 那一层
+            if (item.ViewCount <= 0) item.ViewCount = GetLong(e, "play");
+            if (item.DanmakuCount <= 0) item.DanmakuCount = GetLong(e, "video_review");
+
+            // 发布时间: 热门/收藏用 pubdate, 空间投稿用 created
+            item.Pubdate = GetLong(e, "pubdate");
+            if (item.Pubdate <= 0) item.Pubdate = GetLong(e, "created");
             return item;
         }
         catch
@@ -835,6 +855,7 @@ public class ApiClient
                 detail.ViewCount = GetLong(st, "view");
                 detail.LikeCount = GetLong(st, "like");
                 detail.DanmakuCount = GetLong(st, "danmaku");
+                detail.CommentCount = GetLong(st, "reply");
                 // 操作栏要显示计数(2026-09-26 改成"图标 + 数量"那套)
                 detail.CoinCount = GetLong(st, "coin");
                 detail.FavoriteCount = GetLong(st, "favorite");
@@ -1314,10 +1335,14 @@ public class ApiClient
                 if (e.TryGetProperty("author", out var au) && au.ValueKind == JsonValueKind.Object)
                 {
                     item.Author = GetStr(au, "name");
-                    item.OwnerMid = GetLong(au, "mid");
+                    // ★ mid 是**字符串**("1255510247"), 必须走 Loose 版, 否则恒为 0
+                    item.OwnerMid = GetLongLoose(au, "mid");
+                    // 头像只有动态流给(动态卡片顶部要摆) —— 见 VideoItem.AuthorFace
+                    item.AuthorFace = UrlUtil.Normalize(GetStr(au, "face"));
                 }
                 // 旧版扁平结构把作者 mid 放在顶层 uid
-                if (item.OwnerMid <= 0) item.OwnerMid = GetLong(e, "uid");
+                if (item.OwnerMid <= 0) item.OwnerMid = GetLongLoose(e, "uid");
+                ReadDynamicPubTime(e, item);
                 return item;
             }
 
@@ -1338,16 +1363,20 @@ public class ApiClient
             };
             if (a.TryGetProperty("stat", out var st) && st.ValueKind == JsonValueKind.Object)
             {
-                item2.ViewCount = st.TryGetProperty("view", out var v) && v.ValueKind == JsonValueKind.Number
-                    ? v.GetInt64() : 0;
-                item2.DanmakuCount = st.TryGetProperty("danmaku", out var dm) && dm.ValueKind == JsonValueKind.Number
-                    ? dm.GetInt64() : 0;
+                // ★ 这里的 play/danmaku 是**展示串**("1.4万" / "217"), 不是数字 ——
+                //   原来按 Number 取, 字符串一律取不到, 封面上的播放/弹幕角标永远是空的。
+                item2.ViewCount = GetLong(st, "view");
+                if (item2.ViewCount <= 0) item2.ViewCount = ParseCountText(GetStr(st, "play"));
+                item2.DanmakuCount = GetLong(st, "danmaku");
+                if (item2.DanmakuCount <= 0) item2.DanmakuCount = ParseCountText(GetStr(st, "danmaku"));
             }
             if (e.TryGetProperty("modules", out var mods) &&
                 mods.TryGetProperty("module_author", out var au2))
             {
                 item2.Author = GetStr(au2, "name");
-                item2.OwnerMid = GetLong(au2, "mid");
+                item2.OwnerMid = GetLongLoose(au2, "mid");   // 同扁平路径: mid 可能是字符串
+                item2.AuthorFace = UrlUtil.Normalize(GetStr(au2, "face"));
+                ReadDynamicPubTime(au2, item2);
             }
             return item2;
         }
@@ -1355,6 +1384,113 @@ public class ApiClient
         {
             return null;   // 单条动态结构异常只丢这一条, 不影响整页
         }
+    }
+
+    /// <summary>
+    /// 动态条目的发布时间。两条解析路径的字段名不一样, 都收敛到这里, 免得各写一份漂移:
+    ///   · modules 路径: module_author.pub_ts(时间戳) + pub_time(排好版的文本)
+    ///   · 扁平路径:     只有 pub_time
+    /// pub_time 多数是"2小时前"这种文本, 但也见过把时间戳当字符串给的形态 ——
+    /// 纯数字就按时间戳用, 否则原样当展示文本(见 VideoItem.PubTimeLabel / PubText)。
+    /// </summary>
+    private static void ReadDynamicPubTime(JsonElement e, VideoItem item)
+    {
+        item.Pubdate = GetLong(e, "pub_ts");
+        var t = GetStr(e, "pub_time");
+        if (t.Length == 0) return;
+        if (item.Pubdate <= 0)
+        {
+            if (long.TryParse(t, out var ts) && ts > 0) item.Pubdate = ts;
+            else item.Pubdate = ParseDynamicTime(t);
+        }
+        // ★ 原文**一律留一份**(即使已经算出了时间戳): 卡片上直接显示的就是它
+        //   (用户 2026-10-15 定: 直接显示用接口原文, 悬浮才看精确时间 —— 见 VideoItem.PubText);
+        //   Pubdate 那份是给悬停提示和"按时间排序"之类用的。
+        item.PubTimeLabel = t;
+    }
+
+    /// <summary>
+    /// 把动态接口的 `pub_time` **文本**换算成大致的时间戳。
+    ///
+    /// 实测采集到的写法(2026-10-15, 6 页样本):
+    ///   "刚刚" / "27分钟前" / "2小时前" / "昨天 18:54" / 更早的会是 "09-20"、"2025-09-20 14:30" 这类。
+    ///   —— 接口**只给这个展示文本, 不给时间戳**。
+    ///
+    /// ★ 前三类是**相对文本**, 只能拿本机当前时间反推: 服务端渲染那一刻算出来的东西,
+    ///   与本机时钟差几分钟属于正常范围, 不必为它做时钟校准。
+    /// ★ 为什么要换算而不是直接显示原文(用户 2026-10-15 要求"一直显示日期+时间"):
+    ///   "2小时前"是服务端写死的, 页面开着不动它就一直停在"2小时前", 越看越不准;
+    ///   换算成时间戳后由本地渲染, 显示什么由本机时钟决定。
+    /// ★ 认不出来返回 0, 由调用方回落原文。
+    /// </summary>
+    private static long ParseDynamicTime(string s)
+    {
+        s = s.Trim();
+        if (s.Length == 0) return 0;
+        var now = DateTime.Now;
+        if (s == "刚刚") return ToEpoch(now);
+
+        if (s.EndsWith("分钟前", StringComparison.Ordinal) &&
+            int.TryParse(s[..^3], out var min)) return ToEpoch(now.AddMinutes(-min));
+        if (s.EndsWith("小时前", StringComparison.Ordinal) &&
+            int.TryParse(s[..^3], out var hr)) return ToEpoch(now.AddHours(-hr));
+        if (s.EndsWith("天前", StringComparison.Ordinal) &&
+            int.TryParse(s[..^2], out var day)) return ToEpoch(now.AddDays(-day));
+
+        // "昨天 18:54" / "昨天"
+        if (s.StartsWith("昨天", StringComparison.Ordinal))
+        {
+            var rest = s.Length > 2 ? s[2..].Trim() : "";
+            var d = now.Date.AddDays(-1);
+            if (rest.Length > 0)
+            {
+                if (!DateTime.TryParseExact(rest, "HH:mm",
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out var t2)) return 0;
+                d = d.AddHours(t2.Hour).AddMinutes(t2.Minute);
+            }
+            return ToEpoch(d);
+        }
+
+        // 绝对日期: "09-20" / "09-20 14:30" / "2025-09-20" / "2025-09-20 14:30"
+        string[] patterns = { "MM-dd HH:mm", "MM-dd", "yyyy-MM-dd HH:mm", "yyyy-MM-dd" };
+        foreach (var p in patterns)
+        {
+            if (!DateTime.TryParseExact(s, p, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var d)) continue;
+            // 没带年份的写法按"今年"算(接口用这种写法时指的就是今年)
+            if (p.StartsWith("MM")) d = new DateTime(now.Year, d.Month, d.Day, d.Hour, d.Minute, 0);
+            return ToEpoch(d);
+        }
+        return 0;
+    }
+
+    private static long ToEpoch(DateTime local)
+        => new DateTimeOffset(local).ToUnixTimeSeconds();
+
+    // ★ 这里原本还有一个 ReadDynamicArchiveStats(在扁平条目里试着捞 duration/stat)。
+    //   已删除(2026-10-15): 扁平结构的动态条目**实测没有**这些字段 —— 那条兜底在真实数据上
+    //   一次都不会命中, 是纯粹的猜字段; modules 路径的时长/播放量在它自己那段里已经解析过。
+
+    /// <summary>
+    /// 把接口给的**展示串**计数还原成数字: "1.4万" → 14000, "12.3亿" → 1230000000, "217" → 217。
+    ///
+    /// ★ 动态接口的 stat.play / stat.danmaku 就是这种**已缩写**的字符串(不是数字),
+    ///   直接 GetInt64 会得 0(ValueKind 不是 Number)。还原成数字后再统一走
+    ///   VideoItem.FormatCount 显示 —— 这样"接口给 1.4万"和"接口给 14000"在界面上是同一个样子,
+    ///   不会出现第三种写法。
+    /// ★ 用 InvariantCulture: 小数点必须是 "." —— 在某些区域设置下 "1.4" 会被当成千分位。
+    /// </summary>
+    private static long ParseCountText(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return 0;
+        s = s.Trim();
+        double mul = 1;
+        if (s.EndsWith("万", StringComparison.Ordinal)) { mul = 10_000; s = s[..^1]; }
+        else if (s.EndsWith("亿", StringComparison.Ordinal)) { mul = 100_000_000; s = s[..^1]; }
+        return double.TryParse(s, System.Globalization.NumberStyles.Float,
+                               System.Globalization.CultureInfo.InvariantCulture, out var v)
+            ? (long)(v * mul) : 0;
     }
 
     /// <summary>jump_url 形如 "//www.bilibili.com/video/BV1VfaT6ZELT" → 截出 bvid</summary>
@@ -1950,37 +2086,14 @@ public class ApiClient
             {
                 foreach (var e in arr.EnumerateArray())
                 {
-                    var bvid = GetStr(e, "bvid");
-                    if (string.IsNullOrEmpty(bvid)) continue;
-                    long view = 0, danmaku = 0, like = 0;
-                    if (e.TryGetProperty("stat", out var stat))
-                    {
-                        view = GetLong(stat, "view");
-                        danmaku = GetLong(stat, "danmaku");
-                        like = GetLong(stat, "like");
-                    }
-                    string? author = null;
-                    long ownerMid = 0;
-                    if (e.TryGetProperty("owner", out var owner))
-                    {
-                        author = GetStr(owner, "name");
-                        ownerMid = GetLong(owner, "mid");
-                    }
-                    // 空间投稿: owner 没给 mid 时就用当前空间主(这条列表本来就是他的)
-                    if (ownerMid <= 0) ownerMid = mid;
-                    items.Add(new VideoItem
-                    {
-                        Bvid = bvid,
-                        Title = GetStr(e, "title"),
-                        Cover = UrlUtil.Normalize(GetStr(e, "pic")),
-                        Author = author ?? "",
-                        OwnerMid = ownerMid,
-                        Duration = VideoItem.FormatSeconds(GetInt(e, "duration")),
-                        ViewCount = view,
-                        DanmakuCount = danmaku,
-                        LikeCount = like,
-                        Pubdate = GetLong(e, "pubdate")
-                    });
+                    // ★ 走通用解析器(2026-10-15): 这里原先是手抄的一份, 只认 owner/pubdate,
+                    //   而这个接口的 archives 给的是 **upMid + pubdate + duration(秒)** ——
+                    //   手抄版把 OwnerMid 读成 0、头像/名字全丢。通用解析器两种写法都认, 不必两份。
+                    var item = ParseVideoItem(e);
+                    if (item == null) continue;
+                    // 空间投稿: 没给 mid 时就用当前空间主(这条列表本来就是他的)
+                    if (item.OwnerMid <= 0) item.OwnerMid = mid;
+                    items.Add(item);
                 }
             }
             return (true, null, items);
@@ -3815,6 +3928,23 @@ public class ApiClient
     private static long GetLong(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
             ? v.GetInt64() : 0;
+
+    /// <summary>
+    /// 数字**或数字字符串**都能取(动态接口把 mid/rid 当字符串下发: "mid": "1255510247")。
+    ///
+    /// ★ 为什么必须单独有一个: 动态接口里 `author.mid` 实测是**字符串**,
+    ///   走 GetLong 会得 0 —— 表现为"点头像进不了主页""左栏未读角标永远不亮"(都按 mid 匹配)。
+    ///   只给确认会用字符串下发的字段用它, 别的字段继续用 GetLong, 免得把"脏字符串当数字"
+    ///   这种本该暴露的问题也一并咽下去。
+    /// </summary>
+    private static long GetLongLoose(JsonElement e, string name)
+    {
+        if (!e.TryGetProperty(name, out var v)) return 0;
+        if (v.ValueKind == JsonValueKind.Number) return v.GetInt64();
+        if (v.ValueKind == JsonValueKind.String &&
+            long.TryParse(v.GetString(), out var n)) return n;
+        return 0;
+    }
 
     /// <summary>
     /// 获取登录用户的**直播**观看历史。

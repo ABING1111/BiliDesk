@@ -92,6 +92,15 @@ public class SettingsStore
     public int CardColumns { get; set; }
 
     /// <summary>
+    /// 「动态」页右栏的排版(2026-10-15 新增): false = 动态卡(单列, 头像+发布时间+视频),
+    /// true = 卡片墙(多列网格)。默认动态卡, 见 AppSettings 的同名属性。
+    ///
+    /// ★ 这是**用户偏好**: 点一次切换就记住, 重启/切页回来还是他选的那档 ——
+    ///   与"卡片列数"同一类(改了立刻落盘, 不跟着片源/页面走)。
+    /// </summary>
+    public bool FollowCardWall { get; set; }
+
+    /// <summary>
     /// 软件缩放百分比(默认 100 = 不缩放)。范围见 <see cref="Helpers.UiScale.MinPercent"/>。
     ///
     /// ★ 与"系统 DPI 缩放"是两件事: 那个由 Windows 管、作用于所有程序;
@@ -365,6 +374,9 @@ public class SettingsStore
         //   0 会让整个界面缩成不可见的点, 必须挡住。
         UiScalePercent = Helpers.UiScale.ClampPercent(s.UiScalePercent <= 0 ? 100 : s.UiScalePercent);
 
+        // 动态页排版: 老配置没这个字段 ⇒ 默认 false(动态卡)。bool 没有越界值, 不需要夹取。
+        FollowCardWall = s.FollowCardWall;
+
         // ★ 下载位置: 老配置没这个字段(默认空串 = 用系统下载文件夹)。
         //   非法/不存在的路径**不写进设置**(回落空串), 免得把脏路径带到 Path.Combine 下游 ——
         //   那种错的表现是"下载一直失败", 很难定位到是这行造成的。
@@ -456,6 +468,7 @@ public class SettingsStore
         AcrylicOpacityDark = AcrylicOpacityDark,
         CardColumns = CardColumns,
         UiScalePercent = UiScalePercent,
+        FollowCardWall = FollowCardWall,
         DownloadDir = DownloadDir,
         DanmakuEnabled = DanmakuEnabled,
         DanmakuAreaPercent = DanmakuAreaPercent,
