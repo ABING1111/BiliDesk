@@ -4,6 +4,49 @@
              xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
              Background="{DynamicResource AppBackgroundBrush}">
+    <UserControl.Resources>
+        <!--
+            右栏排版切换的两枚小 chip(动态卡 / 卡片墙)。
+            写法与播放页评论区的「热门 / 时间」一致: 常态浅灰底, 选中态由 Tag="on" 触发粉底粉字。
+            ★ 选中态**只由 code-behind 写 Tag 驱动** —— 两个按钮的亮/灭在一个地方决定,
+              分散着改必然出现"两边都亮"或"两边都不亮"(沿用播放页那条经验)。
+            ★ 绑定必须写 RelativeSource Self: ControlTemplate 的触发器里不写解析不到,
+              改用 TemplatedParent 也会静默失效(2026-10-03 探针实测)。
+        -->
+        <Style x:Key="FeedLayoutChipStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="9,3" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="6"
+                                Background="{DynamicResource ControlFillDefaultBrush}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ControlFillHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            </Trigger>
+                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="on">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource AccentSoftFillBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </DataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -134,47 +177,64 @@
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
-                                            <!-- 头像。右键可看大图 / 保存 -->
-                                            <Border Grid.Column="0" Width="36" Height="36" CornerRadius="18"
-                                                    Background="{DynamicResource AccentSoftFillBrush}"
-                                                    ClipToBounds="True"
-                                                    helpers:Cover.Source="{Binding Face}">
-                                                <Border.ContextMenu>
-                                                    <ContextMenu>
-                                                        <MenuItem Header="打开 UP 主页" Click="OnVisitClick">
-                                                            <MenuItem.Icon>
-                                                                <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                                           FontSize="13" VerticalAlignment="Center" />
-                                                            </MenuItem.Icon>
-                                                        </MenuItem>
-                                                        <MenuItem Header="查看头像大图" Click="OnViewAvatar">
-                                                            <MenuItem.Icon>
-                                                                <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                                           FontSize="13" VerticalAlignment="Center" />
-                                                            </MenuItem.Icon>
-                                                        </MenuItem>
-                                                        <MenuItem Header="下载头像到本地" Click="OnDownloadAvatar">
-                                                            <MenuItem.Icon>
-                                                                <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                                           FontSize="13" VerticalAlignment="Center" />
-                                                            </MenuItem.Icon>
-                                                        </MenuItem>
-                                                        <Separator />
-                                                        <MenuItem Header="取消关注" Click="OnUnfollowClick">
-                                                            <MenuItem.Icon>
-                                                                <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                                           FontSize="13" VerticalAlignment="Center" />
-                                                            </MenuItem.Icon>
-                                                        </MenuItem>
-                                                    </ContextMenu>
-                                                </Border.ContextMenu>
-                                                <TextBlock Text="&#xE77B;"
-                                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                           FontSize="16"
-                                                           Foreground="{DynamicResource AccentTextBrush}"
-                                                           HorizontalAlignment="Center"
-                                                           VerticalAlignment="Center" />
-                                            </Border>
+                                            <!-- 头像。右键可看大图 / 保存。
+                                                 ★ 外面套一层同尺寸 Grid 只为一件事: 把未读角标压在头像
+                                                   右下角(2026-10-15, 用户要求"有未读最新消息就在头像
+                                                   右下角标注")。单靠 Border 自己叠不出来 ——
+                                                   它 ClipToBounds=True, 会把越界的子元素裁掉。 -->
+                                            <Grid Grid.Column="0" Width="36" Height="36">
+                                                <Border Width="36" Height="36" CornerRadius="18"
+                                                        Background="{DynamicResource AccentSoftFillBrush}"
+                                                        ClipToBounds="True"
+                                                        helpers:Cover.Source="{Binding Face}">
+                                                    <Border.ContextMenu>
+                                                        <ContextMenu>
+                                                            <MenuItem Header="打开 UP 主页" Click="OnVisitClick">
+                                                                <MenuItem.Icon>
+                                                                    <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                               FontSize="13" VerticalAlignment="Center" />
+                                                                </MenuItem.Icon>
+                                                            </MenuItem>
+                                                            <MenuItem Header="查看头像大图" Click="OnViewAvatar">
+                                                                <MenuItem.Icon>
+                                                                    <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                               FontSize="13" VerticalAlignment="Center" />
+                                                                </MenuItem.Icon>
+                                                            </MenuItem>
+                                                            <MenuItem Header="下载头像到本地" Click="OnDownloadAvatar">
+                                                                <MenuItem.Icon>
+                                                                    <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                               FontSize="13" VerticalAlignment="Center" />
+                                                                </MenuItem.Icon>
+                                                            </MenuItem>
+                                                            <Separator />
+                                                            <MenuItem Header="取消关注" Click="OnUnfollowClick">
+                                                                <MenuItem.Icon>
+                                                                    <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                               FontSize="13" VerticalAlignment="Center" />
+                                                                </MenuItem.Icon>
+                                                            </MenuItem>
+                                                        </ContextMenu>
+                                                    </Border.ContextMenu>
+                                                    <TextBlock Text="&#xE77B;"
+                                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                               FontSize="16"
+                                                               Foreground="{DynamicResource AccentTextBrush}"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center" />
+                                                </Border>
+                                                <!-- 未读角标: 与消息页会话列表同款(蓝底数字, 贴右下角)。
+                                                     计数来源见 FollowViewModel.UpdateUnreadBadges ——
+                                                     本地比对出来的"该 UP 有新动态", 不额外请求接口。 -->
+                                                <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                        MinWidth="16" Height="16" CornerRadius="8" Padding="4,0"
+                                                        Background="{DynamicResource AccentBrush}"
+                                                        Visibility="{Binding HasNew, Converter={StaticResource BoolToVis}}">
+                                                    <TextBlock Text="{Binding NewCount}" FontSize="10"
+                                                               Foreground="{DynamicResource TextOnAccentBrush}"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                            </Grid>
                                             <TextBlock Grid.Column="1" Text="{Binding Name}"
                                                        FontSize="13" Margin="10,0,0,0"
                                                        VerticalAlignment="Center"
@@ -204,16 +264,27 @@
                     </StackPanel>
                 </ScrollViewer>
 
-                <!-- ===== 右: 内容(卡片网格, 尽量铺满) ===== -->
+                <!-- ===== 右: 内容(两档排版, 右上角可切) ===== -->
                 <Grid Grid.Column="1" Margin="12,4,24,20">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <!-- 右栏标题 -->
-                    <TextBlock Grid.Row="0" Text="{Binding SelectionTitle}" FontSize="15"
-                               FontWeight="SemiBold" Margin="8,0,0,10" />
+                    <!-- 右栏标题 + 排版切换(用户要求"可以自己切换排版") -->
+                    <Grid Grid.Row="0" Margin="8,0,8,10">
+                        <TextBlock Text="{Binding SelectionTitle}" FontSize="15"
+                                   FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                    VerticalAlignment="Center">
+                            <Button x:Name="BtnLayoutCards" Style="{StaticResource FeedLayoutChipStyle}"
+                                    Content="动态卡" Click="OnLayoutCardsClick"
+                                    ToolTip="单列动态卡: 头像 + 发布时间 + 视频" />
+                            <Button x:Name="BtnLayoutWall" Style="{StaticResource FeedLayoutChipStyle}"
+                                    Content="卡片墙" Margin="6,0,0,0" Click="OnLayoutWallClick"
+                                    ToolTip="多列卡片墙(一屏铺更多, 但没有头像与发布时间)" />
+                        </StackPanel>
+                    </Grid>
 
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
                                   ScrollChanged="FeedScroll_OnScrollChanged">
@@ -237,8 +308,27 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- 视频卡片网格: 复用 VideoCard(点击播放/右键操作/全局屏蔽同首页) -->
-                            <ItemsControl ItemsSource="{Binding FeedItems}" Margin="4,0,0,0">
+                            <!-- ===== 两档排版共用同一个 FeedItems, 只切可见性 =====
+                                 ★ 不做"换模板/重建列表": 那会把滚动位置和已生成的容器一起丢掉,
+                                   切一下就跳回顶部。两个 ItemsControl 各自绑自己的可见性最省事 ——
+                                   Collapsed 的那个不参与测量, 也不会生成容器。
+                                 ★ 默认档 = 动态卡(见 SettingsStore.FollowCardWall)。 -->
+
+                            <!-- 动态卡(默认): 单列, 每条 = 头像 + UP 名 + 发布时间 + 视频。
+                                 不挂卡片墙(CardWallPanel) —— 卡片墙是"一屏铺满尽量多张"的网格,
+                                 而动态流要的是每条都有清晰的作者与时间归属, 两者目标相反。 -->
+                            <ItemsControl ItemsSource="{Binding FeedItems}" Margin="4,0,8,0"
+                                          Visibility="{Binding UseCardWall, Converter={StaticResource InvBoolToVis}}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <controls:DynamicCard />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- 卡片墙(切换档): 复用 VideoCard(点击播放/右键操作/全局屏蔽同首页) -->
+                            <ItemsControl ItemsSource="{Binding FeedItems}" Margin="4,0,0,0"
+                                          Visibility="{Binding UseCardWall, Converter={StaticResource BoolToVis}}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
                                         <helpers:CardWallPanel helpers:CardWall.Enable="True" />
