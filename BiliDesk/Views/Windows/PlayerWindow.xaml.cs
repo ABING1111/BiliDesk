@@ -3362,10 +3362,12 @@ public partial class PlayerWindow : FluentWindow
             //   造成"松手后先有声、约 2 秒后持续静音几秒"(实测本机 wasapi 缓冲 96000 frames=2.0s)。
             //   改 seek 后原生日志里 `too late / flushing buffers` 为 0 次, 且实测平均 1.9x。
             StartFastForward();
-            if (SpeedText != null) SpeedText.Text = "2x";
+            // ★ 不碰 SpeedText: 它是控制栏那个**播放速率**指示, 而本方案从头到尾没改过 Rate。
+            //   在长按期间把它写成 "2x" 是错的 —— 用户若设了 1.5x, 按钮会显示 2x 而实际仍是 1.5x。
+            //   长按的反馈交给 ShowSpeedHint 那个浮层(见下), 两者职责不同, 别混。
             // ★ 浮出提示(2026-10-13 用户要求): 长按快进是**无入口手势**,
             //   不提示的话用户只看到画面在跳, 不知道发生了什么、也不知道松手会恢复。
-            //   hold=true: 整个长按期间一直挂着, 松手时由 Up 那边换成"已恢复"并淡出。
+            //   hold=true: 整个长按期间一直挂着, 松手时由 Up 那边换成"已结束"并淡出。
             ShowSpeedHint("2x 快进中", hold: true);
             // 长按触发了, 不再触发单击
             _singleClickTimer?.Stop();
@@ -3407,9 +3409,9 @@ public partial class PlayerWindow : FluentWindow
             _longPressFired = false;
             // 停止 seek 式快进。★ 这里**不需要**恢复倍速: 本方案从头到尾没改过 Rate
             //   (改的是播放位置), 所以没有"恢复 1x"这一步, 也就没有 SetRate 的音频缓冲丢弃。
+            //   也**不要**去写 SpeedText —— 那个指示归控制栏的倍速按钮管, 与长按无关。
             StopFastForward();
-            if (SpeedText != null) SpeedText.Text = "1.0x";
-            // ★ 提示收场: 换成"已恢复"亮一下再淡出 —— 手势有始有终,
+            // ★ 提示收场: 换成"已结束"亮一下再淡出 —— 手势有始有终,
             //   用户才知道刚才那阵快进是自己按出来的、现在结束了。
             ShowSpeedHint("已结束快进", hold: false);
             e.Handled = true;
@@ -3442,9 +3444,8 @@ public partial class PlayerWindow : FluentWindow
         if (_longPressFired)
         {
             _longPressFired = false;
-            // 同 Up 那条路: 停 seek 式快进(全程没动过 Rate, 所以没有"恢复倍速"这一步)
+            // 同 Up 那条路: 停 seek 式快进(全程没动过 Rate, 也不需要动 SpeedText)
             StopFastForward();
-            if (SpeedText != null) SpeedText.Text = "1.0x";
             // ★ 兜底路径也要收掉提示: 鼠标移出时 Up 不会再来了,
             //   不在这里收的话提示会一直挂在屏幕上(用户报过同类"提示不消失")。
             ShowSpeedHint("已结束快进", hold: false);
