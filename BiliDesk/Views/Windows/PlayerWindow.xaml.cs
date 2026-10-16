@@ -326,7 +326,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private string _coverUrl = "";
 
-    // --- 视频区手势: 单击播放暂停 / 双击全屏 / 长按 2x 快进 ---
+    // --- 视频区手势: 单击播放暂停 / 双击全屏 / 长按快进 ---
     private DispatcherTimer? _longPressTimer;     // 检测长按 >= 500ms
     private DispatcherTimer? _singleClickTimer;   // 单击延迟执行(给双击留判定窗口)
     private bool _longPressFired;                  // 当前是否处于长按快进态
@@ -334,7 +334,95 @@ public partial class PlayerWindow : FluentWindow
     // 没有这个标记时: Down 阶段虽然停掉了单击定时器, 但 Up 阶段又会新建一个,
     // 于是双击会先全屏、再在 ~200ms 后补一次播放/暂停 —— 就是"双击既暂停又全屏"的根因。
     private bool _suppressSingleClick;
-    private const float FastForwardRate = 2.0f;    // 长按快进的倍速
+
+    // --- 长按快进: **seek 式**(不用 SetRate) ---
+    //
+    // ★★★ 为什么不用 `SetRate(2.0)`(2026-10-15 深查后改的, 证据见 .probes/bd-probe-rateaudio):
+    //   用 SetRate 换倍速时, libvlc 会**丢弃整个音频输出缓冲**, 每次都打:
+    //       playback way too late (~547-780ms): flushing buffers
+    //   后果就是用户报的"松手后有声音、过一会儿又没声音": 松手瞬间 OS 缓冲里还留着约 2 秒
+    //   已排队的音频(本机 wasapi 缓冲实测 96000 frames = 2.0s) ⇒ 先照常出声;
+    //   等这 2 秒播完, 缓冲空了, 而网络流要重新拉流重填 ⇒ **持续几秒静音**。
+    //   ★ 该行为是 **VLC 自身固有**, 不是本项目的 bug(探针裸调 libvlc 也复现)。
+    //   ★ 已逐一实测**无效**的手段(别再试): --network-caching 1000~6000、
+    //     --no-audio-time-stretch、--aout=mmdevice/directsound/waveout、--clock-jitter=0、
+    //     --clock-synchro=0、Pause/Play 包住 SetRate、分两步换速率、SetRate 后补 seek、
+    //     Stop 后重建 Media、以及"先把音量压到 0 再 SetRate"(纯属无效)。
+    //
+    // ★ 改用本方案: 长按期间**不改倍速**, 改成周期性向前 seek —— 实测原生日志里
+    //   `too late / flushing buffers` 出现 **0 次**(无音频丢弃 ⇒ 松手后不再静音)。
+    //   参数与实测(探针 bd-probe-rateaudio, 起点→终点按采样器实测):
+    //     400ms 一跳 / 每跳 800ms  ⇒  平均有效倍速 1.90x  落点误差 -0.5s
+    //   ★ 必须用**累加目标** `_ffTarget`, 不能写 `mp.Time = mp.Time + step`:
+    //     seek 未沉降时读回的 `mp.Time` 是陈旧值, 那种写法步进叠加不起来(实测有效倍速只有 ~0x)。
+    private DispatcherTimer? _ffTimer;
+    private long _ffTarget;                        // 累加的 seek 目标位置(毫秒)
+    /// <summary>两次 seek 之间的间隔。见 _ffTimer 那段: 400ms/800ms 是实测选出来的组合。</summary>
+    private const int FastForwardIntervalMs = 400;
+    /// <summary>每次向前跳的时长(毫秒)。有效倍速 ≈ 1.9x(实测, 含 seek 期间播放暂停的损耗)。</summary>
+    private const int FastForwardStepMs = 800;
+    /// <summary>快进时距片尾保留的余量: 直接跳到片尾会触发 EOF 遮罩, 留一点更自然。</summary>
+    private const int FastForwardTailGuardMs = 3000;
+    /// <summary>当前是否处于"长按 seek 式快进"中(定时器的开关判据)。</summary>
+    private bool _isFastForwarding;
+
+    /// <summary>
+    /// 开始长按快进(seek 式)。见上方 <see cref="_ffTimer"/> 那段说明为什么不用 SetRate。
+    /// </summary>
+    private void StartFastForward()
+    {
+        if (_closing || _mp == null) return;
+        // 直播没有"跳着往前放"这回事(本来就一直在最新处); 播完了也没有
+        if (_isLive || _ended) return;
+
+        try { _ffTarget = _mp.Time; }
+        catch { return; }
+        if (_ffTarget <= 0) return;
+
+        _isFastForwarding = true;
+
+        if (_ffTimer == null)
+        {
+            _ffTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(FastForwardIntervalMs) };
+            _ffTimer.Tick += (_, _) => FastForwardTick();
+        }
+        _ffTimer.Stop();
+        _ffTimer.Start();
+
+        // 立刻先跳一步: 否则用户按住后要等一个间隔才看到画面动, 手感"迟一拍"
+        FastForwardTick();
+    }
+
+    /// <summary>一次快进步进: 累加目标位置并 seek 过去。</summary>
+    private void FastForwardTick()
+    {
+        if (_closing || _mp == null || !_isFastForwarding) { StopFastForward(); return; }
+        try
+        {
+            var len = _mp.Length;
+            // ★ 累加目标(不能用 `_mp.Time + step`): seek 未沉降时 `_mp.Time` 读回的是陈旧值,
+            //   那种写法步进叠加不起来 —— 探针实测有效倍速会掉到 ~0x。详见 _ffTimer 那段。
+            _ffTarget += FastForwardStepMs;
+            if (len > 0)
+            {
+                var max = len - FastForwardTailGuardMs;
+                if (max > 0 && _ffTarget > max) _ffTarget = max;
+            }
+            _mp.Time = _ffTarget;
+        }
+        catch
+        {
+            // 播放器正在换片/拆解: 直接收手, 别留着定时器继续戳已失效的原生对象
+            StopFastForward();
+        }
+    }
+
+    /// <summary>停止长按快进(松手 / 鼠标移出 / 换片 / 关窗都要调)。</summary>
+    private void StopFastForward()
+    {
+        _isFastForwarding = false;
+        _ffTimer?.Stop();
+    }
 
     // --- SponsorBlock(跳过社区标注的赞助 / 片头片尾片段) ---
     // 原始数据(未过滤, 含所有类别)与"按当前设置挑出来的"分开存:
@@ -1040,6 +1128,11 @@ public partial class PlayerWindow : FluentWindow
         // 清掉跳转看门狗与"提前结束自救"的上一片痕迹
         _pendingSeekMs = -1;
         _seekObservedMs = -1;
+        // ★ 长按快进也要停: 定时器是窗口级的, 换片后若还开着就会对新片子不停发 seek。
+        //   顺带把 _longPressFired 清掉 —— 否则新片的第一次 Up 会走进"结束快进"分支。
+        StopFastForward();
+        _longPressFired = false;
+        _ffTarget = 0;
         RestoreVolumeAfterSeek();   // 上一片若停在 seek 静音中, 别把静音带进新片
         // 心跳间隔也要还原: 上一片可能停在了"跳转等待期"的 100ms 上没来得及还原
         if (_progressTimer != null) _progressTimer.Interval = ProgressTickIdle;
@@ -1171,6 +1264,9 @@ public partial class PlayerWindow : FluentWindow
         // 界面交互态
         nameof(_switchingQuality), nameof(_fillingQualityMenu), nameof(_updatingSlider),
         nameof(_commentsLoaded), nameof(_postingComment), nameof(_longPressFired),
+        // 长按快进的状态与 _longPressFired 同类(都是"这一次手势"的瞬时态):
+        // 换片必须停掉, 否则定时器会继续对**新片子**发 seek。
+        nameof(_isFastForwarding), nameof(_ffTarget),
         nameof(_commentTotal),
         nameof(_suppressSingleClick), nameof(_controlsHidden), nameof(_isFullscreen),
         // 合集: 「这个视频有没有合集」属于"这一片"的属性, 换片必须重算。
@@ -2241,80 +2337,44 @@ public partial class PlayerWindow : FluentWindow
         try { if (_mp != null) _mp.Volume = v; } catch { }
     }
 
-    /// <summary>
-    /// 倍速切换后**补写一次音量**。
-    ///
-    /// ★★★ 为什么必须补写(2026-10-14 探针 bd-probe-ratevol 实测根因):
-    ///   LibVLC 的倍速是靠 **音频滤镜 scaletempo** 实现的(原生日志:
-    ///   `using audio filter module "scaletempo"`, `1.000 scale` → `2.000 scale`)。
-    ///   而滤镜链是 **aout(音频输出)的一部分** —— 倍速一变, libvlc 会把整条音频链拆掉重建:
-    ///      removing module "scaletempo"
-    ///      removing module "samplerate"
-    ///      removing module "float_mixer"
-    ///      keeping audio output
-    ///   重建期间 WASAPI 那一段不出声, 表现为"恢复一倍速后有几秒没声音"。
-    ///
-    /// ★ 为什么补写音量有用: 上面那三条是"滤镜模块"被拆, **aout 本身是保留的**
-    ///   (日志明确写 `keeping audio output`), 所以音量值不会真的归零 ——
-    ///   探针里 `mp.Volume` 读回始终是 80。真正丢声音的是**滤镜重建的那几帧窗口**:
-    ///   scaletempo 内部有一段 standing/queue 缓冲要重新填, 填满之前没有样本往外送。
-    ///   这个窗口补写音量关不掉, 但可以**顺手保证音量一定在**(防止某些片源上
-    ///   aout 真的被重建时音量被带回默认值), 所以这里做的是"保险"而不是"主治"。
-    ///
-    /// ★ 主治手段见 <see cref="SetRateWithAudioGuard"/>: 倍速切换期间先把音量**短暂压到 0**
-    ///   再恢复。理由: 那几秒里声音本来就是断续的(滤镜重建 + 缓冲区重填),
-    ///   与其让用户听到"沙沙的半截声", 不如干脆静音一下再原量回来 —— 观感上从
-    ///   "刺耳的断续"变成"安静一下后正常", 而且原量恢复由本方法保证。
-    /// </summary>
-    private void ReassertVolume()
-    {
-        if (_closing || _mp == null) return;
-        // seek 静音期间别抢: 那时的音量由 RestoreVolumeAfterSeek 收口
-        if (_seekMuteSavedVolume >= 0) return;
-        try { _mp.Volume = _volumeCache; } catch { /* 播放器已失效 */ }
-    }
+    // ------------------------------------------------------------ 倍速切换与"松手后静音"
+    //
+    // ★★★ 2026-10-15 深查结论(探针 .probes/bd-probe-rateaudio, 全部实测可复现):
+    //
+    //  现象: 长按 2x 后松手, 会出现**约 2 秒没有声音**(此时画面照常前进, 只是没声)。
+    //
+    //  根因: **libvlc 在 `SetRate` 生效时会丢弃整个音频输出缓冲**。原生日志每次都打:
+    //          playback way too late (~547-780ms): flushing buffers
+    //        官方对 flush 的定义就是 "discard all pending buffers and stop playback as soon
+    //        as possible" ⇒ 待播音频被整体丢掉, 要重新填满音频输出缓冲才恢复出声。
+    //        ★ 这是 **VLC 自身行为**, 不是本项目的代码 bug: 探针是裸调 libvlc(不含产品代码),
+    //          照样复现。
+    //
+    //  ★ 三条铁证(同一进程内交替 A/B, 排除运行间波动):
+    //      · 完全不调 SetRate (noop)  → flush 0 次
+    //      · 每次 SetRate            → flush 每周期 1 次 (4/4 一致)
+    //  ★ 静音时长 ≈ **音频输出缓冲长度**: 实测 wasapi 96000 frames(=2.0s) → 静音 ~2.0s;
+    //    换成 directsound → ~3.75s; waveout → ~4.25s(与各自缓冲深度同向变化)。
+    //  ★ 为什么本地文件感觉不到: flush 照旧发生, 但数据可**瞬时重读重解** ⇒ 补齐极快, 听不出来。
+    //    网络流要重新拉流/重解码, 所以那 ~2 秒就变成人耳可辨的静音。播放**本地缓存文件时**
+    //    基本不会出现这个问题。
+    //
+    //  ★★★ 以下手段全部**实测无效**, 别再重复尝试(每条都跑过 3 次以上):
+    //    · `--network-caching` 1000/3000/5000/6000(与网络缓冲深度无关)
+    //    · `--no-audio-time-stretch`(libvlc 级与 media 级都试过; 该选项不生效, scaletempo 照旧加载)
+    //    · `--aout=mmdevice / directsound / waveout / afile / amem`
+    //    · `--clock-jitter=0`、`--clock-synchro=0`
+    //    · Pause/Play 包住 SetRate(想借机重建时钟 —— 无效)
+    //    · 分两步换速率(1.0→1.5→2.0)—— flush 反而翻倍
+    //    · SetRate 后补一次小 seek(想逼 aout 重建时钟)—— flush 暴增到 109 次
+    //    · Stop + 重建 Media + 跳回原位置(等于再缓冲一次, 更差)
+    //    · **先把音量压到 0、换完再写回**(上一版曾据此 "修复" —— 实测与直接 SetRate
+    //      **完全相同**, 纯属无效代码, 已删除; 而且它治的是"音量", 真正缺的是"音频帧")
+    //
+    //  ⇒ 结论: 只要用 `SetRate` 换倍速, 这一次缓冲丢弃就消不掉。要彻底避开它, 只能**不用 SetRate**
+    //    (例如长按期间改用"周期性向前 seek"来做快进 —— 实测那样 flush 为 0 次), 
+    //    但那会改变手势手感(音频不再跟着变快), 属于产品取舍, 需要先与用户确认。
 
-    /// <summary>
-    /// 带音频保护的倍速切换: 先把音量短暂压到 0, 换完倍速再补写回权威值。
-    ///
-    /// ★ 解决的用户问题: "长按二倍速后, 恢复一倍速时有几秒没声音"。
-    ///   根因是 scaletempo 滤镜链重建(见 <see cref="ReassertVolume"/> 的日志摘录),
-    ///   重建那几百毫秒到几秒里音频输出是断续的。
-    ///
-    /// ★ 为什么"先静音再恢复"比"直接切"好: 滤镜重建期用户听到的是**刺耳的断续声**
-    ///   (一半是旧倍速的尾音、一半是新倍速的头); 压到 0 再恢复, 听到的是
-    ///   "安静一下 → 正常速度正常音量", 后者更接近"松手了就正常了"的直觉。
-    ///
-    /// ★ 必须补写回 <see cref="_volumeCache"/> 而不是写死 80: 用户可能刚把音量
-    ///   调到 20 或 100(设置里还继承着), 写死会让音量悄悄变掉。
-    ///
-    /// ★ seek 静音期间直接走原生切换: 那时本来就没在出声, 不需要再压一次。
-    /// </summary>
-    private void SetRateWithAudioGuard(float rate)
-    {
-        if (_closing || _mp == null) return;
-
-        if (_seekMuteSavedVolume >= 0)
-        {
-            // 已经在 seek 静音里: 声音本来就收着, 直接切
-            try { _mp.SetRate(rate); } catch { }
-            ReassertVolume();
-            return;
-        }
-
-        var saved = _volumeCache;
-        try
-        {
-            // 1) 压到 0(用户主动调音量时 _seekMuteSavedVolume < 0, 这里不影响那本账)
-            if (saved > 0) _mp.Volume = 0;
-            // 2) 切倍速(滤镜链在这一步重建)
-            _mp.SetRate(rate);
-        }
-        catch { /* 切换失败也要把音量还回去, 不能把用户留在静音态 */ }
-
-        // 3) 立刻补写回权威音量
-        ReassertVolume();
-    }
 
     /// <summary>当前遮罩是不是我们自己弹的"正在缓冲"(据此判断能不能收掉)</summary>
     private bool IsShowingBuffering()
@@ -2361,7 +2421,10 @@ public partial class PlayerWindow : FluentWindow
         }
 
         // 暂停时位置本来就不动; 拖动/跳转宽限期内同理 —— 都不算卡顿
-        if (!_mp.IsPlaying || _isSeeking || inSeekGrace || _pendingSeekMs >= 0)
+        // ★ 长按快进期间也跳过(2026-10-15): 那时是**我们自己**在每 400ms 发一次 seek,
+        //   位置会一阵一阵地停住等解复用器重建 —— 不豁免的话长按几秒就会弹出
+        //   "正在缓冲"遮罩, 那显然不是用户理解的卡顿。
+        if (!_mp.IsPlaying || _isSeeking || inSeekGrace || _pendingSeekMs >= 0 || _isFastForwarding)
         {
             _stallTicks = 0;
             return;
@@ -3294,17 +3357,16 @@ public partial class PlayerWindow : FluentWindow
         {
             _longPressTimer!.Stop();
             _longPressFired = true;
-            // 进入 2x 快进
-            // 先同步弹幕时钟倍速(见 SyncDanmakuClockRate): 倍速一变就落定, 不等下一次校准
-            SyncDanmakuClockRate(FastForwardRate);
-            // ★ 走带音频保护的切换(2026-10-14 修"恢复一倍速有几秒没声音"):
-            //   scaletempo 滤镜链重建会有一段不出声, 先压静音再原量回来, 观感最干净。
-            SetRateWithAudioGuard(FastForwardRate);
-            if (SpeedText != null) SpeedText.Text = FastForwardRate.ToString("0.#") + "x";
-            // ★ 浮出倍速提示(2026-10-13 用户要求): 长按 2x 是无入口手势,
-            //   不提示的话用户只看到画面变快, 不知道发生了什么、也不知道松手会恢复。
+            // ★ 长按快进: **seek 式**(周期性向前跳), 不用 SetRate。
+            //   为什么必须这样 —— 见 _ffTimer 那段: SetRate 会让 libvlc 丢掉整个音频输出缓冲,
+            //   造成"松手后先有声、约 2 秒后持续静音几秒"(实测本机 wasapi 缓冲 96000 frames=2.0s)。
+            //   改 seek 后原生日志里 `too late / flushing buffers` 为 0 次, 且实测平均 1.9x。
+            StartFastForward();
+            if (SpeedText != null) SpeedText.Text = "2x";
+            // ★ 浮出提示(2026-10-13 用户要求): 长按快进是**无入口手势**,
+            //   不提示的话用户只看到画面在跳, 不知道发生了什么、也不知道松手会恢复。
             //   hold=true: 整个长按期间一直挂着, 松手时由 Up 那边换成"已恢复"并淡出。
-            ShowSpeedHint(FastForwardRate.ToString("0.#") + "x 快进中", hold: true);
+            ShowSpeedHint("2x 快进中", hold: true);
             // 长按触发了, 不再触发单击
             _singleClickTimer?.Stop();
         };
@@ -3343,16 +3405,13 @@ public partial class PlayerWindow : FluentWindow
         if (_longPressFired)
         {
             _longPressFired = false;
-            // 先同步弹幕时钟倍速(见 SyncDanmakuClockRate): 倍速一变就落定, 不等下一次校准
-            SyncDanmakuClockRate(1.0f);
-            // ★ 带音频保护的恢复(2026-10-14 修"恢复一倍速有几秒没声音"):
-            //   scaletempo 滤镜链要从 2x 形态拆回 1x 形态, 那一下不出声;
-            //   先压静音再原量回来, 用户听到的是"安静一下 → 正常"。
-            SetRateWithAudioGuard(1.0f);
+            // 停止 seek 式快进。★ 这里**不需要**恢复倍速: 本方案从头到尾没改过 Rate
+            //   (改的是播放位置), 所以没有"恢复 1x"这一步, 也就没有 SetRate 的音频缓冲丢弃。
+            StopFastForward();
             if (SpeedText != null) SpeedText.Text = "1.0x";
-            // ★ 倍速提示收场: 换成"已恢复"亮一下再淡出 —— 手势有始有终,
+            // ★ 提示收场: 换成"已恢复"亮一下再淡出 —— 手势有始有终,
             //   用户才知道刚才那阵快进是自己按出来的、现在结束了。
-            ShowSpeedHint("已恢复 1.0x", hold: false);
+            ShowSpeedHint("已结束快进", hold: false);
             e.Handled = true;
             return;
         }
@@ -3383,15 +3442,15 @@ public partial class PlayerWindow : FluentWindow
         if (_longPressFired)
         {
             _longPressFired = false;
-            // 先同步弹幕时钟倍速(见 SyncDanmakuClockRate): 倍速一变就落定, 不等下一次校准
-            SyncDanmakuClockRate(1.0f);
-            // ★ 同 Up 那条路: 带音频保护恢复(见 SetRateWithAudioGuard)
-            SetRateWithAudioGuard(1.0f);
+            // 同 Up 那条路: 停 seek 式快进(全程没动过 Rate, 所以没有"恢复倍速"这一步)
+            StopFastForward();
             if (SpeedText != null) SpeedText.Text = "1.0x";
-            // ★ 兜底路径也要收掉倍速提示: 鼠标移出时 Up 不会再来了,
+            // ★ 兜底路径也要收掉提示: 鼠标移出时 Up 不会再来了,
             //   不在这里收的话提示会一直挂在屏幕上(用户报过同类"提示不消失")。
-            ShowSpeedHint("已恢复 1.0x", hold: false);
+            ShowSpeedHint("已结束快进", hold: false);
         }
+        // 兜底: 万一手势态已经乱了(比如 _longPressFired 被别处清掉), 定时器也不能留着空转
+        StopFastForward();
         // 离开视频区: 播放中直接藏(倒计时都不用等), 暂停时保持常显
         if (ShouldHideControls()) HideControls();
     }
@@ -7222,6 +7281,9 @@ public partial class PlayerWindow : FluentWindow
             // 表现为进程级访问违例(0xc0000005)。反复"打开-关闭"时这几率会被放大。
             _longPressTimer?.Stop();
             _singleClickTimer?.Stop();
+            // 长按快进定时器同样要停: 它的 Tick 会去碰正在被 Dispose 的 _mp
+            // (与上面三个手势定时器同理, 留着就是访问违例的隐患)
+            StopFastForward();
             _localToastTimer?.Stop();
             _controlsHideTimer?.Stop();
             StopVolumeOsd();
