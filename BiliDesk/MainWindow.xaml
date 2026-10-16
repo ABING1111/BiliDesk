@@ -29,8 +29,10 @@
     </shell:WindowChrome.WindowChrome>
 
     <views:FluentWindow.Resources>
-        <!-- 分区面板里的一行: 图标 + 名字。有官方图标就用图标(异步加载),
-             没有(接口没给 logo 的那十几个)就退化成"首字 + 柔和底色"的方块。 -->
+        <!-- 分区面板里的一行: 图标 + 名字。
+             图标是官方 SVG 矢量图(内嵌在 PartitionCatalog, 见那个文件的生成说明),
+             所以这里直接绑 Image.Source, 不经过任何异步加载 —— 30 个分区的图都是内存里的
+             DrawingImage, 面板展开时零延迟、零网络请求。 -->
         <DataTemplate x:Key="PartitionItemTemplate">
             <Border Height="34" CornerRadius="6" Padding="6,0" Margin="0,0,0,4"
                     Cursor="Hand" MouseLeftButtonUp="OnPartitionItemClick">
@@ -45,16 +47,7 @@
                     </Style>
                 </Border.Style>
                 <StackPanel Orientation="Horizontal">
-                    <Grid Width="24" Height="24">
-                        <Image helpers:Cover.ImageSource="{Binding IconUrl}"
-                               Visibility="{Binding IconUrl, Converter={StaticResource StrToVis}}" />
-                        <Border CornerRadius="6" Background="{DynamicResource AccentSoftFillBrush}"
-                                Visibility="{Binding IconUrl, Converter={StaticResource InvStrToVis}}">
-                            <TextBlock Text="{Binding Initial}" FontSize="12" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource AccentTextBrush}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                    </Grid>
+                    <Image Width="24" Height="24" Source="{Binding Icon}" />
                     <TextBlock Text="{Binding Name}" FontSize="13" Margin="8,0,0,0"
                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                Foreground="{DynamicResource TextPrimaryBrush}" />

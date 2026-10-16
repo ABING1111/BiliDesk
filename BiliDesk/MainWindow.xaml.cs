@@ -50,7 +50,7 @@ public partial class MainWindow : FluentWindow
         // 鼠标侧键(拇指键) = 返回。挂在窗口的隧道路由上, 不会被页面里的控件吃掉。
         PreviewMouseDown += OnPreviewMouseDown;
 
-        // 分区面板: 3 列数据(来源见 PartitionCatalog 的生成说明)
+        // 分区面板: 3 列数据, 每列 10 个分区(来源与生成说明见 PartitionCatalog)
         PartitionCol0.ItemsSource = PartitionCatalog.Columns[0];
         PartitionCol1.ItemsSource = PartitionCatalog.Columns[1];
         PartitionCol2.ItemsSource = PartitionCatalog.Columns[2];

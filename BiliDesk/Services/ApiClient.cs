@@ -437,115 +437,87 @@ public class ApiClient
     }
 
     /// <summary>
-    /// 分区内容(**混合排序**: 分区热门为主干 + 最新投稿混入)。分区页走这个。
+    /// 分区内容(**B站现行分区页的数据源**)。原生分区页走这个。
     ///
-    /// ★★ 2026-10-13 终选(用户从三条取舍里选了"混合排序")。选型过程与实测数据:
+    /// ★★★ 2026-10-17 整体重做(用户报"分区视频数据有问题, 重新做该功能")。
     ///
-    ///   | 接口 | 分区关联 | 质量信号 | 时间跨度 |
-    ///   |---|---|---|---|
-    ///   | ranking/v2 | 精确按 rid | 真实播放量(动画最低 33.7 万) | **全部 559~577 天前** |
-    ///   | newlist | 精确按 rid | stat.view 只有 0~8 | **只有"此刻最新 50 条"**(ps 锁死 50) |
-    ///   | popular/precious(入站必刷) | 用二级分区,一级 rid 命中 **0/19** | 极高(中位 1638 万) | 1150~6191 天前 |
-    ///   | rcmd(个性化) | **不带 tid**,无法按分区筛 | 真实 | 正常 |
+    ///   根因: 旧实现走 <c>ranking/v2?rid=旧tid</c>(美食=211)。实测那个组合返回的是
+    ///   **约 564 天前**的陈旧榜单 —— 20 个分区里中位年龄普遍 560~580 天, 这就是
+    ///   "数据有问题" 的直接来源。而 B站网页版现行分区页(/c/food/)用的是
+    ///   <c>region/feed/rcmd</c> + **v2 tid**(美食=1020), 实测中位年龄只有 3~9 天,
+    ///   与用户截图里的内容完全一致。
     ///
-    ///   ⇒ 没有任何单一接口能同时满足"分区关联 + 质量 + 近期", 所以**混起来**:
-    ///   · 主干 = ranking(保证质量下限与分区精确性);
-    ///   · 混入 = newlist 的最新投稿(保证列表里有"当下在发生的内容");
-    ///   · 按比例交错, 而不是把新内容堆到末尾 —— 堆末尾等于藏起来, 用户仍觉得"全是老视频"。
+    ///   接口: <c>GET /x/web-interface/region/feed/rcmd?display_id={n}&amp;request_cnt={20}
+    ///   &amp;from_region={v2tid}&amp;device=web&amp;plat=30</c>, 数据在 <c>data.archives[]</c>。
     ///
-    /// ★ 混入比例 <see cref="FreshSharePercent"/>: 太高会退回"全是垃圾视频", 太低则看不到新内容。
-    /// ★ rid=202(资讯)被 ranking 硬拒收(-400), 此时 ranking 主干为空, 自动退化成纯 newlist
-    ///   —— 那本来就是资讯这类时效性分区的合理形态。
+    ///   实测(2026-10-17, 带 buvid 设备指纹):
+    ///     · <c>from_region</c> 只认 **v2 tid**(1001~1031); 传旧 tid(211/1/3…)一律 -400。
+    ///     · <c>request_cnt</c> 上限 20: 21 起返回 62013「暂时没有更多内容了」。
+    ///     · <c>display_id</c> 是**游标**, 从 1 递增即可持续翻页: 美食 25 页 = 500 条不重复,
+    ///       页间重复率随深度上升(第 20 页仍有 2 条新的), 说明服务端在滚动推荐池。
+    ///     · 条目字段(aid/bvid/cid/title/cover/duration/pubdate/stat{view,like,danmaku}/author{mid,name})
+    ///       与 popular 的**语义**同构, 但**字段名有两处不同**: 封面是 <c>cover</c> 而不是 <c>pic</c>,
+    ///       UP 主是 <c>author{}</c> 而不是 <c>owner{}</c>。
+    ///       <see cref="ParseVideoItem"/> 两种都认 —— 只认前者的话分区页会"标题正常、封面全灰、
+    ///       UP 主名空白"(探针 bd-probe-zone 抓着这个 bug)。
+    ///
+    ///   ★ 为什么要设备指纹(buvid): 不带 cookie 时, 鬼畜/vlog/小剧场 会返回
+    ///     62013「暂时没有更多内容了」(空列表), 带上就正常 —— 又是一处"看起来像接口没数据、
+    ///     其实是风控认不出设备"的坑。所以 <see cref="GetJsonAsync"/> 默认就带指纹。
+    ///
+    ///   ★ 为什么不做"热门+最新混合"了(旧实现的思路): 既然这个接口本身就是
+    ///     "按分区 + 按质量 + 近期" 的推荐流, 混入就不需要了 —— 旧的混合是为了绕开
+    ///     ranking 全是陈年榜单的问题, 换源之后那个问题的前提不存在了。
     /// </summary>
-    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRegionFeedAsync(int tid)
+    /// <param name="tid">**v2 分区 id**(见 <see cref="PartitionCatalog"/>), 不是旧 tid。</param>
+    /// <param name="page">游标, 从 1 开始。同一个分区连续翻页时才递增。</param>
+    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRegionFeedAsync(int tid, int page = 1)
     {
-        var (rankOk, rankErr, ranked) = await GetRegionRankAsync(tid);
-        // ranking 拒收这个 rid: 退回纯最新流(实测只有资讯 202 属于这一类)
-        if (!rankOk || ranked == null || ranked.Count == 0) return await GetRegionListAsync(tid);
-
-        // 拿到最新投稿; 失败也不影响主流程(ranking 已经够看了)
-        var (_, _, fresh) = await GetRegionListAsync(tid);
-
-        // 交错: 每 FreshSharePercent 条留一个位置给新内容
-        var merged = Interleave(ranked, fresh ?? new List<VideoItem>(), FreshSharePercent);
-        return (true, null, merged);
-    }
-
-    /// <summary>新内容在混合列表里的占比(每 100 条里占多少)。见 <see cref="GetRegionFeedAsync"/>。</summary>
-    private const int FreshSharePercent = 40;
-
-    /// <summary>
-    /// 把"主干列表"与"新内容列表"按比例交错合并, 并按 aid 去重。
-    ///
-    /// ★ 为什么要交错而不是"主干 + 追加在末尾":
-    ///   追加在末尾等于把新内容**藏在最下面**, 用户往下滑之前看到的全是老视频,
-    ///   观感与"全是老视频"没区别。交错让新内容均匀出现在整页里。
-    ///
-    /// ★ 去重按 aid(服务端主键): 两个接口完全可能同时收录同一条视频
-    ///   (榜单热门往往也是最新投稿), 不去重会出现两张一模一样的卡片。
-    /// </summary>
-    private static List<VideoItem> Interleave(List<VideoItem> main, List<VideoItem> fresh, int freshPercent)
-    {
-        if (freshPercent <= 0 || fresh.Count == 0) return main;
-        if (main.Count == 0) return fresh;
-
-        var result = new List<VideoItem>(main.Count + fresh.Count);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var mainIdx = 0; var freshIdx = 0;
-
-        // 每插入 1 条新的, 要跟 freshShare 条主干 —— 走位计数而不是取模, 避免末尾扎堆
-        var sinceFresh = 0;
-        while (mainIdx < main.Count || freshIdx < fresh.Count)
+        try
         {
-            var wantFresh = sinceFresh >= freshPercent;
-            if (wantFresh && freshIdx < fresh.Count)
+            await EnsureBuvidAsync();
+            // ★ 这里**不用** GetVideoListAsync: 它把非 0 码压成一句 message, 拿不到**码**本身,
+            //   而本接口恰恰需要区分 62013「暂时没有更多内容了」与真正的失败(见下)。
+            //   字符串匹配 message 也能凑合, 但服务端改文案就会悄悄失效 —— 直接看码才可靠。
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/web-interface/region/feed/rcmd",
+                new Dictionary<string, string>
+                {
+                    // 接口硬上限: request_cnt >20 直接 62013。写死 20, 调用方不必关心。
+                    ["display_id"] = Math.Max(1, page).ToString(),
+                    ["request_cnt"] = "20",
+                    ["from_region"] = tid.ToString(),
+                    ["device"] = "web",
+                    ["plat"] = "30"
+                });
+
+            // ★ 62013 = **正常的翻到底**, 不是错误: 翻译成"成功但空列表", 让页面能区分
+            //   "到头了"与"请求失败", 而不是在列表底部弹一句吓人的报错(旧实现就是这么错的,
+            //   探针 bd-probe-zone 抓着这个 bug)。
+            if (code == 62013) return (true, null, new List<VideoItem>());
+            if (code != 0 || data == null)
+                return (false, msg ?? $"请求失败 (code {code})", null);
+
+            if (!data.Value.TryGetProperty("archives", out var list) ||
+                list.ValueKind != JsonValueKind.Array)
+                return (true, null, new List<VideoItem>());
+
+            var items = new List<VideoItem>();
+            foreach (var e in list.EnumerateArray())
             {
-                var f = fresh[freshIdx++];
-                if (seen.Add(f.Bvid)) result.Add(f);
-                sinceFresh = 0;
-                continue;
+                var item = ParseVideoItem(e);
+                if (item != null) items.Add(item);
             }
-            if (mainIdx < main.Count)
-            {
-                var m = main[mainIdx++];
-                if (seen.Add(m.Bvid)) result.Add(m);
-                sinceFresh++;
-                continue;
-            }
-            // 主干走完了, 剩下的新内容全接上
-            while (freshIdx < fresh.Count)
-            {
-                var f = fresh[freshIdx++];
-                if (seen.Add(f.Bvid)) result.Add(f);
-            }
+            return (true, null, items);
         }
-        return result;
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null);
+        }
     }
 
-    /// <summary>
-    /// 分区内容流(**最新投稿**)。只在 <see cref="GetRegionFeedAsync"/> 的回退分支里用。
-    ///
-    /// 接口: <c>GET /x/web-interface/newlist?rid={tid}&amp;pn=1&amp;ps=50</c>,
-    /// 数据在 <c>data.archives[]</c> —— 与 popular/ranking 的条目**完全同构**,
-    /// 所以直接复用 <see cref="GetVideoListAsync"/> + <see cref="ParseVideoItem"/>。
-    ///
-    /// ★★ 为什么不当主源(2026-10-13 用户报"分区内容现在全是垃圾视频"):
-    ///   它是最新投稿, 没有质量筛选; 且 <c>stat.view</c> 恒为 0, 想按播放量补一层
-    ///   筛选也做不到(实测阈值 1000 就把全部 50 条筛光)。
-    /// ★★ 翻页做不到: <c>ps</c> 有效, <c>pn</c> 被忽略(pn=1/2/3 条目完全相同)。
-    /// </summary>
-    public Task<(bool ok, string? err, List<VideoItem>? items)> GetRegionListAsync(int tid)
-    {
-        return GetVideoListAsync(
-            "https://api.bilibili.com/x/web-interface/newlist",
-            new Dictionary<string, string>
-            {
-                ["rid"] = tid.ToString(),
-                ["pn"] = "1",
-                ["ps"] = "50"      // 接口上限实测 50; 再多也是 50
-            },
-            jsonProp: "archives");
-    }
+    /// <summary>分区流每页条数(接口硬上限 20, 见 <see cref="GetRegionFeedAsync"/>)。</summary>
+    public const int RegionPageSize = 20;
 
     /// <summary>
     /// 全站排行榜(rid=0 = 全站, 与分区榜同一个接口)。
@@ -553,10 +525,12 @@ public class ApiClient
     public Task<(bool ok, string? err, List<VideoItem>? items)> GetRankingAsync() => GetRegionRankAsync(0);
 
     /// <summary>
-    /// 排行榜。ranking/v2 的 rid 参数决定范围: 0 = 全站, 其余是分区 id。
-    /// 返回该范围 Top 榜(60~95 条, 带 stat 全套计数)。
-    /// ★ 不是所有 rid 都被接受: 实测 番剧(13)/国创(167)/VLOG(65559) 这类 PGC/虚拟分区会返回 -400,
-    ///   所以分区面板里只放了实测可用的那些(见 PartitionCatalog 的生成说明)。
+    /// 排行榜。ranking/v2 的 rid 参数决定范围: 0 = 全站, 其余是**old tid**。
+    ///
+    /// ★ 首页「排行榜」tab 用它。注意 rid=0(全站)与分区是两套表现, 别拿分区 rid 来套:
+    ///   实测(2026-10-17) 这个接口对**v2 tid**(1005 动画 / 1020 美食 / 1009 资讯) 一律 -400,
+    ///   只有全站(0)与**旧 tid**(1/3/4/36/188…) 可用; 而旧 tid 那批返回的是约 564 天前的
+    ///   陈年榜单 —— 分区页**不要**再走这里, 用 <see cref="GetRegionFeedAsync"/>。
     /// </summary>
     public Task<(bool ok, string? err, List<VideoItem>? items)> GetRegionRankAsync(int rid)
     {
@@ -766,12 +740,22 @@ public class ApiClient
             item.Bvid = GetStr(e, "bvid");
             if (string.IsNullOrEmpty(item.Bvid)) return null;
             item.Title = GetStr(e, "title").StripHtml();
+            // ★★ 封面字段名两个接口不一致(2026-10-17 修 "分区页卡片全灰、UP 主名空白"):
+            //   popular/ranking/newlist/related 用 `pic` + `owner{mid,name}`,
+            //   而 region/feed/rcmd(分区流) 用 `cover` + `author{mid,name}`。
+            //   以前只认前者, 于是分区页拿到了标题和时间、封面却是空的 —— 卡片一片灰。
+            //   两种都认, 谁在就用谁(实测没有哪个接口两个字段同时给且含义不同)。
             item.Cover = UrlUtil.Normalize(GetStr(e, "pic"));
+            if (item.Cover.Length == 0) item.Cover = UrlUtil.Normalize(GetStr(e, "cover"));
+
             // UP 主名 + mid: 卡片下方的 UP 主名要能点进他的主页
-            if (e.TryGetProperty("owner", out var o))
+            var owner = e.TryGetProperty("owner", out var o) ? o
+                      : e.TryGetProperty("author", out var a) ? a
+                      : default;
+            if (owner.ValueKind == JsonValueKind.Object)
             {
-                item.Author = GetStr(o, "name");
-                item.OwnerMid = GetLong(o, "mid");
+                item.Author = GetStr(owner, "name");
+                item.OwnerMid = GetLong(owner, "mid");
             }
             item.Duration = VideoItem.FormatSeconds(GetInt(e, "duration"));
             if (e.TryGetProperty("stat", out var st))

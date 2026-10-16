@@ -8,11 +8,12 @@
         分区页(2026-09-26): 点左上角 logo 的分区面板里的一项, 就切到这里。
         结构与首页一致 —— 大标题 + 卡片操作 + VideoCard 卡片墙。
 
-        ★★ 2026-10-13 数据源定为"热门"(用户报"分区内容现在全是垃圾视频"):
-           走 ApiClient.GetRegionFeedAsync —— ranking/v2 分区榜为主(质量好),
-           被它拒掉的 rid(资讯 202)才回退 newlist。选型过程见那个方法的注释。
-        ★ 没有"加载更多": 两个接口的 pn 都被服务端忽略(实测返回完全相同条目),
-          一次 50~95 条就是全部。刷新靠标题行右上角那颗按钮 = 重新请求一次。
+        ★★★ 2026-10-17 数据源重做(用户报"分区视频数据有问题"):
+            走 ApiClient.GetRegionFeedAsync —— region/feed/rcmd + **v2 tid**(美食=1020),
+            也就是 B站网页版分区页(/c/food/)真正的数据源。选型与实测见那个方法的注释。
+            旧实现走的是 ranking/v2 + 旧 tid, 实测返回约 564 天前的陈旧榜单。
+        ★ 现在**支持翻页**(旧实现做不到): 滚到接近底部自动补下一页, 见 code-behind 的
+          OnListScrollChanged。标题右侧的刷新按钮 = 回到游标 1 重拉第一页。
     -->
     <Grid>
         <Grid.RowDefinitions>
@@ -28,12 +29,11 @@
             </Grid.ColumnDefinitions>
             <StackPanel Grid.Column="0" Orientation="Horizontal">
                 <TextBlock Text="{Binding RegionName}" Style="{StaticResource PageTitleStyle}" />
-                <TextBlock Text="热门 · 最新" Margin="14,0,0,6" VerticalAlignment="Bottom"
+                <TextBlock Text="本区精选" Margin="14,0,0,6" VerticalAlignment="Bottom"
                            Style="{StaticResource MetaTextStyle}" />
             </StackPanel>
-            <!-- ★ 刷新按钮(2026-10-13 用户要求"内容可以刷新"):
-                 分区接口**不支持翻页**(实测 pn=1/2/3 返回完全相同的条目), 所以没有"加载更多",
-                 刷新 = 重新请求一次, 拿到服务端此刻的快照。 -->
+            <!-- ★ 刷新按钮: 回到游标 1 重拉第一页(列表会被整体换成服务端此刻的快照)。
+                 翻页是滚动自动触发的, 所以这里只有"刷新"没有"加载更多"按钮(与首页一致)。 -->
             <Button Grid.Column="1" Style="{StaticResource IconButtonStyle}"
                     VerticalAlignment="Bottom" Margin="0,0,0,2"
                     Command="{Binding RefreshCommand}" ToolTip="刷新本分区">
@@ -50,9 +50,9 @@
                            Style="{StaticResource MetaTextStyle}" />
             </StackPanel>
 
-            <!-- 失败 -->
+            <!-- 失败(首屏): 一行说明 + 重试 -->
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
-                        Visibility="{Binding Error, Converter={StaticResource StrToVis}}">
+                        Visibility="{Binding ShowFirstError, Converter={StaticResource BoolToVis}}">
                 <TextBlock Text="{Binding Error}" Style="{StaticResource MetaTextStyle}"
                            HorizontalAlignment="Center" TextWrapping="Wrap" MaxWidth="420"
                            TextAlignment="Center" />
@@ -60,21 +60,48 @@
                         HorizontalAlignment="Center" Command="{Binding RetryCommand}" />
             </StackPanel>
 
-            <!-- 卡片墙: 容器由 DeferredFill 分帧挂载(和首页同一套, 否则 90 张卡片一次布局会卡) -->
+            <!-- 卡片墙: 容器由 DeferredFill 分帧挂载(和首页同一套, 否则一次布局生成几十张卡会卡) -->
             <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          ScrollChanged="OnListScrollChanged"
                           Visibility="{Binding HasItems, Converter={StaticResource BoolToVis}}">
-                <ItemsControl x:Name="CardList" Margin="0,4,0,0">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <helpers:CardWallPanel helpers:CardWall.Enable="True" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <controls:VideoCard />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                <StackPanel>
+                    <ItemsControl x:Name="CardList" Margin="0,4,0,0">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <helpers:CardWallPanel helpers:CardWall.Enable="True" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <controls:VideoCard />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- 底部: 补页转圈 / 补页失败提示。
+                         ★ 外层 StackPanel **不留 Margin**: 里面两个都折叠时它自身高度为 0,
+                           不给列表尾巴上挂一段空白(留了 Margin 的话滚到底永远多出 42px 空气)。 -->
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,24"
+                                    Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
+                            <controls:LoadingRing Width="16" Height="16" />
+                            <TextBlock Text="正在加载更多…" Margin="8,0,0,0" VerticalAlignment="Center"
+                                       Style="{StaticResource MetaTextStyle}" />
+                        </StackPanel>
+
+                        <!-- 补页失败: 只在列表底部说一句, **不**盖到已有卡片上(见 ShowMoreError 的说明)。
+                             ★ 重试按钮走 RetryMoreCommand(重拉**同一页**)而不是 RefreshCommand ——
+                               后者会把列表清空从头再来, 用户已经翻到的位置就没了。 -->
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,24"
+                                    Visibility="{Binding ShowMoreError, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding Error}" VerticalAlignment="Center"
+                                       Style="{StaticResource MetaTextStyle}" />
+                            <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
+                                    Margin="12,0,0,0" Padding="10,3"
+                                    Command="{Binding RetryMoreCommand}" />
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
             </ScrollViewer>
         </Grid>
     </Grid>
