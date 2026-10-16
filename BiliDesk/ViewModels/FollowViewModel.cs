@@ -13,11 +13,13 @@ namespace BiliDesk.ViewModels;
 /// 「动态」页 ViewModel。
 ///
 /// 布局是左右两栏(参考 B 站客户端动态页):
-///   · 左栏 = 「全部动态」入口 + 关注的 UP 主列表(可选);
-///   · 右栏 = 当前选中对象的内容:
+///   · 左栏 = 「全部动态」入口 + 关注的 UP 主列表(可选, 头像右下角带未读角标);
+///   · 右栏 = 当前选中对象的内容, 两档排版由 <see cref="UseCardWall"/> 切:
 ///       - 全部动态: 关注的所有 UP 近期的**视频投稿**(动态时间线接口, 游标分页);
 ///       - 具体某 UP: 该 UP 的投稿视频(空间投稿接口, 页码分页)。
 /// 动态里非视频的内容(图文/纯文字/投票)没有可播对象, 不进这个列表。
+///
+/// 未读角标的判断在 <see cref="UpdateUnreadBadges"/> —— 本地比对, 不额外请求接口。
 /// </summary>
 public class FollowViewModel : ObservableObject
 {
@@ -258,8 +260,13 @@ public class FollowViewModel : ObservableObject
                 var (rOk, rErr, rItems, nextOffset, rHasMore) =
                     await Svc.Api.GetDynamicFeedAsync(reset ? null : _feedOffset);
                 ok = rOk; err = rErr; items = rItems;
-                // has_more 标志实测不可靠(第一页标 false 却还有下一页):
-                // 以"服务端给了新 offset 且与当前不同"为翻页依据, 原样回传 = 到底了。
+                // 翻页依据: "服务端给了新 offset 且与当前不同", 原样回传 = 到底了。
+                // ★ 为什么不用接口的 has_more(2026-10-17 修正): 原来这里的理由是"has_more 实测不可靠,
+                //   第一页标 false 却还有下一页" —— 那其实是**解析 bug**造成的: 接口给的是
+                //   bool(true/false), 而解析按 Number 读(恒为 false)。现在解析已认 bool,
+                //   has_more 是准的(探针 6 页全是 true)。
+                //   仍然保留 offset 这套判据: 它不依赖任何接口字段的语义, 且顺便挡住
+                //   "offset 原样回传却还标着 has_more=true"那类自相矛盾的响应。
                 hasMore = ok && !string.IsNullOrEmpty(nextOffset) && nextOffset != _feedOffset;
                 if (ok) _feedOffset = nextOffset;
             }
@@ -270,6 +277,20 @@ public class FollowViewModel : ObservableObject
                 ok = r.Item1; err = r.Item2; items = r.Item3;
                 hasMore = items != null && items.Count >= 30;
                 if (ok) _upVideoPage++;
+
+                // ★ 单 UP 视图的**头像与名字要在这里盖章**(2026-10-15 用户截图: 卡片上一个头像
+                //   都没有、名字也是空的, 只剩"· 10-14 18:45"):
+                //   空间投稿的两个接口**都不下发头像**; 风控降级接口连 UP 名都没有(只有 upMid)。
+                //   但这两样我们本来就知道 —— 左侧那一条 UP 上就摆着 —— 抄过去即可,
+                //   不必为此再发请求, 更不该让卡片空着。
+                if (items != null)
+                {
+                    foreach (var it in items)
+                    {
+                        if (string.IsNullOrEmpty(it.Author)) it.Author = forUp.Name;
+                        if (string.IsNullOrEmpty(it.AuthorFace)) it.AuthorFace = forUp.Face;
+                    }
+                }
             }
 
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
@@ -293,6 +314,11 @@ public class FollowViewModel : ObservableObject
                 OnPropertyChanged(nameof(ShowFullLoading));
                 if (FeedItems.Count == 0)
                     Error = forUp == null ? "关注的 UP 最近没有视频投稿" : "该 UP 暂时没有投稿视频";
+                // 未读角标: 看"全部动态"时刷新各 UP 的角标; 点开某个 UP 就清掉 TA 的角标。
+                // ★ 放在这里(而不是刷新入口)是因为**只有拿到这一页条目才能判断**:
+                //   角标靠"该 UP 最新一条"与本地基准比对, 没有列表就无从比。
+                if (forUp == null) UpdateUnreadBadges();
+                else ClearUnreadBadge(forUp);
             });
         }
         catch (Exception ex)
@@ -301,6 +327,93 @@ public class FollowViewModel : ObservableObject
             LoadingMore = false;
             Error = ex.Message;
         }
+    }
+
+    // ------------------------------------------------------------ 右栏排版
+
+    private bool _useCardWall = Svc.Settings.FollowCardWall;
+
+    /// <summary>
+    /// 右栏排版: true = 卡片墙(多列网格), false = 动态卡(单列: 头像 + 发布时间 + 视频)。
+    ///
+    /// ★ 初值直接读设置(用户偏好, 重启/切页都保持); 改一次就落盘 —— 与"卡片列数"同一类,
+    ///   这不是"每片状态", 不该跟着数据刷新走。
+    /// ★ 切换只改这个 bool: 界面上两套 ItemsControl 各自绑 Its Visibility(见 FollowPage),
+    ///   所以不需要重建列表, 滚动位置也不会丢。
+    /// </summary>
+    public bool UseCardWall
+    {
+        get => _useCardWall;
+        set
+        {
+            if (!SetProperty(ref _useCardWall, value)) return;
+            Svc.Settings.FollowCardWall = value;
+            Svc.Settings.Save();
+        }
+    }
+
+    // ------------------------------------------------------------ 左栏未读角标
+
+    /// <summary>
+    /// 「全部动态」加载完 → 按这一页的条目刷新左栏各 UP 的未读角标。
+    ///
+    /// 规则(基准存在 <see cref="DynamicSeenStore"/>, 本地判断、不请求接口):
+    ///   · 没有基准的 UP: 只把 TA 当前最新一条记成基准, **不打角标**(见该类的说明);
+    ///   · 基准与最新一条相同: 角标清零;
+    ///   · 不同: 角标数 = 这一页里排在基准那条**之前**的该 UP 投稿数
+    ///     (基准那条已经翻出本页时, 本页所有该 UP 的条目都算新的)。
+    /// ★ 本页没有出现的 UP **不动**: 动态接口只给近期条目, 一个 UP 最近没投稿就无从判断,
+    ///   这时把角标清零是凭空断言"没更新"。宁可留着旧角标, 也不给错的信息。
+    /// </summary>
+    private void UpdateUnreadBadges()
+    {
+        // 每个 UP 在这一页里最新的一条(FeedItems 是按时间倒序拼的, 先遇到的就是最新)
+        var newest = new Dictionary<long, string>();
+        foreach (var it in FeedItems)
+        {
+            if (it.OwnerMid <= 0 || string.IsNullOrEmpty(it.Bvid)) continue;
+            if (!newest.ContainsKey(it.OwnerMid)) newest[it.OwnerMid] = it.Bvid;
+        }
+
+        foreach (var u in Users)
+        {
+            if (!newest.TryGetValue(u.Mid, out var top)) continue;
+
+            if (!DynamicSeenStore.TryGet(u.Mid, out var seen))
+            {
+                DynamicSeenStore.Set(u.Mid, top);
+                u.NewCount = 0;
+                continue;
+            }
+            if (seen == top)
+            {
+                u.NewCount = 0;
+                continue;
+            }
+
+            var n = 0;
+            foreach (var it in FeedItems)
+            {
+                if (it.OwnerMid != u.Mid) continue;
+                if (it.Bvid == seen) break;   // 追到上次看过的那条为止
+                n++;
+            }
+            u.NewCount = n;
+        }
+        DynamicSeenStore.Flush();
+    }
+
+    /// <summary>点开某个 UP(右栏只看 TA 的投稿) = 已读: 清角标, 并把基准推到 TA 当前最新一条</summary>
+    private void ClearUnreadBadge(FollowUser u)
+    {
+        u.NewCount = 0;
+        foreach (var it in FeedItems)
+        {
+            if (it.OwnerMid != u.Mid || string.IsNullOrEmpty(it.Bvid)) continue;
+            DynamicSeenStore.Set(u.Mid, it.Bvid);
+            break;   // FeedItems 是时间倒序, 第一条就是最新
+        }
+        DynamicSeenStore.Flush();
     }
 
     /// <summary>右栏滚动到底: 追加下一页</summary>

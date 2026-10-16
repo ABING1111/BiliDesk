@@ -14,6 +14,13 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
     public string Title { get; set; } = "";
     public string Cover { get; set; } = "";
     public string Author { get; set; } = "";
+
+    /// <summary>
+    /// UP 主头像地址。**只有动态流需要**(动态卡片顶部要摆头像)——
+    /// 首页/搜索那些列表接口不带头像, 那里保持空串即可, 界面按"没有就不显示"处理。
+    /// </summary>
+    public string AuthorFace { get; set; } = "";
+
     public string Duration { get; set; } = "";
     public long ViewCount { get; set; }
     public long DanmakuCount { get; set; }
@@ -81,6 +88,111 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
     /// Pubdate 没解析到(部分接口)时为空, 由界面隐藏。
     /// </summary>
     public string PubDateShort => FormatPubDateShort(Pubdate);
+
+    /// <summary>
+    /// 接口**直接给的**发布时间展示串(动态接口的 `pub_time` 就是这种已经排好版的文本,
+    /// 形如 "2小时前" / "09-25")。非空时优先用它 —— 服务端算好的相对时间比本地推算准。
+    /// </summary>
+    public string PubTimeLabel { get; set; } = "";
+
+    /// <summary>
+    /// <see cref="Pubdate"/> 是不是**从展示文本反推**出来的近似值(而不是接口给的真实时间戳)。
+    ///
+    /// ★ 只有动态接口的扁平路径会置 true: 它只给 "2小时前" / "昨天 18:45", 不给时间戳,
+    ///   于是拿本机时钟反推 —— 误差 = 服务端渲染那一刻到现在的间隔(通常几分钟到几小时)。
+    ///   modules 路径有真实 pub_ts, 空间投稿有真实 created, 都保持 false。
+    /// ★ 用途只有一个: 悬停提示加"约"字(见 <see cref="PubFullText"/>)。
+    ///   **不要**拿它去做排序/去重之类的判断 —— 近似值量级够用, 精确比较不够。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool PubDateApprox { get; set; }
+
+    /// <summary>
+    /// 动态卡片头部**直接显示**的发布时间。
+    ///
+    /// ★ 定稿(用户 2026-10-15): 直接显示说"人话", 精确时间放悬停(<see cref="PubFullText"/>)。
+    ///   · 动态流: 用**接口原文**("昨天 18:45" / "2小时前") —— 服务端已排好版, 比本地推算准;
+    ///   · 单 UP 的空间投稿: 接口只给时间戳、没有原文, 就按本机时钟算相对时间
+    ///     (见 <see cref="FormatPubRelative"/>)—— 两处观感必须一致, 否则同一页里
+    ///     一个"3小时前"、一个"10-14 18:45", 是两种语言。
+    /// ★ 原文是服务端渲染那一刻算的, 页面开着不动它就一直是"2小时前";
+    ///   悬停看到的精确时间由解析出的 Pubdate 算, 不受这个影响。
+    /// </summary>
+    public string PubText
+    {
+        get
+        {
+            if (!string.IsNullOrEmpty(PubTimeLabel)) return PubTimeLabel;
+            if (Pubdate > 0) return FormatPubRelative(Pubdate);
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// 本地算的相对时间(接口没给展示文本时用): "刚刚" / "27分钟前" / "2小时前" / "昨天 18:45",
+    /// 更早的退化成日期("09-20", 跨年带年份)。
+    /// 口径刻意与 B 站动态接口的原文措辞对齐(见 ApiClient.ParseDynamicTime)—— 两处显示同一套语言。
+    /// </summary>
+    public static string FormatPubRelative(long pubdate)
+    {
+        if (pubdate <= 0) return "";
+        try
+        {
+            var t = DateTimeOffset.FromUnixTimeSeconds(pubdate).LocalDateTime;
+            var span = DateTime.Now - t;
+            if (span.TotalMinutes < 1) return "刚刚";
+            if (span.TotalHours < 1) return $"{(int)span.TotalMinutes}分钟前";
+            if (span.TotalDays < 1) return $"{(int)span.TotalHours}小时前";
+            if (span.TotalDays < 2) return $"昨天 {t:HH:mm}";
+            return t.Year == DateTime.Now.Year ? t.ToString("MM-dd") : t.ToString("yyyy-MM-dd");
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>
+    /// 悬停提示用的完整时间("2026-09-20 14:30")。拿不到时回落到 PubText。
+    ///
+    /// ★ 近似值会带上"约": 动态接口只给 "2小时前" 这种原文, Pubdate 是拿本机时钟**反推**的
+    ///   (误差 = 服务端渲染到现在的间隔), 详细见 <see cref="PubDateApprox"/>。
+    ///   直接显示到分钟会让用户以为那是服务端的精确发布时间 —— 加一个字就不用为此解释。
+    /// </summary>
+    public string PubFullText
+        => Pubdate > 0 ? (PubDateApprox ? "约 " : "") + FormatPubDateTimeFull(Pubdate)
+         : !string.IsNullOrEmpty(PubTimeLabel) ? PubTimeLabel : "";
+
+    /// <summary>完整时间(悬停提示用), 一律带年份</summary>
+    public static string FormatPubDateTimeFull(long pubdate)
+    {
+        if (pubdate <= 0) return "";
+        try
+        {
+            return DateTimeOffset.FromUnixTimeSeconds(pubdate).LocalDateTime.ToString("yyyy-MM-dd HH:mm");
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>
+    /// 动态卡片右侧那行数据("1.2万 播放 · 345 弹幕")。两项都拿不到时为空串, 由界面隐藏整行。
+    /// ★ 与封面上那两枚独立角标分开: 动态卡的封面只留时长, 播放/弹幕挪到标题下面,
+    ///   所以要拼成一句话而不是两个独立字符串(见 DynamicCard)。
+    ///
+    /// ★★ 实测(2026-10-17, 6 页 104 条真实动态): 动态接口的**扁平条目不给任何计数** ——
+    ///   字段只有 id_str/author/pub_time/type/rid/title/cover/jump_url/visible/fold,
+    ///   没有 stat, 也没有平铺的 play / video_review。而扁平是主路径 ⇒ **这行在动态页
+    ///   实际上永远是空的**(下面 modules 兼容分支给的 stat 才有值, 那条路实测不走到)。
+    ///   保留它是因为 modules 形态确实带 play/danmaku(且注释里写着服务端对某些客户端
+    ///   形态会返回 modules); 但别指望在动态页看到它 —— 想让它亮起来得换接口或额外请求。
+    /// </summary>
+    public string DynamicStatText
+    {
+        get
+        {
+            var parts = new System.Collections.Generic.List<string>(2);
+            if (ViewCount > 0) parts.Add(FormatCount(ViewCount) + " 播放");
+            if (DanmakuCount > 0) parts.Add(FormatCount(DanmakuCount) + " 弹幕");
+            return string.Join(" · ", parts);
+        }
+    }
 
     /// <summary>
     /// 发布日期的短格式。**抽成静态的给别处复用** —— 合集列表也要显示同一个格式,
@@ -461,6 +573,33 @@ public class FollowUser : System.ComponentModel.INotifyPropertyChanged
                 new System.ComponentModel.PropertyChangedEventArgs(nameof(IsSelected)));
         }
     }
+
+    private int _newCount;
+
+    /// <summary>
+    /// 「未读动态」条数 —— 左栏头像右下角的蓝底数字角标(0 = 不显示)。
+    ///
+    /// ★ 由**本地**判断, 不新增接口(见 DynamicSeenStore): 拿动态流里"该 UP 最新的一条"
+    ///   与上次记录的比对, 不一样就是有新动态。
+    /// ★ 必须带通知: 角标是刷新后由 ViewModel 侧统一刷的(见 FollowViewModel.UpdateUnreadBadges),
+    ///   界面要跟着变。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int NewCount
+    {
+        get => _newCount;
+        set
+        {
+            if (_newCount == value) return;
+            _newCount = value;
+            PropertyChanged?.Invoke(this,
+                new System.ComponentModel.PropertyChangedEventArgs(nameof(NewCount)));
+            PropertyChanged?.Invoke(this,
+                new System.ComponentModel.PropertyChangedEventArgs(nameof(HasNew)));
+        }
+    }
+
+    public bool HasNew => NewCount > 0;
 }
 
 /// <summary>
@@ -1174,6 +1313,15 @@ public class AppSettings
     /// ★ 作用于**所有**卡片页(首页/历史/收藏/搜索/分区/稍后再看/关注/个人空间), 它们共用同一套卡片墙。
     /// </summary>
     public int CardColumns { get; set; }
+
+    /// <summary>
+    /// 「动态」页右栏的排版: false = 动态卡(单列: 头像 + 发布时间 + 视频), true = 卡片墙(多列网格)。
+    ///
+    /// ★ 默认 false(动态卡): 用户 2026-10-15 要求"右侧不要全是视频卡片, 要有视频结合时间和
+    ///   头像的卡片"; 卡片墙是留给他按需切回去的那一档, 而不是默认档。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool FollowCardWall { get; set; }
 
     /// <summary>
     /// 软件缩放百分比(80~150, 默认 100)。把整个界面按比例放大/缩小, 与系统 DPI 无关。

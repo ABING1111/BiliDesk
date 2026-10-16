@@ -1,0 +1,136 @@
+<UserControl x:Class="BiliDesk.Views.Controls.DynamicCard"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             Background="Transparent" Focusable="False">
+    <!--
+        动态流里的一条视频动态卡(用户 2026-10-15 要求"右侧不要全是视频卡片,
+        要有视频结合时间和头像的卡片"):
+
+            ⭕ 某UP主  · 2小时前
+            ┌────────┐ 视频标题……
+            │  封面  │ 1.2万 播放 · 345 弹幕
+            └────────┘
+
+        ★ 为什么另起一个控件而不是给 VideoCard 加开关: 两者版式是**方向相反的** ——
+          VideoCard 是"封面在上、文字在下"的网格卡, 这里是"头像抬头 + 封面在左、文字在右"的
+          列表卡; 行高、点击区域、角标位置全不一样, 塞进一个控件只会让两边互相迁就。
+          (动态页两档排版并存, 由右上角开关切, 见 FollowPage。)
+    -->
+    <UserControl.ContextMenu>
+        <!--
+            动态卡也是"一条视频", 右键菜单与卡片墙(VideoCard)保持同一套:
+            下载封面 / 下载视频 / 加入稍后再看。
+            ★ 为什么不能省: 动态卡是**默认排版**(见 AppSettings.FollowCardWall),
+              少了这套就等于"用户默认看到的那种卡片没有右键功能"—— 切一下排版才回来,
+              表现得像功能时好时坏。文案与 VideoCard 逐字一致, 免得两处漂移。
+        -->
+        <ContextMenu>
+            <MenuItem Header="下载封面到本地" Click="OnDownloadCover">
+                <MenuItem.Icon>
+                    <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="13" VerticalAlignment="Center" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator />
+            <MenuItem Header="下载视频到本地" Click="OnDownloadVideo">
+                <MenuItem.Icon>
+                    <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="13" VerticalAlignment="Center" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator />
+            <MenuItem Header="加入稍后再看" Click="OnAddWatchLater">
+                <MenuItem.Icon>
+                    <TextBlock Text="&#xE7C1;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="13" VerticalAlignment="Center" />
+                </MenuItem.Icon>
+            </MenuItem>
+        </ContextMenu>
+    </UserControl.ContextMenu>
+    <Border Margin="0,0,0,12" CornerRadius="10" Padding="14,12"
+            Background="{DynamicResource CardBackgroundBrush}"
+            BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1">
+        <StackPanel>
+            <!-- ===== 头部: UP 头像 + 昵称 + 发布时间 =====
+                 头像与昵称都可点, 进 UP 主主页(与点卡片墙的 UP 名是同一条路)。 -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <!-- 头像。写法与左栏 UP 列表、我的页头像**完全一致**: 显式 36x36 + 兜底人形。
+                     ★ 兜底人形不需要自己管显隐 —— Cover 贴图成功后会把 Border 的子元素收起来
+                       (见 CoverLoader.ApplyDecoded 里那句), 贴图失败时它则留在原地当占位,
+                       两种情况都正好是想要的。 -->
+                <Border Grid.Column="0" Width="36" Height="36" CornerRadius="18" ClipToBounds="True"
+                        Background="{DynamicResource AccentSoftFillBrush}"
+                        Cursor="Hand" MouseLeftButtonUp="OnUpClick" ToolTip="进入 UP 主主页"
+                        helpers:Cover.Source="{Binding AuthorFace}">
+                    <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="16" Foreground="{DynamicResource AccentTextBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Author}" FontSize="13" FontWeight="SemiBold"
+                               Cursor="Hand" MouseLeftButtonUp="OnUpClick"
+                               TextTrimming="CharacterEllipsis" MaxWidth="200"
+                               ToolTip="{Binding Author, Mode=OneWay}" />
+                    <!-- 间隔点只在有时间时显示, 否则名字后面挂一个孤零零的"·"。
+                         时间同理: 接口没给就整段藏起来(见 VideoItem.PubText)。 -->
+                    <TextBlock Text="·" Margin="6,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               Visibility="{Binding PubText, Converter={StaticResource StrToVis}}" />
+                    <TextBlock Text="{Binding PubText, Mode=OneWay}" FontSize="12"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               ToolTip="{Binding PubFullText, Mode=OneWay}" />
+                </StackPanel>
+            </Grid>
+
+            <!-- ===== 正文: 左封面 + 右标题/数据 ===== -->
+            <Grid Margin="0,10,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="200" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <!-- 封面 200x112(16:9)。点击播放, 与卡片墙点封面是同一个入口。 -->
+                <Border Grid.Column="0" CornerRadius="8" Height="112" ClipToBounds="True"
+                        Background="{DynamicResource PlaceholderBrush}"
+                        Cursor="Hand" MouseLeftButtonUp="OnOpenClick">
+                    <Grid>
+                        <!-- 圆角必须写在图自己身上: 外层 Border 的圆角不裁子元素 -->
+                        <Border CornerRadius="8" helpers:Cover.Source="{Binding Cover}" />
+
+                        <!-- 右下: 时长。读不到就整枚藏起来(StrToVis 对空串给 Collapsed) ——
+                             扁平结构的动态条目**不给时长**(实测 2026-10-15), 只有 modules 那条
+                             兼容路径会带 duration_text, 所以多数卡片这里没有角标。 -->
+                        <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                Margin="0,0,6,6" CornerRadius="4" Padding="6,2"
+                                Background="{DynamicResource DurationBadgeBackgroundBrush}"
+                                Visibility="{Binding Duration, Converter={StaticResource StrToVis}}">
+                            <TextBlock Text="{Binding Duration}" Foreground="White" FontSize="11" />
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <StackPanel Grid.Column="1" Margin="12,0,0,0">
+                    <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold"
+                               TextWrapping="Wrap" LineHeight="20" MaxHeight="40"
+                               TextTrimming="CharacterEllipsis"
+                               Cursor="Hand" MouseLeftButtonUp="OnOpenClick"
+                               ToolTip="{Binding Title, Mode=OneWay}" />
+                    <!-- 播放/弹幕("1.2万 播放 · 345 弹幕")。★ 实测动态接口的扁平条目
+                         **不给计数**(见 VideoItem.DynamicStatText 的说明), 所以这行在动态页
+                         实际上一直是收起的; 留着是为了 modules 形态能带出数据。 -->
+                    <TextBlock Text="{Binding DynamicStatText, Mode=OneWay}" FontSize="11"
+                               Margin="0,8,0,0"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Visibility="{Binding DynamicStatText, Converter={StaticResource StrToVis}}" />
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </Border>
+</UserControl>

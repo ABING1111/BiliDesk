@@ -8,8 +8,9 @@ using BiliDesk.ViewModels;
 namespace BiliDesk.Views.Pages;
 
 /// <summary>
-/// 「动态」页: 左栏 = 全部动态 + 关注 UP 列表(可选), 右栏 = 选中对象的视频卡片网格。
-/// 选中态与数据都在 FollowViewModel; 这个 code-behind 只做事件转发与滚动加载。
+/// 「动态」页: 左栏 = 全部动态 + 关注 UP 列表(可选, 头像带未读角标),
+/// 右栏 = 选中对象的内容, 两档排版(单列动态卡 / 多列卡片墙)由右上角的两枚 chip 切换。
+/// 选中态与数据都在 FollowViewModel; 这个 code-behind 只做事件转发、滚动加载与排版 chip 的选中态。
 /// </summary>
 public partial class FollowPage : UserControl
 {
@@ -23,7 +24,34 @@ public partial class FollowPage : UserControl
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        if (DataContext is FollowViewModel vm) await vm.InitAsync();
+        if (DataContext is FollowViewModel vm)
+        {
+            UpdateLayoutChips(vm);
+            await vm.InitAsync();
+        }
+    }
+
+    // ------------------------------------------------------------ 右栏排版切换
+
+    private void OnLayoutCardsClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is FollowViewModel vm) { vm.UseCardWall = false; UpdateLayoutChips(vm); }
+    }
+
+    private void OnLayoutWallClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is FollowViewModel vm) { vm.UseCardWall = true; UpdateLayoutChips(vm); }
+    }
+
+    /// <summary>
+    /// 同步两枚 chip 的选中态。★ 只在这里写 Tag(与播放页评论排序同一套约定: 字符串 "on"/"off"),
+    /// 分散着改必然出现"两边都亮"或"两边都不亮"。
+    /// </summary>
+    private void UpdateLayoutChips(FollowViewModel vm)
+    {
+        if (BtnLayoutCards == null || BtnLayoutWall == null) return;
+        BtnLayoutCards.Tag = vm.UseCardWall ? "off" : "on";
+        BtnLayoutWall.Tag = vm.UseCardWall ? "on" : "off";
     }
 
     // ------------------------------------------------------------ 选择
