@@ -1310,6 +1310,10 @@ public partial class PlayerWindow : FluentWindow
         //   不可能活到用户换下一个视频。留着 false 的初值即可, 清了没有任何可观察差异。
         nameof(_fullscreenCoverArmed),
         nameof(_resizeHold),
+        // 手势"这一下是否由 Down 起步"的标记(左键/右键各一份): 它们描述的是**当前这一次点击**,
+        //   窗口关闭/换片时鼠标多半早已抬起, 留着初值 false 即可;
+        //   真按住不放时换片本来就是不可能的操作, 清了也没有可观察差异。
+        nameof(_videoGestureActive), nameof(_rightGestureActive),
         // CompositionTarget.Rendering / 弹幕时钟的订阅只挂一次, 属窗口级(同 _playerRegistered)
         nameof(_modalSizeWatchAttached),
         nameof(_danmakuClockAttached),
@@ -2992,6 +2996,14 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool _videoGestureActive;
 
+    /// <summary>
+    /// 视频区**右键**手势是否已由一次 Down 正式起步(右键那条线的 <see cref="_videoGestureActive"/>)。
+    ///
+    /// ★ 为什么右键要单独一份而不是复用上面那个: 两者是**并行的两条手势**,
+    ///   用户完全可能左键按着拖、中途点右键; 共用一个标记会互相把对方的"配对"抹掉。
+    /// </summary>
+    private bool _rightGestureActive;
+
     private void OnQualityClick(object sender, RoutedEventArgs e)
     {
         QualityPopup.IsOpen = true;
@@ -3246,6 +3258,13 @@ public partial class PlayerWindow : FluentWindow
         var scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
         var border = Math.Max(2, (int)Math.Ceiling(ResizeEdgeDip * scale));
 
+        // ★ 必须先确认光标**落在窗口里**。下面的判据全是"离某条边多远 < border",
+        //   而"远在窗口外"的坐标同样满足它(比如窗口在 y=100, 光标在 y=0 ⇒ top=true)
+        //   ⇒ 不先框住范围的话, 光标移到窗口外也会被判成"在缩放带上"。
+        //   实测踩到: 光标停在屏幕最顶端(y=0)时, 这个函数返回了非 0,
+        //   于是视频区右键被当成"点在缩放带"而整个吞掉。
+        if (pt.X < r.Left || pt.X > r.Right || pt.Y < r.Top || pt.Y > r.Bottom) return 0;
+
         var left = pt.X - r.Left < border;
         var right = r.Right - pt.X <= border;
         var top = pt.Y - r.Top < border;
@@ -3413,6 +3432,56 @@ public partial class PlayerWindow : FluentWindow
         _singleClickTimer.Start();
     }
 
+    /// <summary>
+    /// 视频区右键按下: 只负责"记下这一下是我起的", 真正的动作在 Up。
+    ///
+    /// ★★ 为什么必须**成对判定**(Down 起步 + Up 才动作), 而不是直接在 Up 里切:
+    ///   实测(见 <see cref="AnyPlayerPopupOpen"/> 的时间戳): 弹层(清晰度/弹幕设置)收起时,
+    ///   那次关闭点击的 **Down 被弹层 HWND 吃掉、只有 Up 漏进主窗口**, 而 `Closed` 晚 13~70ms,
+    ///   `Popup.IsOpen` 那一刻已经变 false —— 所有"当前状态"判据都不可用。
+    ///   左键那套早就是这么防的(<see cref="_videoGestureActive"/>); 右键如果直接在 Up 里切,
+    ///   就会出现"点空白处收起清晰度列表, 视频却顺手铺满了"这种灵异现象。
+    ///   ⇒ 唯一可靠判据同样是"有没有配对的 Down"。
+    /// </summary>
+    private void OnVideoAreaMouseRightDown(object sender, MouseButtonEventArgs e)
+    {
+        // ★ 落在窗口边缘缩放带里就**不要**当成视频区手势, 但**也不能**调 TryBeginEdgeResize():
+        //   它内部发的是 `WM_NCLBUTTONDOWN`(**左键**消息), 用右键去调等于"假装用户按了左键拖边框",
+        //   会让系统进入模态缩放循环 —— 而那个循环等的是左键松开, 右键根本不会给它。
+        //   ⇒ 这里只判断"在不在缩放带", 在就放行(交给窗口默认行为), 不启动任何东西。
+        if (IsOnResizeEdge()) return;
+        if (_mp == null) return;
+        RestoreKeyboardFocus();
+        // 控制栏 / 跳过提示条上的右键不算视频区手势(与左键同款理由)
+        if (ControlBar != null && ControlBar.IsMouseOver) return;
+        if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
+        // 弹层开着 ⇒ 这一下属于浮层, 不起步(地基, 见方法说明)
+        if (AnyPlayerPopupOpen) { _rightGestureActive = false; return; }
+        _rightGestureActive = true;
+        e.Handled = true;   // 别让它冒泡成系统菜单
+    }
+
+    /// <summary>指针是否落在窗口边缘的缩放带上(只判断, 不启动缩放 —— 见 OnVideoAreaMouseRightDown)。</summary>
+    private bool IsOnResizeEdge()
+    {
+        if (_isFullscreen || WindowState != WindowState.Normal) return false;
+        return HitTestResizeEdge() != 0;
+    }
+
+    /// <summary>
+    /// 视频区右键抬起: 与 Down 配对时切换「铺满窗口」。
+    /// 没有配对 Down 的 Up 一律丢弃(那是弹层余波, 见 Down 的说明)。
+    /// </summary>
+    private void OnVideoAreaMouseRightUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_rightGestureActive) { e.Handled = true; return; }
+        _rightGestureActive = false;
+        if (_closing) return;
+        // 走**同一个开关**: 与右上角那个按钮共享 _isFillWindow, 不复制逻辑
+        ToggleFillWindow();
+        e.Handled = true;
+    }
+
     /// <summary>鼠标离开视频区: 兜底, 防止按住时鼠标移出导致状态卡住</summary>
     private void OnVideoAreaMouseLeave(object sender, MouseEventArgs e)
     {
@@ -3422,6 +3491,9 @@ public partial class PlayerWindow : FluentWindow
         // ★ 手势状态一并复位: 鼠标移出去了, 这一次按下就不再属于视频区,
         //   之后即使漏一个 Up 进来也会因为"没有配对 Down"被正确丢掉。
         _videoGestureActive = false;
+        // 右键那一路同样复位: 按下后拖到视频区外再松手, Up 不会再来 ——
+        // 不复位的话下一次孤立的 Up 会被误当成"配对成功"而切一次铺满。
+        _rightGestureActive = false;
         if (_longPressFired)
         {
             _longPressFired = false;
@@ -4966,9 +5038,8 @@ public partial class PlayerWindow : FluentWindow
     /// 为什么图标要跟着状态变: 同一个位置点两下是"进入/退出", 字形不变的话用户不知道
     /// 现在是不是已经铺满了, 也不知道再点一下会发生什么。
     ///
-    /// ★ 右键菜单里那一项也由这里一起刷新(见 <see cref="OnVideoAreaMenuOpened"/>):
-    ///   按钮和菜单项是**同一个开关的两个入口**, 状态文案必须一致 ——
-    ///   分两处各写一遍, 早晚会出现"按钮说还原、菜单说铺满"。
+    /// ★ 视频区**右键**也切同一个开关(见 OnVideoAreaMouseRightUp): 那个手势不需要文案
+    ///   —— 右键按下去画面当场就变了, 状态是"看得见"的, 不用靠字形容器。
     /// </summary>
     private void UpdateFillWindowButton()
     {
@@ -4976,21 +5047,6 @@ public partial class PlayerWindow : FluentWindow
         // E9A6 = 虚线框(填充区域) / E73F = 向内的双箭头(还原)。两者在本字体里形状差异明显。
         if (FillWindowGlyph != null) FillWindowGlyph.Text = _isFillWindow ? "\uE73F" : "\uE9A6";
         BtnFillWindow.ToolTip = _isFillWindow ? "还原 (退出铺满窗口)" : "铺满窗口";
-    }
-
-    /// <summary>
-    /// 视频区右键菜单**弹出前**刷新一次项文案(菜单项的 Click 直接复用 OnFillWindowClick)。
-    ///
-    /// ★ 为什么在 Opened 里刷而不是每次状态变化时刷: ContextMenu 不在可视树里
-    ///   (它是独立的 Popup 宿主), 跟着状态刷要额外维护"菜单有没有被创建"这条线;
-    ///   而用户只在弹出那一刻看到它 —— 那时刷一次就够, 也不会漏。
-    /// </summary>
-    private void OnVideoAreaMenuOpened(object sender, RoutedEventArgs e)
-    {
-        if (MenuFillWindow == null) return;
-        // 与按钮同一套文案/字形, 只把 ToolTip 那半边换成菜单项能用的说法
-        MenuFillWindow.Header = _isFillWindow ? "还原窗口" : "铺满窗口";
-        if (FillWindowMenuGlyph != null) FillWindowMenuGlyph.Text = _isFillWindow ? "\uE73F" : "\uE9A6";
     }
 
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreen();

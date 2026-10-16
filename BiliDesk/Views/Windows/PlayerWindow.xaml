@@ -807,32 +807,21 @@
                     <Grid x:Name="VideoAreaRoot" Background="#01000000"
                           PreviewMouseLeftButtonDown="OnVideoAreaMouseLeftDown"
                           PreviewMouseLeftButtonUp="OnVideoAreaMouseLeftUp"
+                          PreviewMouseRightButtonDown="OnVideoAreaMouseRightDown"
+                          PreviewMouseRightButtonUp="OnVideoAreaMouseRightUp"
                           PreviewMouseWheel="OnVideoAreaMouseWheel"
                           MouseMove="OnVideoAreaMouseMove"
                           MouseLeave="OnVideoAreaMouseLeave">
-                            <!-- ===== 视频区右键菜单(2026-10-16 新增) =====
-                                 ★ 为什么挂在 VideoAreaRoot 上: 视频区被两层原生 HWND 占着,
-                                   而这层 Grid 是 VideoView.Content 里那个浮层窗口的一部分
-                                   (见上面 VideoAreaRoot 的说明)—— 右键在这里收得到。
-                                 ★ 菜单项走**已有方法**, 不复制逻辑:
-                                   ToggleFillWindow() 就是右上角那个「铺满窗口」按钮的入口
-                                   (OnFillWindowClick 也只是转发到它), 两者是同一个开关、同一份状态。
-                                 ★ 文案跟着状态走(铺满 / 还原), 由 OnVideoAreaMenuOpened
-                                   在**弹出前**刷一次(菜单不在可视树里, 按需刷最省心)。
-                                   按钮那侧由 UpdateFillWindowButton 刷 —— 两者文案必须一致。 -->
-                            <Grid.ContextMenu>
-                                <ContextMenu x:Name="VideoAreaMenu"
-                                             Opened="OnVideoAreaMenuOpened">
-                                    <MenuItem x:Name="MenuFillWindow" Header="铺满窗口"
-                                              Click="OnFillWindowClick">
-                                        <MenuItem.Icon>
-                                            <TextBlock x:Name="FillWindowMenuGlyph" Text="&#xE9A6;"
-                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                       FontSize="13" VerticalAlignment="Center" />
-                                        </MenuItem.Icon>
-                                    </MenuItem>
-                                </ContextMenu>
-                            </Grid.ContextMenu>
+                            <!-- ===== 视频区右键 = 「铺满窗口」开关(2026-10-16) =====
+                                 ★ **直接切换, 不弹菜单**: 这一个手势只对应一个开关, 弹一层菜单
+                                   反而多一次点击, 而菜单里也没有别的项可放。
+                                 ★ 与右上角那个「铺满窗口」按钮是**同一个开关、同一份状态**
+                                   (两边都走 ToggleFillWindow), 不复制逻辑。
+                                 ★ 为什么挂在这层: 视频区被两层原生 HWND 占着, 而这层 Grid 是
+                                   VideoView.Content 里那个浮层窗口的一部分(见上面 VideoAreaRoot
+                                   的说明)—— 右键在这里收得到。
+                                 ★ 必须**成对判定**: 只有 Down/Up 配对的那次右键才算数。
+                                   孤立的 Up 是弹层收起时漏过来的(实测, 见 OnVideoAreaMouseRightDown)。 -->
                             <!-- 弹幕层 -->
                             <Canvas x:Name="DanmakuCanvas" Background="Transparent" IsHitTestVisible="False"
                                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
