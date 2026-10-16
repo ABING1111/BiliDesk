@@ -810,6 +810,29 @@
                           PreviewMouseWheel="OnVideoAreaMouseWheel"
                           MouseMove="OnVideoAreaMouseMove"
                           MouseLeave="OnVideoAreaMouseLeave">
+                            <!-- ===== 视频区右键菜单(2026-10-16 新增) =====
+                                 ★ 为什么挂在 VideoAreaRoot 上: 视频区被两层原生 HWND 占着,
+                                   而这层 Grid 是 VideoView.Content 里那个浮层窗口的一部分
+                                   (见上面 VideoAreaRoot 的说明)—— 右键在这里收得到。
+                                 ★ 菜单项走**已有方法**, 不复制逻辑:
+                                   ToggleFillWindow() 就是右上角那个「铺满窗口」按钮的入口
+                                   (OnFillWindowClick 也只是转发到它), 两者是同一个开关、同一份状态。
+                                 ★ 文案跟着状态走(铺满 / 还原), 由 OnVideoAreaMenuOpened
+                                   在**弹出前**刷一次(菜单不在可视树里, 按需刷最省心)。
+                                   按钮那侧由 UpdateFillWindowButton 刷 —— 两者文案必须一致。 -->
+                            <Grid.ContextMenu>
+                                <ContextMenu x:Name="VideoAreaMenu"
+                                             Opened="OnVideoAreaMenuOpened">
+                                    <MenuItem x:Name="MenuFillWindow" Header="铺满窗口"
+                                              Click="OnFillWindowClick">
+                                        <MenuItem.Icon>
+                                            <TextBlock x:Name="FillWindowMenuGlyph" Text="&#xE9A6;"
+                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                       FontSize="13" VerticalAlignment="Center" />
+                                        </MenuItem.Icon>
+                                    </MenuItem>
+                                </ContextMenu>
+                            </Grid.ContextMenu>
                             <!-- 弹幕层 -->
                             <Canvas x:Name="DanmakuCanvas" Background="Transparent" IsHitTestVisible="False"
                                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
