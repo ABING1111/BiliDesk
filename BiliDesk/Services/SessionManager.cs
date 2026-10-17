@@ -262,11 +262,49 @@ public class SessionManager
     /// </summary>
     public void Clear()
     {
-        Current = new Session();
+        // ★★ 2026-10-17 修「退出登录后无法播放, 提示 B站限流」:
+        //
+        //   `Current = new Session()` 会把 buvid3/buvid4 **一起清空**。于是登出之后这台设备
+        //   在 B 站眼里变成"一台**从没见过的新设备**": 第一个请求还没拿到指纹就发了出去,
+        //   紧接着又要现领指纹再重发 —— 一台"零历史的新设备"连着打同一个接口,
+        //   正是最典型的风控特征, 于是稳定吃到 -412。
+        //   (重新登录后正常, 因为 SESSDATA 本身就是被认可的凭据, 不需要靠指纹"自证"。)
+        //
+        //   ⇒ **登录凭据要清, 设备身份要留**。buvid 是"这台机器的匿名编号",
+        //     它与"我是谁(SESSDATA)"无关; 把它连同登录态一起丢掉, 等于每次登出
+        //     都给自己换一台新设备。保留它既不会泄露身份(匿名编号而已),
+        //     也让登出前后的请求特征保持连续。
+        var keepBuvid3 = Current.Buvid3;
+        var keepBuvid4 = Current.Buvid4;
+        var keepBuvidFp = Current.BuvidFp;
+
+        Current = new Session
+        {
+            Buvid3 = keepBuvid3,
+            Buvid4 = keepBuvid4,
+            BuvidFp = keepBuvidFp,
+        };
         _loaded = true;
+        // ★★ 删文件 → 再把"保留下来的设备指纹"写回去(2026-10-17 实测发现漏了这步):
+        //   Clear() 的原设计是"删掉整个 session.json = 未登录"。但现在我们**刻意保留**了
+        //   buvid3/buvid4, 而文件已经删了 —— 若不落盘, 内存里有、磁盘上无:
+        //     · 下次重启 Load() 读不到 buvid ⇒ 变成一台"新设备"重新领一对
+        //       (与登出前连续的身份被打断, 重新登录后还要再换一次);
+        //     · 更糟的是登出后若进程被杀, 这次保留就白做了。
+        //
+        // ★★ 为什么不复用 Save(): 它写的是 `Current`(字段全、含 bili_jct 等),
+        //   而这里只想要"一个只含 buvid 的干净会话"; 更关键的是 `Save()` 的闸门二
+        //   依赖 `OnDiskHasLogin()` 判断"要不要拒绝覆盖", 在文件刚被删、又需要
+        //   写一份"未登录"回去的语境下, 语义是拧着的。⇒ 直接写, 一次到位。
         try
         {
-            if (File.Exists(FilePath)) File.Delete(FilePath);
+            var keep = new Session
+            {
+                Buvid3 = keepBuvid3,
+                Buvid4 = keepBuvid4,
+                BuvidFp = keepBuvidFp,
+            };
+            File.WriteAllText(FilePath, JsonSerializer.Serialize(keep, JsonOpts));
         }
         catch
         {
@@ -280,7 +318,16 @@ public class SessionManager
         //   ⇒ EnsureBuvidAsync 直接短路, 既不重新领也不落盘
         //   ⇒ 用户重新登录后 session.json 里 buvid 是空的, 点赞照旧报风控。
         //   (用户原话: "退出登录, 在最新的 debug 上重新登录, 风控问题出现")
-        Svc.Api.ResetBuvidCache();
+        //
+        // ★★ 2026-10-17: 这条**只适用于磁盘上指纹也已失效**的情况。
+        //   上面 Clear() 已经改成**保留** buvid3/buvid4 了(登出不该让设备变成"新设备"),
+        //   所以内存里这对恰恰是要**留着继续用**的 —— 这里再无条件清一次, 等于把刚保留的
+        //   又扔了: 内存空、磁盘有 ⇒ EnsureBuvidAsync 会从磁盘把同一对补回来, 看似无碍;
+        //   但在补齐之前的那一个请求仍然是**无指纹**的, 而"零历史的新设备"正是风控最爱拦的。
+        //   ⇒ 只有磁盘上确实已经没有指纹时才需要清内存(让下一次重新领)。
+        var sessNow = Current;
+        if (string.IsNullOrEmpty(sessNow.Buvid3) || string.IsNullOrEmpty(sessNow.Buvid4))
+            Svc.Api.ResetBuvidCache();
 
         Changed?.Invoke();
     }

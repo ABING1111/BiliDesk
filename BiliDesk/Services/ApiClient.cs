@@ -61,7 +61,8 @@ public class ApiClient
 
     private async Task<(int code, string? msg, JsonElement? data)> GetJsonAsync(
         string url, Dictionary<string, string>? ps, bool sign = false, bool allowRetry = true,
-        string? referer = null, bool fingerprint = true, string payloadKey = "data")
+        string? referer = null, bool fingerprint = true, string payloadKey = "data",
+        int riskRetries = RiskRetryMax)
     {
         ps ??= new Dictionary<string, string>();
         if (sign)
@@ -119,6 +120,38 @@ public class ApiClient
                 return await GetJsonAsync(url, ps, sign: true, allowRetry: false,
                     referer: referer, fingerprint: fingerprint, payloadKey: payloadKey);
             }
+
+            // ★★★ -412「request was banned」= **IP 级限流**, 等一下重试即可(2026-10-17 修)
+            //
+            //   实测结论(探针 bd-probe-412 / cookie / cookie2 / conn, 四轮对照互相印证):
+            //   ① 同一个 URL, 上一秒 code=0、这一秒 -412, **完全不带 cookie 也一样**;
+            //   ② 换一组全新 buvid 仍被拦, 而同一时刻另一组又能过;
+            //   ③ 完全相同的请求连打 12 次, **code=0 与 -412 交替出现**;
+            //   ④ 等 45~180 秒后完全恢复(10 次连打全 code=0)。
+            //   ⇒ 它既不是"免登录 1080P"那组参数的问题(playurl 根本还没走到,
+            //     未登录取**详情**就已经被拦), 也不是本地指纹被标记 —— **是 IP 被限流**。
+            //   ⇒ 唯一有效的处理是**退避后重试**; 换指纹只会白白多打一次请求。
+            //
+            //   重试策略: **退避重试两次**(1.5s → 3s)。实测(探针 bd-probe-conn)这个限流是
+            //   "隔一阵就随机过、隔一阵又随机不过": 同一 IP、同一个 URL、完全不带 cookie,
+            //   连打 12 次里出现过 code=0 与 -412 **交替**。⇒ 一次退避不一定够,
+            //   而多试几次也不会把请求堆上去(总共只多 2 次, 且都带等待)。
+            if (riskRetries > 0 && code == RiskRateLimitedCode)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[Api] {url} 命中 -412(IP 限流), 退避 {RiskBackoffMs * riskRetries}ms 后重试");
+                await Task.Delay(RiskBackoffMs * riskRetries);
+                return await GetJsonAsync(url, ps, sign: sign, allowRetry: allowRetry,
+                    referer: referer, fingerprint: fingerprint, payloadKey: payloadKey,
+                    riskRetries: riskRetries - 1);
+            }
+
+            // 退避重试之后**仍然是** -412: 说明限流窗口比我们退避的那一下更长。
+            // 给一句能看懂的话, 别把 "request was banned" 这种裸英文甩给用户 ——
+            // 它看起来像"账号被封了", 而实际只是"这个 IP 暂时请求过密"。
+            if (code == RiskRateLimitedCode)
+                return (code, "当前网络请求过于频繁(B站限流), 请稍候再试", data);
+
             return (code, msg, data);
         }
         catch (HttpRequestException ex)
@@ -294,6 +327,21 @@ public class ApiClient
 
     /// <summary>写操作预热是否已经做过(每进程一次, 失败不重试以免拖慢用户点击)</summary>
     private bool _writeReady;
+
+    /// <summary>
+    /// B 站的 IP 级限流码: <c>-412 request was banned</c>(2026-10-17 实测钉死)
+    ///
+    /// ★ 它**不是**账号/设备被封: 实测同一 IP 上"这一秒 -412、下一秒 code=0",
+    ///   且**完全不带 cookie** 也照样被拦 ⇒ 与 buvid、登录态、参数都无关。
+    ///   表现形式是短时间内请求过密, 退避一下就好(见 GetJsonAsync 里那处重试)。
+    /// </summary>
+    private const int RiskRateLimitedCode = -412;
+
+    /// <summary>命中 -412 后的退避基数(毫秒)。第 n 次重试等待 n × 该值, 形成 1.5s / 3s。</summary>
+    private const int RiskBackoffMs = 1500;
+
+    /// <summary>-412 最多重试几次(见 GetJsonAsync 里那处的实测依据)</summary>
+    private const int RiskRetryMax = 2;
 
     /// <summary>
     /// 清掉内存里的设备指纹缓存(下次 <see cref="EnsureBuvidAsync"/> 会重新领并落盘)。
@@ -1550,7 +1598,40 @@ public class ApiClient
         try
         {
             await EnsureBuvidAsync();
-            // ---- 1. DASH(fnval=16): 清晰度不受 html5 平台 720P 限制 ----
+
+            // ★★★ 2026-10-17 播放器手术第 1 步: durl 合流单流**按需**优先(仅 ≤720P)。
+            //
+            //   背景(全部实测, 探针 bd-probe-muxed / muxed2 / muxed5):
+            //   DASH 双流要用 `:input-slave` 把音轨挂到视频流上, 而 libvlc 3.0.20 在
+            //   **带 input-slave 的组合**下, 对 frag-MP4 的远距离 seek 会**内部失败**
+            //   (cannot seek ⇒ 位置掉回开头), 这就是"拖过去又跳回去、画面卡死"的根因。
+            //   durl(fnval=1) 是**音视频已合流的单个 MP4**, 不需要 input-slave; 配
+            //   `:demux=avformat` 后实测来回 7 跳全部准确(偏差 0.9~2.2s)且画面持续推进。
+            //
+            //   ★ 代价: durl **封顶 720P**(实测带不带 ApplyTryLook 都一样, bd-probe-muxed3),
+            //     而 DASH 能到 1080P ⇒ 只有用户真的要 ≤720P 时才值得走 durl。
+            //
+            // ★★★ 两个必须避开的坑(都实测踩过, 用户报"几乎所有视频都是 720p"):
+            //   ① **"无条件先试 durl"是错的**: 默认档 1080P 时 durl 只返回 [64,16],
+            //      `actualQn` 变 64, 而播放器用 actualQn 覆盖 `_currentQn`
+            //      (见 FillQualityMenu) ⇒ 之后每条视频都被钉死在 720P;
+            //      画质菜单也被换成 durl 的列表 ⇒ **1080P 那档直接消失**, 用户再也选不回去。
+            //   ② **AutoQn(=0) 不是最低画质, 而是"自动(最高可用)"**(见 QualityPreference,
+            //      内部换算成 127)。所以判"是否 ≤720P"必须**先排除它** ——
+            //      直接写 `qn <= 64` 会把 0 也吃进去, 于是用户默认就落进 durl 那条路。
+            var isAuto = qn == QualityPreference.AutoQn;
+            if (!isAuto && qn <= 64)
+            {
+                var (mUrl, mBackups, mQn, mQualities, durMux) = await FetchMuxedAsync(bvid, cid, qn);
+                if (!string.IsNullOrEmpty(mUrl))
+                {
+                    if (mQualities.Count > 0) qualities = mQualities;
+                    return (true, null, mUrl, mBackups, durMux, qualities, mQn, null, null);
+                }
+                // durl 取不到(多段切片/大会员/该档无源) → 落到下面的 DASH, 行为与手术前一致
+            }
+
+            // ---- DASH(fnval=16): 清晰度不受 html5 平台 720P 限制 ----
             var ps = new Dictionary<string, string>
             {
                 ["bvid"] = bvid,
@@ -1720,6 +1801,8 @@ public class ApiClient
             }
 
             // ---- 2. 回退 durl 单流 ----
+            // 手术前 durl 只在这条"兜底"路径上被用到; 现在它同时也是 ≤720P 的**主路**。
+            // 这里仍然保留兜底: DASH 取不到(付费/大会员/该档无源)时, 单流往往还能救回来。
             var (mUrl2, mBackups2, mQn2, mQualities2, dur2) = await FetchMuxedAsync(bvid, cid, qn);
             if (mUrl2 == null)
                 return (false, "DASH 与 durl 都没能取到可播放的地址(可能是大会员/付费专属, 或该清晰度无源)",
@@ -1846,12 +1929,40 @@ public class ApiClient
 
         ps["try_look"] = "1";
         // 四个设备指纹参数必须**成组**出现, 缺一不可(见上方必要性矩阵)。
-        // 取值本身几乎不被校验: dm_img_str / dm_cover_img_str 用随机 base64 即可,
-        // 但要保证是"非空的、形状像指纹"的串 —— 这是 PiliPlus 用随机 base64 的原因。
+        // ★★ 2026-10-17 修「退出登录后无法播放」: 必须是**进程内固定的一组**, 不能每次随机。
+        //   上一版用 RandomBase64 每次请求都生成新值 —— 这正是"长驻进程才出问题、
+        //   探针复现不了"的原因: 探针只发一两次请求, 而产品每看一个视频、每切一次清晰度
+        //   都打一次 playurl ⇒ **同一个 buvid 却每次带着一组全新的设备指纹**,
+        //   服务端眼里就是"一台设备在不断更换自己的硬件特征" ⇒ 判为爬虫 ⇒ -412。
+        //   (重新登录后正常, 因为 SESSDATA 给设备特征不一致背了书。)
+        //   取值本身几乎不被校验(形状像指纹即可), 所以固定下来的成本为零。
         ps["dm_img_list"] = "[]";
-        ps["dm_img_str"] = RandomBase64(16, 64);
-        ps["dm_cover_img_str"] = RandomBase64(32, 128);
+        ps["dm_img_str"] = StableDeviceFingerprint(16, 64);
+        ps["dm_cover_img_str"] = StableDeviceFingerprint(32, 128);
         ps["dm_img_inter"] = "{\"ds\":[],\"wh\":[0,0,0],\"of\":[0,0,0]}";
+    }
+
+    /// <summary>dm_img_str 的进程内缓存(一台设备一套, 见 StableDeviceFingerprint)</summary>
+    private static string? _imgStrCache;
+
+    /// <summary>dm_cover_img_str 的进程内缓存(与上面那份相互独立)</summary>
+    private static string? _coverImgStrCache;
+
+    /// <summary>
+    /// 进程内固定的"设备指纹"随机串: 同一字段每次调用返回**同一个值**。
+    ///
+    /// ★ 为什么不能每次都随机(2026-10-17 实测教训, 见 ApplyTryLook):
+    ///   同一 buvid 每次请求都换一组硬件特征, 在服务端看来就是"设备特征不稳定的爬虫",
+    ///   于是稳定 -412。而**探针复现不了**这个 bug —— 它只发一两次请求,
+    ///   只有长驻进程连续取流才会暴露。这与 MEMORY 里
+    ///   "探针的 ApiClient 是全新实例, 用户跑的是长驻进程"那条教训是同一个模式。
+    /// </summary>
+    private static string StableDeviceFingerprint(int minLen, int maxLen)
+    {
+        // 用 maxLen 区分两个字段, 各缓存一份(彼此独立, 但各自稳定)
+        if (maxLen <= 64)
+            return _imgStrCache ??= RandomBase64(minLen, maxLen);
+        return _coverImgStrCache ??= RandomBase64(minLen, maxLen);
     }
 
     /// <summary>生成指定长度范围内的随机 base64 串(用于 dm_img_str / dm_cover_img_str)</summary>
