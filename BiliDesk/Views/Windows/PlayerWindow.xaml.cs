@@ -640,6 +640,38 @@ public partial class PlayerWindow : FluentWindow
                 $"\n[EncounteredError] bvid={_currentBvid} cid={_currentCid} lastUrl={_lastPlayUrl}\n");
         }));
 
+        // ★★★ vout 建立/重建的那一刻就把原生窗口底色处理掉(2026-10-17, 修"最大化/还原后白块")。
+        //   为什么必须要这个事件、不能只靠定时器: libvlc 的 `Static` 子窗口是**新建**出来的,
+        //   它第一次上屏时就已经是白的了 —— 定时器最快也要 120ms 之后才轮到, 那 120ms
+        //   在浅色主题下就是用户看到的那一下"白块"。何况最大化/还原/换清晰度都会重建它。
+        //   ⇒ 挂在这里: vout 一出现就立刻刷黑 + 起一轮短时守护。
+        // ★★ 这里**故意同步执行、不走 Dispatcher**(与别的事件处理器不同):
+        //   `Vout` 在 libvlc 的 vout 线程上触发, 而"改类背景刷"是纯 Win32 调用,
+        //   不碰任何 WPF 对象 —— 走 Dispatcher 会把动作推迟到下一轮消息循环, 就晚了。
+        //   原生回调里抛异常会直接终结进程, 所以整段包在 try 里。
+        // ★ 参数 `Count` = 当前 vout 个数; 为 0 表示 vout 被销毁, 不必处理。
+        _mp.Vout += (_, e) =>
+        {
+            if (_closing || e.Count <= 0) return;
+            try
+            {
+                var hwnd = FindVideoStaticWindow();
+                if (hwnd != IntPtr.Zero) VideoBackdropInterop.PaintClassBackgroundBlack(hwnd);
+            }
+            catch { /* 原生回调里绝不能抛 */ }
+
+            // UI 线程上再起一轮短时守护(兜住"vout 稍后才建好"与"稍后又被重绘"）
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (_closing) return;
+                    StartVideoBackdropFix();
+                }));
+            }
+            catch { /* 窗口正在销毁 */ }
+        };
+
         _currentBvid = bvid;
         // ★ 这条构造函数路径(直接带 bvid new 出窗口)**不走 ResetForNewMedia**
         //   —— 而 _currentQn 的字段初值是"内置默认档"而不是用户设置。
@@ -5090,6 +5122,13 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void ApplyFullscreenLayout(bool on)
     {
+        // ★★★ 全屏切换期间**不要**让"最大化/还原黑罩"插手(2026-10-17):
+        //   全屏 = 最大化 + 收顶栏, 所以它必然触发 WM_SYSCOMMAND / 尺寸剧变;
+        //   而这条路径本来就有自己的一套遮罩时序(下面的 ArmFullscreenCover / ReleaseFullscreenCover)。
+        //   两套叠加的实测后果: 退全屏后视频区**黑约 0.9 秒**(被这边的兜底计时器按住)。
+        //   ⇒ 整段(含之后由消息循环送达的状态变化)排掉, 时长给足 —— 进出全屏最慢也就几百毫秒。
+        SuppressStateCoverFor(1600);
+
         if (on)
         {
             // ★ 全屏期间**禁止**"失焦换窗口底色"那套处理接管(2026-10-06):
@@ -5472,7 +5511,262 @@ public partial class PlayerWindow : FluentWindow
 
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreen();
 
-    // ------------------------------------------------------------ 收藏状态(右侧按钮 + 顶栏图标)
+    // ---------------------------------------- 最大化 / 还原: 视频区白块
+
+    /// <summary>
+    /// 窗口**最大化/还原**期间把视频区压黑, 盖住 libvlc 重协商 vout 时的白底。
+    ///
+    /// ★★★ 为什么必须有这一段(2026-10-17 用户澄清"全屏"其实是**窗口最大化**后立刻查清):
+    ///   视频区原有的黑罩(<see cref="ArmResizeCover"/>)**只挂在
+    ///   `WM_ENTERSIZEMOVE`/`WM_EXITSIZEMOVE` 上** —— 那是"用户拖窗口边缘改大小"的消息。
+    ///   而最大化/还原走的是 **WM_SYSCOMMAND + WM_SIZE**, 根本不经过 ENTERSIZEMOVE
+    ///   ⇒ 那段"客户区尺寸剧变 + vout 重协商"全程**没有任何遮罩**,
+    ///   于是浅色主题下还原之后视频区上下就露出白块。
+    ///   (深色主题下露出来的也是同一块白, 只是周围本来就暗, 不如浅色扎眼 —— 与用户
+    ///     "浅色才明显"的描述一致。)
+    ///
+    /// ★ 为什么还要重刷原生窗口底色(调 `StartVideoBackdropFix`):
+    ///   最大化/还原会让 libvlc 按新尺寸**重建 vout**, 新的 `Static` 子窗口又没被刷黑;
+    ///   而第一版的定时器在起播后几拍就停了(`_videoBackdropTries` 用完), 这时没人管。
+    ///
+    /// ★ 为什么用"遮罩 + 延迟撤"而不是直接切窗口底色:
+    ///   与全屏同一套理由 —— `VideoView` 是 HwndHost(airspace), 画在所有 WPF 元素之上,
+    ///   窗口/RootGrid 的底色**盖不住它**; 只有 `VideoAreaRoot`(在 VideoView.Content 浮层里)
+    ///   压得住, 见 <see cref="ArmFullscreenCover"/> 的说明。
+    ///
+    /// ★ 为什么不等状态稳定后再压、而是**先压**:
+    ///   白块出现在"尺寸正在变"的那几十毫秒里, 等 `StateChanged` 送达时窗口往往已经重绘完,
+    ///   那块白早就闪过去了。所以顺序是: 压黑 → 改状态 → 让新帧来撤。
+    ///
+    /// ★★★ 这里**不是"压一次就按住"**, 而是"每次尺寸变化都重新压 + 重新计时"(2026-10-17):
+    ///   最大化/还原在 DWM 过渡动画里会连着发好几次尺寸变化(几十毫秒一次),
+    ///   每次都会让 libvlc 重协商一轮 vout。如果只压第一次, 后面的每一轮又会露白
+    ///   (实测: 只压第一次 → 还原后边带亮度 242; 每次都重压 → 0)。
+    ///   ⇒ 语义是"**只要尺寸还在变, 就一直压着**", 与拖边缘那条(ENTER→EXIT)一致。
+    /// </summary>
+    private void ArmMaximizeCover()
+    {
+        if (_closing || VideoAreaRoot == null) return;
+        _resizeHold = true;
+        _maximizeCoverArmed = true;
+        VideoAreaRoot.Background = Brushes.Black;
+        _fullscreenCoverArmed = true;
+
+        // ★★ 同时**立刻**重刷 vout 原生底色并起短时守护(2026-10-17 加):
+        //   尺寸剧变后 libvlc 会重新协商 vout, 那一刻 `Static` 子窗口会用**自己的类默认背景(白)**
+        //   擦一次背景 —— 而它铺满整个视频区, 盖在画面之外的地方(letterbox/控制栏下方)。
+        //   实测(bd-probe-barwho): 三者的几何完全一致, 白条却出现在底部 12% 处
+        //   ⇒ 白不是"窗口没跟上布局", 就是 `Static` 自己擦出来的。
+        //   ⇒ 每次尺寸变化都重新藏它 + 刷黑, 并让守护把接下来 3 秒盖住。
+        StartVideoBackdropFix();
+
+        // ★ 关键: 每次进来都**重新起算** settle —— 尺寸还在变就一直压着。
+        _maximizeSettle ??= new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(MaximizeSettleMs)
+        };
+        _maximizeSettle.Tick -= OnMaximizeSettle;
+        _maximizeSettle.Tick += OnMaximizeSettle;
+        _maximizeSettle.Stop();
+        _maximizeSettle.Start();
+
+        // ★ 绝对兜底: `_resizeHold` 会让 ReleaseFullscreenCover 直接 return, 而最大化/还原
+        //   **没有** WM_EXITSIZEMOVE 那样的结束消息。万一 settle 也没等到, 遮罩就永远黑着
+        //   (用户会看到"视频区全黑")。所以再挂一道无条件放闸的计时器。
+        _maximizeCoverSafety ??= new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(MaximizeCoverSafetyMs)
+        };
+        _maximizeCoverSafety.Tick -= OnMaximizeCoverSafety;
+        _maximizeCoverSafety.Tick += OnMaximizeCoverSafety;
+        _maximizeCoverSafety.Stop();
+        _maximizeCoverSafety.Start();
+
+        // 普通兜底计时器在按住期间只做"万一"之用(见 OnFullscreenCoverTimeout → ReleaseFullscreenCover
+        // 会被 _resizeHold 挡住), 这里启动只是保持与拖边缘那条路同构。
+        _fullscreenCoverTimer ??= new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(FullscreenCoverTimeoutMs)
+        };
+        _fullscreenCoverTimer.Tick -= OnFullscreenCoverTimeout;
+        _fullscreenCoverTimer.Tick += OnFullscreenCoverTimeout;
+        _fullscreenCoverTimer.Start();
+    }
+
+    /// <summary>
+    /// 尺寸已经稳定(一段时间没有再变)⇒ 放闸, 让"下一帧到达"立刻揭幕。
+    /// ★ 只放闸、不直接揭幕: 尺寸刚停的这几帧 vout 可能还在重协商, 立刻揭幕会露白。
+    ///   交给新帧(TimeChanged/Playing 会调 ReleaseFullscreenCover)是最准的时机。
+    /// </summary>
+    private void OnMaximizeSettle(object? sender, EventArgs e)
+    {
+        _maximizeSettle?.Stop();
+        if (_closing) return;
+        _resizeHold = false;
+    }
+
+    /// <summary>
+    /// 绝对兜底: 无条件放闸并撤罩。
+    /// ★ 走到这里说明"新帧"和"状态回调"都没来 —— 再不放闸就是永久黑屏。
+    ///   宁可多露一帧白, 也不能让用户对着黑屏等下去。
+    /// </summary>
+    private void OnMaximizeCoverSafety(object? sender, EventArgs e)
+    {
+        _maximizeCoverSafety?.Stop();
+        if (_closing) return;
+        _resizeHold = false;
+        _maximizeCoverArmed = false;
+        ReleaseFullscreenCover();
+    }
+
+    /// <summary>
+    /// 尺寸"稳定"的判定窗口(ms)。
+    /// ★ 取 260 而不是 100: 最大化的 DWM 过渡动画实测约 200ms, 期间尺寸一直在变;
+    ///   窗口太短会在动画中途就放闸, 后半段的白又露出来(实测 160ms 时仍有 242 的白)。
+    ///   "尺寸停了再放闸"的代价只有这一小段黑屏, 而它正好被过渡动画盖住, 用户看不到。
+    /// </summary>
+    private const int MaximizeSettleMs = 260;
+
+    /// <summary>绝对兜底时长(ms)。见 <see cref="ArmMaximizeCover"/> 里那段说明。</summary>
+    private const int MaximizeCoverSafetyMs = 1200;
+
+    private DispatcherTimer? _maximizeSettle;
+    private DispatcherTimer? _maximizeCoverSafety;
+
+    /// <summary>
+    /// 最大化/还原结束: 放闸让遮罩能撤, 并把新 vout 的原生底色再刷一次。
+    ///
+    /// ★ 顺序必须是"先放闸再刷": 遮罩要靠"新帧到达"撤掉(TimeChanged/Playing 都会调
+    ///   <see cref="ReleaseFullscreenCover"/>), 而它会检查 `_resizeHold`。
+    /// ★ 这里**不**直接揭幕: 尺寸刚变完的这几帧 vout 可能还在重协商, 立刻揭幕会露白。
+    ///   交给"新帧到达"撤(最准), 计时器只兜底(暂停中/极短片没有新帧)。
+    /// </summary>
+    private void ReleaseMaximizeCover()
+    {
+        if (_closing) return;
+        _maximizeCoverSafety?.Stop();
+        _resizeHold = false;
+        _maximizeCoverArmed = false;
+
+        // 状态已经落定 ⇒ 现在的窗口尺寸就是最终尺寸, 此时改类背景刷不会被打断
+        StartVideoBackdropFix();
+    }
+
+    /// <summary>
+    /// 窗口状态落定(基类在 <c>OnStateChanged</c> 里调): 放掉最大化期间的黑罩 + 重刷 vout 底色。
+    /// ★ 全屏切换自己有一套更严格的收尾(见 ApplyFullscreenLayout), 这里跳过它免得两套互抢。
+    /// </summary>
+    protected override void OnWindowStateSettled()
+    {
+        if (_closing) return;
+        if (_isFullscreen || _suppressStateCover) return;   // 全屏那条路由 ApplyFullscreenLayout 自己收尾
+        if (!_maximizeCoverArmed) return;
+
+        _maximizeCoverArmed = false;
+        ReleaseMaximizeCover();
+    }
+
+    /// <summary>
+    /// 标记"接下来一段时间内, 窗口状态变化由调用方自己负责遮罩"。
+    ///
+    /// 见 <see cref="_suppressStateCover"/> 的说明 —— 进出全屏必须走这个,
+    /// 否则两套遮罩叠加会把画面压黑近一秒。
+    /// </summary>
+    private void SuppressStateCoverFor(int ms)
+    {
+        _suppressStateCover = true;
+        _suppressStateCoverTimer ??= new DispatcherTimer();
+        _suppressStateCoverTimer.Tick -= OnSuppressStateCoverDone;
+        _suppressStateCoverTimer.Tick += OnSuppressStateCoverDone;
+        _suppressStateCoverTimer.Stop();
+        _suppressStateCoverTimer.Interval = TimeSpan.FromMilliseconds(ms);
+        _suppressStateCoverTimer.Start();
+    }
+
+    private void OnSuppressStateCoverDone(object? sender, EventArgs e)
+    {
+        _suppressStateCoverTimer?.Stop();
+        _suppressStateCover = false;
+    }
+
+    /// <summary>
+    /// 上一次看到的窗口尺寸, 用来发现"尺寸变了但没收到 WM_SYSCOMMAND"的那条路
+    /// (例如代码里直接赋 `WindowState`, 或系统动画/贴边布局替我们最大化)。
+    /// 见 <see cref="OnLayoutSizeChanged"/>。
+    /// </summary>
+    private Size _lastMeasuredSize;
+
+    /// <summary>
+    /// 兜底: 客户区尺寸**真的变了**但没压过遮罩时补压一次。
+    ///
+    /// ★ 为什么需要兜底: `WM_SYSCOMMAND` 只覆盖"用户点按钮/双击标题栏/快捷键"那几条路;
+    ///   而**代码里直接赋 `WindowState`**(ScMaximize 那套之外)以及系统的"贴边布局(Aero Snap)"
+    ///   不一定会经过它。2026-10-17 探针实测: 直接 `win.WindowState = Maximized` 就不发
+    ///   WM_SYSCOMMAND, 那条路原本完全没有遮罩。
+    /// ★ 只在"从没压过"时补, 且**不设** `_maximizeCoverArmed`: 这次补压没有对应的
+    ///   WM_SYSCOMMAND, 由计时器兜底撤罩即可(见 ReleaseMaximizeCover 的说明)。
+    /// </summary>
+    protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
+    {
+        base.OnRenderSizeChanged(sizeInfo);
+
+        if (_closing || !IsLoaded) return;
+        if (_isFullscreen || _suppressStateCover) return;
+        if (sizeInfo.PreviousSize.Width < 1 || sizeInfo.PreviousSize.Height < 1) return;
+        _lastMeasuredSize = sizeInfo.NewSize;
+
+        // ★★ 每次尺寸变化都**重新压 + 重新计时**(2026-10-17):
+        //   最大化/还原的过渡动画期间尺寸会连着变好几次, 每次 libvlc 都重协商一轮 vout。
+        //   只压第一次的话, 后面每一轮又露白(实测: 只压第一次 → 还原后边带 242; 每次都压 → 0)。
+        //   ⇒ 只要尺寸还在变, 就一直压着(不管幅度大小); 尺寸停了由 settle 计时器放闸。
+        //   ★ 这里**不能**按"变化幅度"过滤: 还原动画的后半段变化幅度会变小,
+        //     一旦据此放闸, 那一刻遮罩就撤了, 而 vout 还在重协商 ⇒ 白块又回来了(实测 242)。
+        var dw = Math.Abs(sizeInfo.NewSize.Width - sizeInfo.PreviousSize.Width);
+        var dh = Math.Abs(sizeInfo.NewSize.Height - sizeInfo.PreviousSize.Height);
+        if (dw > 0.5 || dh > 0.5) ArmMaximizeCover();
+    }
+
+    /// <summary>最大化/还原的黑罩是否压着(见 <see cref="ArmMaximizeCover"/>)</summary>
+    private bool _maximizeCoverArmed;
+
+    /// <summary>
+    /// 即将执行"最大化/还原/最小化"(WM_SYSCOMMAND) 时压黑视频区。
+    ///
+    /// ★ 为什么必须抢在**尺寸变化之前**: 白块出现在客户区尺寸剧变的那几十毫秒里;
+    ///   等 `OnStateChanged` 送达时窗口已经重绘完, 那块白早就闪过去了。
+    /// ★ 最小化也压上: 它同样会让 vout 重协商, 而恢复时露出来的白更显眼
+    ///   (窗口整个重新可见)。恢复(SC_RESTORE)同理。
+    /// </summary>
+    protected override void OnSystemCommand(int command)
+    {
+        if (_closing) return;
+        // 视频全屏期间那条路由 ApplyFullscreenLayout 自己管(它连着改多次窗口状态,
+        // 这里再压一次会和它的收尾打架)。
+        if (_isFullscreen || _suppressStateCover) return;
+
+        if (command is SC_MAXIMIZE or SC_RESTORE or SC_MINIMIZE)
+        {
+            ArmMaximizeCover();
+        }
+    }
+
+    /// <summary>
+    /// 为真时**不要**为窗口状态变化压黑罩。
+    ///
+    /// ★★★ 为什么必须有它(2026-10-17 加, 修一处自己引入的回归):
+    ///   "全屏"本身就是"最大化 + 收顶栏", 所以进出全屏**也会**触发
+    ///   `WM_SYSCOMMAND`/尺寸剧变 —— 而全屏那条路已经有一套更严格的遮罩时序
+    ///   (见 ApplyFullscreenLayout, 它自己 Arm/Release)。两边都压的后果实测是:
+    ///   退全屏时这边又压了一层、且它要等 `_resizeHold` 的兜底超时才放
+    ///   ⇒ 视频区在退全屏后**黑约 0.9 秒**(探针 bd-probe-fullscreen 立刻抓到)。
+    ///   ⇒ 用这个标志把"全屏切换期间"整段排除掉。
+    ///
+    /// ★ 用**计时器**而不是"方法开头置真/结尾置假": 状态变化与尺寸变化是
+    ///   `ApplyFullscreenLayout` 返回**之后**才由消息循环送达的, 结尾置假根本盖不住。
+    /// </summary>
+    private bool _suppressStateCover;
+
+    private DispatcherTimer? _suppressStateCoverTimer;
 
     /// <summary>收藏状态只有这一个入口 —— 分散着改很容易出现两边显示不一致</summary>
     private void SetFavorited(bool favorited)
@@ -7730,61 +8024,82 @@ public partial class PlayerWindow : FluentWindow
     {
         var hwnd = FindVideoStaticWindow();
         if (hwnd == IntPtr.Zero) return;
+        // ★★ 只刷**宿主窗口**的类背景刷, 不隐藏 `Static`(2026-10-17 最终版):
+        //   早两版试过 `ShowWindow(Static, SW_HIDE)`, 在探针里能把边带刷到 0,
+        //   但真机一跑就发现 **整个视频画面也没了** —— 说明这台机器上画面就是 `Static`
+        //   那条链画出来的(与探针顶部的拓扑假设不同, 不同 vout/显卡组合不一样)。
+        //   ⇒ 隐藏它风险太大, 不能作为产品行为的默认值。
+        //   ⇒ 回到"刷父窗口类背景刷"这一条: 探针实测 242→0, 且画面不受影响。
         VideoBackdropInterop.PaintClassBackgroundBlack(hwnd);
     }
 
     // --- 起播后把视频区原生窗口底色刷黑(见 ApplyHwndHostBlackBackground) ---
-    private DispatcherTimer? _videoBackdropTimer;
-    private int _videoBackdropTries;
-
-    /// <summary>重试上限: 10 × 120ms ≈ 1.2s, 足够覆盖"vout 建立 + 首次出帧"那段</summary>
-    private const int VideoBackdropMaxTries = 10;
-    private const int VideoBackdropIntervalMs = 120;
 
     /// <summary>
-    /// 刷到第几拍就收手(而不是第一拍命中即停)。
-    /// ★ 实测: 第一拍拿到句柄时那个 `Static` 可能还没真正显示, 刷完会被后续重绘盖回白色。
-    ///   多刷几拍把"稳定后的那次重绘"也覆盖住, 代价只有几百毫秒的定时器。
-    /// </summary>
-    private const int VideoBackdropSettleTries = 4;
-
-    /// <summary>
-    /// 起播后启动"把视频区底色刷黑"的有限次重试。
+    /// **短时守护**: 每 <see cref="VideoBackdropGuardIntervalMs"/> 检查一次 `Static` 有没有
+    /// 又被 libvlc 显示出来, 是就立刻再藏一次。
     ///
-    /// ★ 为什么要重试(2026-10-17 实测): `Playing` 事件触发时 libvlc 的 `Static` 子窗口
-    ///   **还没建出来** —— 那一刻 `FindVideoStaticWindow()` 返回 0, 修复被静默跳过,
-    ///   用户看到的就是"一直白着"。vout 建好要 200ms~1s(随片源/网速变), 排一拍常常还太早。
-    /// ★ 命中即停: 一旦成功就不再重试, 不会常驻跑定时器。
+    /// ★★★ 为什么必须有它(2026-10-17 实测, 这是"白块依旧"的最后一层):
+    ///   libvlc 在 **vout 建立 / 重建 / 首帧到达** 时会自己调 `ShowWindow(Static, SW_SHOW)`,
+    ///   而我们的"藏一次"只在那一个瞬间有效 —— 它随后又被显示出来, 白色也跟着回来。
+    ///   探针时间轴抓到的正是这个: 遮罩压着时边带 0, 撤罩后变成 242(白),
+    ///   而那一刻 `Static` 的 `IsWindowVisible` 又是 True。
+    ///   ⇒ 靠"事件触发时藏一次"必然有竞态(事件与 libvlc 的内部调用顺序由它决定);
+    ///     只有**短时间反复确认**才能把这段时间盖死。
+    ///
+    /// ★ 为什么是"短时"而不是常驻: 起播/vout 重建之后约 2 秒内它才会折腾,
+    ///   之后再频繁去摸原生窗口纯属浪费(而且 `CompositionTarget` 那条零原生调用的规矩
+    ///   虽然只约束逐帧路径, 但也没必要给 DispatcherTimer 长期加活)。
     /// </summary>
-    private void StartVideoBackdropFix()
+    private DispatcherTimer? _videoBackdropGuard;
+    private int _videoBackdropGuardTicks;
+
+    /// <summary>守护检查间隔(ms)。比一帧长一点, 足够盖住"被重新显示"的窗口期。</summary>
+    private const int VideoBackdropGuardIntervalMs = 120;
+
+    /// <summary>守护跑多少拍收手。25 × 120ms = 3s, 覆盖 vout 重建 + 首帧那段。</summary>
+    private const int VideoBackdropGuardTicks = 25;
+
+    /// <summary>
+    /// 启动短时守护(见 <see cref="RunVideoBackdropGuard"/>): 在接下来约 3 秒内反复确认
+    /// `Static` 是隐藏的。尺寸剧变 / vout 重建 / 起播都要调一次。
+    /// </summary>
+    private void RunVideoBackdropGuard()
     {
         if (_closing) return;
-        ApplyHwndHostBlackBackground();   // 先试一次(本地文件常常已经在)
+        ApplyHwndHostBlackBackground();   // 立刻先来一次, 不等第一拍
 
-        _videoBackdropTries = 0;
-        _videoBackdropTimer ??= new DispatcherTimer
+        _videoBackdropGuard ??= new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(VideoBackdropIntervalMs)
+            Interval = TimeSpan.FromMilliseconds(VideoBackdropGuardIntervalMs)
         };
-        _videoBackdropTimer.Tick -= OnVideoBackdropTick;
-        _videoBackdropTimer.Tick += OnVideoBackdropTick;
-        _videoBackdropTimer.Start();
+        _videoBackdropGuard.Tick -= OnVideoBackdropGuardTick;
+        _videoBackdropGuard.Tick += OnVideoBackdropGuardTick;
+        _videoBackdropGuardTicks = 0;
+        _videoBackdropGuard.Stop();
+        _videoBackdropGuard.Start();
     }
 
-    private void OnVideoBackdropTick(object? sender, EventArgs e)
+    private void OnVideoBackdropGuardTick(object? sender, EventArgs e)
     {
-        if (_closing || ++_videoBackdropTries > VideoBackdropMaxTries)
+        if (_closing || ++_videoBackdropGuardTicks > VideoBackdropGuardTicks)
         {
-            _videoBackdropTimer?.Stop();
+            _videoBackdropGuard?.Stop();
             return;
         }
-        var hwnd = FindVideoStaticWindow();
-        if (hwnd == IntPtr.Zero) return;   // vout 还没建好, 下一拍再试
         ApplyHwndHostBlackBackground();
-        // ★ 不要一命中就停: 实测第一拍拿到句柄时 Static 可能还是 0 尺寸/还没真正显示,
-        //   刷了也会被后续重绘盖回白色。多跑几拍把"稳定后的一次重绘"覆盖住, 代价可忽略。
-        if (_videoBackdropTries >= VideoBackdropSettleTries) _videoBackdropTimer?.Stop();
     }
+
+    /// <summary>
+    /// 起播 / vout 重建 / 尺寸剧变后, 把视频区原生窗口底色处理干净并启动短时守护。
+    ///
+    /// ★ 为什么是"守护一段时间"而不是"刷几次就停"(2026-10-17 实测):
+    ///   `Playing` 触发时 `Static` 往往还没建出来(句柄 0); 建好之后 libvlc 还会在
+    ///   首帧/重建时把它**重新显示**出来。固定 4 拍的预算在这两种情况下都不够用 ——
+    ///   探针时间轴实测: 遮罩压着时边带 0, 撤罩后变 242, 而那一刻 `Static` 又是可见的。
+    ///   ⇒ 改成 3 秒内每 120ms 确认一次(见 <see cref="RunVideoBackdropGuard"/>)。
+    /// </summary>
+    private void StartVideoBackdropFix() => RunVideoBackdropGuard();
     /// <summary>
     /// 找 libvlc 那个铺满视频区的 `Static` 窗口(白边的作者)。
     ///

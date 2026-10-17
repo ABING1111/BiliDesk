@@ -23,6 +23,14 @@ public static class DwmInterop
     // DWMSBT 值: 1=None 2=Mica 3=Acrylic 4=Tabbed
     private const int DwmWcpRound = 2;         // 圆角窗口
 
+    // ---- 非客户区着色 ----
+    private const int DwmwaBorderColor = 34;
+    private const int DwmwaCaptionColor = 35;
+    /// <summary>DWMWA_COLOR_NONE: 让 DWM **不画**这一项(材质/桌面直接透上来)</summary>
+    private const int DwmColorNone = unchecked((int)0xFFFFFFFE);
+    /// <summary>DWMWA_COLOR_DEFAULT: 交还给系统默认配色</summary>
+    private const int DwmColorDefault = unchecked((int)0xFFFFFFFF);
+
     // ---- 窗口样式(GWL_STYLE) ----
     private const int GWL_STYLE = -16;
     /// <summary>WS_CAPTION = WS_BORDER | WS_DLGFRAME(0x00C00000)</summary>
@@ -268,6 +276,59 @@ public static class DwmInterop
 
 
     /// <summary>
+    /// 关掉 DWM 在客户区上叠的那两样"非客户区装饰": **caption 底色** 与 **1px 边框**。
+    ///
+    /// 只在"整窗都是玻璃区"(材质开启, GlassFrameThickness=-1)时才需要 —— 那时 DWM 会把
+    /// 客户区当成自己的地盘, 在顶端画一条 caption 底、沿外缘画一圈边框(实测各 36px / 1px)。
+    /// 本工程是自绘标题栏 + 自绘内容, 这两样纯属多余: 轻则让顶部与下方差一档色(用户报的
+    /// "灰色长条"), 重则把内容最上面那一条吃掉。
+    ///
+    /// ★ 用 <c>DWMWA_COLOR_NONE</c>(0xFFFFFFFE) 而不是涂成某个具体颜色:
+    ///   涂色只能"猜"对当前主题, 而材质/页面底是**动态**的(透明度可调、深浅两套、
+    ///   失焦又会换底), 猜必然过期; COLOR_NONE 是"别画", 永远正确。
+    /// ★ 不影响任何系统行为: 窗口过渡动画靠 <c>WS_CAPTION</c> 样式位, 与这两个颜色属性无关。
+    /// ★ 失败静默: 顶多还是那条带, 不能因为"修外观"让窗口起不来。
+    /// </summary>
+    public static void HideNonClientDecorations(Window window)
+    {
+        try
+        {
+            if (!IsWindows11) return;
+            var hwnd = GetHwnd(window);
+            if (hwnd == IntPtr.Zero) return;
+            SetAttr(hwnd, DwmwaCaptionColor, DwmColorNone);
+            SetAttr(hwnd, DwmwaBorderColor, DwmColorNone);
+        }
+        catch
+        {
+            // 忽略
+        }
+    }
+
+    /// <summary>
+    /// 把 caption/边框交还给系统默认配色(关掉材质时调)。
+    ///
+    /// ★ 必须**对称**地还原: 不还原的话, 关掉材质后窗口仍带着 COLOR_NONE,
+    ///   而那时客户区已不是玻璃区, 那条 caption 会露出 DWM 的**默认浅灰**,
+    ///   在深色主题下就是窗口顶端一道白边(比原来的问题更显眼)。
+    /// </summary>
+    public static void RestoreNonClientDecorations(Window window)
+    {
+        try
+        {
+            if (!IsWindows11) return;
+            var hwnd = GetHwnd(window);
+            if (hwnd == IntPtr.Zero) return;
+            SetAttr(hwnd, DwmwaCaptionColor, DwmColorDefault);
+            SetAttr(hwnd, DwmwaBorderColor, DwmColorDefault);
+        }
+        catch
+        {
+            // 忽略
+        }
+    }
+
+    /// <summary>
     /// 按用户选择的**材质变体**下发背景材质(Win11 实验性)。
     ///
     /// ★★★ 参数为什么是枚举而不是 bool(2026-10-06): 系统没有任何 API 能改**模糊半径**
@@ -323,6 +384,32 @@ public static class DwmInterop
             //   ★ 做法: 去掉 **WS_SYSMENU**(见 SyncCaptionForAcrylic) —— **不要**动 WS_CAPTION,
             //     那是 DWM 播窗口过渡动画的依据, 摘了会让最小化/最大化/全屏都没动画。
             SyncCaptionForAcrylic(window);
+
+            // ★★★ 顶部那条"灰色长条"的根因与修法(2026-10-17, 探针 bd-probe-caption 实测):
+            //   现象: 少数用户在亚克力/云母下看到客户区**顶端一条**与下方不同色的灰带。
+            //   根因**不是**我们的 WPF 内容, 而是 DWM 自己画的 **caption(标题栏)底色**:
+            //     · 材质开启 ⇒ 本方法把 GlassFrameThickness 设成 -1 ⇒ **整个客户区成为 DWM 玻璃区**;
+            //     · 而本项目为了窗口过渡动画补回了 **WS_CAPTION**(见 RestoreCaptionForDwmAnimation);
+            //     · ⇒ DWM 认为这窗口"有标题栏", 于是在客户区顶端约一个**标准标题栏高**
+            //       (本机 125% DPI 实测 36 设备像素) 的那一条上, 先画它自己的 caption 底色。
+            //   为什么只有"部分用户"看得出来: 默认 caption 色在浅色主题下就是 #F3F3F3,
+            //     与我们页面底(#B3F3F3F3 叠在云母/亚克力上 ≈ #F1F5F1)**几乎同色**(实测偏离仅 2 阶,
+            //     肉眼不可见); 而下面任一条成立时它会变成明显的一道灰:
+            //       · 系统开了"在标题栏和窗口边框上显示强调色"(caption 变成强调色调);
+            //       · 系统处于深色标题栏 / 高对比主题;
+            //       · 第三方美化工具(MicaForEveryone / StartAllBack 等)改了 caption 色;
+            //       · 强调色/页面底恰好深浅差得远(用户自定义主题色时最容易撞上)。
+            //   ★ 修法(实测有效, 且**不影响材质与窗口动画**):
+            //     把 DWMWA_CAPTION_COLOR 设成 **DWMWA_COLOR_NONE** —— 让 DWM 干脆不画那一条。
+            //     探针实测: 页面层涂纯红时, 修前 y=1..33 全是 #F3F3F3(caption 挡住),
+            //     修后 y=0..33 全是 #FF0000(我们的内容一直画到最顶上), 即"那条带彻底不存在"。
+            //   ★ 为什么不用"摘掉 WS_CAPTION"来修: 那会连带把最小化/最大化/全屏的**系统过渡动画**
+            //     一起摘掉(2026-10-03 那次回归的原因, 见 SuppressCaptionForFullscreen)。
+            //     而 COLOR_NONE 只关掉"那一层底色", 样式位一律不动。
+            //   ★ 边框同理: 客户区已扩到整窗, 那条 1px 的 DWM 边框会沿着窗口外缘压一圈
+            //     (探针实测 VISIBLE_FRAME_BORDER_THICKNESS=1, 且第一行像素就是它的颜色)。
+            //     自绘界面不需要它 —— 圆角由 SetRoundCorners 负责, 阴影由 DWM 保留。
+            HideNonClientDecorations(window);
 
             // ★★★ "失焦变灰"在这个函数里**修不了**, 别再往这里加代码(2026-10-06 第三次确认):
             //   现象: 窗口失焦后亚克力消失、整窗变灰(221,222,223)。

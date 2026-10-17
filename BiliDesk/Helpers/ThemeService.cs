@@ -225,6 +225,12 @@ public class ThemeService
                     // 只在"跟随系统"模式下才有必要重算; CheckSystemThemeChanged 内部会判断
                     CheckSystemThemeChanged();
                     CheckSystemAccentChanged();
+                    // ★ 换壁纸也走这个事件(2026-10-17): 云母的页面底是**我们按壁纸算出来的**,
+                    //   缓存不失效的话换了壁纸色调还停在旧的那张上(用户会觉得"不跟着壁纸变")。
+                    //   DesktopTint 内部有缓存, 不 Invalidate 就等于白算。
+                    DesktopTint.Invalidate();
+                    ApplyAcrylicSurfaces();
+                    Settle();
                 });
             };
         }
@@ -437,33 +443,51 @@ public class ThemeService
     }
 
     /// <summary>
-    /// **亚克力材质**开启时, 把"页面基底"与"不透明实色块"整体换成**亚克力专用的一套配色**;
-    /// 非亚克力材质(含云母/云母 Alt/无材质)则把这些键的覆盖**移除**, 回落到色板默认配色。
+    /// 按当前**材质**给"页面基底 / 侧边栏 / 卡片 / 浮层"这一整套配色做覆盖。
     ///
-    /// ★ 适用面只限"材质 == Acrylic"(2026-10-11): 云母/云母 Alt 是**不透明**材质,
-    ///   只采样壁纸、并不透出桌面, 那套"页面底压到很低透明度 + 实色块压暗一档"的配色
-    ///   是专门为"透出桌面"设计的, 套到云母上就是错的(用户报"云母不是纯白的")。
-    ///   云母走默认材质配色 ⇒ 与"无材质"时的面板一致。
+    /// ★★★ 2026-10-17 整段重做(**这一版才是对的**, 之前几版的取向都错)。用户报了两件事:
+    ///   ① "云母材质效果很差, 基本和白色背景没区别"
+    ///   ② "亚克力背景看起来很脏, 不通透"
+    ///   下面两条是它们的**实测根因**(探针 bd-probe-backdrop / bd-probe-tune / bd-probe-stack):
     ///
-    /// ★ 根因(为什么以前 Mica 也被覆盖): <c>AcrylicBackground</c> 是**派生**属性
-    ///   (SettingsStore: <c>AcrylicMaterial != None</c>), 对云母同样为 true, 而这里原来
-    ///   只判它。判据必须落到 <c>AcrylicMaterial</c> 本身。
+    /// ★ 根因一: **云母在多数机器上会被 DWM 退化成纯灰白**, 而我们的页面底同色 ⇒ 两层一样白。
+    ///   实测(build 26200, 同一窗口分别对 白/青绿/深灰/橙 四张纯色壁纸):
+    ///   <code>
+    ///     壁纸         Mica 读到的像素
+    ///     白 #FFFFFF   243,243,243
+    ///     青绿         243,243,243   ← 一点青绿都没有
+    ///     深灰         243,243,243   ← 也没有变暗
+    ///     橙           232,248,243
+    ///   </code>
+    ///   而我们的页面底是色板里的 <c>#B3F3F3F3</c>(70% 的 #F3F3F3)—— **两者同一个颜色**。
+    ///   ⇒ 云母"设上了"却一个像素的色差都看不出来, 用户看到的就是"和白色没区别"。
+    ///   ⇒ 修法: **自己算一份壁纸色调**染到页面底上(<see cref="DesktopTint"/>)。
+    ///      DWM 材质照旧下发(有模糊纹理的机器照样享受), 但颜色**不再依赖它是否采样成功**。
     ///
-    /// ★ 亚克力为什么必须压暗/压透: 色板里的 AppBackgroundBrush 是 <c>#B3F3F3F3</c> = 70% 不透明,
-    ///   铺在窗口最底层之上会让亚克力只剩 30% 透出来, 淡到几乎看不见且"白底掺灰"发灰。
-    ///   深色主题压得更狠(深底本来就暗, 不压会和页面底糊在一起)。
-    /// ★ 为什么不直接改色板文件: 色板是"浅色/深色"两套静态资源, 而透明度跟着"材质开关"变;
-    ///   直接项优先级高于字典项, 写入即压过色板, 移除即自动回落(与强调色同一套路)。
-    /// ★ 覆盖的键必须与窗口/页面实际用的键完全一致, 少覆盖一层就会有一块"没跟着压暗的白"。
+    /// ★ 根因二: **页面底被叠了两层 ⇒ 实际不透明度远高于滑杆设定值**。
+    ///   `MainWindow.RootGrid` 与每个页面(UserControl)都写了
+    ///   `Background="{DynamicResource AppBackgroundBrush}"` —— 同一个半透明笔刷在同一块像素上
+    ///   画了两遍。合成后不透明度是 **1-(1-a)²** 而不是 a:
+    ///   <code>
+    ///     a=30% ⇒ 实测 51%     a=45% ⇒ 实测 70%     a=70% ⇒ 实测 91%
+    ///   </code>
+    ///   (探针 bd-probe-stack 用 a=45% 的白笔刷实测: 两层 232 / 单层 222, Δ=10, 且"只留页面层"
+    ///    与"只留 RootGrid"完全相等 ⇒ 双叠成立, 不是量法问题。)
+    ///   ⇒ 这就是"亚克力不通透"的真根因: 用户把滑杆拉到 30%, 实际得到 51%。
+    ///   ⇒ 修法: 这里下发的 alpha 一律按 **1-(1-a)² = 目标** 反解, 即
+    ///     `a = 1-sqrt(1-target)`, 让"滑杆上写的数字"就是"屏幕上实际的不透明度"。
     ///
-    /// ★★ "实色块压暗一档"的原因(2026-10-05 用户连续两次反馈"还是白"的**真根因**):
-    ///   亚克力会让页面底**透出桌面壁纸**, 实测合成后约 226(浅色壁纸时) —— 而卡片/浮层/输入框
-    ///   原本是**不透明实色**(243 附近)。亮度差拉到 17 阶, 那一块块实色在浅色壁纸上就是"白块",
-    ///   且因为**不透明**, 它完全不跟着亚克力呼吸, 视觉上格外突兀。
-    ///   (前两轮只在色板里把 255 微调到 248, 只有 3~7 阶, 肉眼根本看不出 —— 所以用户说"还是白"。)
-    /// ★ 为什么不直接把色板里的值压暗: 那会破坏**纯色模式**的层次 —— 纯色模式页面底是 236,
-    ///   卡片必须比它亮才像"浮起来"; 压到 226 就比页面底还暗, 层次反了。
-    ///   所以两套模式各给一套值: 纯色/云母用色板原值, 亚克力用这里覆盖的暗一档的值。
+    /// ★ 根因三: **亚克力的基准色是中性灰(实测 211), 页面底也是灰(#ECEDEF)** ⇒ 灰压灰 = 脏。
+    ///   浅色主题下正确的做法是**用白提亮**(白压灰不会变脏), 而不是再压一层灰。
+    ///
+    /// ★ 适用面(四种材质各一套, 别再合并):
+    ///   · None      → 色板原值(纯色, 不涉及材质)
+    ///   · Mica/Alt  → 页面底 = **壁纸色调提亮**; 卡片/浮层仍用色板值(材质是"底", 卡片要浮起来)
+    ///   · Acrylic   → 页面底 = **白**(按滑杆反解后的 alpha); 实色块压暗一档(否则白卡在白底上糊成一片)
+    ///
+    /// ★ 为什么不直接改色板文件: 色板是"浅色/深色"两套**静态**资源, 而这套值跟着
+    ///   "材质 + 壁纸 + 滑杆"变; 直接项优先级高于字典项, 写入即压过色板, 移除即自动回落。
+    /// ★ 覆盖的键必须与窗口/页面实际用的键完全一致, 少覆盖一层就会有一块"没跟着变的白"。
     /// </summary>
     private void ApplyAcrylicSurfaces()
     {
@@ -493,26 +517,87 @@ public class ThemeService
         //   页面底压到很低透明度"的配色。云母本身**不透明**(只采样壁纸), 并不透出桌面,
         //   所以那套为透出桌面而设计的半透明/压暗配色用在这里就是错的。
         //   Mica/MicaAlt 直接走下面的"移除覆盖"分支 ⇒ 回落到色板里的默认材质面板色。
-        if (!Svc.Settings.AcrylicBackground || Svc.Settings.AcrylicMaterial != BackdropMaterial.Acrylic)
+        // ★★ 2026-10-17 起云母**不再是"什么都不做"**: 它要走自己的分支给页面底上壁纸色调
+        //   (理由见方法头"根因一")。所以这里判 None 与 Acrylic 两种, 云母单独处理。
+        var material = Svc.Settings.AcrylicMaterial;
+        if (!Svc.Settings.AcrylicBackground || material == BackdropMaterial.None)
         {
-            // 关掉 / 非亚克力材质: 全部移除覆盖项, 自动回落到色板里的原值(不需要记旧值)
+            // 关掉材质: 全部移除覆盖项, 自动回落到色板里的原值(不需要记旧值)
             foreach (var k in keys) app.Resources.Remove(k);
             return;
         }
 
-        // 开: 页面底压到很低的透明度(让亚克力质感透出来);
-        // 实色块压暗一档 —— 深色主题压得更狠(深色底本来就暗, 不压会和页面底糊在一起)。
-        // ★ 透明度可由用户在设置里分开调节浅色/深色(0~100), 侧边栏比页面底更透明一档。
-        var opacity = Math.Clamp(IsDark ? Svc.Settings.AcrylicOpacityDark : Svc.Settings.AcrylicOpacityLight, 0, 100);
-        var alpha = (byte)(opacity * 255 / 100);
-        var sidebarAlpha = (byte)(alpha * 0.7);
+        // ============ 云母 / 云母 Alt ============
+        // 页面底与侧边栏上**壁纸色调**(提亮后的), 其余实色块保持色板原值。
+        // ★ 为什么只动这两层: 云母是"底色材质", 它的意义就是让**大面积留白**带上壁纸色;
+        //   卡片/输入框/浮层是"浮在底上的实体", 跟着变色反而会让整屏糊成一片
+        //   (它们还要与卡片里的白字/封面形成层次)。
+        // ★ 不透明度取"反解后的 70%"(两层叠完正好 70%): 太透会露出 DWM 那块灰白基色,
+        //   太实又白压一层把色调闷掉。70% 是实测最平衡的一档(探针 bd-probe-tune)。
+        if (material is BackdropMaterial.Mica or BackdropMaterial.MicaAlt)
+        {
+            // 云母Alt 比云母"层次更平"(系统文档的原话), 这里让它更透一点、色调更淡一点
+            var alt = material == BackdropMaterial.MicaAlt;
+            var target = alt ? 0.66 : 0.74;
+            var chroma = IsDark ? DesktopTint.DarkChroma : DesktopTint.LightChroma;
+            // 云母Alt 的层次"更平", 色度收一点, 两种云母才看得出区别
+            var tint = IsDark
+                ? WithAlpha(DesktopTint.TintedBase(0.13, alt ? chroma * 0.8 : chroma), ToOverlayAlpha(target))
+                : WithAlpha(DesktopTint.TintedBase(0.93, alt ? chroma * 0.8 : chroma), ToOverlayAlpha(target));
 
-        app.Resources["AppBackgroundBrush"] = IsDark
-            ? Frozen(Color.FromArgb(alpha, 0x20, 0x20, 0x20))
-            : Frozen(Color.FromArgb(alpha, 0xEC, 0xED, 0xEF));
-        app.Resources["SideBarBackgroundBrush"] = IsDark
-            ? Frozen(Color.FromArgb(sidebarAlpha, 0x20, 0x20, 0x20))
-            : Frozen(Color.FromArgb(sidebarAlpha, 0xEC, 0xED, 0xEF));
+            app.Resources["AppBackgroundBrush"] = Frozen(tint);
+            // 侧边栏比页面底略透一档(它本来就该更"贴"材质)
+            app.Resources["SideBarBackgroundBrush"] = Frozen(WithAlpha(
+                IsDark ? DesktopTint.TintedBase(0.13, chroma) : DesktopTint.TintedBase(0.93, chroma),
+                ToOverlayAlpha(alt ? 0.50 : 0.58)));
+
+            // 其余键恢复色板原值(从别的材质切过来时必须清干净)
+            foreach (var k in keys)
+            {
+                if (k is "AppBackgroundBrush" or "SideBarBackgroundBrush") continue;
+                app.Resources.Remove(k);
+            }
+            return;
+        }
+
+        // ============ 亚克力 ============
+        // 页面底压到很低的不透明度(让材质透出来); 实色块压暗一档(白卡压在白底上会糊成一片)。
+        // ★ 透明度可由用户在设置里分开调节浅色/深色, 侧边栏比页面底更透明一档。
+        // ★★ 用户给的是**目标**不透明度(屏幕上该看到多少), 而下发的 alpha 必须反解掉"双叠"
+        //   (见方法头"根因二"): a = 1 - sqrt(1 - target)。
+        var target2 = Math.Clamp(
+            (IsDark ? Svc.Settings.AcrylicOpacityDark : Svc.Settings.AcrylicOpacityLight) / 100.0, 0, 1);
+
+        // ★★★ 页面底必须**自带壁纸色调**, 而不是"白一层"(2026-10-17 二次定标)。
+        //   为什么不能只压白: 本机(以及相当多机器)DWM 的亚克力会退化成**平灰 211**(见
+        //   DesktopTint 的说明), 页面底越透就越接近那片灰 —— 用户说的"脏、不通透"。
+        //   实测(探针 bd-probe-acrylic, 真实主窗口 + 用户壁纸):
+        //     <code>
+        //       白 34%(旧下限) → 217,217,217  与白卡只差 9 阶, 发闷且毫无材质色
+        //       白 70%         → 232,232,232  干净了, 但还是"白", 看不出材质
+        //       壁纸色 80%     → 229,236,234  干净 + 有壁纸色(色偏 7)  ★ 采用
+        //     </code>
+        //   ⇒ 用壁纸色调的**高亮度低色度**版本: 读起来像"一层很淡的玻璃",
+        //     而不是"脏灰", 也不是"纯白"。
+        // ★ 与云母的差别: 亮度更高(0.975 vs 0.93)、色度更低(0.038 vs 0.078) ——
+        //   亚克力是"磨砂玻璃"(清透), 云母是"壁纸底纹"(更实)。两者不通用一个配方。
+        var acrylicBase = IsDark
+            ? DesktopTint.TintedBase(0.22, 0.06)
+            : DesktopTint.TintedBase(0.975, 0.038);
+
+        // ★★★ 下限/上限: 用户滑杆仍然决定"在这段里的位置", 但**不允许拉出这一段**。
+        //   下限挡的是"透到看见 DWM 那层灰"(0.34 时实测 217 发闷);
+        //   上限挡的是"白到和卡片糊在一起"(>0.95 时页面底与 #FFF 卡片差不到 3 阶)。
+        var floor = IsDark ? 0.62 : 0.70;
+        var ceiling = IsDark ? 0.96 : 0.94;
+        var target3 = floor + (ceiling - floor) * target2;
+
+        var alpha = ToOverlayAlpha(target3);
+        // 侧边栏比页面底略透一点(导航栏本来就该更"贴"材质), 但同样不越过下限
+        var sidebarAlpha = ToOverlayAlpha(Math.Max(floor - 0.06, target3 - 0.12));
+
+        app.Resources["AppBackgroundBrush"] = Frozen(WithAlpha(acrylicBase, alpha));
+        app.Resources["SideBarBackgroundBrush"] = Frozen(WithAlpha(acrylicBase, sidebarAlpha));
 
         // 卡片/提示条: 比纯色模式的 #F0F1F3 再压 6 阶(→ 约 234)
         app.Resources["CardBackgroundBrush"] = Frozen(IsDark
@@ -552,6 +637,34 @@ public class ThemeService
             ? Color.FromArgb(0xEB, 0x3E, 0x3E, 0x3E)
             : Color.FromArgb(0xD9, 0xD5, 0xD9, 0xDE));
     }
+
+    /// <summary>
+    /// 把"屏幕上该看到的不透明度"反解成**单层笔刷的 alpha** —— 因为这个笔刷会被
+    /// 页面层与窗口根网格各画一次(双叠), 合成结果是 <c>1-(1-a)²</c> 而不是 <c>a</c>。
+    ///
+    /// <code>
+    ///   target  a=1-sqrt(1-target)   实测叠完
+    ///   0.30    0.163                0.30
+    ///   0.50    0.293                0.50
+    ///   0.70    0.452                0.70
+    /// </code>
+    ///
+    /// ★ 为什么必须在这里补: `MainWindow.RootGrid` 与每个页面都绑同一个
+    ///   `AppBackgroundBrush`(见该方法头上的"根因二"), 而两处都不能删 ——
+    ///   RootGrid 那层是"页面切走/加载中"时的兜底底色, 页面层是"这个页面自己的底",
+    ///   缺任何一个都会在某些时刻露出一块纯材质甚至桌面。
+    ///   ⇒ 既然去不掉一层, 就在**下发处**把 alpha 反解掉, 让用户滑杆上的数字等于实际观感。
+    ///
+    /// ★ 边界: target ≤ 0 时返回 0(全透); target → 1 时 alpha → 1(全不透), 不会溢出。
+    /// </summary>
+    private static byte ToOverlayAlpha(double target)
+    {
+        target = Math.Clamp(target, 0, 1);
+        var a = 1 - Math.Sqrt(1 - target);
+        return (byte)Math.Round(Math.Clamp(a, 0, 1) * 255);
+    }
+
+    private static Color WithAlpha(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);
 
     /// <summary>注入整套 Accent 笔刷(用户主题色 / 系统强调色, 默认 B 站粉)</summary>
     private void ApplyAccent()

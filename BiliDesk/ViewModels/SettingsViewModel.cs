@@ -407,11 +407,14 @@ public class SettingsViewModel : ObservableObject
     }
 
     /// <summary>当前材质对应的说明(用户一眼知道这个材质是透还是不透)</summary>
+    /// ★ 2026-10-17 起云母的说明要提到"壁纸色调由程序自己算": 实测不少机器上 DWM 的云母
+    ///   会退化成纯灰白(见 Helpers/DesktopTint 的说明), 只靠系统材质的话用户会觉得"没生效"。
+    ///   现在颜色由我们自己保证, 说明里讲清楚这一点, 用户才不会以为那是 bug。
     public string AcrylicMaterialHint => Svc.Settings.AcrylicMaterial switch
     {
         BackdropMaterial.Acrylic => "亚克力: 半透明磨砂, 实时透出桌面内容；窗口失焦时改用主题底色(系统限制)",
-        BackdropMaterial.Mica => "云母: 不透明, 只取壁纸色调 —— 不会透出后面的窗口",
-        BackdropMaterial.MicaAlt => "云母 Alt: 不透明, 层次比云母更平",
+        BackdropMaterial.Mica => "云母: 取壁纸色调染在窗口底色上(不透明, 不透出后面的窗口)",
+        BackdropMaterial.MicaAlt => "云母 Alt: 与云母同源, 色调更淡、层次更平",
         _ => "不使用材质: 窗口用主题纯色背景"
     };
 
