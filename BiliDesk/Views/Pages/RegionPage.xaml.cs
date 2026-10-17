@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media.Animation;
 using BiliDesk.Helpers;
 using BiliDesk.ViewModels;
 
@@ -40,6 +41,7 @@ public partial class RegionPage : UserControl
         if (!sameRegion)
         {
             await vm.OpenAsync(name, tid);   // LoadAsync 结束时 PropertyChanged(Loading=false) 会触发挂载
+            ListScroll.ScrollToTop();        // 换分区 = 换一整批内容, 停在原来的滚动位置毫无意义
         }
     }
 
@@ -88,6 +90,8 @@ public partial class RegionPage : UserControl
     /// </summary>
     private async void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        UpdateBackToTop(sender as ScrollViewer);
+
         if (DataContext is not RegionViewModel vm) return;
         if (!vm.HasMore || vm.Loading || vm.LoadingMore) return;
         if (_autoFillCount > 5) return;
@@ -105,5 +109,47 @@ public partial class RegionPage : UserControl
         _autoFillCount++;
         try { await vm.LoadMoreAsync(); }
         finally { _autoFillCount--; }
+    }
+
+    // ------------------------------------------------------------ 右下角工具列
+
+    /// <summary>滚过这个距离就把「回到顶部」点亮(与首页同值)</summary>
+    private const double BackToTopThreshold = 300;
+
+    /// <summary>「回到顶部」当前是否亮着(避免每次滚动都重复起动画)</summary>
+    private bool _backToTopShown;
+
+    /// <summary>
+    /// 按当前滚动位置点亮/熄灭「回到顶部」。
+    ///
+    /// ★ 只动 Opacity 与命中测试, **不用 Visibility** —— 它在工具列最上面, 用 Collapsed 会让
+    ///   下面那个「刷新」每滚过一次阈值就上下跳一下(首页同款, 见 HomePage.UpdateBackToTop)。
+    /// </summary>
+    private void UpdateBackToTop(ScrollViewer? sv)
+    {
+        var show = sv is { VerticalOffset: > BackToTopThreshold };
+        if (show == _backToTopShown) return;
+        _backToTopShown = show;
+
+        BtnTop.IsHitTestVisible = show;
+        BtnTop.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(BtnTop.Opacity, show ? 1 : 0, TimeSpan.FromMilliseconds(160))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
+    }
+
+    private void OnBackToTopClick(object sender, RoutedEventArgs e) => ListScroll.ScrollToTop();
+
+    /// <summary>
+    /// 刷新当前分区: 回到游标 1 重拉第一页, 并把列表滚回顶部。
+    /// ★ 由页面(而不是 VM)来做"滚回顶部": 刷新会把整批内容换成服务端此刻的快照, 停在
+    ///   原来的滚动位置毫无意义; 而滚动位置是视图的事(首页 OnRefreshClick 同款分工)。
+    /// </summary>
+    private void OnRefreshClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not RegionViewModel vm) return;
+        ListScroll.ScrollToTop();
+        _ = vm.RefreshAsync();
     }
 }
