@@ -568,6 +568,14 @@ public partial class PlayerWindow : FluentWindow
             //   "视频区边缘黑/亮交替抽动"(同一道闸本来就是为了这个才加的, 见 ArmResizeCover)。
             //   顺带还解释了"拖动时偶尔能看到一块白": 撤罩那一瞬 vout 还没帧, 白底露出来。
             ReleaseFullscreenCover();
+            // ★ 视频没填满时的白色边带(2026-10-17): 起播后要把那块原生窗口底色刷黑。
+            //   ★★ 不能只调一次就完事: 实测 `Playing` 触发时 libvlc 的 `Static` 子窗口
+            //      **还没建出来**(那一刻拿到的句柄是 0, 修复静默跳过), vout 建好之后才有。
+            //      所以这里起一个**有限次重试**的定时器, 命中即停。
+            //   ★ 用定时器而不是单个 BeginInvoke: vout 建立耗时随片源/网速变化(实测 200ms~1s),
+            //     排一拍常常还是太早。重试上限 10 次 × 120ms ≈ 1.2s, 足够覆盖;
+            //     命中后立刻停, 不常驻。
+            StartVideoBackdropFix();
             UpdatePlayButton();
             StartControlsHideCountdown();   // 播放中才开始倒计时自动隐藏
             // 聆听态: 起播后把文案里的秒数对齐到真实位置(切流前后 _mp.Time 会有几十毫秒偏差),
@@ -7268,6 +7276,137 @@ public partial class PlayerWindow : FluentWindow
             fw.ShowInTaskbar = false;
         }
         catch { /* 拿不到就算了, 键盘至少在主窗口里是可用的 */ }
+    }
+
+    /// <summary>
+    /// 把 HwndHost 那个原生宿主窗口的**类背景刷**改成黑色 —— 修"视频没填满时是一片白"。
+    ///
+    /// ★★★ 真根因(2026-10-17 探针 bd-probe-letterbox 实测钉死, 别再猜):
+    ///   `VideoView` 是 <c>HwndHost</c>, 它下面由 libvlc 建了一串**同进程**的子窗口:
+    ///   <code>
+    ///     HwndWrapper[...]   ← HwndHost 宿主窗口(我们这侧建的)
+    ///       Static           ← 铺满整个视频区(1000x945)   ★白边的作者
+    ///       VLC video main   ← 铺满整个视频区
+    ///       VLC video output ← 只盖住画面那一块(1000x562)
+    ///   </code>
+    ///   视频宽高比与视频区不一致时, `video output` 只占中间一条, 上下(或左右)剩下的区域
+    ///   没有任何窗口画东西 ⇒ 露出 `Static` 的**窗口类默认背景(白色)**。
+    ///   逐层隐藏实测: 藏 `Static` → 边带亮度 240→0; 藏另两个 → 不变。**作者就是 Static。**
+    ///
+    /// ★★ 为什么不能"把手势层涂黑"(2026-10-13 那条记录只说会全黑, 原因在此):
+    ///   `VideoAreaRoot` 在 `VideoView.Content`(浮层窗口)里, **盖在整个视频区之上**。
+    ///   实测: 涂品红 → 边带变品红(确实在最上层); 涂不透明黑 → **画面中心也黑了**。
+    ///   ⇒ 它盖的是整块, 分不出"画面"和"边带", 这条路不可用。
+    ///
+    /// ★ 为什么改**父窗口**的类背景刷有效(而不是 Static 自己的):
+    ///   实测 `Static` 的 `GCLP_HBRBACKGROUND` 本来就是 0(没设), 它的白来自 `Static` 类
+    ///   自身的默认背景; 把**父窗口**设成黑之后, 那块区域由父窗口先擦黑, Static 再叠上去
+    ///   就透不出白 —— 边带 152→0, 画面不受影响, 持续播放 2 秒仍正确(实测)。
+    ///   ★ 关键: 它是**本进程的窗口**, 所以 `SetClassLongPtr` 可用;
+    ///     libvlc 自己的 `VLC video *` 窗口怎么改都无效(探针 E/G/J 段都验证过)。
+    ///
+    /// ★ 起播/换片后必须再调一次(见调用点): libvlc 重建 vout 会重新建 `Static` 子窗口,
+    ///   那时会再露出一次白 —— 这也是为什么"点一下就好"的观感像是"要碰一下才正常"。
+    /// </summary>
+    /// ★ 实测有效的只有一处: 把 `Static` 的**父窗口**(`HwndWrapper`, 也就是 HwndHost 的宿主)
+    ///   的类背景刷设成黑 —— 边带 242→0 且画面正常, 持续播放不回弹。
+    ///   ★ 反过来对 `Static` 自己涂黑**无效**(实测: 边带仍 242) —— 它自己那层不负责擦背景。
+    ///     这条很容易搞反: "白边是 Static 画的" ≠ "改 Static 就能黑", 两个都试过才知道。
+    /// </summary>
+    private void ApplyHwndHostBlackBackground()
+    {
+        var hwnd = FindVideoStaticWindow();
+        if (hwnd == IntPtr.Zero) return;
+        VideoBackdropInterop.PaintClassBackgroundBlack(hwnd);
+    }
+
+    // --- 起播后把视频区原生窗口底色刷黑(见 ApplyHwndHostBlackBackground) ---
+    private DispatcherTimer? _videoBackdropTimer;
+    private int _videoBackdropTries;
+
+    /// <summary>重试上限: 10 × 120ms ≈ 1.2s, 足够覆盖"vout 建立 + 首次出帧"那段</summary>
+    private const int VideoBackdropMaxTries = 10;
+    private const int VideoBackdropIntervalMs = 120;
+
+    /// <summary>
+    /// 刷到第几拍就收手(而不是第一拍命中即停)。
+    /// ★ 实测: 第一拍拿到句柄时那个 `Static` 可能还没真正显示, 刷完会被后续重绘盖回白色。
+    ///   多刷几拍把"稳定后的那次重绘"也覆盖住, 代价只有几百毫秒的定时器。
+    /// </summary>
+    private const int VideoBackdropSettleTries = 4;
+
+    /// <summary>
+    /// 起播后启动"把视频区底色刷黑"的有限次重试。
+    ///
+    /// ★ 为什么要重试(2026-10-17 实测): `Playing` 事件触发时 libvlc 的 `Static` 子窗口
+    ///   **还没建出来** —— 那一刻 `FindVideoStaticWindow()` 返回 0, 修复被静默跳过,
+    ///   用户看到的就是"一直白着"。vout 建好要 200ms~1s(随片源/网速变), 排一拍常常还太早。
+    /// ★ 命中即停: 一旦成功就不再重试, 不会常驻跑定时器。
+    /// </summary>
+    private void StartVideoBackdropFix()
+    {
+        if (_closing) return;
+        ApplyHwndHostBlackBackground();   // 先试一次(本地文件常常已经在)
+
+        _videoBackdropTries = 0;
+        _videoBackdropTimer ??= new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(VideoBackdropIntervalMs)
+        };
+        _videoBackdropTimer.Tick -= OnVideoBackdropTick;
+        _videoBackdropTimer.Tick += OnVideoBackdropTick;
+        _videoBackdropTimer.Start();
+    }
+
+    private void OnVideoBackdropTick(object? sender, EventArgs e)
+    {
+        if (_closing || ++_videoBackdropTries > VideoBackdropMaxTries)
+        {
+            _videoBackdropTimer?.Stop();
+            return;
+        }
+        var hwnd = FindVideoStaticWindow();
+        if (hwnd == IntPtr.Zero) return;   // vout 还没建好, 下一拍再试
+        ApplyHwndHostBlackBackground();
+        // ★ 不要一命中就停: 实测第一拍拿到句柄时 Static 可能还是 0 尺寸/还没真正显示,
+        //   刷了也会被后续重绘盖回白色。多跑几拍把"稳定后的一次重绘"覆盖住, 代价可忽略。
+        if (_videoBackdropTries >= VideoBackdropSettleTries) _videoBackdropTimer?.Stop();
+    }
+    /// <summary>
+    /// 找 libvlc 那个铺满视频区的 `Static` 窗口(白边的作者)。
+    ///
+    /// ★ 反射路径有两处必须踩准(2026-10-17 探针实测, 两处都错过一次, 错一处修复就**静默失效**):
+    ///   ① `VideoView` 自己**不是** HwndHost —— 真正的宿主在私有字段 `_videoHwndHost`
+    ///      (类型 `VideoHwndHost`)。
+    ///   ② 该对象的句柄存在基类 `HwndHost._hwnd`, 类型是 **`HandleRef`**(不是 `IntPtr`),
+    ///      必须读 `.Handle`。第一版只认 `IntPtr` ⇒ 永远拿到 0 ⇒ 边带一直白着。
+    ///   ③ ★ 那个句柄拿到的**正是 `Static` 子窗口本身**(实测类名 `Static`, 父级才是
+    ///      `HwndWrapper`), 所以直接对它涂黑就是对的; 不必再往上找父级
+    ///      (改父级也有效, 但会波及宿主窗口的其它区域, 不如改 Static 精确)。
+    ///   ★ 别用 `PresentationSource.FromVisual(VideoView)`: 那返回的是**外层播放器窗口**
+    ///     的 HwndSource, 拿它改类背景刷会把主题底色一起改坏。
+    /// </summary>
+    private IntPtr FindVideoStaticWindow()
+    {
+        try
+        {
+            var vv = VideoView;
+            if (vv == null) return IntPtr.Zero;
+
+            var hostField = vv.GetType().GetField("_videoHwndHost",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (hostField?.GetValue(vv) is not System.Windows.Interop.HwndHost host) return IntPtr.Zero;
+
+            var hwndField = typeof(System.Windows.Interop.HwndHost).GetField("_hwnd",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            return hwndField?.GetValue(host) switch
+            {
+                HandleRef hr => hr.Handle,
+                IntPtr ip => ip,
+                _ => IntPtr.Zero
+            };
+        }
+        catch { return IntPtr.Zero; }
     }
 
     /// <summary>
