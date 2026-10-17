@@ -568,55 +568,57 @@ public class ThemeService
         var target2 = Math.Clamp(
             (IsDark ? Svc.Settings.AcrylicOpacityDark : Svc.Settings.AcrylicOpacityLight) / 100.0, 0, 1);
 
-        // ★★★ 页面底必须**自带壁纸色调**, 而不是"白一层"(2026-10-17 二次定标)。
-        //   为什么不能只压白: 本机(以及相当多机器)DWM 的亚克力会退化成**平灰 211**(见
-        //   DesktopTint 的说明), 页面底越透就越接近那片灰 —— 用户说的"脏、不通透"。
-        //   实测(探针 bd-probe-acrylic, 真实主窗口 + 用户壁纸):
-        //     <code>
-        //       白 34%(旧下限) → 217,217,217  与白卡只差 9 阶, 发闷且毫无材质色
-        //       白 70%         → 232,232,232  干净了, 但还是"白", 看不出材质
-        //       壁纸色 80%     → 229,236,234  干净 + 有壁纸色(色偏 7)  ★ 采用
-        //     </code>
-        //   ⇒ 用壁纸色调的**高亮度低色度**版本: 读起来像"一层很淡的玻璃",
-        //     而不是"脏灰", 也不是"纯白"。
-        // ★ 与云母的差别: 亮度更高(0.975 vs 0.93)、色度更低(0.038 vs 0.078) ——
-        //   亚克力是"磨砂玻璃"(清透), 云母是"壁纸底纹"(更实)。两者不通用一个配方。
+        // ★★★ 页面底**必须真的很透**, 这是亚克力的全部意义(2026-10-17 二次返工)。
+        //   上一版我给亚克力设了**不透明度下限 0.70**, 理由是"0.34 时实测 217 发闷" ——
+        //   结果把亚克力做成了不透明材质, 用户当场反馈"亚克力现在不透明了"。
+        //   ⇒ 那个推理是错的: "发闷"要用**颜色**解决(下面改成白), 绝不能用"提高不透明度"解决。
+        //     亚克力一旦不透明, 它与"纯色 + 一层壁纸色调"就没有区别了, 那不如不加这个材质。
+        //
+        //   浅色主题怎么既通透又干净(实测取舍, 探针 bd-probe-alpha):
+        //     · 透出量随不透明度直接下降: 0% → 55、50% → 20、100% → 5(品红成分)
+        //     · 发闷的真正来源是**那层灰**(DWM 亚克力实测 211), 而白压灰只会提亮
+        //     ⇒ 页面底取**白**, 亮度高、色度极低(带一点点壁纸倾向), 不透明度**交回给用户**。
+        //   ★ 不设下限/上限: 滑杆 0 就是 0(最通透), 100 就是 100(最实),
+        //     用户要什么给什么 —— 这才是一个"透明度"滑杆该有的行为。
+        //     (色板里 AppBackgroundBrush 默认 70% 对应滑杆 100%; 默认值 AcrylicOpacityLight=30
+        //      就是"默认偏通透", 与 Fluent 里亚克力的观感一致。)
         var acrylicBase = IsDark
-            ? DesktopTint.TintedBase(0.22, 0.06)
-            : DesktopTint.TintedBase(0.975, 0.038);
+            ? DesktopTint.TintedBase(0.30, 0.055)
+            : DesktopTint.TintedBase(0.985, 0.030);
 
-        // ★★★ 下限/上限: 用户滑杆仍然决定"在这段里的位置", 但**不允许拉出这一段**。
-        //   下限挡的是"透到看见 DWM 那层灰"(0.34 时实测 217 发闷);
-        //   上限挡的是"白到和卡片糊在一起"(>0.95 时页面底与 #FFF 卡片差不到 3 阶)。
-        var floor = IsDark ? 0.62 : 0.70;
-        var ceiling = IsDark ? 0.96 : 0.94;
-        var target3 = floor + (ceiling - floor) * target2;
-
+        // ★★ 滑杆数值直接就是目标不透明度, 不做任何映射 —— 双叠由 ToOverlayAlpha 反解(见其说明)。
+        var target3 = target2;
         var alpha = ToOverlayAlpha(target3);
-        // 侧边栏比页面底略透一点(导航栏本来就该更"贴"材质), 但同样不越过下限
-        var sidebarAlpha = ToOverlayAlpha(Math.Max(floor - 0.06, target3 - 0.12));
+        // 侧边栏比页面底**更透一档**: 导航栏本来就该更"贴"材质, 但不能透成全透明
+        // (那样左侧会直接看到桌面, 文字压不住)。差值随用户给的通透程度缩放。
+        var sidebarTarget = Math.Clamp(target3 * 0.75, 0.12, 0.96);
+        var sidebarAlpha = ToOverlayAlpha(sidebarTarget);
 
         app.Resources["AppBackgroundBrush"] = Frozen(WithAlpha(acrylicBase, alpha));
         app.Resources["SideBarBackgroundBrush"] = Frozen(WithAlpha(acrylicBase, sidebarAlpha));
 
-        // 卡片/提示条: 比纯色模式的 #F0F1F3 再压 6 阶(→ 约 234)
+        // 卡片/提示条: 2026-10-17 起**不再压暗**(上一版的 #E9EAEC 是"压暗一档"的旧配方)。
+        //   为什么撤掉: 那一档压暗本来是为"页面底很实"设计的补偿 —— 页面底若接近实色,
+        //   卡片不压暗就会与它糊在一起。但现在页面底**真的透**(见上面), 层次已经由
+        //   "透出度差"拉开了; 再压暗就变成整屏偏灰, 观感就是用户说的"脏"。
+        //   ⇒ 回到接近色板原值, 只留一点点差距(3~4 阶)以保证卡片仍然"浮起来"。
         app.Resources["CardBackgroundBrush"] = Frozen(IsDark
-            ? Color.FromRgb(0x26, 0x26, 0x26)
-            : Color.FromRgb(0xE9, 0xEA, 0xEC));
+            ? Color.FromRgb(0x2A, 0x2A, 0x2A)
+            : Color.FromRgb(0xFC, 0xFC, 0xFD));
         app.Resources["InfoBarBackgroundBrush"] = Frozen(IsDark
-            ? Color.FromRgb(0x26, 0x26, 0x26)
-            : Color.FromRgb(0xE9, 0xEA, 0xEC));
+            ? Color.FromRgb(0x2A, 0x2A, 0x2A)
+            : Color.FromRgb(0xFC, 0xFC, 0xFD));
 
-        // 浮层/输入框/工具列/Toast: 比纯色模式的 #F3F4F6 再压 6 阶(→ 约 237)
+        // 浮层/输入框/Toast: 同上, 回到接近色板原值(输入框要透一点才能看出"是个洞")
         app.Resources["InputBackgroundBrush"] = Frozen(IsDark
-            ? Color.FromRgb(0x2A, 0x2A, 0x2A)
-            : Color.FromRgb(0xEC, 0xED, 0xEF));
+            ? Color.FromRgb(0x2E, 0x2E, 0x2E)
+            : Color.FromRgb(0xF6, 0xF7, 0xF9));
         app.Resources["FlyoutBackgroundBrush"] = Frozen(IsDark
-            ? Color.FromRgb(0x2A, 0x2A, 0x2A)
-            : Color.FromRgb(0xEC, 0xED, 0xEF));
+            ? Color.FromRgb(0x2E, 0x2E, 0x2E)
+            : Color.FromRgb(0xFC, 0xFC, 0xFD));
         app.Resources["ToastBackgroundBrush"] = Frozen(IsDark
-            ? Color.FromRgb(0x2A, 0x2A, 0x2A)
-            : Color.FromRgb(0xEC, 0xED, 0xEF));
+            ? Color.FromRgb(0x2E, 0x2E, 0x2E)
+            : Color.FromRgb(0xF6, 0xF7, 0xF9));
         // ★★★ 工具列按钮: 亚克力模式下改成**半透明**, 让它也跟着呈现亚克力质感
         //   (2026-10-05 用户要求"亚克力时右下角工具列也应用亚克力效果")。
         //   ★ 为什么只能"半透明"而不能真做局部亚克力: DWM 的亚克力是**挂在窗口 HWND 上的
