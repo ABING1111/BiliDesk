@@ -122,6 +122,22 @@ public partial class PlayerWindow : FluentWindow
     private const long SeekLandingToleranceMs = 1500;
 
     /// <summary>
+    /// "落地但偏早"允许的**最大**偏早幅度(毫秒)。
+    ///
+    /// 真实偏早是秒级(实测 60s→55.2s = 4.8s、150s→145.7s = 4.3s), 取 30s 已经很宽松。
+    /// 超过它就不是"落到前一个分片边界", 而是 seek 根本没落地(位置跑到片子别处去了)。
+    /// ★ 2026-10-17 加这条的原因: 原来的判据没有上界, 把"落到开头 5s"(目标 329s)当成
+    ///   "落地偏早"认账, 于是不重试 ⇒ 用户看到"拉过去又跳回去"。见 UpdateProgressUi。
+    /// </summary>
+    private const long SeekLandingMaxEarlyMs = 30_000;
+
+    /// <summary>
+    /// "落地但偏早"允许的**最小**偏早幅度(毫秒)。
+    /// 与 <see cref="SeekConfirmWindowMs"/> 同量级: 比这更近就算"到位", 不必再区分。
+    /// </summary>
+    private const long SeekLandingMinEarlyMs = 3_000;
+
+    /// <summary>
     /// 上一次心跳里"位置同时远离跳转起点与目标"的那个值(-1 = 上一次不满足)。
     /// 用来给"落地但偏早"做**连续两次采样**确认, 见 UpdateProgressUi 里的说明。
     /// </summary>
@@ -593,6 +609,9 @@ public partial class PlayerWindow : FluentWindow
                 // 走一次 MarkSeekIssued: 钉住进度条/时间显示, 并启动 seek 看门狗,
                 // 否则恢复进度那一下也可能被回写顶回 0(表现是"切完清晰度从头播")
                 MarkSeekIssued(resume);
+                // ★ 重建后 libvlc 会"接受目标→又退回低值"来回震, 单次设 Time 不够,
+                //   这里起一个短间隔补跳把它压住(见 KickRebuildSeek 的说明)。
+                KickRebuildSeek(resume);
             }
         }));
         // 暂停/停止时同步按钮图标(否则起播后图标停留在初始状态, 看起来像"反了")
@@ -1054,6 +1073,9 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void ResetForNewMedia()
     {
+        // ★ 分段跳必须立刻停: 它带着"上一条视频的时间轴目标", 不停的话新片会继续
+        //   一段段往前冲(2026-10-17 加分段跳时同步加的)。字段本身另有登记(PerMediaStateFields)。
+        StopSegmentedSeek();
         _indexInLib = 0;
         // 换片: 音频链路诊断重新记一次(每个片源一条, 见 LogAudioStateOnce)
         _audioStateLogged = false;
@@ -1249,6 +1271,13 @@ public partial class PlayerWindow : FluentWindow
         nameof(_pendingSeekMs), nameof(_seekDeadline), nameof(_seekRetries),
         nameof(_seekObservedMs), nameof(_seekElsewhereSeenMs), nameof(_seekFromMs),
         nameof(_seekGraceUntil), nameof(_seekMuteSavedVolume), nameof(_isSeeking),
+        // 分段跳(2026-10-17): 它属于"这一片"的跳转过程 —— 换片时上一次的分段目标必须作废,
+        // 否则新片会继续按旧目标一段段往前冲(目标还是上一条视频的时间轴)。
+        nameof(_segSeekTarget), nameof(_segSeekRunning),
+        nameof(_segSeekStepIssuedMs), nameof(_segSeekStepFromMs), nameof(_segSeekStepDeadline),
+        // 重建后补跳的状态: 同样是"这一次跳转"的过程量
+        nameof(_rebuildSeekTarget), nameof(_rebuildSeekTries),
+        nameof(_rebuildSeekStable), nameof(_rebuildRebuilds),
         // 卡顿检测
         nameof(_stallLastMs), nameof(_stallTicks),
         // 弹幕
@@ -1985,6 +2014,8 @@ public partial class PlayerWindow : FluentWindow
 
         if (_mp.IsPlaying) _mp.Pause();
         else _mp.Play();
+        // 记住"这是用户自己按的": seek 后的"确保在播放"要尊重它, 不许把暂停顶回去
+        _pausedByUser = !_mp.IsPlaying;
         UpdatePlayButton();
 
         // 暂停是一次"自然的段落结束", 补报一次让云端记录的进度与用户当下的位置一致
@@ -2121,21 +2152,31 @@ public partial class PlayerWindow : FluentWindow
             var time = _mp.Time;
             var settled = IsSeekSettled(time, _pendingSeekMs, _seekObservedMs, !_mp.IsPlaying);
 
-            // ★ "落地但偏早"—— 远端 DASH 双流跳转的常态, 不是故障。
-            // 判据必须**同时**远离"跳转前的位置"和"目标位置":
-            //   · Time 刚设完读回来的那个值 == 目标(受理回执), 所以"远离目标"这条能把回执排除掉;
-            //   · 真的被丢掉时位置会停在 _seekFromMs 附近, 所以"远离起点"这条能把"丢失"排除掉。
-            // 剩下的就只能是"落到了目标之前的分片边界"(实测 60s → 55.2s, 150s → 145.7s)。
-            // 这时**绝不能重发**: 重发会让 LibVLC 重建整个 input, 把正在恢复的播放又打回去
-            // (实测把 5s 的跳转拖到 7.5s, 而且重发两次也追不回目标, 纯亏)。
+            // ★★ 2026-10-17 大修: 原来的判据只要求"远离起点 + 远离目标", 没有**上界**,
+            //   结果把"seek 彻底失效、位置回到片子开头"误判成"落地但偏早", 于是收手不重试 ——
+            //   这正是用户报的"拉过去又跳回去、画面卡住"(探针 bd-probe-seekstick 实测):
+            //     拖到 329s → 落在 5.1s, 拖到 724s → 落在 11.1s, 拖到 988s → 落在 200s。
+            //   而 `_seekFromMs` 当时是 3.4s / 8.9s / 198s, 用 `> 1500ms` 判"远离起点"轻而易举
+            //   就成立 ⇒ 立刻被当成"落地偏早"认账。**判据缺的是"离目标不能太远"这个上界。**
             //
-            // 但**必须连续两次心跳都成立**才认账: input 重启的那一瞬间位置可能报出一个过渡值,
-            // 单次采样就认会让看门狗提前收工(顺带把 seek 静音也提前解除 —— 那正是"画面还没回来
-            // 声音先到了"的老问题)。两次心跳间隔 100ms(等待期的粒度), 认账的延迟可以忽略。
+            //   真实"落地偏早"(DASH 分片边界)的偏差是**秒级**: 实测 60s→55.2s(4.8s)、
+            //   150s→145.7s(4.3s); 而这次失效的偏差是 324s / 713s / 788s —— 差两个数量级。
+            //   所以判据取"偏早不超过目标的 1/8 且不超过 30s": 正常偏早(几秒)仍被认账,
+            //   跳到开头/跳到很远的地方则一律判为"没落地", 交给看门狗重发。
+            //
+            // ★ 为什么上界要用**相对目标的比例**而不是固定值: 目标可能在 5 分钟处也可能在
+            //   20 分钟处, 固定 30s 对短跳转太松(5s 目标偏 25s = 完全跑偏却仍认账)。
+            var earlyBy = _pendingSeekMs - time;                 // >0 表示落在目标之前
+            var earlyUpper = Math.Min(SeekLandingMaxEarlyMs,
+                                      Math.Max(SeekLandingMinEarlyMs, _pendingSeekMs / 8));
             var farFromBoth = _seekFromMs >= 0 &&
                               Math.Abs(time - _seekFromMs) > SeekLandingToleranceMs &&
                               Math.Abs(time - _pendingSeekMs) > SeekConfirmWindowMs;
-            var landedElsewhere = farFromBoth && _seekElsewhereSeenMs >= 0 && time != _seekElsewhereSeenMs;
+            // ★ 只接受"落在目标之前、且偏早幅度在合理范围内"; 落在目标**之后**超窗也不算
+            //   (那同样是跑偏, 该重试)
+            var withinEarlyBand = earlyBy > SeekConfirmWindowMs && earlyBy <= earlyUpper;
+            var landedElsewhere = farFromBoth && withinEarlyBand &&
+                                  _seekElsewhereSeenMs >= 0 && time != _seekElsewhereSeenMs;
             _seekElsewhereSeenMs = farFromBoth ? time : -1;
 
             _seekObservedMs = time;
@@ -2494,6 +2535,365 @@ public partial class PlayerWindow : FluentWindow
                         $"{FormatClock(TimeSpan.FromMilliseconds(_totalMs))}";
     }
 
+    /// <summary>
+    /// 安全读一次播放位置, 并把 libvlc 的**无效值**归一成 -1。
+    ///
+    /// ★ 必须这么做(2026-10-17 修 seek 时实测): 分段跳 / Media 重建途中,
+    ///   `_mp.Time` 会报出 -1 或超大值(实测读到 18446744073709551 —— ulong 溢出)。
+    ///   直接当位置用会算出荒谬的下一段, 判据也会被污染。
+    /// </summary>
+    private long SafeMpTime()
+    {
+        try
+        {
+            var t = _mp.Time;
+            return (t < 0 || t > 24L * 3600 * 1000) ? -1 : t;
+        }
+        catch { return -1; }
+    }
+
+    /// <summary>统一的 seek 发起入口 —— **所有跳转都必须走这里**(拖进度条 / 方向键 / 快进快退)。
+    ///
+    /// ★★★ 为什么需要它(2026-10-17 用户报"拉进度条失效, 拉过去又跳回去、画面卡住"):
+    ///   真根因是 **libvlc 3.0.20 对 frag-MP4 的 seek 有单次跳跃距离上限**。
+    ///   探针 bd-probe-reseek 实测(视频 BV1WqpS66E7w, 22 分钟):
+    ///     <code>
+    ///       单次跳  60s → 偏差   499ms  ✅
+    ///       单次跳 120s → 偏差  -751ms  ✅
+    ///       单次跳 180s → 偏差 -2750ms  ✅
+    ///       单次跳 300s → 偏差 -297249ms  ❌ 位置掉回原处
+    ///       直接跳到 25%(329s) → 偏差 -323943ms ❌
+    ///     </code>
+    ///   原生日志对应 `cannot seek (to offset 30717145)` + `INPUT_CONTROL_SET_TIME ... failed`。
+    ///   ⇒ 用户拖得越远越必然失败, 表现就是"拉过去又跳回去"。
+    ///
+    /// ★ 修法(两条都实测可用, 见探针 G/H/I 段):
+    ///   ① **往前**跳: 拆成每段 ≤150s 的连续跳转 —— 实测 8 段 150s 全部准确,
+    ///      从 1.4s 一路跳到 1181s(90%)落点偏差 4s 内;
+    ///   ② **往回**跳: 分段无效(实测第一段就原地不动), 改用**重建 Media** 后直接跳 ——
+    ///      实测落到目标偏差 416ms。重建就是"换片"那条路, 一直好用。
+    ///   ★ 短距离(≤150s)仍然一步到位, 不给普通跳转引入任何额外延迟。
+    /// </summary>
+    private void SeekTo(long targetMs)
+    {
+        if (_closing || _mp == null) return;
+        var length = _mp.Length;
+        if (length <= 0) return;
+        targetMs = Math.Clamp(targetMs, 0, Math.Max(0, length - 500));
+
+        var cur = _lastKnownMs > 0 ? _lastKnownMs : 0;
+        var delta = targetMs - cur;
+
+        // ★ 这是**用户主动发起**的一次新跳转: 重建重试预算复位, 否则一次失败后
+        //   后续所有往回跳都失去了"再重建一次"的机会。
+        _rebuildRebuilds = 0;
+        _ensurePlayProbeMs = -1;   // "确保播放"的推进基线也重新建立
+
+        // 短跳(含往前/往回 150s 内): 一步到位, 保持原有手感
+        if (Math.Abs(delta) <= SeekSingleMaxMs)
+        {
+            try { _mp.Time = targetMs; } catch { }
+            MarkSeekIssued(targetMs);
+            return;
+        }
+
+        // 往回且距离不小: 分段无效, 只能重建
+        if (delta < 0)
+        {
+            RebuildMediaAndSeek(targetMs);
+            return;
+        }
+
+        // 往前长跳: 分段逼近
+        StartSegmentedSeek(targetMs);
+    }
+
+    /// <summary>单次 seek 能可靠完成的最大距离(毫秒)。超过它 libvlc 会把位置丢回原处。</summary>
+    private const long SeekSingleMaxMs = 150_000;
+
+    // --- 分段跳状态 ---
+    private readonly System.Windows.Threading.DispatcherTimer _segSeekTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(700)
+    };
+    private long _segSeekTarget = -1;
+    private bool _segSeekRunning;
+    /// <summary>当前这一段的目标(-1 = 还没发过), 用来判"本段是否已落地"</summary>
+    private long _segSeekStepIssuedMs = -1;
+    /// <summary>当前这一段的起点, 用来判"位置有没有真的动过"</summary>
+    private long _segSeekStepFromMs = -1;
+    /// <summary>本段的等待截止(TickCount64), 超时就不等了直接发下一段</summary>
+    private long _segSeekStepDeadline;
+
+    /// <summary>
+    /// 分段跳: 每段往前挪最多 <see cref="SeekSingleMaxMs"/>, 直到到达目标。
+    ///
+    /// ★★ 间隔必须"等本段确认落地", 不能固定 700ms(2026-10-17 实测踩到):
+    ///   固定间隔时 libvlc 还没落地就发下一段, 位置会**来回震荡**
+    ///   (实测序列 150→150→454→306→458→606→459→607, 最终冲到 -1), 比不修还糟。
+    ///   现在每段发完就等"位置确实到了本段落点附近"再发下一段(超时 2.5s 兜底)。
+    /// </summary>
+    private void StartSegmentedSeek(long targetMs)
+    {
+        _segSeekTarget = targetMs;
+        _segSeekRunning = true;
+        _segSeekStepIssuedMs = -1;
+        _segSeekStepFromMs = -1;
+        _segSeekStepDeadline = 0;
+        MarkSeekIssued(targetMs);          // 进度条立刻钉到目标, 不要让它一格一格爬
+        _segSeekTimer.Tick -= OnSegmentedSeekTick;
+        _segSeekTimer.Tick += OnSegmentedSeekTick;
+        _segSeekTimer.Start();
+        StepSegmentedSeek();
+    }
+
+    private void OnSegmentedSeekTick(object? sender, EventArgs e) => StepSegmentedSeek();
+
+    private void StepSegmentedSeek()
+    {
+        if (_closing || _mp == null || !_segSeekRunning || _segSeekTarget < 0)
+        {
+            StopSegmentedSeek();
+            return;
+        }
+
+        var now = Environment.TickCount64;
+        // 一段还没落地: 等它(超时 2.5s 就强行发下一段, 免得卡死)
+        if (_segSeekStepIssuedMs >= 0 && now < _segSeekStepDeadline)
+        {
+            var observed = _lastKnownMs;
+            // ★ 判"本段已落地"不能要求精确到 8s 内 —— 远端 DASH 落地偏差实测 0~4s,
+            //   而更关键的是:**位置已经离开上一段起点**就说明 input 已经动过了。
+            //   之前用 |observed - 段目标| > 8000 判"还没到", 结果每段都要等满 2.5s 超时
+            //   (实测 9 秒才前进 3 段, 用户会觉得"拖了之后半天不动")。
+            if (Math.Abs(observed - _segSeekStepIssuedMs) > 20_000 &&
+                Math.Abs(observed - _segSeekStepFromMs) < 2_000) return;   // 完全没动, 继续等
+        }
+
+        // ★ 用**实时**的 _mp.Time 而不是 _lastKnownMs(2026-10-17 实测踩到):
+        //   _lastKnownMs 靠 TimeChanged 事件更新(约 4Hz, 且有延迟), 分段跳读到它
+        //   会滞后 1~2 段 ⇒ 算出的"剩余距离"偏大 ⇒ **冲过目标**
+        //   (实测冲到 898400ms, 超目标 173 秒)。实时读一次就没这个问题。
+        var cur = SafeMpTime();
+        if (cur <= 0) cur = _lastKnownMs > 0 ? _lastKnownMs : 0;
+        var remain = _segSeekTarget - cur;
+
+        if (remain <= 5_000)
+        {
+            StopSegmentedSeek();
+            MarkSeekIssued(_segSeekTarget);
+            return;
+        }
+
+        // ★ 分段步进必须**双重钳制**: 既不超过单段上限, 也不越过目标。
+        var step = Math.Min(remain, SeekSingleMaxMs);
+        var next = cur + step;
+        try { _mp.Time = next; } catch { }
+
+        _segSeekStepFromMs = cur;
+        _segSeekStepIssuedMs = next;
+        _segSeekStepDeadline = now + 2_500;
+
+        // 每一段都重新计时看门狗 —— 否则总时长会超过 2.5s 被误判成"丢了"并重发
+        _pendingSeekMs = next;
+        _seekDeadline = now + 2_500;
+        _seekObservedMs = -1;
+        _seekFromMs = cur;
+        _seekElsewhereSeenMs = -1;
+    }
+
+    private void StopSegmentedSeek()
+    {
+        _segSeekRunning = false;
+        _segSeekTarget = -1;
+        _segSeekStepIssuedMs = -1;
+        _segSeekStepFromMs = -1;
+        _segSeekTimer.Stop();
+    }
+
+    /// <summary>
+    /// 重建 Media 后跳到目标 —— 用于**往回**的长跳(libvlc 往回长跳实测原地不动)。
+    ///
+    /// ★ 这就是"换片/切清晰度"那条路: 丢一条全新的 Media 进去, 起播后立刻设目标。
+    ///   实测落点偏差 416ms(见探针 I 段)。
+    /// </summary>
+    private void RebuildMediaAndSeek(long targetMs)
+    {
+        if (_closing) return;
+        if (_isLocalPlayback)
+        {
+            var path = _lastPlayUrl;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+            ShowLoading("正在跳转…");
+            _resumeAfterSwitchMs = targetMs;
+            PlayMedia(new Media(_libVLC, path, FromType.FromPath));
+            return;
+        }
+
+        var url = _lastPlayUrl;
+        if (string.IsNullOrEmpty(url)) return;
+        ShowLoading("正在跳转…");
+        // ★ 重建前把"最后已知位置"清掉: 它记的是**旧 input** 的位置(比如 72 万 ms),
+        //   留着的话补跳会拿它当"当前位置"算出荒谬的下一段(2026-10-17 实测踩到)。
+        _lastKnownMs = 0;
+        // 起播后由 Playing 事件读到这个值并跳到目标(见 _resumeAfterSwitchMs 那套机制)
+        _resumeAfterSwitchMs = targetMs;
+        _rebuildSeekTarget = targetMs;
+        PlayMedia(BuildMedia(url, _isListenMode ? null : _lastAudioUrl));
+    }
+
+    /// <summary>
+    /// 重建 Media 后要落到的目标(-1 = 没有)。
+    ///
+    /// ★★ 为什么要单独记一份并**反复补跳**(2026-10-17 实测):
+    ///   起播后设一次 Time 不够 —— libvlc 会先接受目标、随后又退回低值, 来回震
+    ///   (实测序列 197605 → 1402 → 197605 → 5404 → 197605 → 8660 → 10404)。
+    ///   而看门狗把这种"离开目标又回来"误当成"落地偏早"就收手了, 于是最终停在 10 秒。
+    ///   ⇒ 这里在起播后按短间隔再补几次, 每次都重新钉住目标, 直到位置真的稳住。
+    /// </summary>
+    private long _rebuildSeekTarget = -1;
+    private int _rebuildSeekTries;
+
+    /// <summary>重建后补跳: 起播后最多补 <see cref="RebuildSeekMaxTries"/> 次, 每次间隔 400ms</summary>
+    private const int RebuildSeekMaxTries = 20;
+
+    private void KickRebuildSeek(long targetMs)
+    {
+        _rebuildSeekTarget = targetMs;
+        _rebuildSeekTries = 0;
+        _rebuildSeekStable = 0;
+        var myTarget = targetMs;   // 闭包捕获: 目标变了老 timer 就退休
+
+        // ★★ 起播后先等一段再动手(2026-10-17 实测):
+        //   重建后 input 还在初始化, 这时发 seek 会被丢
+        //   (原生日志 `prefetch stream error: cannot seek`, 位置随后退回开头)。
+        var delay = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(1200)
+        };
+        delay.Tick += (_, _) =>
+        {
+            delay.Stop();
+            if (_closing || _mp == null || _rebuildSeekTarget != myTarget) return;
+            StartRebuildStepTimer(myTarget);
+        };
+        delay.Start();
+    }
+
+    /// <summary>
+    /// 重建后的逐段补跳: 每 350ms 看一次位置, 没到就**只往前挪一小段**(不是直接设目标)。
+    ///
+    /// ★★ 两个关键点(2026-10-17 实测):
+    ///   ① 重建后第一次 seek 是**假受理**: 位置先跳到目标(实测 1.0s 时确实是 197605),
+    ///      随后 libvlc 又退回低值(2.0s 时 2651), 一路从头播。
+    ///      ⇒ 必须要求"连续 3 次都在目标附近"才算稳, 中途掉回去就继续补。
+    ///   ② 补跳时**不能直接设目标**: 实测从 6.1s 直接跳 197.6s 会冲过头到 266.4s
+    ///      (超目标 68 秒)。改成每次只挪 ≤150s(与分段跳同一个上限),
+    ///      这样即使 libvlc 落点有偏差也不会越过目标。
+    /// </summary>
+    private void StartRebuildStepTimer(long myTarget)
+    {
+        var timer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(350)
+        };
+        timer.Tick += (_, _) =>
+        {
+            if (_rebuildSeekTarget != myTarget) { timer.Stop(); return; }   // 目标变了, 退休
+            if (_closing || _mp == null) { timer.Stop(); return; }
+            if (++_rebuildSeekTries > RebuildSeekMaxTries) { timer.Stop(); return; }
+
+            var cur = SafeMpTime();
+            if (cur > 0 && Math.Abs(cur - myTarget) < 3_000)
+            {
+                _rebuildSeekStable++;
+                // 位置对了还不够 —— 实测会停在"时间轴正确但画面不动", 这里补一次播放
+                if (_rebuildSeekStable >= 2) EnsurePlayingAfterSeek();
+                if (_rebuildSeekStable >= 3)
+                {
+                    // 收工: 清干净看门狗。
+                    // ★ 补跳期间一直在重置 _pendingSeekMs, 不清它就一直挂着,
+                    //   后续进度回写/卡顿检测全被"正在跳转"挡住。
+                    // ★ 别在这里再做"位置有没有推进"的二次确认并重设目标 ——
+                    //   试过, 正常播放前进时也会误判成"没推进", 于是反复重设目标
+                    //   把位置冲过头(实测冲到 746901ms, 超目标 22 秒)。播放推进交给
+                    //   EnsurePlayingAfterSeek 和卡顿检测就够了。
+                    ClearSeekWatchdog();
+                    timer.Stop();
+                    return;
+                }
+            }
+            else
+            {
+                _rebuildSeekStable = 0;
+                // 只往前挪一段(见上面第②点), 越过目标就钳回目标
+                var want = cur > 0 ? cur : 0;
+                var remain = myTarget - want;
+                var step = Math.Abs(remain) <= SeekSingleMaxMs
+                    ? myTarget
+                    : want + Math.Sign(remain) * SeekSingleMaxMs;
+                try { _mp.Time = step; } catch { }
+                _pendingSeekMs = step;
+                _seekDeadline = Environment.TickCount64 + 2500;
+            }
+
+            // ★ 补到上限还没稳: 这条 input 已经"认死"了(实测会一路从头播),
+            //   再补也没用 —— 重建一次重来(限 2 次, 防止无限循环)。
+            if (_rebuildSeekTries >= RebuildSeekMaxTries && _rebuildSeekStable < 3)
+            {
+                timer.Stop();
+                if (_rebuildRebuilds < 2)
+                {
+                    _rebuildRebuilds++;
+                    RebuildMediaAndSeek(myTarget);
+                }
+            }
+        };
+        timer.Start();
+    }
+
+    /// <summary>连续几次读到"位置在目标附近"(重建补跳用)</summary>
+    private int _rebuildSeekStable;
+
+    /// <summary>
+    /// 确保播放器处于播放态。seek 之后 libvlc 偶尔会停在暂停/停止态(位置对但不推进),
+    /// 用户看到的就是"时间轴对、画面卡死" —— 这正是用户报的第三个症状。
+    ///
+    /// ★ 只在不该暂停时动手: 用户**自己**按了暂停, _pauseByUser 会记下来, 不许被这里顶回去。
+    /// </summary>
+    private void EnsurePlayingAfterSeek()
+    {
+        if (_closing || _mp == null || _pausedByUser) return;
+        try
+        {
+            // ★ 不能只看 IsPlaying: 实测它会停在"IsPlaying=true 但位置/解码都不动"
+            //   的状态(用户报的"时间轴对、画面卡死")。这里用**位置有没有推进**来判。
+            var now = SafeMpTime();
+            // 第一次调用只建立基线, 不判"没推进"(否则必然误触发一次 Play)
+            if (_ensurePlayProbeMs < 0) { _ensurePlayProbeMs = now; return; }
+            var advanced = now > _ensurePlayProbeMs;
+            _ensurePlayProbeMs = now;
+
+            if (_mp.IsPlaying && advanced) return;   // 真的在播, 不动它
+
+            // ★ 位置没动: 再 Play 一次(幂等)。实测 SeekTo 之后 libvlc 偶尔会停在
+            //   "IsPlaying=true 但位置/解码都不动"(用户报的"时间轴会动、画面卡死"),
+            //   调一次 Play() 能把解码线程唤醒。
+            if (now > 0) _mp.Play();
+            else if (!_mp.IsPlaying) _mp.Play();
+        }
+        catch { /* 播放器可能刚好失效 */ }
+    }
+
+    /// <summary>上一次"确保播放"探到的位置, 用来判"位置有没有真的推进"</summary>
+    private long _ensurePlayProbeMs = -1;
+
+    /// <summary>用户主动暂停了(seek 后的"确保播放"要尊重它)</summary>
+    private bool _pausedByUser;
+
+    /// <summary>重建后补跳仍失败时, 允许再重建几次(最多 2 次)</summary>
+    private int _rebuildRebuilds;
+
     /// <summary>进度条值变化: 点击轨道任意位置直接跳转(IsMoveToPointEnabled + 本处理器)。
     /// 拖动过程由 _isSeeking 屏蔽, 松手才生效</summary>
     private void OnProgressValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -2505,8 +2905,7 @@ public partial class PlayerWindow : FluentWindow
         // 少一层换算, 短视频(6 秒时 0.001 只代表 6ms)上也不会被"变化太小"的过滤挡掉。
         var targetMs = (long)Math.Round(e.NewValue / 1000.0 * _mp.Length);
         if (Math.Abs(_mp.Time - targetMs) < 250) return; // 已经在目标附近, 不必发跳转
-        _mp.Time = targetMs;
-        MarkSeekIssued(targetMs);
+        SeekTo(targetMs);
     }
 
     private void OnLengthChanged(object? sender, MediaPlayerLengthChangedEventArgs e) =>
@@ -2523,7 +2922,12 @@ public partial class PlayerWindow : FluentWindow
             if (_closing) return;
             // 记下最后已知位置: EOF 之后 _mp.Time 会归零(那条 input 已结束),
             // "提前结束自救"只能靠这里留底
-            _lastKnownMs = e.Time;
+            //
+            // ★ 只收**合法值**: libvlc 在 input 重建 / 分段 seek 途中会报出 -1 或
+            //   超大值(实测读到 18446744073709551 —— ulong 溢出), 一旦写进 _lastKnownMs,
+            //   依赖它的分段跳/看门狗就会算出一个荒谬的目标(2026-10-17 修 seek 时踩到)。
+            if (e.Time >= 0 && e.Time < 24L * 3600 * 1000)
+                _lastKnownMs = e.Time;
             // ★ 全屏黑幕: 能收到时间推进 = 视频正在出帧, 这一刻撤掉最准。
             //   不能只靠 Playing 事件 —— 进全屏时视频本来就在播, Playing 不会再来一次。
             ReleaseFullscreenCover();
@@ -2651,8 +3055,9 @@ public partial class PlayerWindow : FluentWindow
         if (_mp.Length > 0)
         {
             var targetMs = (long)Math.Round(ProgressSlider.Value / 1000.0 * _mp.Length);
-            _mp.Time = targetMs;
-            MarkSeekIssued(targetMs);
+            // ★ 走统一入口: 它会按距离决定"一步到位 / 分段跳 / 重建后跳"
+            //   (libvlc 对 frag-MP4 的单次 seek 有距离上限, 见 SeekTo 的说明)
+            SeekTo(targetMs);
         }
         // 拖动结束后立刻补报一次: 用户主动跳转是"我在看这个位置"的强信号,
         // 如果只等 15 秒周期上报, 此时关掉窗口会把位置记在拖动前的老地方。
@@ -4634,9 +5039,8 @@ public partial class PlayerWindow : FluentWindow
     private void SeekRelative(double seconds)
     {
         if (_mp.Length <= 0) return;
-        var newMs = Math.Max(0, Math.Min(_mp.Length, _mp.Time + seconds * 1000));
-        _mp.Time = (long)newMs;
-        MarkSeekIssued((long)newMs);
+        // ★ 走统一入口(分段跳 / 重建后跳), 见 SeekTo 的说明
+        SeekTo((long)(_mp.Time + seconds * 1000));
     }
 
     // ------------------------------------------------------------ 全屏
@@ -4731,6 +5135,10 @@ public partial class PlayerWindow : FluentWindow
             //   (表现就是"全屏进去了, 任务栏还在")。先退成 Normal 再最大化即可。
             if (WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
             WindowState = WindowState.Maximized;
+
+            // ★★ 进全屏同样会按新尺寸重建 vout ⇒ 新的 `Static` 子窗口又没被刷黑,
+            //   全屏时画面两侧/上下会露白边。与退全屏对称, 这里也刷一次。
+            StartVideoBackdropFix();
         }
         else
         {
@@ -4747,6 +5155,11 @@ public partial class PlayerWindow : FluentWindow
             //   (重复按钮的克制现在靠去掉 WS_SYSMENU, 不再靠摘 WS_CAPTION。)
 
             ReleaseFullscreenCover();
+            // ★★ 退出全屏后 libvlc 会按新尺寸**重建 vout**, 那里面的 `Static` 子窗口是新的,
+            //   之前设的黑色类背景刷跟着旧窗口一起没了 ⇒ 视频区边缘又露出白(用户报的
+            //   "先全屏再退全屏, 播放器页面部分出现白色区域")。
+            //   所以这里必须重刷一次(和起播后那次同一个入口, 见 ApplyHwndHostBlackBackground)。
+            StartVideoBackdropFix();
             // 根网格底色还给主题(与 ApplyChrome 同理: 缩回过程露出的边角要主题色)
             RootGrid.SetResourceReference(BackgroundProperty, "AppBackgroundBrush");
 

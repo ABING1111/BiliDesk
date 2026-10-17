@@ -68,6 +68,15 @@ public static class VlcCore
 
             // network-caching=1000 抑制网络抖动引起的卡顿;
             // 不强制 d3d11va 硬解(部分显卡驱动上会花屏/卡顿), 交给 LibVLC 自动选择。
+            //
+            // ★★★ 别加 `--demux=avformat`(2026-10-17 试过, 有致命副作用, 已撤回):
+            //   它确实能修好 seek —— 实测 25%/70% 落点偏差都是 0ms(基线是 -32万ms)。
+            //   **但它和 DASH 的 `input-slave` 音轨组合会让播放器在 seek 后直接进 Ended**:
+            //   实测 state 从 Playing 变 Ended、位置冻在目标点不动、解码停止。
+            //   而本项目的 DASH 一律是 input-slave 挂音轨 ⇒ 一换就"画面卡死"。
+            //   (裸 libvlc 不带 slave 时是好的, 所以只测裸 libvlc 会得出错误结论 ——
+            //    必须用 bd-probe-seekstick 走**产品自己的路径**验。)
+            //   ⇒ seek 的问题改为在播放器层处理(见 PlayerWindow.RecoverFromFailedSeek)。
             _instance = new LibVLC(
                 "--intf=dummy",
                 "--no-osd",
