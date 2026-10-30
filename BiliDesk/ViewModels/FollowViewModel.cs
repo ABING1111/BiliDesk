@@ -98,11 +98,22 @@ public class FollowViewModel : ObservableObject
     public bool LiveBoardLoading
     {
         get => _liveBoardLoading;
-        private set => SetProperty(ref _liveBoardLoading, value);
+        private set
+        {
+            if (SetProperty(ref _liveBoardLoading, value))
+                OnPropertyChanged(nameof(ShowLiveEmptyText));
+        }
     }
 
     /// <summary>看板有没有内容可显示(有主播在播)</summary>
     public bool HasLiveNow => LiveNow.Count > 0;
+
+    /// <summary>
+    /// 看板空态说明("关注的主播暂时都没有在直播")的可见性:
+    /// 加载**完成**且没人在播才显示 —— 加载中显示它会把"正在查"误报成"没人在播"。
+    /// (Style 触发器压不过属性绑定, 这种复合条件在 VM 里算好最干净。)
+    /// </summary>
+    public bool ShowLiveEmptyText => !LiveBoardLoading && !HasLiveNow;
 
     /// <summary>
     /// 拉"关注的主播正在直播"列表。与动态流**并行**加载(不占 RefreshAsync 的关键路径),
@@ -124,6 +135,7 @@ public class FollowViewModel : ObservableObject
                     foreach (var it in items) LiveNow.Add(it);
                 OnPropertyChanged(nameof(LiveBoardTitle));
                 OnPropertyChanged(nameof(HasLiveNow));
+                OnPropertyChanged(nameof(ShowLiveEmptyText));
             });
         }
         catch

@@ -268,6 +268,7 @@
                 <Grid Grid.Column="1" Margin="12,4,24,20">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
@@ -289,13 +290,23 @@
                     <!-- ===== 关注直播看板(2026-10-31 新增) =====
                          我关注的主播里正在播的, 一行一个: 头像 + 名字 + 直播标题。
                          ★ 点整行 → 直接进 TA 的直播间(Svc.Player.PlayLive), 不经任何中间页。
-                         ★ 没人在播(HasLiveNow=false)时整块**隐藏** —— 空看板没有信息量,
-                           还把"动态流首屏"往下顶一行。
+                         ★ **常驻显示**(2026-10-31 用户问"看板在哪里" —— 之前做成"没人在播就整块
+                           隐藏", 结果用户找不到这个功能; 空态改成一行说明文字, 位置固定可预期)。
+                           未登录才整块隐藏(登录了才有"关注"可言)。
                          ★ 展开态可折叠(点标题行切换), 数据与动态流并行加载。 -->
-                    <Border Grid.Row="0" Margin="8,0,8,10" Padding="12,10" CornerRadius="10"
+                    <Border Grid.Row="1" Margin="8,0,8,10" Padding="12,10" CornerRadius="10"
                             Background="{DynamicResource CardBackgroundBrush}"
-                            BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
-                            Visibility="{Binding HasLiveNow, Converter={StaticResource BoolToVis}}">
+                            BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding NotLoggedIn}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
                         <StackPanel>
                             <!-- 标题行: 点它折叠/展开 -->
                             <Grid Cursor="Hand" MouseLeftButtonUp="OnToggleLiveBoard">
@@ -320,7 +331,8 @@
                                     </TextBlock.RenderTransform>
                                 </TextBlock>
                             </Grid>
-                            <!-- 主播列表(竖排, 一行一个) -->
+                            <!-- 主播列表(竖排, 一行一个); 空态给一行说明 —— 看板常驻后
+                                 "为什么列表是空的"要自己解释清楚, 不然像坏了 -->
                             <ItemsControl ItemsSource="{Binding LiveNow}" Margin="0,8,0,0"
                                           Visibility="{Binding LiveBoardOpen, Converter={StaticResource BoolToVis}}">
                                 <ItemsControl.ItemTemplate>
@@ -373,10 +385,15 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            <!-- 空态: 加载完成且没人在播(加载中不显示, 由标题行的 ring 表达) -->
+                            <TextBlock Text="关注的主播暂时都没有在直播"
+                                       FontSize="12" Margin="0,8,0,2"
+                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                       Visibility="{Binding ShowLiveEmptyText, Converter={StaticResource BoolToVis}}" />
                         </StackPanel>
                     </Border>
 
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"
                                   ScrollChanged="FeedScroll_OnScrollChanged">
                         <StackPanel>
                             <!-- 出错/为空提示(非阻断, 放在列表上方) -->
