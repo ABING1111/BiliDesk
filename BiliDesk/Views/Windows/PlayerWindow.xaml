@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:BiliDesk.Views"
              xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers"
              xmlns:behaviors="clr-namespace:BiliDesk.Helpers"
              xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
              xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
@@ -288,6 +289,39 @@
                 </StackPanel>
             </DataTemplate>
 
+            <!--
+                ============ 评论图片缩略图条(2026-10-31 新增) ============
+                一条评论的 content.pictures 渲染成横排缩略图。
+                ★ 尺寸照 B 站网页版: 缩略图**最高 160px**, 宽按原始宽高比算(接口给 img_width/height);
+                  原始尺寸缺失时按 160x160 方形兜底, 不然 NaN 会让图直接消失。
+                ★ 竖图(手机截图 1170x2532 那种)会变成 74px 宽的窄条 —— 网页版就是这样,
+                  一排窄条排开反而整齐; 横图(2666x1500)占 160px 宽。两种都是"高 160"基准。
+                ★ 点击整张图 → MediaActions.ShowImage 看大图(4096 解码), Image 的 Tag 带原始地址。
+                ★ Stretch=UniformToFill + 固定框: 比起 Stretch=Uniform 能避免"加载完突然改变宽度"
+                  把整排图挤一下; 裁掉的部分点开大图都能看到。
+            -->
+            <DataTemplate x:Key="CommentPicturesTemplate">
+                <ItemsControl ItemsSource="{Binding Pictures}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- ★ 走 Cover.Source(与封面/头像同一套加载 + 磁盘缓存 + 渐显),
+                                 图画在 Border 的 Background(ImageBrush), 尺寸固定的外框 + UniformToFill
+                                 保证"加载完不变宽", 一排缩略图不会互相挤。 -->
+                            <Border Width="{Binding ThumbWidth}" Height="160"
+                                    CornerRadius="6" ClipToBounds="True"
+                                    Cursor="Hand" ToolTip="点击查看大图"
+                                    MouseLeftButtonUp="OnCommentPictureClick"
+                                    helpers:Cover.Source="{Binding Url}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </DataTemplate>
+
             <DataTemplate x:Key="CommentCardTemplate">
             <!--
                 ★★★ 2026-10-30 评论区改成 B 站网页版那种"无卡片"布局。
@@ -366,6 +400,17 @@
                                      FontSize="14" Margin="0,5,0,0"
                                      Foreground="{DynamicResource TextPrimaryBrush}"
                                      MentionForeground="{DynamicResource AccentTextBrush}" />
+                <!-- ===== 评论图片(2026-10-31 新增) =====
+                     带图评论在正文下面挂一排缩略图(照 B 站网页版: 最高 160px, 按原始宽高比)。
+                     ★ 点击看大图: 复用 MediaActions.ShowImage(ImagePreviewWindow 按 4096 解码),
+                       与"封面另存为"那套入口一致, 不为评论图片另造一个预览窗。
+                     ★ 缩略图加载走 CoverLoader(磁盘缓存共用, 解码宽 480 档 —— 缩略图最高
+                       160px@150%缩放 = 240px, 取上一档 320; 点开大图才按 4096 重新请求)。
+                     ★ ContentTemplate 走 CommentPicturesTemplate(本文件下方定义),
+                       详情页与楼中楼也各引一份, 模板只有一份。 -->
+                <ContentControl Content="{Binding}" Margin="0,6,0,0" HorizontalAlignment="Left"
+                                ContentTemplate="{StaticResource CommentPicturesTemplate}"
+                                Visibility="{Binding HasPictures, Converter={StaticResource BoolToVis}}" />
                 <!-- 评论操作行(赞 / 踩 / 回复): 统一走 CommentActionBarTemplate, 别在这里另写一份 -->
                 <ContentControl Content="{Binding}" HorizontalAlignment="Left" Margin="0,4,0,0"
                                 ContentTemplate="{StaticResource CommentActionBarTemplate}" />
@@ -1993,6 +2038,10 @@
                                                                 </StackPanel>
                                                                 <controls:CommentText Comment="{Binding}" FontSize="14" Margin="0,8,0,0"
                                                                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                                <!-- 评论图片(2026-10-31): 与列表页同一份缩略图模板 -->
+                                                                <ContentControl Content="{Binding}" Margin="0,6,0,0" HorizontalAlignment="Left"
+                                                                                ContentTemplate="{StaticResource CommentPicturesTemplate}"
+                                                                                Visibility="{Binding HasPictures, Converter={StaticResource BoolToVis}}" />
                                                                 <ContentControl Content="{Binding}"
                                                                                 HorizontalAlignment="Left" Margin="0,6,0,0"
                                                                                 ContentTemplate="{StaticResource CommentActionBarTemplate}" />
@@ -2047,6 +2096,10 @@
                                                                     </StackPanel>
                                                                     <controls:CommentText Comment="{Binding}" FontSize="14" Margin="0,3,0,0"
                                                                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                                    <!-- 评论图片(2026-10-31): 与列表页同一份缩略图模板 -->
+                                                                    <ContentControl Content="{Binding}" Margin="0,4,0,0" HorizontalAlignment="Left"
+                                                                                    ContentTemplate="{StaticResource CommentPicturesTemplate}"
+                                                                                    Visibility="{Binding HasPictures, Converter={StaticResource BoolToVis}}" />
                                                                     <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
                                                                         <ContentControl Content="{Binding}"
                                                                                         ContentTemplate="{StaticResource CommentActionBarTemplate}" />

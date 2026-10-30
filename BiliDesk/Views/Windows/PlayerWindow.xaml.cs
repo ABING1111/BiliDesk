@@ -7177,6 +7177,16 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
+    /// 点评论缩略图 → 看大图(2026-10-31 评论图片功能)。
+    /// DataContext 是 <see cref="CommentPicture"/>(模板直接绑图片项), 原图地址就在 Url 里。
+    /// </summary>
+    private void OnCommentPictureClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (_closing || (sender as FrameworkElement)?.DataContext is not CommentPicture pic) return;
+        MediaActions.ShowImage(pic.Url, title: "评论图片", owner: this);
+    }
+
+    /// <summary>
     /// 点"回复" → 打开详情页并把输入框切到"回复 @某人"模式。
     ///
     /// 线程根要分清两种情况: 在详情页里点某条回复 → 根是详情页的线程根;

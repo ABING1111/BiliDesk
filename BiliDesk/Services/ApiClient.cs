@@ -3259,12 +3259,12 @@ public class ApiClient
             // 根评论总数(不受 ps 分页影响)。缺失时保持 0, 由调用方回落到"本页条数"。
             if (data.Value.TryGetProperty("cursor", out var cursor) &&
                 cursor.ValueKind == JsonValueKind.Object)
-                total = GetLong(cursor, "all_count");
+                total = GetLongSafe(cursor, "all_count");
 
             // 本稿件的 UP 主 mid: 用来给"UP 主自己的评论"打 [UP] 标
             var upperMid = data.Value.TryGetProperty("upper", out var up) &&
                            up.ValueKind == JsonValueKind.Object
-                ? GetLong(up, "mid") : 0L;
+                ? GetLongSafe(up, "mid") : 0L;
 
             // ★★★ 置顶评论(2026-10-03 修"置顶评论不可见"): 置顶那条**不在 replies 里**,
             //   而是在 `data.top.upper`(UP 主置顶)或 `data.top.admin`(管理员置顶)。
@@ -3297,7 +3297,10 @@ public class ApiClient
             // 不能真的"静默": 解析里任何一处异常都会让后面的评论**整批丢掉**,
             // 表现是"评论只出来前几条", 而排查时一点线索都没有。记到日志里。
             App.ReportError(ex);
-            return (false, "解析评论失败: " + ex.Message, result, 0);
+            // 堆栈首行一起带出去: "invalid format"这类错误只有堆栈才能定位到具体字段
+            var stackTop = (ex.StackTrace ?? "").Split('\n')
+                .FirstOrDefault(l => l.Contains("BiliDesk") && !l.Contains("ThrowHelper")) ?? "";
+            return (false, "解析评论失败: " + ex.Message + (stackTop.Length > 0 ? " @ " + stackTop.Trim() : ""), result, 0);
         }
         return (true, null, result, total);
     }
@@ -3334,7 +3337,7 @@ public class ApiClient
             // 楼中楼里 UP 主自己的回复同样要打 [UP] 标 —— reply/reply 的 data 里也带 upper
             var upperMid = data.Value.TryGetProperty("upper", out var up) &&
                            up.ValueKind == JsonValueKind.Object
-                ? GetLong(up, "mid") : 0L;
+                ? GetLongSafe(up, "mid") : 0L;
 
             if (data.Value.TryGetProperty("replies", out var arr) && arr.ValueKind == JsonValueKind.Array)
             {
@@ -3366,17 +3369,20 @@ public class ApiClient
     {
         // 当前登录用户对这条评论的操作: 1 = 已赞(0 = 无)。未登录时恒为 0。
         // 2 = 已踩: 只在服务端确实会下发这个值时才成立, 见 CommentItem.IsDisliked 的说明。
-        var myAction = GetInt(e, "action");
+        var myAction = GetIntSafe(e, "action");
 
         var item = new CommentItem
         {
-            Rpid = GetLong(e, "rpid"),
+            // ★ 数值字段一律 GetLongSafe/GetIntSafe: 实测服务端会把 like 等字段下发成
+            //   小数(如 12.0), 普通 GetLong 对浮点调 GetInt64() 直接抛
+            //   "One of the identified items was in an invalid format",
+            //   而 ParseComment 外层只有一个大 try —— 一条评论抛异常整页全丢。
+            Rpid = GetLongSafe(e, "rpid"),
             // 评论者 mid: 顶层字段就有, 取不到再从 member.mid 兜一次
-            Mid = GetLong(e, "mid"),
+            Mid = GetLongLoose(e, "mid"),
             // 被回复的那条评论 id(详情页里"回复 @"指向谁)
-            ParentRpid = GetLong(e, "parent"),
-            LikeCount = e.TryGetProperty("like", out var l) && l.ValueKind == JsonValueKind.Number
-                ? l.GetInt32() : 0,
+            ParentRpid = GetLongLoose(e, "parent"),
+            LikeCount = GetIntSafe(e, "like"),
             IsLiked = myAction == 1,
             IsDisliked = myAction == 2
         };
@@ -3385,10 +3391,10 @@ public class ApiClient
         {
             item.UserName = GetStr(m, "uname");
             item.UserFace = UrlUtil.Normalize(GetStr(m, "avatar"));
-            if (item.Mid <= 0) item.Mid = GetLong(m, "mid");
+            if (item.Mid <= 0) item.Mid = GetLongLoose(m, "mid");
             // 等级徽章。member.level_info.current_level(0~6), 缺了就不显示徽章
             if (m.TryGetProperty("level_info", out var lv) && lv.ValueKind == JsonValueKind.Object)
-                item.Level = GetInt(lv, "current_level");
+                item.Level = GetIntSafe(lv, "current_level");
         }
 
         // UP 标: 评论者就是本稿件 UP 主本人
@@ -3421,7 +3427,7 @@ public class ApiClient
                 var size = 1;
                 if (kv.Value.TryGetProperty("meta", out var meta) && meta.ValueKind == JsonValueKind.Object)
                 {
-                    var s = GetInt(meta, "size");
+                    var s = GetIntSafe(meta, "size");
                     if (s > 1) size = s;
                 }
                 item.Emotes[kv.Name] = new CommentEmote { Url = url, Size = size };
@@ -3429,7 +3435,7 @@ public class ApiClient
         }
 
         item.RcTime = e.TryGetProperty("ctime", out var ct) && ct.ValueKind == JsonValueKind.Number
-            ? DateTimeOffset.FromUnixTimeSeconds(ct.GetInt64()).LocalDateTime.ToString("yyyy-MM-dd HH:mm")
+            ? DateTimeOffset.FromUnixTimeSeconds(GetLongSafe(e, "ctime")).LocalDateTime.ToString("yyyy-MM-dd HH:mm")
             : "";
 
         // @提及(2026-10-30 新增): 扫出正文里 @ 到的昵称, 界面据此把它们染成强调色。
@@ -3438,9 +3444,30 @@ public class ApiClient
         foreach (var name in MentionParser.Parse(item.Content))
             item.Mentions.Add(name);
 
+        // 评论图片(2026-10-31 新增): content.pictures 数组, 带图评论才有。
+        // ★ 字段名带 img_ 前缀(img_src/img_width/img_height/img_size), 与 emote 那套不同名。
+        if (c.ValueKind == JsonValueKind.Object &&
+            c.TryGetProperty("pictures", out var pics) && pics.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var p in pics.EnumerateArray())
+            {
+                if (p.ValueKind != JsonValueKind.Object) continue;
+                var url = UrlUtil.Normalize(GetStr(p, "img_src"));
+                if (url.Length == 0) continue;
+                item.Pictures.Add(new CommentPicture
+                {
+                    Url = url,
+                    Width = GetIntSafe(p, "img_width"),
+                    Height = GetIntSafe(p, "img_height"),
+                    // img_size 实测是 KB 数(可能带小数), 用 LongSafe 兜住
+                    FileSize = GetLongSafe(p, "img_size")
+                });
+            }
+        }
+
         if (withReplies)
         {
-            item.ReplyCount = GetInt(e, "rcount");
+            item.ReplyCount = GetIntSafe(e, "rcount");
             // /x/v2/reply/main 会把前 3 条回复直接内联在 replies 里 —— 先渲染出来,
             // 用户不点任何东西就能看见别人的回复内容
             if (e.TryGetProperty("replies", out var arr) && arr.ValueKind == JsonValueKind.Array)
@@ -3565,6 +3592,128 @@ public class ApiClient
         {
             foreach (var e in arr.EnumerateArray())
                 if (e.ValueKind == JsonValueKind.Object) yield return e;
+        }
+    }
+
+    /// <summary>
+    /// 取「我关注的主播」里正在直播的列表(动态页右栏"关注直播"看板的数据源, 2026-10-31 新增)。
+    ///
+    /// ★★★ 接口选型(2026-10-31 探针 bd-probe-imglive 实测定下, 别换):
+    ///   · 网页版直播页左栏「关注」面板的 xlive/app-interface/v2/second/getList
+    ///     **所有参数组合都 -400**(v1 已 404), 这条路是死的;
+    ///   · 实际可行的是两段式:
+    ///       ① /x/relation/followings?vmid={自己} → data.list[]{mid, uname, face}
+    ///       ② POST /room/v1/Room/get_status_info_by_uids  (body: {"uids":[m1,m2,…]})
+    ///         → data["{mid}"]{room_id, title, uname, live_status, user_cover, online, …}
+    ///     live_status: 0=未开播, 1=直播中, 2=轮播。看板只收 **1**。
+    ///   · ②实测必须发 **application/json**(form 传 uids 报 invalid params), uid 要纯数字串。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetFollowingLiveAsync(int limit = 30)
+    {
+        try
+        {
+            if (!SessionManager.Instance.HasLogin)
+                return (false, "请先登录后查看关注直播", null);
+            await EnsureBuvidAsync();
+
+            // ① 自己的 mid(relation 接口要求 vmid 是"自己")
+            var (_, _, me) = await GetUserStateAsync();
+            if (me == null || me.Mid <= 0) return (false, "未登录", null);
+
+            // ② 关注列表(第一页 50 个足够看板用; 状态查询一次最多 100 个 uid)
+            var (fOk, fMsg, fData) = await GetJsonAsync(
+                "https://api.bilibili.com/x/relation/followings",
+                new Dictionary<string, string>
+                {
+                    ["vmid"] = me.Mid.ToString(),
+                    ["ps"] = Math.Min(limit, 50).ToString(),
+                    ["pn"] = "1"
+                },
+                referer: "https://space.bilibili.com/");
+            if (fOk != 0 || fData == null)
+                return (false, fMsg ?? "获取关注列表失败", null);
+            if (!fData.Value.TryGetProperty("list", out var ulist) || ulist.ValueKind != JsonValueKind.Array)
+                return (true, null, new List<VideoItem>());
+
+            // relation 接口偶尔混进脏 mid(实测出现 20 位假 mid), 收紧到合理范围
+            var mids = ulist.EnumerateArray()
+                .Select(u => u.TryGetProperty("mid", out var mm) && mm.ValueKind == JsonValueKind.Number ? mm.GetInt64() : 0)
+                .Where(m => m > 0 && m < 4_000_000_000L)
+                .Take(limit).ToList();
+            if (mids.Count == 0) return (true, null, new List<VideoItem>());
+
+            // ③ 批量查开播状态
+            var (code, msg, data) = await PostJsonAsync(
+                "https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids",
+                "{\"uids\":[" + string.Join(",", mids) + "]}",
+                referer: "https://live.bilibili.com/");
+            if (code != 0 || data == null)
+                return (false, code == -352 ? "B 站风控拦截(请稍后再试)" : (msg ?? $"查询直播状态失败 (code {code})"), null);
+
+            var items = new List<VideoItem>();
+            foreach (var kv in data.Value.EnumerateObject())
+            {
+                if (kv.Value.ValueKind != JsonValueKind.Object) continue;
+                var e = kv.Value;
+                // live_status: 0=未开播, 1=直播中, 2=轮播(轮播不算"正在直播")
+                if (GetIntSafe(e, "live_status") != 1) continue;
+                var roomId = GetLongSafe(e, "room_id");
+                if (roomId <= 0) roomId = GetLongSafe(e, "short_id");
+                if (roomId <= 0) continue;
+
+                var cover = GetStr(e, "user_cover");
+                if (cover.Length == 0) cover = GetStr(e, "cover");
+                if (cover.Length == 0) cover = GetStr(e, "keyframe");
+
+                items.Add(new VideoItem
+                {
+                    RoomId = roomId,
+                    Title = GetStr(e, "title").StripHtml(),
+                    Author = GetStr(e, "uname"),
+                    OwnerMid = GetLongSafe(e, "uid"),
+                    Cover = UrlUtil.Normalize(cover),
+                    Duration = "直播中",
+                    ViewCount = Math.Max(0, GetLongSafe(e, "online"))
+                });
+            }
+            // 按 人气 倒序: 看板是"谁在播"的快照, 热的排前面
+            items.Sort((a, b) => b.ViewCount.CompareTo(a.ViewCount));
+            return (true, null, items);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, ex.Message, null);
+        }
+    }
+
+    /// <summary>POST JSON 请求(房间状态批量查询要求 application/json, form 会被拒)。</summary>
+    private async Task<(int code, string? msg, JsonElement? data)> PostJsonAsync(
+        string url, string json, string? referer = null)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+            var cookie = AppendFingerprint(SessionManager.Instance.BuildCookieHeader());
+            if (cookie.Length > 0) req.Headers.TryAddWithoutValidation("Cookie", cookie);
+            req.Headers.TryAddWithoutValidation("Referer", referer ?? "https://live.bilibili.com/");
+
+            using var resp = await _http.SendAsync(req);
+            var text = await resp.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            var code = root.TryGetProperty("code", out var c) ? c.GetInt32() : -999;
+            var msg = root.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String
+                ? m.GetString() : null;
+            var data = root.TryGetProperty("data", out var d) && d.ValueKind != JsonValueKind.Null ? d.Clone() : (JsonElement?)null;
+            return (code, msg, data);
+        }
+        catch (Exception ex)
+        {
+            return (-1, ex.Message, null);
         }
     }
 
@@ -4057,6 +4206,29 @@ public class ApiClient
     private static long GetLong(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
             ? v.GetInt64() : 0;
+
+    /// <summary>
+    /// 浮点也能取的 int/long(2026-10-31 修"部分视频评论区整页解析失败")。
+    ///
+    /// ★ 某些评论字段(实测 like)会被服务端下发成 **小数**(如 12.0):
+    ///   GetInt/GetLong 对浮点调 GetInt32()/GetInt64() 会抛
+    ///   "One of the identified items was in an invalid format",
+    ///   而 ParseComment 外层只有一个大 try —— 一条评论抛异常, **整页评论全部丢掉**。
+    ///   数值字段一律走这里, 按"先整后浮再截断"取值。
+    /// </summary>
+    private static int GetIntSafe(JsonElement e, string name)
+    {
+        if (!e.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Number) return 0;
+        if (v.TryGetInt32(out var i)) return i;
+        return v.ValueKind == JsonValueKind.Number ? (int)v.GetDouble() : 0;
+    }
+
+    private static long GetLongSafe(JsonElement e, string name)
+    {
+        if (!e.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Number) return 0;
+        if (v.TryGetInt64(out var l)) return l;
+        return v.ValueKind == JsonValueKind.Number ? (long)v.GetDouble() : 0;
+    }
 
     /// <summary>
     /// 数字**或数字字符串**都能取(动态接口把 mid/rid 当字符串下发: "mid": "1255510247")。

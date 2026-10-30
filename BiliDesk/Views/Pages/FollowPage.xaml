@@ -286,6 +286,96 @@
                         </StackPanel>
                     </Grid>
 
+                    <!-- ===== 关注直播看板(2026-10-31 新增) =====
+                         我关注的主播里正在播的, 一行一个: 头像 + 名字 + 直播标题。
+                         ★ 点整行 → 直接进 TA 的直播间(Svc.Player.PlayLive), 不经任何中间页。
+                         ★ 没人在播(HasLiveNow=false)时整块**隐藏** —— 空看板没有信息量,
+                           还把"动态流首屏"往下顶一行。
+                         ★ 展开态可折叠(点标题行切换), 数据与动态流并行加载。 -->
+                    <Border Grid.Row="0" Margin="8,0,8,10" Padding="12,10" CornerRadius="10"
+                            Background="{DynamicResource CardBackgroundBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                            Visibility="{Binding HasLiveNow, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <!-- 标题行: 点它折叠/展开 -->
+                            <Grid Cursor="Hand" MouseLeftButtonUp="OnToggleLiveBoard">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="&#xE7E8;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontSize="13" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource AccentTextBrush}" />
+                                    <TextBlock Text="{Binding LiveBoardTitle}" FontSize="13" FontWeight="SemiBold"
+                                               Margin="8,0,0,0" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    <controls:LoadingRing Width="14" Height="14" Margin="8,0,0,0"
+                                                          VerticalAlignment="Center"
+                                                          Visibility="{Binding LiveBoardLoading, Converter={StaticResource BoolToVis}}" />
+                                </StackPanel>
+                                <!-- 展开箭头(收起时转 180°) -->
+                                <TextBlock HorizontalAlignment="Right" VerticalAlignment="Center"
+                                           Text="&#xE70D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}"
+                                           RenderTransformOrigin="0.5,0.5">
+                                    <TextBlock.RenderTransform>
+                                        <RotateTransform Angle="{Binding LiveBoardOpen, Converter={StaticResource BoolToAngle}}" />
+                                    </TextBlock.RenderTransform>
+                                </TextBlock>
+                            </Grid>
+                            <!-- 主播列表(竖排, 一行一个) -->
+                            <ItemsControl ItemsSource="{Binding LiveNow}" Margin="0,8,0,0"
+                                          Visibility="{Binding LiveBoardOpen, Converter={StaticResource BoolToVis}}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border CornerRadius="8" Padding="6,6" Margin="0,0,0,4" Cursor="Hand"
+                                                ToolTip="进入直播间"
+                                                MouseLeftButtonUp="OnLiveItemClick">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="Transparent" />
+                                                    <Style.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter Property="Background" Value="{DynamicResource NavItemHoverBrush}" />
+                                                        </Trigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <!-- 头像 + 直播中角标(红点在头像右下角, 照 B 站直播面板) -->
+                                                <Border Grid.Column="0" Width="36" Height="36" CornerRadius="18"
+                                                        Background="{DynamicResource AccentSoftFillBrush}" ClipToBounds="True"
+                                                        helpers:Cover.Source="{Binding Cover}"
+                                                        ToolTip="{Binding Title}">
+                                                    <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                               FontSize="14" Foreground="{DynamicResource AccentTextBrush}"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                                <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Author}" FontSize="13" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextPrimaryBrush}"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Text="{Binding Title}" FontSize="11.5" Margin="0,1,0,0"
+                                                               Foreground="{DynamicResource TextSecondaryBrush}"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                                <!-- 「直播中」标 -->
+                                                <Border Grid.Column="2" CornerRadius="4" Padding="5,2"
+                                                        VerticalAlignment="Center"
+                                                        Background="{DynamicResource DangerBrush}">
+                                                    <TextBlock Text="直播中" FontSize="9.5" FontWeight="SemiBold"
+                                                               Foreground="White" />
+                                                </Border>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
                                   ScrollChanged="FeedScroll_OnScrollChanged">
                         <StackPanel>

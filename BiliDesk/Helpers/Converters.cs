@@ -39,6 +39,19 @@ public class InverseBoolConverter : IValueConverter
         => value is bool b && !b;
 }
 
+/// <summary>
+/// bool → 折叠箭头角度(2026-10-31 关注直播看板用): true=0°(向下), false=180°(向上)。
+/// 不直接绑 RotateTransform 的双向转换, 单向就够 —— 折叠态只由 ViewModel 一个地方写。
+/// </summary>
+public class BoolToAngleConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is true ? 0.0 : 180.0;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
 /// <summary>字符串非空 => Visible, 空/Null => Collapsed</summary>
 public class StringToVisibilityConverter : IValueConverter
 {

@@ -76,6 +76,70 @@ public class FollowViewModel : ObservableObject
     public int Count => Users.Count;
     public bool NotLoggedIn => !Svc.Session.HasLogin;
 
+    // ------------------------------------------------------------ 关注直播看板(2026-10-31)
+
+    /// <summary>正在直播的关注主播(点一条直接进 TA 的直播间)。空 = 没人在播(看板整块收起)。</summary>
+    public ObservableCollection<VideoItem> LiveNow { get; } = new();
+
+    private bool _liveBoardOpen = true;
+
+    /// <summary>看板展开/收起(UI 状态, 不落盘 —— 动态页每次进来默认展开, 想收就收一下)</summary>
+    public bool LiveBoardOpen
+    {
+        get => _liveBoardOpen;
+        set => SetProperty(ref _liveBoardOpen, value);
+    }
+
+    /// <summary>看板标题: 说明有几人在播, 0 人时整个看板隐藏</summary>
+    public string LiveBoardTitle => $"关注直播 · {LiveNow.Count}";
+
+    /// <summary>看板加载中(随 RefreshAsync 并行, 不挡动态流)</summary>
+    private bool _liveBoardLoading;
+    public bool LiveBoardLoading
+    {
+        get => _liveBoardLoading;
+        private set => SetProperty(ref _liveBoardLoading, value);
+    }
+
+    /// <summary>看板有没有内容可显示(有主播在播)</summary>
+    public bool HasLiveNow => LiveNow.Count > 0;
+
+    /// <summary>
+    /// 拉"关注的主播正在直播"列表。与动态流**并行**加载(不占 RefreshAsync 的关键路径),
+    /// 失败静默 —— 看板是锦上添花, 不该因为它给整页报错。
+    /// </summary>
+    private async Task LoadLiveBoardAsync()
+    {
+        if (!Svc.Session.HasLogin) return;
+        LiveBoardLoading = true;
+        try
+        {
+            var (ok, _, items) = await Svc.Api.GetFollowingLiveAsync();
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                LiveBoardLoading = false;
+                if (!ok) return;   // 静默: 风控/网络抖动时看板保持原样
+                LiveNow.Clear();
+                if (items != null)
+                    foreach (var it in items) LiveNow.Add(it);
+                OnPropertyChanged(nameof(LiveBoardTitle));
+                OnPropertyChanged(nameof(HasLiveNow));
+            });
+        }
+        catch
+        {
+            LiveBoardLoading = false;
+            // 静默(同上)
+        }
+    }
+
+    /// <summary>点看板里的一条 → 直接进 TA 的直播间</summary>
+    public void OpenLive(VideoItem item)
+    {
+        if (item == null || item.RoomId <= 0) return;
+        Svc.Player.PlayLive(item.RoomId, item.Title);
+    }
+
     public ICommand RefreshCommand { get; }
     public ICommand LoadMoreCommand { get; }
     public ICommand LoginCommand { get; }
@@ -189,6 +253,8 @@ public class FollowViewModel : ObservableObject
                 Loading = false;
             });
             await LoadSelectionAsync(reset: true);
+            // 关注直播看板: 与动态流并行(不 await 到关键路径里), 慢一点没关系
+            _ = LoadLiveBoardAsync();
         }
         catch (Exception ex)
         {

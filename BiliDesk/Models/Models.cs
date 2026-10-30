@@ -616,6 +616,30 @@ public class CommentEmote
     public int Size { get; set; } = 1;
 }
 
+/// <summary>
+/// 评论里的一张图片(接口 content.pictures 数组的一项)。
+/// </summary>
+public class CommentPicture
+{
+    /// <summary>图片地址(img_src)。点击看大图也用它(ImagePreviewWindow 会按 4096 解码)</summary>
+    public string Url { get; set; } = "";
+
+    /// <summary>原始宽高(像素)。布局用它算缩放比, 缺了按方形兜底</summary>
+    public int Width { get; set; }
+    public int Height { get; set; }
+
+    /// <summary>文件大小(字节)。接口可能不给, 0 = 未知, 只用于提示</summary>
+    public long FileSize { get; set; }
+
+    /// <summary>
+    /// 缩略图显示宽(px)。照 B 站网页版: 缩略图**最高 160px**, 宽按原始宽高比算。
+    /// ★ 原始尺寸缺失(0)时按 160 方形兜底 —— 按比例算会得 NaN, 图直接消失。
+    /// </summary>
+    public double ThumbWidth => Width > 0 && Height > 0
+        ? Math.Round(160.0 * Width / Height)
+        : 160;
+}
+
 /// <summary>评论条目(顶层评论与楼中楼回复共用同一个模型)</summary>
 public class CommentItem : System.ComponentModel.INotifyPropertyChanged
 {
@@ -777,6 +801,21 @@ public class CommentItem : System.ComponentModel.INotifyPropertyChanged
 
     /// <summary>正文里有没有 @ 人(用于决定要不要做高亮扫描)</summary>
     public bool HasMentions => Mentions.Count > 0;
+
+    // ------------------------------------------------------------ 评论图片(2026-10-31)
+
+    /// <summary>
+    /// 这条评论附带的图片(接口 <c>content.pictures</c>)。带图评论才有内容。
+    ///
+    /// ★ 接口形态(2026-10-31 实测, /x/v2/reply/main):
+    ///   pictures: [ { img_src, img_width, img_height, img_size, img_tag?, img_type? } ]
+    ///   · 尺寸是**原始像素**, 网页版按它把图缩到最高 160px 的缩略图;
+    ///   · 带图评论的 message 里**不含**图片占位符, 图是"正文下面挂一排缩略图"。
+    /// </summary>
+    public List<CommentPicture> Pictures { get; } = new();
+
+    /// <summary>有没有图(用于决定图片行的可见性)</summary>
+    public bool HasPictures => Pictures.Count > 0;
 
     public string LikeText => LikeCount > 0 ? VideoItem.FormatCount(LikeCount) : "";
 

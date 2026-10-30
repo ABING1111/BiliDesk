@@ -54,6 +54,7 @@
             <helpers:CountToVisibilityConverter x:Key="CountToVis" />
             <helpers:WidthClassToValueConverter x:Key="ClassToValue" />
     <helpers:HexToBrushConverter x:Key="HexToBrush" />
+            <helpers:BoolToAngleConverter x:Key="BoolToAngle" />
             <BooleanToVisibilityConverter x:Key="BoolToVis" />
 
             <!-- 导航图标(用户提供的官方 SVG): 动态=风车描边 / 消息=信封填充。

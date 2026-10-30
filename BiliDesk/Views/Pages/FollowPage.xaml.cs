@@ -71,6 +71,22 @@ public partial class FollowPage : UserControl
         if (DataContext is FollowViewModel vm) _ = vm.SelectUpAsync(u);
     }
 
+    // ------------------------------------------------------------ 关注直播看板(2026-10-31)
+
+    /// <summary>点看板标题行: 折叠/展开主播列表</summary>
+    private void OnToggleLiveBoard(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is FollowViewModel vm) vm.LiveBoardOpen = !vm.LiveBoardOpen;
+    }
+
+    /// <summary>点看板里的一个主播: 直接进 TA 的直播间</summary>
+    private void OnLiveItemClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+        if (((FrameworkElement)sender).DataContext is not VideoItem item) return;
+        if (DataContext is FollowViewModel vm) vm.OpenLive(item);
+    }
+
     // ------------------------------------------------------------ 滚动加载
 
     /// <summary>右栏: 内容滚动到底自动补下一页(全部动态 = 游标; 单 UP = 页码)</summary>

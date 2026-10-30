@@ -21,6 +21,9 @@ memory/
 # 运行期临时文件
 *.log
 *.tmp
+errors.txt
+vlc-debug.txt
+settings.json
 
 # 本地探针(离线复现/验证用, 不进仓库)
 .probes/
