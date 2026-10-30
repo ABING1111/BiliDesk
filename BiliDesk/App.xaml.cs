@@ -122,6 +122,21 @@ public partial class App : Application
         // (声明窗口已经占过一次 MainWindow 的位置, 这里不重新指认的话关掉主窗口不会退出程序)
         MainWindow = main;
         ShutdownMode = ShutdownMode.OnMainWindowClose;
+
+        // ★★★ 开屏动画(2026-10-30 新增)。
+        //
+        //   开屏窗**先**显示, 主窗口紧接着显示 —— 两者是并行的:
+        //   主窗口一创建就要解析首页 XAML(实测 ~360ms), 那段时间如果没有开屏,
+        //   用户看到的是"任务栏闪一下、然后界面慢慢出来"; 有开屏正好填上这段空窗期。
+        //
+        //   ★ 为什么放在免责声明**之后**: 首次启动要先看声明, 声明没同意就退出。
+        //     先放 logo 再弹声明, 观感割裂(用户还以为程序已经起来了)。
+        //   ★ 为什么不 await 动画: 等它播完再显示主窗口, 用户就得多等一秒才能用。
+        //   ★ 第二次启动(单实例已跑)走的是上面那段 return, 根本到不了这里 ——
+        //     所以"二次启动不放开屏"是**天然成立**的, 不需要额外判断。
+        var splash = TryCreateSplash();
+        if (splash != null) splash.Play();
+
         main.Show();
 
         // 系统托盘: 双击回主界面, 右键可退出(失败只记日志, 不影响启动)
@@ -172,6 +187,27 @@ public partial class App : Application
             await System.Threading.Tasks.Task.Delay(6000);
             await UpdateChecker.AutoCheckAsync();
         });
+    }
+
+    /// <summary>
+    /// 建开屏窗; 用户关掉了这个设置就返回 null(一个窗口都不建)。
+    ///
+    /// ★ 失败一律返回 null 而不是抛: 开屏是锦上添花, 建不起来不该影响程序启动。
+    /// </summary>
+    private static Views.Windows.SplashWindow? TryCreateSplash()
+    {
+        try
+        {
+            if (!Svc.Settings.SplashEnabled) return null;
+            var splash = new Views.Windows.SplashWindow();
+            splash.Show();
+            return splash;
+        }
+        catch (Exception ex)
+        {
+            ReportError(ex);
+            return null;
+        }
     }
 
     /// <summary>

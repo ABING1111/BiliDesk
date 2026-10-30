@@ -65,6 +65,20 @@ public class CommentText : RichTextBox
         set => SetValue(PrefixForegroundProperty, value);
     }
 
+    /// <summary>
+    /// @提及的高亮色(2026-10-30 新增)。XAML 里传 DynamicResource(强调色), 主题切换时跟着变。
+    /// ★ 传 null 就不做 @ 高亮(默认行为) —— 这样"用别处"不会突然多出一堆蓝色。
+    /// </summary>
+    public static readonly DependencyProperty MentionForegroundProperty = DependencyProperty.Register(
+        nameof(MentionForeground), typeof(Brush), typeof(CommentText),
+        new PropertyMetadata(null, OnCommentChanged));
+
+    public Brush? MentionForeground
+    {
+        get => (Brush?)GetValue(MentionForegroundProperty);
+        set => SetValue(MentionForegroundProperty, value);
+    }
+
     public CommentText()
     {
         IsReadOnly = true;
@@ -120,14 +134,55 @@ public class CommentText : RichTextBox
 
         if (text.Length == 0) return;
 
-        // 没有表情就整段一次加完(最常见的情况, 别为它走扫描逻辑)
-        if (item == null || item.Emotes.Count == 0)
+        var emotes = item?.Emotes ?? (IReadOnlyDictionary<string, CommentEmote>)new Dictionary<string, CommentEmote>();
+        var mentionBrush = MentionForeground;
+        var hasEmotes = emotes.Count > 0;
+        // ★ @ 高亮只在"传了颜色"且"正文里确实有 @"时才做 —— 没传颜色就别扫,
+        //   扫了也白扫(而且 Split 会多跑一遍)。
+        var hasMentions = mentionBrush != null && text.Contains('@');
+
+        // 最常见的情况: 既没有表情也没有 @ ⇒ 整段一次加完
+        if (!hasEmotes && !hasMentions)
         {
             p.Inlines.Add(new Run(text));
             return;
         }
 
-        var emotes = item.Emotes;
+        // ---------------------------------------------------------------
+        // 有 @ 时按"提及段 / 普通段"切开, 逐段处理; 没 @ 时就是**一整段普通文本**。
+        // 两段两种处理方式共用同一套"扫描表情"逻辑(见 AppendTextWithEmotes)。
+        // ---------------------------------------------------------------
+        var segments = hasMentions
+            ? MentionParser.Split(text)
+            : new List<(string Text, bool IsMention)> { (text, false) };
+
+        foreach (var (segText, isMention) in segments)
+        {
+            if (isMention)
+            {
+                // 提及段: 整段(含 @)染成强调色。★ 里面**不再**处理表情 ——
+                //   昵称里出现表情短代码的概率极低, 真出现了也只是显示成字面文本, 可接受。
+                var run = new Run(segText) { Foreground = mentionBrush };
+                p.Inlines.Add(run);
+                continue;
+            }
+
+            AppendTextWithEmotes(this, p, segText, emotes, hasEmotes, item);
+        }
+    }
+
+    /// <summary>
+    /// 把一段**普通文本**加进段落, 途中遇到表情短代码就换成内联图片。
+    /// </summary>
+    private static void AppendTextWithEmotes(CommentText self, Paragraph p, string text,
+        IReadOnlyDictionary<string, CommentEmote> emotes, bool hasEmotes, CommentItem? owner)
+    {
+        if (!hasEmotes || emotes.Count == 0)
+        {
+            p.Inlines.Add(new Run(text));
+            return;
+        }
+
         var buffer = new StringBuilder();
 
         void FlushText()
@@ -150,7 +205,7 @@ public class CommentText : RichTextBox
                     if (emotes.TryGetValue(sign, out var emote))
                     {
                         FlushText();
-                        p.Inlines.Add(BuildEmote(emote, item));
+                        if (owner != null) p.Inlines.Add(self.BuildEmote(emote, owner));
                         i = end + 1;
                         continue;
                     }

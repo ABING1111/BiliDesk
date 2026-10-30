@@ -248,6 +248,26 @@
                                 IsSnapToTickEnabled="True" TickFrequency="1"
                                 Value="{Binding CardColumns, Mode=TwoWay}" />
                     </Grid>
+
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 开屏动画(2026-10-30 新增): 启动时逐笔画出品牌字标。
+                         ★ 只影响**真正的冷启动**: 从托盘恢复、重复双击 exe 都不会放。
+                         ★ 关掉就一点痕迹都不留(开屏窗根本不会被创建)。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="开屏动画" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding SplashHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding SplashEnabled, Mode=TwoWay}" />
+                    </Grid>
                 </StackPanel>
             </Border>
 

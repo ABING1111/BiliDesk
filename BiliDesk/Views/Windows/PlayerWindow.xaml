@@ -289,9 +289,21 @@
             </DataTemplate>
 
             <DataTemplate x:Key="CommentCardTemplate">
-            <Border Background="{DynamicResource CardBackgroundBrush}"
-            BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
-            CornerRadius="6" Padding="10,8" Margin="0,0,0,6">
+            <!--
+                ★★★ 2026-10-30 评论区改成 B 站网页版那种"无卡片"布局。
+
+                原来的样子: 每条评论一个带边框的圆角白卡片(CardBackgroundBrush + 描边),
+                卡片之间还留 6px 间距 —— 整屏看下去是一列**卡片**, 评论区像"一堆小卡片"。
+                B 站网页版的做法是**没有卡片**: 评论直接铺在页面底上, 条目之间靠一条
+                极淡的分隔线区分。观感上"轻"很多, 也更像"在读评论"而不是"在看一堆卡片"。
+
+                ★ 这里改成: 外层无底无框, 底下垫一条分隔线(DividerBrush)分隔相邻两条。
+                  ★ 为什么不靠"间距"分隔: 12px 的间距在深色主题下几乎看不出来,
+                    条目会糊成一片; 一条 1px 的淡线在任何主题下都分得清。
+                  ★ 只改**列表页**: 详情页(CommentDetailCard 那套)有自己的模板, 不受影响。
+            -->
+            <Border BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1"
+                    Padding="0,10,0,10">
             <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
@@ -299,7 +311,7 @@
             </Grid.ColumnDefinitions>
             <!-- 真实头像: 圆形裁切靠 CornerRadius + Cover 附加属性,
                  加载失败时里面的占位人形图标仍然可见 -->
-            <Border Grid.Column="0" Width="26" Height="26" CornerRadius="13"
+            <Border Grid.Column="0" Width="28" Height="28" CornerRadius="14"
                     VerticalAlignment="Top"
                     Background="{DynamicResource AccentSoftFillBrush}"
                     ClipToBounds="True"
@@ -313,7 +325,7 @@
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center" />
             </Border>
-            <StackPanel Grid.Column="1" Margin="8,0,0,0">
+            <StackPanel Grid.Column="1" Margin="10,0,0,0">
                 <StackPanel Orientation="Horizontal">
                     <!-- 「置顶」标摆在昵称**最前面**: 它说的是这条评论的位置属性, 不是作者身份。
                          见 PinnedBadgeStyle 的说明。 -->
@@ -321,8 +333,12 @@
                             Visibility="{Binding IsPinned, Converter={StaticResource BoolToVis}}">
                         <TextBlock Text="置顶" FontSize="9" FontWeight="SemiBold" Foreground="White" />
                     </Border>
+                    <!-- ★ 昵称改成**灰色**(TextSecondaryBrush), 与 B 站网页版一致 ——
+                         那里昵称是次要色, 正文才是主色。之前昵称是主色(纯白/纯黑),
+                         一屏评论全是"白底白字黑字", 昵称比正文还抢眼。 -->
                     <TextBlock Text="{Binding UserName}"
-                               FontWeight="SemiBold" FontSize="13" />
+                               FontWeight="SemiBold" FontSize="13"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
                     <!-- 等级徽章 + UP 标 -->
                     <Border Style="{StaticResource LevelBadgeStyle}"
                             Visibility="{Binding HasLevel, Converter={StaticResource BoolToVis}}">
@@ -332,13 +348,14 @@
                             Visibility="{Binding IsUp, Converter={StaticResource BoolToVis}}">
                         <TextBlock Text="UP" FontSize="9" FontWeight="SemiBold" Foreground="White" />
                     </Border>
-                    <TextBlock Text="{Binding RcTime}"
-                               Style="{StaticResource MetaTextStyle}"
-                               Margin="8,1,0,0" FontSize="11" />
-                    <!-- ★ IP 属地已移到评论操作行(回复键右边), 见 CommentActionBarTemplate
-                         与下方 ContentControl 的说明。这里不再放 —— 它原本和"昵称 + 等级 + UP 标
-                         + 时间"抢同一行, 长昵称会把它顶出可见区域。 -->
+                    <!-- ★ 时间移到**昵称下方**独立一行(2026-10-30 照 B 站网页版改)。
+                         之前它与昵称同行靠右, 长昵称 + 等级标 + UP 标会把它挤出可见区域
+                         (这个坑之前就踩过, IP 属地因此被挪走了), 挪到下一行就再也不会挤。
+                         ★ 时间格式不变(接口给的 "10-10"), 仍走 MetaTextStyle。 -->
                 </StackPanel>
+                <TextBlock Text="{Binding RcTime}"
+                           Style="{StaticResource MetaTextStyle}"
+                           FontSize="11" Margin="0,2,0,0" />
                 <!-- 评论内容: 走 CommentText, 把 [表情] 内联成图片。
                      换成它之后就不能再拖选复制了(TextBlock 没有选中能力),
                      所以控件自带右键菜单"复制评论文字"补回来。
@@ -346,17 +363,20 @@
                        12px 在 1080p/125% 缩放下偏小, 一段长评论要凑近看。
                        提到 14 后与正文其它区块(简介/操作栏说明)同档, 又不至于像标题那样抢。 -->
                 <controls:CommentText Comment="{Binding}"
-                                     FontSize="14" Margin="0,3,0,0"
-                                     Foreground="{DynamicResource TextPrimaryBrush}" />
+                                     FontSize="14" Margin="0,5,0,0"
+                                     Foreground="{DynamicResource TextPrimaryBrush}"
+                                     MentionForeground="{DynamicResource AccentTextBrush}" />
                 <!-- 评论操作行(赞 / 踩 / 回复): 统一走 CommentActionBarTemplate, 别在这里另写一份 -->
-                <ContentControl Content="{Binding}" HorizontalAlignment="Left" Margin="0,3,0,0"
+                <ContentControl Content="{Binding}" HorizontalAlignment="Left" Margin="0,4,0,0"
                                 ContentTemplate="{StaticResource CommentActionBarTemplate}" />
 
                 <!-- ===== 楼中楼预览方框 =====
                      整框可点 → 进"详情"页看这条评论的全部回复(唯一的楼中楼入口)。
                      框内**列出全部回复**(用户要求"自动展开所有评论", 不再截前 3 条);
-                     每条是"用户名 [UP]：正文"的一行混排(前缀由 CommentText 内联, 见 ReplyPrefix)。 -->
-                <Border Margin="0,6,0,0" Padding="8,6" CornerRadius="6"
+                     每条是"用户名 [UP]：正文"的一行混排(前缀由 CommentText 内联, 见 ReplyPrefix)。
+                     ★ 本轮(保守版)不动这个方框的样式: 描边/底色/回复者名加粗都保持原样,
+                       只靠上面那条 @ 高亮把"提到谁"点出来。 -->
+                <Border Margin="0,8,0,0" Padding="8,6" CornerRadius="6"
                         Background="{DynamicResource ControlFillDefaultBrush}"
                         BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1"
                         Cursor="Hand"
@@ -371,7 +391,8 @@
                                                           Prefix="{Binding ReplyPrefix}"
                                                           PrefixForeground="{DynamicResource TextTertiaryBrush}"
                                                           FontSize="13" Margin="0,0,0,3"
-                                                          Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                          Foreground="{DynamicResource TextSecondaryBrush}"
+                                                          MentionForeground="{DynamicResource AccentTextBrush}" />
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>

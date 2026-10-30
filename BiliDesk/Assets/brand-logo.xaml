@@ -1,0 +1,63 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!--
+        BILIDESK 品牌字标(手写断笔风)的笔画几何。
+
+        ★ 为什么是**自绘**而不是用字体渲染:
+          图一那种观感的关键是"每个字母由几段断开的笔画组成, 笔画有粗细变化与手写倾斜"。
+          Segoe UI 的 "BILIDESK" 是标准印刷体, 描边生长出来也是印刷体 —— 完全不是那个味道。
+          自绘虽然多花功夫, 但这是拿到那个观感的唯一办法。
+
+        ★ 画布: 1000 x 270, 字母基线 y=210, 字母高 150(y=60~210)。
+          字母从 x=135 起排, 总宽 730, 正好在画布里居中。
+
+        ★ 每段笔画都是**独立的 PathGeometry**(不是一个大几何):
+          描边生长动画要逐段控制时机, 一个 PathGeometry 里塞多段就没法分别画了。
+          同一个字母里相接的两段(比如 B 的竖与肚子)刻意**不**合并 ——
+          "断开"正是手写断笔风的特征(见图一: b 的竖与肚子就是分开的)。
+
+        ★ 坐标里的小偏移(竖笔底部往左偏 3px、横笔右端抬 2px)是**手写倾斜**的来源,
+          去掉就变成机械的印刷体了。
+    -->
+
+    <!-- B -->
+    <PathGeometry x:Key="Brand_B_Stem" Figures="M 135,60 L 132,210" />
+    <!--
+        B 的两个"肚子"**刻意不闭合到竖笔上**(末端离竖笔约 14px)。
+        ★ 闭合的话整个 B 变成两个圆环, 一眼看过去是 "8" 而不是 "B" ——
+          实测渲染出来就是这个效果(第一版把末端接回 135,130 / 133,210, 正是 8)。
+        留一道缝反而更像手写: 断笔风的 B 就是这样。
+    -->
+    <PathGeometry x:Key="Brand_B_Top" Figures="M 137,74 C 196,71 199,124 146,129" />
+    <PathGeometry x:Key="Brand_B_Bottom" Figures="M 135,141 C 202,135 205,202 145,207" />
+
+    <!-- I -->
+    <PathGeometry x:Key="Brand_I1" Figures="M 257,60 L 254,210" />
+
+    <!-- L -->
+    <PathGeometry x:Key="Brand_L_Stem" Figures="M 295,60 L 292,210" />
+    <PathGeometry x:Key="Brand_L_Bar" Figures="M 292,210 L 367,205" />
+
+    <!-- I -->
+    <PathGeometry x:Key="Brand_I2" Figures="M 411,60 L 408,210" />
+
+    <!-- D -->
+    <PathGeometry x:Key="Brand_D_Stem" Figures="M 449,60 L 446,210" />
+    <!-- D 的肚子同样**留一道缝**(末端离竖笔约 12px), 与 B 的处理一致 -->
+    <PathGeometry x:Key="Brand_D_Bowl" Figures="M 451,64 C 518,60 528,128 458,203" />
+
+    <!-- E -->
+    <PathGeometry x:Key="Brand_E_Stem" Figures="M 563,60 L 560,210" />
+    <PathGeometry x:Key="Brand_E_Top" Figures="M 563,60 L 635,57" />
+    <PathGeometry x:Key="Brand_E_Middle" Figures="M 562,135 L 625,133" />
+    <PathGeometry x:Key="Brand_E_Bottom" Figures="M 560,210 L 637,207" />
+
+    <!-- S -->
+    <PathGeometry x:Key="Brand_S_Top" Figures="M 743,84 C 699,50 667,100 707,130" />
+    <PathGeometry x:Key="Brand_S_Bottom" Figures="M 707,130 C 749,162 721,214 673,184" />
+
+    <!-- K -->
+    <PathGeometry x:Key="Brand_K_Stem" Figures="M 779,60 L 776,210" />
+    <PathGeometry x:Key="Brand_K_Upper" Figures="M 781,138 L 859,62" />
+    <PathGeometry x:Key="Brand_K_Lower" Figures="M 787,132 L 861,210" />
+</ResourceDictionary>

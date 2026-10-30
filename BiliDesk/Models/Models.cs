@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text.Json;
@@ -757,6 +758,26 @@ public class CommentItem : System.ComponentModel.INotifyPropertyChanged
 
     public bool HasLocation => Location.Length > 0;
 
+    // ------------------------------------------------------------ @提及(2026-10-30)
+
+    /// <summary>
+    /// 正文里 @ 到的**昵称列表**(按出现顺序, 可重复)。
+    ///
+    /// ★ 为什么要自己解析: B 站接口的 <c>content</c> 字段是**纯文本**(emote 另给),
+    ///   但回复楼中楼里的 "@某某" 是**结构化引用** —— 昵称在正文里,
+    ///   而真正的主键(rpid)在 <c>reply_control.reply_id</c>。
+    ///   界面只要"把 @ 出来的那几个字染成强调色", 自己扫文本就够了。
+    ///
+    /// ★ 解析规则(与 B 站网页版一致):
+    ///   · <c>@</c> 后面跟一段**非空白**字符, 直到下一个空白或标点为止;
+    ///   · 昵称里可能含中文、字母、数字、点、下划线、减号 —— 所以不能只认单词字符;
+    ///   · 长度上限 20(超长的多半是误匹配, 例如邮箱)。
+    /// </summary>
+    public List<string> Mentions { get; } = new();
+
+    /// <summary>正文里有没有 @ 人(用于决定要不要做高亮扫描)</summary>
+    public bool HasMentions => Mentions.Count > 0;
+
     public string LikeText => LikeCount > 0 ? VideoItem.FormatCount(LikeCount) : "";
 
     // ------------------------------------------------------------ 楼中楼
@@ -1330,6 +1351,12 @@ public class AppSettings
     /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
     /// </summary>
     public bool FollowCardWall { get; set; }
+
+    /// <summary>
+    /// 是否播开屏动画(2026-10-30 新增)。默认 true。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool SplashEnabled { get; set; } = true;
 
     /// <summary>
     /// 软件缩放百分比(80~150, 默认 100)。把整个界面按比例放大/缩小, 与系统 DPI 无关。

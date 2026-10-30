@@ -3432,6 +3432,12 @@ public class ApiClient
             ? DateTimeOffset.FromUnixTimeSeconds(ct.GetInt64()).LocalDateTime.ToString("yyyy-MM-dd HH:mm")
             : "";
 
+        // @提及(2026-10-30 新增): 扫出正文里 @ 到的昵称, 界面据此把它们染成强调色。
+        // ★ 接口给的 content.message 是**纯文本**, 没有现成的结构化引用字段可用,
+        //   所以只能按 B 站网页版的规则自己扫(见 CommentItem.Mentions 的说明)。
+        foreach (var name in MentionParser.Parse(item.Content))
+            item.Mentions.Add(name);
+
         if (withReplies)
         {
             item.ReplyCount = GetInt(e, "rcount");
