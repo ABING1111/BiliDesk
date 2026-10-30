@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -109,6 +110,23 @@ public class CommentText : RichTextBox
         };
         menu.Items.Add(copy);
         ContextMenu = menu;
+
+        // ★★ 钉住 PagePadding = 0(2026-10-31 修"正文和昵称不对齐")。
+        //
+        //   构造函数里给 FlowDocument.PagePadding 写的 0 **撑不过第一次排版**:
+        //   文档视图(FlowDocumentView)在排版阶段会把它改回默认的 5, 每个 LineVisual
+        //   因此被推到 X=+5 —— 探针 bd-probe-commentalign 实测: 昵称墨迹从 X=39 起,
+        //   正文墨迹从 X=44 起, 整条正文比昵称右缩 5px, 上下看着不齐。
+        //   ★ 构造后再设一次也挡不住(重置发生在排版阶段, 不是赋值阶段),
+        //     所以这里挂属性变更监听: 只要它被改回 5 就拨回 0。
+        //     (DependencyPropertyDescriptor 走的是 DependencyProperty 的实际变更,
+        //      排版阶段的修改也会触发; 只在非 0 时才赋值, 不会造成死循环。)
+        DependencyPropertyDescriptor.FromProperty(FlowDocument.PagePaddingProperty, typeof(FlowDocument))
+            .AddValueChanged(Document, (_, _) =>
+            {
+                if (Document.PagePadding != default)
+                    Document.PagePadding = new Thickness(0);
+            });
     }
 
     private static void OnCommentChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
