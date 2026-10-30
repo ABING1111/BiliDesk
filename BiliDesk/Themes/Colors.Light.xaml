@@ -95,15 +95,6 @@
     <SolidColorBrush x:Key="DangerTextBrush" Color="#C42B1C" />
     <SolidColorBrush x:Key="TextOnDangerBrush" Color="#FFFFFF" />
 
-    <!--
-        开屏窗底色(2026-10-30 新增)。
-        ★ 刻意**不进** ThemeService 的材质覆盖清单: 开屏是"品牌一闪", 底色必须**不透明实色**,
-          任何材质(云母/亚克力)下都不能透出壁纸 —— 品牌粉字标在壁纸上会糊。
-        ★ 浅色用**纯白**(与用户给的设计图一致, B 站粉在纯白上最准);
-          深色用 #202020(与 WindowSolidDarkBrush 同色, 不额外造一个色)。
-    -->
-    <SolidColorBrush x:Key="SplashBackgroundBrush" Color="#FFFFFF" />
-
     <!-- 说明: 强调色(Accent*)一律由 ThemeService 注入品牌粉, 见 App.xaml 里的兜底定义。
          这里不放任何固定的强调色, 否则会和品牌色打架。 -->
 

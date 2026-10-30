@@ -607,29 +607,6 @@ public class SettingsViewModel : ObservableObject
         ? "点右上角关闭键会收进系统托盘, 双击托盘图标可恢复"
         : "点右上角关闭键将直接退出程序";
 
-    // ----------------- 开屏动画 -----------------
-
-    /// <summary>
-    /// 是否播开屏动画(2026-10-30 新增, 默认开)。
-    /// ★ 关掉后开屏窗**根本不会被创建**, 不是"跳过动画但还闪一下"。
-    /// </summary>
-    public bool SplashEnabled
-    {
-        get => Svc.Settings.SplashEnabled;
-        set
-        {
-            if (value == Svc.Settings.SplashEnabled) return;
-            Svc.Settings.SetSplashEnabled(value);
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(SplashHint));
-        }
-    }
-
-    /// <summary>副标题: 说清"只在冷启动时放", 免得用户以为每次从托盘恢复都要等动画</summary>
-    public string SplashHint => Svc.Settings.SplashEnabled
-        ? "启动时逐笔画出品牌字标 · 只在冷启动时出现, 从托盘恢复不播"
-        : "启动时直接进入主界面";
-
     /// <summary>立即把主界面收进托盘(等价于点关闭键的效果, 方便先试一下手感)</summary>
     public ICommand MinimizeToTrayCommand { get; }
 

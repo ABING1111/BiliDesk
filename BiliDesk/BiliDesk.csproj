@@ -59,14 +59,6 @@
 
   <ItemGroup>
     <Resource Include="Assets\app.png" />
-    <!--
-      品牌字标的笔画几何(开屏动画用)。
-      ★ 必须是 Resource 而不是 Page: 它是一份"可被 Application/窗口资源字典引用"的
-        资源字典, 用 pack URI 加载(见 SplashWindow 的写法)。
-      ★ 为什么不塞进 Themes/Styles.xaml: 那是给全局样式用的, 品牌字标只有开屏一处要用,
-        单独成文件改起来干净。
-    -->
-    <Resource Include="Assets\brand-logo.xaml" />
   </ItemGroup>
 
   <ItemGroup>

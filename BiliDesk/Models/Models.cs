@@ -1353,12 +1353,6 @@ public class AppSettings
     public bool FollowCardWall { get; set; }
 
     /// <summary>
-    /// 是否播开屏动画(2026-10-30 新增)。默认 true。
-    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
-    /// </summary>
-    public bool SplashEnabled { get; set; } = true;
-
-    /// <summary>
     /// 软件缩放百分比(80~150, 默认 100)。把整个界面按比例放大/缩小, 与系统 DPI 无关。
     /// 范围见 Helpers/UiScale.MinPercent/MaxPercent。
     /// </summary>

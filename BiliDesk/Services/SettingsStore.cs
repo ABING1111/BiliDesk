@@ -116,16 +116,6 @@ public class SettingsStore
     public int UiScalePercent { get; set; } = 100;
 
     /// <summary>
-    /// 是否播**开屏动画**(2026-10-30 新增)。默认开。
-    ///
-    /// ★ 这是**用户偏好**: 有人喜欢启动时那一段品牌动画, 有人嫌它挡路。
-    ///   做成设置项后, 不喜欢的人关掉就一点痕迹都不留(开屏窗根本不会被创建)。
-    /// ★ 只影响"真正的冷启动"; 第二次启动(单实例已跑)与托盘恢复**永远不放**开屏 ——
-    ///   那两种场景用户是"回到已经在跑的窗口", 突然插一段动画会很怪。
-    /// </summary>
-    public bool SplashEnabled { get; set; } = true;
-
-    /// <summary>
     /// **自定义下载/缓存位置**(空串 = 用默认的系统「下载」文件夹)。
     /// 下载的视频与"图片另存为"都存到这里(见 <see cref="AppPaths.DownloadDir"/>)。
     /// ★ 2026-10-11 由 <c>CacheRoot</c> 改名而来, 语义从"内部缓存根"改成"下载目录"
@@ -430,8 +420,6 @@ public class SettingsStore
 
         // 动态页排版: 老配置没这个字段 ⇒ 默认 false(动态卡)。bool 没有越界值, 不需要夹取。
         FollowCardWall = s.FollowCardWall;
-        // 开屏动画: 老配置没这个字段 ⇒ 反序列化保持属性初始化值(true, 默认开)。
-        SplashEnabled = s.SplashEnabled;
 
         // ★ 下载位置: 老配置没这个字段(默认空串 = 用系统下载文件夹)。
         //   非法/不存在的路径**不写进设置**(回落空串), 免得把脏路径带到 Path.Combine 下游 ——
@@ -537,7 +525,6 @@ public class SettingsStore
         CardColumns = CardColumns,
         UiScalePercent = UiScalePercent,
         FollowCardWall = FollowCardWall,
-        SplashEnabled = SplashEnabled,
         DownloadDir = DownloadDir,
         DanmakuEnabled = DanmakuEnabled,
         DanmakuAreaPercent = DanmakuAreaPercent,
@@ -708,14 +695,6 @@ public class SettingsStore
     {
         if (CloseToTray == value) return;
         CloseToTray = value;
-        Save();
-    }
-
-    /// <summary>改"是否播开屏动画"并落盘(2026-10-30 新增)</summary>
-    public void SetSplashEnabled(bool value)
-    {
-        if (SplashEnabled == value) return;
-        SplashEnabled = value;
         Save();
     }
 
