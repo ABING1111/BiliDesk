@@ -262,6 +262,29 @@ public class SettingsStore
     public int PlayerVolume { get; set; } = 80;
 
     /// <summary>
+    /// LibVLC 的网络缓冲(毫秒)。
+    ///
+    /// ★ 2026-10-30 实测(探针 bd-probe-startcfix, 同一路 DASH):
+    ///   `:network-caching=300` 与 `3000` 的"时间开始推进"分别是 1.07s / 0.96s ——
+    ///   在**起播阶段几乎测不出差别**(缓存是按网络速度灌的, 不是按播放速度等)。
+    ///   它真正影响的是**播放中的抗抖动余量**: 值越小越省内存/延迟低, 越大越能扛网络抖动。
+    ///   所以默认保持旧的 1000 不动(不拿卡顿风险换一个测不出来的收益), 只把它开放给用户调。
+    /// ★ 只对网络流生效; 按媒体加 `:network-caching=`, 改完下一条视频生效,
+    ///   不需要重建 LibVLC 实例(全局值见 VlcCore.Get, 作为没有媒体选项时的兜底)。
+    /// ★ 越界值(手改配置)由 <see cref="SettingsStore"/> 读取时夹回范围内。
+    /// </summary>
+    public int NetworkCachingMs { get; set; } = 1000;
+
+    /// <summary>网络缓冲可选下限: 再低在丢包链路上会频繁卡顿</summary>
+    public const int NetworkCachingMinMs = 300;
+
+    /// <summary>网络缓冲可选上限: 弱网兜底档</summary>
+    public const int NetworkCachingMaxMs = 3000;
+
+    /// <summary>网络缓冲的默认值(与 1.3.2 及之前的全局值一致)</summary>
+    public const int NetworkCachingDefaultMs = 1000;
+
+    /// <summary>
     /// 上次用的搜索类别(见 <see cref="Models.ContentKind"/>: 0=视频 1=直播间 2=番剧)。
     ///
     /// ★ 为什么要记住它(2026-11-12 用户报"番剧依然无法被搜索"):
@@ -290,6 +313,20 @@ public class SettingsStore
         var v = Math.Clamp(volume, 0, 100);
         if (PlayerVolume == v) return;
         PlayerVolume = v;
+        Save();
+    }
+
+    /// <summary>
+    /// 设置网络缓冲并落盘。夹回 300~3000 —— 手改配置可能塞进 0 或十万,
+    /// 前者等于关掉缓冲(必卡), 后者白占内存。
+    /// </summary>
+    public void SetNetworkCaching(int ms)
+    {
+        var v = ms <= 0
+            ? NetworkCachingDefaultMs
+            : Math.Clamp(ms, NetworkCachingMinMs, NetworkCachingMaxMs);
+        if (NetworkCachingMs == v) return;
+        NetworkCachingMs = v;
         Save();
     }
 
@@ -439,6 +476,11 @@ public class SettingsStore
         //   留着它会让"手动模式"指到一条不存在的线路(见 CdnService.SelectUrlAsync)。
         CdnMode = s.CdnMode;
         CdnManualId = CdnOption.ById(s.CdnManualId)?.Id ?? "";
+        // ★ "手动指定"却没选中任何线路(老配置写坏/用户从未选过)必须归一成自动 ——
+        //   否则设置页显示"手动指定", 实际 SelectUrlAsync 因为拿不到目标而静默走了自动测速,
+        //   用户会以为手动设置没生效, 排查时也看不出真相(2026-10-30 实测).
+        if (CdnMode == CdnSelectMode.Manual && string.IsNullOrEmpty(CdnManualId))
+            CdnMode = CdnSelectMode.Auto;
         BlockPcdn = s.BlockPcdn;
 
         // 老配置里只有 DisclaimerAccepted(bool)、没有版本号。
@@ -449,6 +491,13 @@ public class SettingsStore
 
         // 音量继承: 老配置没这个字段 ⇒ 保持默认 80。越界值夹回 0~100。
         PlayerVolume = Math.Clamp(s.PlayerVolume, 0, 100);
+
+        // 网络缓冲: 老配置缺字段 ⇒ AppSettings 的初始化值 1000(与旧版一致)。
+        // ★ 这里仍要夹取: 手改配置可能塞进 0(等于关掉缓冲)或十万(白占内存)。
+        // ★ 0 不能直接 Math.Clamp 成 300 —— 那会把"坏了的值"悄悄推进最容易卡的那一档。
+        NetworkCachingMs = s.NetworkCachingMs <= 0
+            ? NetworkCachingDefaultMs
+            : Math.Clamp(s.NetworkCachingMs, NetworkCachingMinMs, NetworkCachingMaxMs);
 
         // 上次的搜索类别: 老配置没这个字段 ⇒ 视频(与搜索页初始类别一致)。
         SearchKind = Enum.IsDefined(typeof(ContentKind), s.LastSearchKind)
@@ -504,6 +553,7 @@ public class SettingsStore
         DisclaimerAccepted = DisclaimerAccepted,
         DisclaimerVersion = AcceptedDisclaimerVersion,
         PlayerVolume = PlayerVolume,
+        NetworkCachingMs = NetworkCachingMs,
         LastSearchKind = (int)SearchKind
     };
 

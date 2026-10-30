@@ -459,15 +459,6 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private CancellationTokenSource? _sponsorCts;
 
-    /// <summary>
-    /// 起播时为"取片段"预留的等待上限。
-    ///
-    /// 片段查询与"取播放地址 / 合流下载"是**并行**跑的, 绝大多数情况下这一步早就回来了;
-    /// 这里再等 800ms 是为了拿到"开场就是广告"时能做空降(见 ApplySponsorRaw)。
-    /// 等不到就照常起播 —— 心跳会在 0.5 秒内补上跳过, 顶多闪一下, 绝不为它推迟起播。
-    /// </summary>
-    private const int SponsorWaitMs = 800;
-
     /// <summary>片段剩余不足这么多毫秒时不跳: 跳到片段末尾只前进一点点, 反而像画面抽了一下</summary>
     private const long SponsorMinRemainMs = 500;
 
@@ -579,6 +570,12 @@ public partial class PlayerWindow : FluentWindow
         _mp.Playing += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
         {
             if (_closing) return;
+            // 首帧耗时(从 PlayMedia 算起): 与 [Timing] 那行对齐, 用来验证起播优化有没有效果
+            if (_playWatch != null)
+            {
+                WriteLibVLCDebug($"[Timing] first-frame={_playWatch.ElapsedMilliseconds}ms\n");
+                _playWatch = null;
+            }
             // aout(音频输出)就绪后把应用侧记住的音量补写回去:
             // 无 aout 时 libvlc_audio_set_volume 是静默丢弃的(反编译 3.8.0 确认 setter 不看返回值),
             // 长视频远端 DASH 在起播/缓冲/换清晰度期间常出现"用户滚轮调了音量但 aout 还没建好"的窗口,
@@ -1434,6 +1431,12 @@ public partial class PlayerWindow : FluentWindow
         //   ★ 特意**不**在 ResetForNewMedia 里清: 那会与 CalibrateDanmakuClock 抢写,
         //     而后者才是权威来源(2026-11-11 为修"暂停回跳"刚把权威收敛到它)。
         nameof(_dmClockMedia), nameof(_dmClockStamp), nameof(_dmClockRunning),
+        // ---- 2026-10-30 补登记: 起播优化新增的三个窗口级瞬态 ----
+        // 加载链代次与闸门: 换片时**故意不清** —— 新一次加载会自己 ++_loadGen 让旧的作废;
+        //   清成 0 反而可能让旧任务的代次与新任务撞上。闸门由 LoadVideoAsync 的 finally 收敛。
+        nameof(_loadGen), nameof(_loadRunning),
+        // 首帧计时器(引用类型, 自检本来也不审, 这里登记只是表明它是窗口级瞬态)
+        nameof(_playWatch),
     };
 
     /// <summary>
@@ -1563,7 +1566,10 @@ public partial class PlayerWindow : FluentWindow
         // 覆盖层窗口(VideoView 的 ForegroundWindow)这时才建出来 —— 把键盘处理也挂上去,
         // 否则点过一次视频/控制栏之后快捷键就全哑了(见 HookOverlayKeyboard 的说明)
         HookOverlayKeyboard();
-        await LoadVideoAsync();
+        // ★ 不重复启动: 新窗口第一次打开时 PlayerService 已经先调过 PlayVideo(→LoadVideoAsync),
+        //   Loaded 事件随后才到。没有这个闸门就会跑两遍详情/取流/测速, 甚至
+        //   "先远端起播、下完再切本地"二次重启(2026-10-30 起播慢的隐藏原因之一)。
+        if (!_loadRunning && !string.IsNullOrEmpty(_currentBvid)) await LoadVideoAsync();
     }
 
     // ------------------------------------------------------------ 加载流程
@@ -1578,13 +1584,22 @@ public partial class PlayerWindow : FluentWindow
     private async Task LoadVideoAsync(long cid = 0)
     {
         if (string.IsNullOrEmpty(_currentBvid)) return;
+
+        // ★ 每次进入都取一个新代次: 上一次在飞的加载(点了另一条视频/另一个分P)立刻作废。
+        //   没有这一道时, 连点两张卡片会跑两条完整的加载链, 后回来的那条会把画面/标题盖掉。
+        var gen = ++_loadGen;
+        _loadRunning = true;
+        var sw = Stopwatch.StartNew();
+        long tDetail = 0, tPlayUrl = 0, tRemux = 0, tSponsor = 0;
+
         ShowLoading("正在获取视频信息…");
         FailOverlay.Visibility = Visibility.Collapsed;
         try
         {
             var (detailOk, detailErr, detail) = await Svc.Api.GetVideoAsync(_currentBvid);
-            // 加载期间用户可能已经关掉窗口, 此时不能再碰任何 UI/原生对象
-            if (_closing) return;
+            tDetail = sw.ElapsedMilliseconds;
+            // 加载期间用户可能已经关掉窗口/换了片, 此时不能再碰任何 UI/原生对象
+            if (_closing || gen != _loadGen) return;
             if (detail == null)
             {
                 // 现在 err 会带真实原因(接口码/异常), 不用再写死一句猜测的话
@@ -1612,15 +1627,16 @@ public partial class PlayerWindow : FluentWindow
             }
 
             // ★ 片段查询**立刻发起, 与下面"取播放地址 / 合流下载"并行** ——
-            // 那两步通常要几百毫秒到几十秒, 等它们跑完这边基本已经回来了,
-            // 所以"跳过赞助片段"不会给起播增加可感知的等待(见 SponsorWaitMs)。
+            // 起播**不等它**(服务端首包实测 2.6s, 等了也拿不到); 回来得早才做开场空降,
+            // 否则由 500ms 心跳补跳(见 BeforePlayApplySponsorAsync)。
             var sponsorTask = FetchSponsorSegmentsAsync();
 
             SetLoadingText("正在获取播放地址…");
             // 默认请求 1080P(qn=80), B 站会按登录态/大会员返回实际可用的清晰度
             var (playOk, playErr, main, backups, durMs, qualities, actualQn, audioUrl, remux) =
                 await Svc.Api.GetPlayUrlAsync(_currentBvid, _currentCid, _currentQn);
-            if (_closing) return;
+            tPlayUrl = sw.ElapsedMilliseconds;
+            if (_closing || gen != _loadGen) return;
             // 以前这里不判成败, 直接拿 main 往下走 —— 取不到地址时 main 是 null, 一路走到
             // BuildMedia(null) 才炸, 用户看到的是一句语焉不详的"打开失败"。
             // 现在把 API 层给的原因直接透出去(见 ApiClient.GetPlayUrlAsync 的说明)。
@@ -1635,20 +1651,24 @@ public partial class PlayerWindow : FluentWindow
             _qualities.AddRange(qualities);
             FillQualityMenu(actualQn);
 
-            // ---- 短视频: 先合流成本地文件再播(它同时给到 1080P / 快跳转 / 完整结尾) ----
-            // 顺序: 已缓存 -> 直接播本地; 没缓存 -> 就地下完再播(带进度); 下不动 -> 回落远端 DASH
+            // ---- 极短片(≤60s / ≤8MB): 先合流成本地文件再播; 其余一律远端双流直接起播 ----
+            // 顺序: 已缓存 -> 直接播本地; 没缓存 -> 2.5 秒内下完就播本地; 下不动 -> 回落远端 DASH。
+            // ★ 2026-10-30: 阈值从"3 分钟 / 150MB"收到"1 分钟 / 8MB"。旧阈值下大多数
+            //   短视频都要先整片下载, 起播被拖成 10~45 秒(用户报"加载慢/卡住")。
+            //   实测 15.3MB 就要 3.6 秒, 所以 8MB 才是"等得起"的体量上限。
             //
             // ★ 只在播**第一个 P** 时才碰本地缓存(2026-10-11 加分P时补的):
-            //   ShortVideoCache 的键只有 bvid, 不含 cid。多P 的短视频(每段都小于 150MB 上限,
+            //   ShortVideoCache 的键只有 bvid, 不含 cid。多P 的短视频(每段都小于体积上限,
             //   比如一个视频切成几段 vlog)切到 P2 时会命中 P1 落盘的文件 —— 表现为
-            //   "换了集还是上一段的内容"。长视频(纪录片那种 90 分钟)本来就超预算走不到这里,
+            //   "换了集还是上一段的内容"。长视频本来就超预算走不到这里,
             //   所以这个坑平时碰不到, 但短视频多P 一做分P 就会踩。
             //   与其给缓存 API 加 cid 参数(要动文件命名/清理/落盘三处), 不如认准"只缓存首 P"。
             var isFirstPage = cid <= 0 || cid == detail.Cid;
             var local = isFirstPage ? ShortVideoCache.TryGet(_currentBvid, actualQn) : null;
             if (local == null && isFirstPage && ShortVideoCache.WorthCaching(remux))
                 local = await PrepareShortVideoAsync(remux!, actualQn);
-            if (_closing) return;
+            tRemux = sw.ElapsedMilliseconds;
+            if (_closing || gen != _loadGen) return;
 
             string? url;
             string? playAudio;
@@ -1686,10 +1706,17 @@ public partial class PlayerWindow : FluentWindow
             WriteLibVLCDebug(
                 $"\n[LoadVideo] bvid={_currentBvid} cid={_currentCid} qn={actualQn} url={url} audio={playAudio}\n");
 
-            // 片段数据: 到这里"取播放地址 / 合流下载"已经花掉了大部分时间, 这一步几乎必然已就绪。
-            // 万一还没回来, 也最多再等 SponsorWaitMs —— 等不到就先起播, 结果回来后再补上。
+            // 片段数据: 只落地"已经回来"的结果 —— 绝不为它推迟起播(见 BeforePlayApplySponsorAsync)
             await BeforePlayApplySponsorAsync(sponsorTask);
-            if (_closing) return;
+            tSponsor = sw.ElapsedMilliseconds;
+            if (_closing || gen != _loadGen) return;
+
+            // 起播耗时诊断: 每段都是**本段耗时**(不是累计), 与 [Playing] 的 first-frame 对齐看
+            WriteLibVLCDebug(
+                $"\n[Timing] bvid={_currentBvid} detail={tDetail}ms " +
+                $"playurl={tPlayUrl - tDetail}ms remux={tRemux - tPlayUrl}ms " +
+                $"sponsor={tSponsor - tRemux}ms toPlay={sw.ElapsedMilliseconds}ms " +
+                $"source={(local != null ? "local" : "remote")} qn={actualQn}\n");
 
             // B站 CDN 对 Referer 和 User-Agent 有校验, 必须通过 Media 选项告诉 LibVLC;
             // DASH 流音视频分离, 用 input-slave 把音轨挂到视频流上一起播放。
@@ -1722,7 +1749,13 @@ public partial class PlayerWindow : FluentWindow
         }
         catch (Exception ex)
         {
-            if (!_closing) ShowFail("加载失败: " + ex.Message);
+            if (!_closing && gen == _loadGen) ShowFail("加载失败: " + ex.Message);
+        }
+        finally
+        {
+            // ★ 只有"还是当前这一代"才有资格清闸门: 被新加载顶掉的旧任务清掉的话,
+            //   闸门会在新任务还在飞的时候谎报空闲, OnLoaded 又会叠一条进来。
+            if (gen == _loadGen) _loadRunning = false;
         }
     }
 
@@ -1744,7 +1777,11 @@ public partial class PlayerWindow : FluentWindow
     {
         try
         {
-            return _mp.Play(media);
+            // 首帧计时只用于诊断日志: 每次起播(含切清晰度/重播/直播)都会重置。
+            _playWatch = Stopwatch.StartNew();
+            var ok = _mp.Play(media);
+            if (!ok) _playWatch = null;   // 没播起来就别留一个永远等不到 Playing 的计时器
+            return ok;
         }
         finally
         {
@@ -1805,6 +1842,11 @@ public partial class PlayerWindow : FluentWindow
             foreach (var o in options) local.AddOption(o);
             return local;
         }
+
+        // 起播缓冲(2026-10-30 新增, 设置页「起播缓冲」): 只加给网络流。
+        // ★ 用**媒体级**选项而不是重建 LibVLC: 全局实例是进程单例, 改它等于要重启内核;
+        //   媒体级选项下一条视频就生效, 且能各走各的(直播也一样)。
+        options.Add(":network-caching=" + Svc.Settings.NetworkCachingMs);
         return new Media(_libVLC, new Uri(url), options.ToArray());
     }
 
@@ -1814,10 +1856,41 @@ public partial class PlayerWindow : FluentWindow
     private CancellationTokenSource? _remuxCts;
 
     /// <summary>
+    /// 本会话里"下载超时过"的 bvid —— 不再为它尝试本地合流。
+    ///
+    /// ★ 为什么需要: 2.5 秒预算到点后回落到远端起播, 但**下一次再点开同一个视频**又会
+    ///   从头等 2.5 秒。记下来之后, 本会话内直接流式起播, 用户不会再看到第二次转圈。
+    ///   不持久化: 换网络/重启后值得重新试一次。
+    /// </summary>
+    private readonly HashSet<string> _remuxSlow = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// 合流任务的"代次"。换片/切清晰度都要作废上一次的在飞任务 ——
     /// 直接比字段(比如"cid 还一样吗")容易漏(切清晰度时 cid 是不变的), 用单调递增的代次最省心。
     /// </summary>
     private int _remuxGen;
+
+    /// <summary>
+    /// 加载代次。换片 / 换分P 只要再次进入 <see cref="LoadVideoAsync"/>, 代次就 +1 ——
+    /// 上一次还在飞的加载回来时必须立刻作废, 否则会把旧视频的详情/地址/本地文件灌进新视频
+    /// (表现是"换片后标题对了、画面还是上一条")。
+    /// ★ 与 _remuxGen 同款, 但管的是**整条加载链**, 不只是合流任务。
+    /// </summary>
+    private int _loadGen;
+
+    /// <summary>
+    /// 是否有一次 LoadVideoAsync 正在飞。
+    /// ★ 用来挡住 OnLoaded 的重复启动: 新窗口第一次打开时 PlayerService 先调 PlayVideo,
+    ///   Loaded 事件随后才到 —— 没有这个闸门就会跑两遍详情/取流/测速, 甚至
+    ///   "先远端起播、下完再切本地"二次重启(2026-10-30 起播慢的隐藏原因之一)。
+    /// </summary>
+    private bool _loadRunning;
+
+    /// <summary>
+    /// 本次 <see cref="PlayMedia"/> 到首帧(Playing)的计时器, 只用于 [Timing] 诊断日志。
+    /// 打完即置空, 避免 seek 后重复的 Playing 事件把首帧耗时刷成无意义的数。
+    /// </summary>
+    private Stopwatch? _playWatch;
 
     /// <summary>
     /// 短视频: 下载两路并合流成本地文件, 期间在加载遮罩上显示进度。
@@ -1826,18 +1899,25 @@ public partial class PlayerWindow : FluentWindow
     /// 为什么是"下完再播"(用户 2026-09-25 选定):
     ///   前一版是"边播边下、就绪后换源"。换源那一下真机上暴露了两个问题 —— 跳转后画面花屏、
     ///   音轨不同步(根因见 DashRemuxer 里 mfhd 序列号那条)。下完再播从头到尾都是**同一个输入**,
-    ///   没有换源这一步, 问题面小得多。代价是首次打开要等下载(实测 18MB / 2.5s), 之后就吃缓存。
+    ///   没有换源这一步, 问题面小得多。
+    ///
+    /// ★ 2026-10-30 收窄: 只有"≤60 秒 且 ≤8MB"的极短片会走到这里, 且总预算 2.5 秒。
+    ///   旧版对所有 ≤3 分钟的视频都先整片下载(45 秒上限), 起播被拖成 10~45 秒。
     ///
     /// 进度是"两路已下字节 / 按码率估算的总字节": 估算值来自接口的 bandwidth, 与实际有偏差,
     /// 所以到 100% 之后还可能要等一下合流(那步是纯内存拷贝, 很快)。
     /// </summary>
     private async Task<string?> PrepareShortVideoAsync(DashStreams spec, int qn)
     {
+        // 本会话已经为它白等过 2.5 秒 ⇒ 直接流式起播, 不再重试。
+        // ★ 必须放在创建 CTS / 清遮罩文案之前: 早退不该留下一个没人用的 CTS。
+        var bvid = _currentBvid;  // 别在后台线程上读字段: 先取到本地变量
+        if (_remuxSlow.Contains(bvid)) return null;
+
         CancelRemuxPrefetch();
         var cts = new CancellationTokenSource();
         _remuxCts = cts;
         var gen = _remuxGen;      // CancelRemuxPrefetch 里已经自增过, 这就是"本次任务"的代次
-        var bvid = _currentBvid;  // 别在后台线程上读字段: 先取到本地变量
 
         SetLoadingText("正在准备高清播放…");
         try
@@ -1851,11 +1931,12 @@ public partial class PlayerWindow : FluentWindow
                     : "正在准备高清播放…");
             });
 
-            var path = await ShortVideoCache.PrepareAsync(bvid, qn, spec, cts.Token, progress);
+            var result = await ShortVideoCache.PrepareAsync(bvid, qn, spec, cts.Token, progress);
             // 期间用户可能已经换片/切清晰度/关窗: 代次变了就丢掉这次结果
             if (_closing || gen != _remuxGen) return null;
-            if (path == null) SetLoadingText("正在缓冲视频…");   // 合流没成 -> 走远端, 文案还原
-            return path;
+            if (result.TimedOut) _remuxSlow.Add(bvid);
+            if (result.Path == null) SetLoadingText("正在缓冲视频…");   // 合流没成 -> 走远端, 文案还原
+            return result.Path;
         }
         finally
         {
@@ -7502,26 +7583,25 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 起播前落地片段数据。最多等 <see cref="SponsorWaitMs"/> ——
-    /// 等得到就能做"开场就是广告"的空降; 等不到就先起播, 由后台补上(心跳会兜住跳过)。
-    /// **绝不为了它把起播卡住。**
+    /// 起播前落地片段数据 —— **绝不等待**。
+    ///
+    /// 历史(2026-10-30 修): 这里原来最多等 800ms, 为的是拿到"开场就是广告"时能做空降。
+    /// 但实测服务端 www.bsbsb.top 首包要 **2.6 秒**, 800ms 必然等满且拿不到数据 ——
+    /// 等于每条视频白等 0.8 秒, 空降却一次都没成过。
+    /// 现在只在"查询已经返回"时做空降; 否则起播优先, 由 500ms 心跳按正常时机补跳
+    /// (顶多先看到半秒广告)。
     /// </summary>
     private async Task BeforePlayApplySponsorAsync(Task<IReadOnlyList<SponsorSegment>> task)
     {
+        var key = SponsorKey();
         if (task.IsCompleted)
         {
             ApplySponsorRaw(await SafeAwait(task), applyInitialDrop: true);
             return;
         }
 
-        var key = SponsorKey();
-        var done = await Task.WhenAny(task, Task.Delay(SponsorWaitMs));
-        if (_closing) return;
-
-        if (ReferenceEquals(done, task))
-            ApplySponsorRaw(await SafeAwait(task), applyInitialDrop: true);
-        else
-            _ = ApplySponsorLaterAsync(task, key);
+        // 还没回来 ⇒ 先起播, 结果回来后再补(见 ApplySponsorLaterAsync)
+        _ = ApplySponsorLaterAsync(task, key);
     }
 
     /// <summary>超时后补落地。只认"还是同一个视频"的那份数据 —— 用户可能已经换片了</summary>

@@ -66,8 +66,10 @@ public static class VlcCore
             //   "Warning: option --plugin-path no longer exists"(实测, 它不生效, 只是噪声)。
             Environment.SetEnvironmentVariable("VLC_PLUGIN_PATH", PluginsDirectory);
 
-            // network-caching=1000 抑制网络抖动引起的卡顿;
-            // 不强制 d3d11va 硬解(部分显卡驱动上会花屏/卡顿), 交给 LibVLC 自动选择。
+            // 网络缓冲: 用用户设置(设置页「网络缓冲」, 默认 1000 = 旧版行为)。
+            // ★ 媒体级还会再带一份(见 PlayerWindow.BuildMedia), 这里给"没有带选项的路径"
+            //   (直播/重播兜底/探针)一个一致的值; 运行中改设置不重建内核, 所以这里只在首次生效。
+            // ★ 实测它对**起播速度**几乎没影响(缓存按网速灌), 影响的是播放中的抗抖动余量。
             //
             // ★★★ 别加 `--demux=avformat`(2026-10-17 试过, 有致命副作用, 已撤回):
             //   它确实能修好 seek —— 实测 25%/70% 落点偏差都是 0ms(基线是 -32万ms)。
@@ -77,10 +79,11 @@ public static class VlcCore
             //   (裸 libvlc 不带 slave 时是好的, 所以只测裸 libvlc 会得出错误结论 ——
             //    必须用 bd-probe-seekstick 走**产品自己的路径**验。)
             //   ⇒ seek 的问题改为在播放器层处理(见 PlayerWindow.RecoverFromFailedSeek)。
+            var caching = SettingsStore.Instance.NetworkCachingMs;
             _instance = new LibVLC(
                 "--intf=dummy",
                 "--no-osd",
-                "--network-caching=1000");
+                "--network-caching=" + caching);
 
             return _instance;
         }

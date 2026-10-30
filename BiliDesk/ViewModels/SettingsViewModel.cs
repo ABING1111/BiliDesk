@@ -671,6 +671,54 @@ public class SettingsViewModel : ObservableObject
             : $"每次起播都请求 {QualityPreference.LabelOf(Svc.Settings.PreferredQualityQn)}; " +
               "该清晰度不存在或没有权限时自动降到可用的下一档";
 
+    // ----------------- 起播缓冲(网络缓存) -----------------
+
+    /// <summary>
+    /// 网络缓冲的可选档位(文字 + 毫秒)。顺序即下拉框顺序: 从"最小/最省"到"最抗抖动"。
+    /// ★ 值为 300/500/1000/3000, 与 SettingsStore.NetworkCachingMin/Max 的夹取范围一致。
+    /// </summary>
+    private static readonly (string Label, int Ms)[] NetworkCachingChoices =
+    {
+        ("300ms · 最小", 300),
+        ("500ms · 偏小", 500),
+        ("1000ms · 默认", 1000),
+        ("3000ms · 弱网", 3000),
+    };
+
+    /// <summary>网络缓冲下拉框的显示项</summary>
+    public string[] NetworkCachingOptions { get; } =
+        NetworkCachingChoices.Select(c => c.Label).ToArray();
+
+    /// <summary>
+    /// 当前网络缓冲(字符串投影, 理由同 CdnModeSelected)。落盘走 SetNetworkCaching,
+    /// 它在读取时已经夹到合法范围, 所以这里不会出现"选了个不存在的档"。
+    /// </summary>
+    public string NetworkCachingSelected
+    {
+        get
+        {
+            foreach (var c in NetworkCachingChoices)
+                if (c.Ms == Svc.Settings.NetworkCachingMs) return c.Label;
+            return NetworkCachingChoices[2].Label;   // 越界值(手改配置)显示默认档
+        }
+        set
+        {
+            var hit = NetworkCachingChoices.FirstOrDefault(c => c.Label == value);
+            if (hit.Label == null) return;
+            if (hit.Ms == Svc.Settings.NetworkCachingMs) return;
+            Svc.Settings.SetNetworkCaching(hit.Ms);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(NetworkCachingHint));
+        }
+    }
+
+    /// <summary>
+    /// 副标题: 说清它是"抗抖动余量"而不是"起播开关" —— 实测起播阶段 300/3000 几乎测不出差别
+    /// (见 SettingsStore.NetworkCachingMs 的说明), 不写清楚会让人以为调小就能秒开。
+    /// </summary>
+    public string NetworkCachingHint =>
+        $"流式播放的预读缓冲: 越大越抗网络抖动, 越小越省内存 · 当前 {Svc.Settings.NetworkCachingMs}ms, 下一条视频生效";
+
     // ----------------- CDN(线路)设置 -----------------
     // 逻辑见 Services/CdnService.cs; 实测依据见该文件顶部注释
 
@@ -1294,7 +1342,7 @@ public class SettingsViewModel : ObservableObject
             var (count, bytes) = ShortVideoCache.GetStats();
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
                 VideoCacheSizeText = count == 0
-                    ? "尚无缓存(只对 3 分钟以内的视频做本地合流)"
+                    ? "尚无缓存(只对 1 分钟 / 8MB 以内的视频做本地合流)"
                     : $"{count} 个视频 · 共 {FormatBytes(bytes)}");
         });
     }

@@ -1265,6 +1265,14 @@ public class AppSettings
     public int PlayerVolume { get; set; } = 80;
 
     /// <summary>
+    /// LibVLC 网络缓冲(毫秒)。控制流式播放的预读深度: 越小越省内存, 越大越抗网络抖动。
+    /// 老配置没有这个字段 ⇒ 反序列化保持初始化值(1000, 与旧版全局值一致)。
+    /// 手改成 0/越界值由 SettingsStore 读取时夹回 300~3000。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public int NetworkCachingMs { get; set; } = 1000;
+
+    /// <summary>
     /// 上次用的搜索类别(见 <see cref="ContentKind"/>: 0=视频 1=直播间 2=番剧)。
     /// 存 int 而不是枚举本身: JSON 里枚举按数字走, 老配置没有这个字段时默认 0(视频),
     /// 与搜索页的初始类别一致。★ 取值范围由 SettingsStore.SearchKind 夹取。

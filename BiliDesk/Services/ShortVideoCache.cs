@@ -27,11 +27,19 @@ namespace BiliDesk.Services;
 /// 磁盘策略("允许写盘但要清理"): 目录默认 <c>%LocalAppData%\BiliDesk\vcache</c>
 /// (2026-10-11 起内部缓存不再随用户设置移动, 固定在 AppPaths.CacheRoot = 数据目录下),
 /// 每次写完都 Prune —— 超过 14 天、超过 50 个、总量超 500MB 的一律按"最久没动过"先删;
-/// 中断残留的 .part/.tmp 也会被清掉。单片按码率估算超过 150MB 的直接不做(不值得占盘)。
+/// 中断残留的 .part/.tmp 也会被清掉。单片按码率估算超过 8MB 的直接不做(不值得占盘)。
 /// 另外启动时也会 Prune 一次(见 App.OnStartup), 免得用户长时间不看视频时旧缓存一直占着。
 /// </summary>
 public static class ShortVideoCache
 {
+    /// <summary>
+    /// 一次"下载 + 合流"的结果。
+    /// <paramref name="Path"/> 为 null 表示没拿到; <paramref name="TimedOut"/> 区分
+    /// "我们自己的 2.5s 预算到点"(调用方应记住这条视频, 本会话别再试) 与
+    /// "用户换片/关窗取消"(下次还能正常试)。
+    /// </summary>
+    public readonly record struct PrepareResult(string? Path, bool TimedOut);
+
     private static readonly HttpClient Http = new(new SocketsHttpHandler
     {
         AutomaticDecompression = DecompressionMethods.All,
@@ -62,7 +70,13 @@ public static class ShortVideoCache
     public static readonly TimeSpan MaxAge = TimeSpan.FromDays(14);
 
     /// <summary>单片上限(按码率估算)。超过就不做本地合流 —— 为"拖进度条顺一点"占太多盘不值</summary>
-    private const long MaxSingleBytes = 150L * 1024 * 1024;
+    /// <remarks>
+    /// ★ 2026-10-30 从 150MB 收到 8MB: 只要体积一超就必然把"起播"拖成"下载"。
+    ///   实测(探针 bd-probe-startcfix)15.3MB / 58 秒的片子要 **3.6 秒**下载+合流,
+    ///   仍会让人盯着"正在准备高清播放…"。8MB 在常见线路上 1~2 秒能下完,
+    ///   才对得起"极短片秒开"这个前提; 更大的直接流式起播。
+    /// </remarks>
+    private const long MaxSingleBytes = 8L * 1024 * 1024;
 
     /// <summary>残留的中间文件多久算"没人要了"(避免误删正在下的那一个)</summary>
     private static readonly TimeSpan PartGarbageAge = TimeSpan.FromHours(1);
@@ -70,9 +84,12 @@ public static class ShortVideoCache
     /// <summary>
     /// 单次"下载 + 合流"的总超时。到点就放弃本地合流、回落远端 DASH ——
     /// 与其让用户对着进度条等到怀疑人生, 不如先按旧体验播起来。
-    /// 实测正常情况 2.5 秒左右(18MB), 45 秒已经是很宽的余量。
+    ///
+    /// ★ 2026-10-30: 45s → 2.5s。现在只有极短片(≤60s / ≤8MB)才走这条路;
+    ///   实测 15.3MB 要 3.6 秒, 8MB 在常见线路上 1~2 秒 —— 2.5 秒是"还值得等"的上限。
+    ///   超时过的视频由播放器记进"本会话不再尝试"的集合, 不会每次都白等。
     /// </summary>
-    private static readonly TimeSpan TotalTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan TotalTimeout = TimeSpan.FromSeconds(2.5);
 
     /// <summary>
     /// 合流产物的**格式版本**。只要合流器改了对容器有影响的字段, 这里就必须 +1 ——
@@ -122,15 +139,15 @@ public static class ShortVideoCache
     }
 
     /// <summary>
-    /// 下载两路 → 合流 → 落到缓存目录。返回最终文件路径; 失败/被取消返回 null。
-    /// 调用方在后台跑, 换片/切清晰度/关窗时用 CancellationToken 取消。
+    /// 下载两路 → 合流 → 落到缓存目录。调用方在后台跑, 换片/切清晰度/关窗时用
+    /// CancellationToken 取消。
     /// </summary>
     /// <param name="progress">下载进度 0~1(按"已下字节 / 按码率估算的总字节"算, 估算有偏差,
     /// 所以到 1 之后还可能要等合流那一下 —— 那步是纯拷贝, 很快)</param>
-    public static async Task<string?> PrepareAsync(string bvid, int qn, DashStreams spec,
+    public static async Task<PrepareResult> PrepareAsync(string bvid, int qn, DashStreams spec,
         CancellationToken ct, IProgress<double>? progress = null)
     {
-        if (!WorthCaching(spec)) return null;
+        if (!WorthCaching(spec)) return new PrepareResult(null, false);
 
         var key = KeyOf(bvid, qn);
         var final = Path.Combine(Dir, key + ".mp4");
@@ -143,7 +160,7 @@ public static class ShortVideoCache
         if (existing != null)
         {
             progress?.Report(1);
-            return existing;
+            return new PrepareResult(existing, false);
         }
 
         // 单次准备的总超时。网络半死不活时不能把"起播"卡住太久 ——
@@ -170,10 +187,10 @@ public static class ShortVideoCache
                 // 合流失败不是"致命错误", 但必须留痕: 这是片源结构变化的第一手线索
                 App.ReportError(new InvalidOperationException(
                     $"本地合流失败 bvid={bvid} qn={qn}: {err}"));
-                return null;
+                return new PrepareResult(null, false);
             }
             progress?.Report(1);
-            return final;
+            return new PrepareResult(final, false);
 
             void Report(long delta)
             {
@@ -183,12 +200,14 @@ public static class ShortVideoCache
         }
         catch (OperationCanceledException)
         {
-            return null;   // 用户换片/关窗, 或超时放弃 —— 都属正常路径, 不记日志
+            // 用户换片/关窗, 或超时放弃 —— 都属正常路径, 不记日志。
+            // ★ 区分两种: 外层 ct 没被取消 ⇒ 是我们自己的 2.5s 预算到点。
+            return new PrepareResult(null, !ct.IsCancellationRequested);
         }
         catch (Exception ex)
         {
             App.ReportError(ex);
-            return null;
+            return new PrepareResult(null, false);
         }
         finally
         {

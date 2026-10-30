@@ -44,8 +44,18 @@ public sealed class CdnService
     public static CdnService Instance { get; } = new();
 
     /// <summary>单条线路的测速窗口</summary>
-    private const int SpeedTestBytes = 256 * 1024;
+    private const int SpeedTestBytes = 128 * 1024;
     private const int SpeedTestTimeoutMs = 3000;
+
+    /// <summary>
+    /// 起播路径上给整轮测速的**硬预算**。
+    ///
+    /// ★ 为什么必须有(2026-10-30 实测): 候选里既有 0.16~0.24s 的常规线路, 也有
+    ///   `upos-sz-mirroraliov`(2.11s)与直接连不上的 `08c`。`Task.WhenAll` 要等**最慢**
+    ///   的那条 —— 于是每条视频的起播都被拖 2.1s+(最坏 3s 探针超时)。
+    ///   到点只取已完成且校验通过的线路, 剩下的直接取消: 排名略粗糙, 但起播快得多。
+    /// </summary>
+    private static readonly TimeSpan StartupRankBudget = TimeSpan.FromMilliseconds(800);
 
     /// <summary>
     /// 测速结果缓存时长。
@@ -59,9 +69,15 @@ public sealed class CdnService
     private readonly HttpClient _http;
     private readonly object _gate = new();
 
-    // 缓存: 上一次测速的赢家 + 当时的候选池指纹
-    private string? _cachedBestUrl;
-    private string? _cachedPoolKey;
+    // 缓存: 上一次测速的赢家 **host**。
+    // ★ 存 host 而不是完整 URL: URL 里带 deadline/trid/upsig, 每条视频都不同,
+    //   拿它当缓存键会让缓存永远不命中(这正是"每条视频都重新测速 2 秒"的根因)。
+    // ★ 也**不再按"候选池"分键**: 服务端给同一批视频的 base/backup host 组合每条都变
+    //   (mirrorhwb / estgoss / mirrorali …), 按池分键仍然几乎每条都 miss。
+    //   而"换 host"对非 mcdn 模板是普遍成立的(实测 72/72), 与具体视频无关 ——
+    //   所以一个 10 分钟有效的全局赢家就够, 与音轨那条 SelectSecondaryUrl 的做法一致。
+    //   命中时用**当前视频**的模板 ReplaceHost 重建, 不会复用别人的过期签名。
+    private string? _cachedBestHost;
     private DateTime _cachedAt = DateTime.MinValue;
     private string? _lastReport;
 
@@ -92,11 +108,10 @@ public sealed class CdnService
         {
             lock (_gate)
             {
-                if (_cachedBestUrl == null) return null;
+                if (_cachedBestHost == null) return null;
                 if (DateTime.UtcNow - _cachedAt > CacheTtl) return null;
-                var host = SafeHost(_cachedBestUrl);
                 return CdnOption.All.FirstOrDefault(o =>
-                    string.Equals(o.Host, host, StringComparison.OrdinalIgnoreCase));
+                    string.Equals(o.Host, _cachedBestHost, StringComparison.OrdinalIgnoreCase));
             }
         }
     }
@@ -106,8 +121,7 @@ public sealed class CdnService
     {
         lock (_gate)
         {
-            _cachedBestUrl = null;
-            _cachedPoolKey = null;
+            _cachedBestHost = null;
             _cachedAt = DateTime.MinValue;
         }
     }
@@ -191,51 +205,84 @@ public sealed class CdnService
     }
 
     /// <summary>
-    /// 自动: 有缓存且候选池没变就直接用, 否则真测一轮。
+    /// 自动: 有缓存且没过期就直接用(不再按候选池比对), 否则做一轮**限时**测速。
     /// </summary>
     private async Task<string> AutoPickAsync(List<string> pool)
     {
-        var key = PoolKey(pool);
         lock (_gate)
         {
-            if (_cachedBestUrl != null &&
-                _cachedPoolKey == key &&
-                DateTime.UtcNow - _cachedAt <= CacheTtl)
-                return _cachedBestUrl;
+            if (_cachedBestHost != null && DateTime.UtcNow - _cachedAt <= CacheTtl)
+            {
+                // ★ 缓存里只有 host: 必须用**当前视频**的 URL 模板重建,
+                //   绝不能把上一条视频的完整 URL 直接返回(签名会过期且 session 不对)。
+                var swapped = TryBuildSwapped(pool, _cachedBestHost);
+                if (swapped != null) return swapped;
+            }
         }
 
+        // 起播路径用硬预算: 只等 StartupRankBudget, 到点取已完成的结果。
         // RankAsync 会顺带写好测速报告与缓存(见其说明)
-        var ranked = await RankAsync(pool).ConfigureAwait(false);
+        var ranked = await RankAsync(pool, StartupRankBudget).ConfigureAwait(false);
 
         // 一条都没测通 → 回退服务端原样线路(而不是返回空)
         return ranked.Count > 0 ? ranked[0].Url : pool[0];
     }
 
     /// <summary>
-    /// 对候选池做限时测速, 返回按吞吐从高到低排序且**已验证可用**的线路。
+    /// 对候选池做一轮完整测速(设置页「开始测速」用), 返回按吞吐从高到低排序且**已验证可用**的线路。
     ///
     /// ★ 它同时负责更新测速报告与缓存 —— 因为设置页的「开始测速」按钮直接调这个方法,
     ///   如果报告只在 AutoPickAsync 里写, 用户点按钮后看到的会是**上一次的旧结果**
     ///   (实测踩过: 报告写"阿里云 2461KB/s", 而真实第一名是 13473KB/s)。
     ///
-    /// 并排测: 总耗时 ≈ 最慢那条的窗口时间, 而不是累加 —— 否则十几条 × 3s 没法用。
+    /// 并排测: 总耗时 ≈ 最慢那条的窗口时间, 而不是累加。
     /// </summary>
-    public async Task<List<(string Url, long BytesPerSecond, long ElapsedMs)>> RankAsync(List<string> pool)
+    public Task<List<(string Url, long BytesPerSecond, long ElapsedMs)>> RankAsync(List<string> pool)
+        => RankAsync(pool, TimeSpan.Zero);
+
+    /// <summary>
+    /// 带预算的测速。<paramref name="budget"/> 为 <see cref="TimeSpan.Zero"/> 时等全部候选
+    /// (设置页手动测速); 否则到点取消剩余候选, 只用已完成的结果排名。
+    ///
+    /// ★ 为什么预算只用在起播路径: 手动测速的语义是"把家底都测一遍", 截断会让报告说谎;
+    ///   而起播只需要"够快的一条", 不值得为最慢的海外线路等 2 秒。
+    /// </summary>
+    private async Task<List<(string Url, long BytesPerSecond, long ElapsedMs)>> RankAsync(
+        List<string> pool, TimeSpan budget)
     {
         var candidates = BuildCandidateSet(pool);
+        var budgeted = budget > TimeSpan.Zero;
+
+        using var cts = new CancellationTokenSource();
+        if (budgeted) cts.CancelAfter(budget);
 
         var tasks = candidates.Select(async u =>
         {
-            var (ok, ms, bytes) = await ProbeAsync(u).ConfigureAwait(false);
+            var (ok, ms, bytes) = await ProbeAsync(u, cts.Token).ConfigureAwait(false);
             return (url: u, ok, ms, bytes);
         }).ToList();
 
-        var done = await Task.WhenAll(tasks).ConfigureAwait(false);
+        if (budgeted)
+        {
+            // 到点就收工。★ 不能 await Task.WhenAll: 它会把被取消的探针也等完(取消本身
+            //   也需要一次 IO 回调), 起播路径上这几百毫秒同样是白等。
+            await Task.WhenAny(Task.WhenAll(tasks), Task.Delay(budget)).ConfigureAwait(false);
+            try { cts.Cancel(); } catch { /* 已经结束 */ }
+        }
+        else
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
 
         var ranked = new List<(string Url, long BytesPerSecond, long ElapsedMs)>();
-        foreach (var (u, ok, ms, bytes) in done)
+        foreach (var t in tasks)
+        {
+            // 未完成/被取消的探针直接跳过 —— 绝不在这里 .Result 阻塞
+            if (t.Status != TaskStatus.RanToCompletion) continue;
+            var (u, ok, ms, bytes) = t.Result;
             if (ok && bytes > 0)
                 ranked.Add((u, bytes * 1000 / Math.Max(1, ms), ms));
+        }
 
         // 同速时**优先服务端原样线路**(它没有换 host 的 403 风险)
         var poolSet = new HashSet<string>(pool, StringComparer.Ordinal);
@@ -247,19 +294,18 @@ public sealed class CdnService
         });
 
         // 写报告 + 缓存(与 AutoPickAsync 共用同一份写入逻辑, 免得两处写法漂移)
-        Publish(ranked, PoolKey(pool));
+        Publish(ranked);
         return ranked;
     }
 
     /// <summary>把一轮测速的结果写成报告与缓存。ranked 为空表示全部不可达。</summary>
-    private void Publish(List<(string Url, long BytesPerSecond, long ElapsedMs)> ranked, string poolKey)
+    private void Publish(List<(string Url, long BytesPerSecond, long ElapsedMs)> ranked)
     {
         lock (_gate)
         {
             if (ranked.Count > 0)
             {
-                _cachedBestUrl = ranked[0].Url;
-                _cachedPoolKey = poolKey;
+                _cachedBestHost = SafeHost(ranked[0].Url);
                 _cachedAt = DateTime.UtcNow;
 
                 var others = ranked.Skip(1).Take(3)
@@ -272,8 +318,7 @@ public sealed class CdnService
             }
             else
             {
-                _cachedBestUrl = null;
-                _cachedPoolKey = null;
+                _cachedBestHost = null;
                 _lastReport = $"{DateTime.Now:HH:mm:ss} 测速失败: 候选线路都不可达, 已回退服务端线路";
             }
         }
@@ -338,8 +383,6 @@ public sealed class CdnService
                !host.Contains("mcdn.", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string PoolKey(List<string> pool) => string.Join("|", pool);
-
     private static string SafeHost(string url)
     {
         try { return new Uri(url).Host; } catch { return ""; }
@@ -350,8 +393,9 @@ public sealed class CdnService
     ///
     /// ★ 这个探测**同时承担可用性校验**: 只有真返回 200/206 并且读出字节才算成功。
     ///   换 host 后可能 403 —— 403 会在这里被判为不可用, 于是不会进排名。
+    /// ★ <paramref name="outer"/>: 起播路径的整轮预算, 到点会把未完成的探针一起取消。
     /// </summary>
-    private async Task<(bool ok, long ms, long bytes)> ProbeAsync(string url)
+    private async Task<(bool ok, long ms, long bytes)> ProbeAsync(string url, CancellationToken outer = default)
     {
         var sw = Stopwatch.StartNew();
         try
@@ -360,7 +404,8 @@ public sealed class CdnService
             req.Headers.TryAddWithoutValidation("Referer", "https://www.bilibili.com/");
             req.Headers.TryAddWithoutValidation("Range", $"bytes=0-{SpeedTestBytes - 1}");
 
-            using var cts = new CancellationTokenSource(SpeedTestTimeoutMs);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(outer);
+            cts.CancelAfter(SpeedTestTimeoutMs);
             using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token)
                 .ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
@@ -383,7 +428,7 @@ public sealed class CdnService
         }
         catch (OperationCanceledException)
         {
-            // 超时: 这条线路慢到读不完窗口 —— 视为不可用(不参与排名)
+            // 超时/整轮预算到点: 这条线路不参与排名
             sw.Stop();
             return (false, sw.ElapsedMilliseconds, 0);
         }

@@ -326,6 +326,28 @@
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
+                    <!-- 网络缓冲(2026-10-30 新增): LibVLC 流式播放的预读深度。
+                         越小越省内存, 越大越抗网络抖动; 只对网络流生效(本地文件/合流缓存不受影响)。
+                         ★ 实测(探针 bd-probe-startcfix)起播阶段 300/3000ms 几乎无差别 ——
+                           所以文案只说"抗抖动", 不宣传"调小就秒开"。
+                         ★ 走**媒体级**选项(:network-caching=), 改完下一条视频生效, 不需要重建播放器内核。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="网络缓冲" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding NetworkCachingHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
+                                  Width="170" VerticalAlignment="Center"
+                                  ItemsSource="{Binding NetworkCachingOptions}"
+                                  SelectedItem="{Binding NetworkCachingSelected, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
                     <!-- 免登录 1080P: 未登录时给取流请求补 try_look + dm_img_* 四件套,
                          把匿名可见清晰度从 360P/480P 提到 720P/1080P(依据见 ApiClient.ApplyTryLook)。
                          这是设备指纹启发式放权, B 站改判据就会失效, 所以给用户一个关掉的入口。 -->
@@ -778,8 +800,8 @@
 
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
-                    <!-- 短视频下载缓存: 3 分钟内视频的 1080P 音视频本地合流产物,
-                         和上面的封面缓存是两回事。 -->
+                    <!-- 短视频下载缓存: 极短片(≤60s / ≤8MB)的 1080P 音视频本地合流产物,
+                         和上面的封面缓存是两回事。超过这个体积的一律远端直接起播, 不落盘。 -->
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
