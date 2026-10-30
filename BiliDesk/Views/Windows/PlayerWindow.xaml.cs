@@ -528,6 +528,10 @@ public partial class PlayerWindow : FluentWindow
         // 重画成本只有几个 Rectangle, 不必做节流。
         SponsorMarks.SizeChanged += (_, _) => RenderSponsorMarks();
         if (DanmakuAreaSlider != null) DanmakuAreaSlider.Value = Svc.Settings.DanmakuAreaPercent;
+        // ★ 到这里四个滑杆都已经同步成"用户的真实设置", 才打开回灌闸门。
+        //   在这之前的所有 ValueChanged 都只刷文字、不落库 —— 否则 XAML 里的初始
+        //   Value(25/80/100/2)会在 InitializeComponent() 时把用户设置整个覆写成默认。
+        _syncingDanmakuLook = false;
         UpdateDanmakuButton();
 
         // LibVLC 走进程级共享单例(见 VlcCore): 初始化全进程只做一次, 且永不在这里释放。
@@ -1437,6 +1441,9 @@ public partial class PlayerWindow : FluentWindow
         nameof(_loadGen), nameof(_loadRunning),
         // 首帧计时器(引用类型, 自检本来也不审, 这里登记只是表明它是窗口级瞬态)
         nameof(_playWatch),
+        // 弹幕滑杆的回灌闸门(2026-10-30): 构造期间必须保持 true 挡住 XAML 初始 Value 的写回;
+        //   换片不该碰它 —— 它是窗口级初始化状态, 不是"这一片"的弹幕设置。
+        nameof(_syncingDanmakuLook),
     };
 
     /// <summary>
@@ -1625,6 +1632,13 @@ public partial class PlayerWindow : FluentWindow
                 ShowFail("无法获取视频 cid, 播放中止");
                 return;
             }
+
+            // ★ 评论区 Tab 是**窗口级状态**: 换片不会自动回到「简介」。
+            //   它已经处于选中态时 Checked 事件不会再触发, 新视频的评论就永远不加载 ——
+            //   用户看到的就是"停在评论区、一片空白, 必须先点简介再点回来"(2026-10-30)。
+            //   这里补一次(与取流并行, 不占起播时间)。
+            WriteLibVLCDebug($"\n[Load] 详情就绪 aid={_aid} cid={_currentCid} tabComments={TabComments?.IsChecked}\n");
+            if (TabComments?.IsChecked == true) _ = LoadCommentsAsync();
 
             // ★ 片段查询**立刻发起, 与下面"取播放地址 / 合流下载"并行** ——
             // 起播**不等它**(服务端首包实测 2.6s, 等了也拿不到); 回来得早才做开场空降,
@@ -3512,6 +3526,9 @@ public partial class PlayerWindow : FluentWindow
         _danmakuAreaRatio = pct / 100.0;
         if (DanmakuAreaText != null) DanmakuAreaText.Text = pct + "%";
         if (DanmakuAreaValue != null) DanmakuAreaValue.Text = pct + "%";
+        // ★ 初始化/程序同步期间只刷文字, 不落库 —— 否则 XAML 里的初始 Value=25
+        //   会在 InitializeComponent() 时把用户存的值覆写成默认(见 _syncingDanmakuLook 的说明)。
+        if (_syncingDanmakuLook) return;
         // 持久化到全局设置(设置页与播放器双向同步)
         Svc.Settings.UpdateDanmakuSettings(Svc.Settings.DanmakuEnabled, pct, Svc.Settings.DanmakuSmartFilter);
     }
@@ -3564,7 +3581,10 @@ public partial class PlayerWindow : FluentWindow
     private void UpdateDanmakuLookTexts()
     {
         var s = Svc.Settings;
-        // 回灌保护: 下面的赋值会触发 ValueChanged, 那三个处理器会写设置
+        // 回灌保护: 下面的赋值会触发 ValueChanged, 那三个处理器会写设置。
+        // ★ 保存/恢复上一个值而不是无条件 false —— 本方法可能在"窗口初始化"的大闸门里被调用,
+        //   直接置 false 会提前把闸门打开(2026-10-30)。
+        var prev = _syncingDanmakuLook;
         _syncingDanmakuLook = true;
         try
         {
@@ -3578,7 +3598,7 @@ public partial class PlayerWindow : FluentWindow
         }
         finally
         {
-            _syncingDanmakuLook = false;
+            _syncingDanmakuLook = prev;
         }
     }
 
@@ -4072,8 +4092,14 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 同步弹幕外观滑杆时的回灌保护。
     /// 见 <see cref="UpdateDanmakuLookTexts"/>: 赋 Value 会触发 ValueChanged。
+    ///
+    /// ★★★ 初值必须是 **true**(2026-10-30 修"弹幕字号/覆盖面永远回到默认"):
+    ///   XAML 里四个滑杆都写了初始 `Value`(25 / 80 / 100 / 2) 且挂了 `ValueChanged` ——
+    ///   `InitializeComponent()` 装载这些初始值时会**立刻触发**四个处理器, 把用户的设置
+    ///   覆写成默认值。构造函数后面再从设置里读, 读到的已经是刚被覆写的 25/80/100/2。
+    ///   闸门从一开始就关着, 等构造函数把滑杆同步成用户的真实设置后才打开。
     /// </summary>
-    private bool _syncingDanmakuLook;
+    private bool _syncingDanmakuLook = true;
 
     /// <summary>基准弹幕字号(倍率 100% 时的值)</summary>
     private const double DanmakuBaseFontSize = 24;
@@ -6548,12 +6574,16 @@ public partial class PlayerWindow : FluentWindow
     private async Task LoadCommentsAsync(bool force = false)
     {
         if (_closing) return;
+        // ★ 记住发起时的 aid: 网络回来时用户可能已经换片了。没有这道的话,
+        //   上一条视频的评论会灌进新视频(列表/条数/排序入口全是旧的)。
+        var aidAtStart = _aid;
+        WriteLibVLCDebug($"\n[Comments] start aid={aidAtStart} loaded={_commentsLoaded} force={force}\n");
         // force: 刚发表完评论要重新拉一次(rpid/楼层/审核状态本地编不出来)。
         // 但"看过就不再拉"这个短路必须保留 —— 切 Tab 会反复调到这里, 不短路就是白刷接口。
         // ★ 切换排序必须走 force=true: 它要的就是"同一份数据换个顺序重拉"。
         if (force) CloseCommentDetail();
         if (_commentsLoaded && !force) { CommentHint.Text = "已加载"; return; }
-        if (_aid <= 0)
+        if (aidAtStart <= 0)
         {
             CommentHint.Text = _isLocalPlayback ? "本地文件没有评论" : "未获取到视频 aid";
             UpdateCommentSortUi(visible: false);
@@ -6566,10 +6596,10 @@ public partial class PlayerWindow : FluentWindow
         UpdateCommentSortUi(visible: false);
         try
         {
-            var (cmtOk, cmtErr, list, total) = await Svc.Api.GetCommentsAsync(_aid, 30, _commentSort);
+            var (cmtOk, cmtErr, list, total) = await Svc.Api.GetCommentsAsync(aidAtStart, 30, _commentSort);
             await Dispatcher.InvokeAsync(() =>
             {
-                if (_closing) return;
+                if (_closing || _aid != aidAtStart) return;
                 CommentList.ItemsSource = list;
                 _commentsLoaded = true;
                 _commentTotal = total;
@@ -6587,7 +6617,7 @@ public partial class PlayerWindow : FluentWindow
         }
         catch
         {
-            if (_closing) return;
+            if (_closing || _aid != aidAtStart) return;
             CommentLoadingRing.Visibility = Visibility.Collapsed;
             CommentHint.Text = "评论加载失败";
             UpdateCommentSortUi(visible: false);
