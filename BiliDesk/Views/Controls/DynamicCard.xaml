@@ -26,6 +26,12 @@
               表现得像功能时好时坏。文案与 VideoCard 逐字一致, 免得两处漂移。
         -->
         <ContextMenu>
+            <MenuItem Header="预览封面" Click="OnPreviewCover">
+                <MenuItem.Icon>
+                    <TextBlock Text="&#xE8B3;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="13" VerticalAlignment="Center" />
+                </MenuItem.Icon>
+            </MenuItem>
             <MenuItem Header="下载封面到本地" Click="OnDownloadCover">
                 <MenuItem.Icon>
                     <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"

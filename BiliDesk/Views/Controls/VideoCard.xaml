@@ -100,8 +100,14 @@
             而不是"卡片的菜单把外层 Grid 的菜单顶掉"导致页面功能消失。
         -->
         <ContextMenu>
-            <!-- "查看封面大图"已按用户要求整体移除(2026-09-26): 超大图适配修了之后仍保留
-                 下载入口, 但"看大图"这个动作用户明确不要了。 -->
+            <!-- 预览封面(2026-10-31 用户要求加回): 打开 ImagePreviewWindow 看大图,
+                 与"下载封面"共用同一个 Cover URL。 -->
+            <MenuItem Header="预览封面" Click="OnPreviewCover">
+                <MenuItem.Icon>
+                    <TextBlock Text="&#xE8B3;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="13" VerticalAlignment="Center" />
+                </MenuItem.Icon>
+            </MenuItem>
             <MenuItem Header="下载封面到本地" Click="OnDownloadCover">
                 <MenuItem.Icon>
                     <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"

@@ -259,14 +259,22 @@ public partial class VideoCard : UserControl
 
     private VideoItem? Current => DataContext as VideoItem;
 
-    // "查看封面大图"(OnViewCover)已按用户要求整体移除(2026-09-26);
-    // MediaActions.ShowImage 仍被头像/私信图片预览使用, ImagePreviewWindow 保留。
+    // "查看封面大图"曾按用户要求移除(2026-09-26), 2026-10-31 预览窗重写后按新要求加回
+    // (OnPreviewCover); MediaActions.ShowImage 同时被头像/私信图片预览使用。
 
     private async void OnDownloadCover(object sender, RoutedEventArgs e)
     {
         var v = Current;
         if (v == null) return;
         await MediaActions.SaveImageAsync(v.Cover, v.Title);
+    }
+
+    /// <summary>预览封面大图(2026-10-31 加回): 与"下载封面"同一个 Cover URL。</summary>
+    private void OnPreviewCover(object sender, RoutedEventArgs e)
+    {
+        var v = Current;
+        if (v == null) return;
+        MediaActions.ShowImage(v.Cover, v.Title, Window.GetWindow(this));
     }
 
     private async void OnDownloadVideo(object sender, RoutedEventArgs e)

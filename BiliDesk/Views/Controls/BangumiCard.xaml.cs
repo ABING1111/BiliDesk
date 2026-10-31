@@ -104,6 +104,14 @@ public partial class BangumiCard : UserControl
         await MediaActions.SaveImageAsync(b.Cover, b.Title);
     }
 
+    /// <summary>预览封面大图(与 VideoCard 同款)。</summary>
+    private void OnPreviewCover(object sender, RoutedEventArgs e)
+    {
+        var b = Current;
+        if (b == null) return;
+        MediaActions.ShowImage(b.Cover, b.Title, Window.GetWindow(this));
+    }
+
     // ★ OnOpenWebPage 已删(2026-10-11 用户要求): 右键菜单里不再有"在浏览器中打开番剧主页"。
     //   跳 B 站网页版会把用户从原生体验里拽出来, 首页那三个「查看全部 / 我的追番 ›」同理由头删除。
     //   番剧主页 URL 仍留在 BangumiItem.Url 上 —— 万一以后要接站内"番剧详情页", 数据已经齐了,

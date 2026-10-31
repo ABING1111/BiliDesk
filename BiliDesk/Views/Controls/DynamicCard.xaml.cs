@@ -58,6 +58,14 @@ public partial class DynamicCard : UserControl
         await MediaActions.SaveImageAsync(v.Cover, v.Title);
     }
 
+    /// <summary>预览封面大图(与 VideoCard 同款, 动态卡不能少功能)。</summary>
+    private void OnPreviewCover(object sender, RoutedEventArgs e)
+    {
+        var v = Current;
+        if (v == null) return;
+        MediaActions.ShowImage(v.Cover, v.Title, Window.GetWindow(this));
+    }
+
     private async void OnDownloadVideo(object sender, RoutedEventArgs e)
     {
         var v = Current;
