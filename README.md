@@ -1,27 +1,25 @@
 <div align="center">
 
+<img src="docs/logo_rounded.png" width="104" alt="BiliDesk 图标">
+
 # BiliDesk
 
 **干净、流畅的哔哩哔哩第三方 Windows 桌面客户端**
 
-*WPF · .NET 8 · LibVLC*
+*WPF · .NET 10 · LibVLC*
 
 <br>
 
 [![Release](https://img.shields.io/github/v/release/ABING1111/BiliDesk?style=flat-square)](https://github.com/ABING1111/BiliDesk/releases/latest)
 [![Platform](https://img.shields.io/badge/Windows-10%2B-0078D4?logo=windows11&logoColor=white&style=flat-square)](#-下载安装)
-[![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white&style=flat-square)](#-从源码构建)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white&style=flat-square)](#-从源码构建)
 [![License](https://img.shields.io/github/license/ABING1111/BiliDesk?style=flat-square)](LICENSE)
 
 [下载](https://github.com/ABING1111/BiliDesk/releases/latest) · [功能特性](#-功能特性) · [快捷键](#-快捷键) · [从源码构建](#-从源码构建)
 
 <br>
 
-<img width="100%" alt="BiliDesk 首页" src="docs/screenshot-home.jpg">
-
-<br>
-
-<img width="100%" alt="BiliDesk 播放器" src="docs/screenshot-player.jpg">
+<img width="100%" alt="BiliDesk 首页" src="docs/screenshot-home-rounded.png">
 
 </div>
 
@@ -77,11 +75,11 @@
 | 发行包 | 说明 |
 | :--- | :--- |
 | **便携版 zip** | 自包含，解压即用，无需安装 .NET 运行时 |
-| **安装器** | 需要 .NET 8 或更高版本的桌面运行时（安装器会自动检测并引导下载；只装了 .NET 10/11 也可以直接用） |
+| **安装器** | 需要 .NET 10 或更高版本的桌面运行时（安装器会自动检测并引导下载；只装了 .NET 11 也可以直接用） |
 
 ## 🧰 从源码构建
 
-需要 Windows 10+ 与 [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)（x64）。
+需要 Windows 10+ 与 [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)（x64）。
 
 ```powershell
 git clone https://github.com/ABING1111/BiliDesk.git
