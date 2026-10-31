@@ -110,13 +110,26 @@ public partial class ImagePreviewWindow : FluentWindow
     /// 的适配比例约 0.07, 被 clamp 抬回 0.1 后渲染尺寸(1152x864)仍比窗口大 ——
     /// 用户看到的就是"只有中心一小块", 即真机反馈的"封面显示不全"。
     /// 初始适配的目标就是"完整可见", 多小都合法。
+    ///
+    /// ★★ 尺寸必须用 **DIP(设备无关像素)** 而不是 PixelWidth(2026-10-31 修"窗口小的时候
+    /// 显示不全"): BitmapImage 的 DPI 元数据不是恒为 96 —— 截图工具保存的 PNG 带 72/120/144
+    /// 都见过。DPI≠96 时 WPF 的显示尺寸 = PixelWidth × 96/DPI, 直接拿像素数算适配比例
+    /// 就系统性偏大, 图永远比窗口大一圈。Width/Height 属性已经是 WPF 算好的 DIP 尺寸,
+    /// 直接用它, 与窗口的 ActualWidth 同一把尺子。
     /// </summary>
     private void FitToWindow(BitmapSource img)
     {
-        var availW = Math.Max(100, ActualWidth > 0 ? ActualWidth - 40 : 900);
-        var availH = Math.Max(100, ActualHeight > 0 ? ActualHeight - 100 : 600);
-        var sx = availW / img.PixelWidth;
-        var sy = availH / img.PixelHeight;
+        // 窗口可用区 = 客户区减去标题栏/底栏的留白; ActualWidth 在首帧布局前是 0, 给保守兜底
+        var availW = Math.Max(100, ImageHost.ActualWidth > 0 ? ImageHost.ActualWidth - 16 : ActualWidth - 40);
+        var availH = Math.Max(100, ImageHost.ActualHeight > 0 ? ImageHost.ActualHeight - 16 : ActualHeight - 100);
+
+        // DPI 感知: 拿不到 DIP 尺寸(=0)时退回像素数, 96/DPI 修正只对像素路径生效
+        var dipW = img.Width > 0 ? img.Width : img.PixelWidth * 96.0 / img.DpiX;
+        var dipH = img.Height > 0 ? img.Height : img.PixelHeight * 96.0 / img.DpiY;
+        if (dipW <= 0 || dipH <= 0) return;
+
+        var sx = availW / dipW;
+        var sy = availH / dipH;
         var s = Math.Min(1.0, Math.Min(sx, sy));
         _scale.ScaleX = s;
         _scale.ScaleY = s;
@@ -136,18 +149,37 @@ public partial class ImagePreviewWindow : FluentWindow
         if (ZoomText != null) ZoomText.Text = (int)Math.Round(s * 100) + "%";
     }
 
+    /// <summary>用户有没有手动缩放/拖过图 —— 动过之后窗口尺寸变化就**不再**自动重适配,
+    /// 不然用户刚摆好的视图会被拽走。</summary>
+    private bool _userAdjusted;
+
+    private bool _fittedOnce;
+
     protected override void OnRenderSizeChanged(SizeChangedInfo info)
     {
         base.OnRenderSizeChanged(info);
-        // 首次布局完成后如果还没适配过, 补一次适配(构造时 ActualWidth 还是 0)
-        if (!_fittedOnce && PreviewImage.Source is BitmapSource b && info.NewSize.Width > 0)
+        if (PreviewImage.Source is not BitmapSource b || info.NewSize.Width <= 0) return;
+
+        // ★ 窗口大小变化时自动重适配(2026-10-31 修"不同窗口大小时显示不全"):
+        //   适配只发生一次的话, 开窗后拖一拖窗口边框, 图立刻又超出去。
+        //   用户手动缩放/拖动过(_userAdjusted)就不打扰 —— 尊重用户自己摆的视图。
+        //   双击可以随时回到完整视图。
+        if (!_fittedOnce)
         {
             _fittedOnce = true;
             FitToWindow(b);
         }
+        else if (!_userAdjusted)
+        {
+            // ★ 推到渲染队列之后再适配: SizeChanged 这一刻 ImageHost 的 ActualWidth/Height
+            //   可能还停留在旧布局, 直接算会按旧尺寸适配(大→小缩窗时图还是超的)。
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (PreviewImage.Source is BitmapSource b2 && !_userAdjusted)
+                    FitToWindow(b2);
+            }), System.Windows.Threading.DispatcherPriority.Loaded);
+        }
     }
-
-    private bool _fittedOnce;
 
     // ------------------------------------------------------------ 交互
 
@@ -155,6 +187,7 @@ public partial class ImagePreviewWindow : FluentWindow
     {
         var factor = e.Delta > 0 ? 1.12 : 1 / 1.12;
         ApplyScale(_scale.ScaleX * factor);
+        _userAdjusted = true;
         e.Handled = true;
     }
 
@@ -162,8 +195,17 @@ public partial class ImagePreviewWindow : FluentWindow
     {
         if (e.ClickCount >= 2)
         {
-            // 双击在 1:1 与自适应之间切换
-            ApplyScale(Math.Abs(_scale.ScaleX - 1.0) < 0.01 ? 0.5 : 1.0);
+            // 双击在"完整视图"与 1:1 之间切换(2026-10-31: 完整视图替换原来写死的 0.5 ——
+            // 小窗口里 0.5 一样显示不全, 双击就该回到"肯定能看全"的那一档)
+            if (Math.Abs(_scale.ScaleX - 1.0) < 0.01)
+            {
+                if (PreviewImage.Source is BitmapSource b) FitToWindow(b);
+            }
+            else
+            {
+                ApplyScale(1.0);
+            }
+            _userAdjusted = false;   // 回到自适应档: 窗口再变化继续跟随
             return;
         }
         _dragging = true;
@@ -183,6 +225,8 @@ public partial class ImagePreviewWindow : FluentWindow
     {
         if (!_dragging) return;
         var p = e.GetPosition(this);
+        if (Math.Abs(p.X - _dragStart.X) > 2 || Math.Abs(p.Y - _dragStart.Y) > 2)
+            _userAdjusted = true;
         _trans.X += p.X - _dragStart.X;
         _trans.Y += p.Y - _dragStart.Y;
         _dragStart = p;
@@ -193,9 +237,9 @@ public partial class ImagePreviewWindow : FluentWindow
         switch (e.Key)
         {
             case Key.Escape: Close(); break;
-            case Key.OemPlus or Key.Add: ApplyScale(_scale.ScaleX * 1.15); break;
-            case Key.OemMinus or Key.Subtract: ApplyScale(_scale.ScaleX / 1.15); break;
-            case Key.D0 or Key.NumPad0: ApplyScale(1.0); break;
+            case Key.OemPlus or Key.Add: ApplyScale(_scale.ScaleX * 1.15); _userAdjusted = true; break;
+            case Key.OemMinus or Key.Subtract: ApplyScale(_scale.ScaleX / 1.15); _userAdjusted = true; break;
+            case Key.D0 or Key.NumPad0: ApplyScale(1.0); _userAdjusted = true; break;
         }
     }
 

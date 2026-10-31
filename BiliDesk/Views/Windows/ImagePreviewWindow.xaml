@@ -41,7 +41,7 @@
             </Border>
 
             <!-- 图片区: 滚轮缩放 / 拖动平移 / 双击切换 1:1 -->
-            <Grid Grid.Row="1" Background="#0E0E0E" ClipToBounds="True">
+            <Grid x:Name="ImageHost" Grid.Row="1" Background="#0E0E0E" ClipToBounds="True">
                 <Image x:Name="PreviewImage" Cursor="Hand"
                        Stretch="None"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
