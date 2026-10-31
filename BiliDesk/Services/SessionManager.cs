@@ -237,6 +237,17 @@ public class SessionManager
     }
 
     /// <summary>
+    /// 强制覆盖设备指纹的第一半(buvid3)。**只有风控轮换指纹时该用**(见 ApiClient 的搜索降级链)
+    /// —— 常规路径必须走 <see cref="SetBuvid3"/>, 那里有"已有就不覆盖"的保护, 保证设备身份稳定。
+    /// </summary>
+    public void ForceSetBuvid3(string buvid3)
+    {
+        if (string.IsNullOrEmpty(buvid3)) return;
+        Current.Buvid3 = buvid3;
+        Save();
+    }
+
+    /// <summary>
     /// 记下设备指纹的第二半(buvid4)。
     ///
     /// ★ 和 buvid3 不同: **每次拿到新的都要覆盖存下来**, 不能像 SetBuvid3 那样"有就跳过"。
@@ -248,6 +259,14 @@ public class SessionManager
     {
         if (string.IsNullOrEmpty(buvid4)) return;
         if (string.Equals(Current.Buvid4, buvid4, StringComparison.Ordinal)) return;
+        Current.Buvid4 = buvid4;
+        Save();
+    }
+
+    /// <summary>强制覆盖 buvid4, 与 <see cref="ForceSetBuvid3"/> 配套(风控轮换指纹用)。</summary>
+    public void ForceSetBuvid4(string buvid4)
+    {
+        if (string.IsNullOrEmpty(buvid4)) return;
         Current.Buvid4 = buvid4;
         Save();
     }

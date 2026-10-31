@@ -41,6 +41,9 @@ public class ApiClient
     private string? _buvid3;
     private string? _buvid4;
 
+    /// <summary>上一次 GetJsonAsync 解析 JSON 失败时的原始响应体(见 -2 分支)。</summary>
+    private string? _lastNonJsonBody;
+
     public ApiClient()
     {
         _http = new HttpClient(new SocketsHttpHandler
@@ -75,6 +78,8 @@ public class ApiClient
         var fullUrl = url + "?" + string.Join("&",
             ps.Select(kv => $"{kv.Key}={Enc(kv.Value)}"));
 
+        // 在 try 外声明: JSON 解析失败时 catch 里要靠它判断是不是 HTML 风控页
+        string text = "";
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, fullUrl);
@@ -88,7 +93,7 @@ public class ApiClient
             req.Headers.TryAddWithoutValidation("Referer", referer ?? "https://www.bilibili.com/");
 
             using var resp = await _http.SendAsync(req);
-            var text = await resp.Content.ReadAsStringAsync();
+            text = await resp.Content.ReadAsStringAsync();
             int code;
             string? msg;
             JsonElement? data;
@@ -160,6 +165,9 @@ public class ApiClient
         }
         catch (JsonException)
         {
+            // ★ 留下原始 body: 偶尔服务端回的不是 JSON 而是 HTML 风控页(HTTP 200),
+            //   调用方需要看它长什么样才能区分"接口坏了"和"被风控了"(见 IsHtmlRiskPage)。
+            _lastNonJsonBody = text;
             return (-2, "响应解析失败", null);
         }
     }
@@ -2613,10 +2621,14 @@ public class ApiClient
                 // 风控: 返回 v_voucher, 走 voucher 注册流程
                 // ★ 这里的 `data != null` 是**必需**的空守卫: "没搜到"的查询会一路走到本行,
                 //   而 `data.Value` 对 null 会抛。
+                // ★★ 2026-10-31: v_voucher 是 B 站给游客的主要拦截形态(code=0 + 挑战字段,
+                //   不是 -352 错误码)。注册失败后不能直接 Blocked —— 降级链(裸端点/换指纹)
+                //   常能直接绕过挑战, 所以先走一遍 SearchRiskFallbackAsync, 全失败才拦。
                 if (data != null && data.Value.TryGetProperty("v_voucher", out var vv) &&
                     vv.ValueKind == JsonValueKind.String)
                 {
                     var token = await RegisterVoucherAsync(vv.GetString()!);
+                    System.Diagnostics.Trace.WriteLine($"[Api] 搜索命中 v_voucher, 注册{(token == null ? "失败" : "成功")}");
                     if (!string.IsNullOrEmpty(token))
                     {
                         var ps2 = new Dictionary<string, string>(ps) { ["voucher"] = token };
@@ -2637,6 +2649,30 @@ public class ApiClient
                                 };
                             return result;
                         }
+                    }
+                    System.Diagnostics.Trace.WriteLine("[Api] 搜索 voucher 流程未通过, 走降级链");
+                    var psBare = new Dictionary<string, string>(ps);
+                    psBare.Remove("wts");
+                    psBare.Remove("w_rid");
+                    psBare.Remove("voucher");
+                    var (vfbCode, _, vfbData) = await SearchRiskFallbackAsync(ps, psBare, sign: !isBangumi);
+                    if (vfbCode == 0 && vfbData != null &&
+                        vfbData.Value.TryGetProperty("result", out var vfbList) &&
+                        vfbList.ValueKind == JsonValueKind.Array)
+                    {
+                        AppendSearchItems(result, vfbList, kind);
+                        var vgot = kind == ContentKind.Bangumi ? result.BangumiItems.Count : result.Items.Count;
+                        result.Ok = vgot > 0;
+                        // 与主路径同规则: 页大小是固定的, 拿本页条数与它比才知道还有没有下一页
+                        result.HasMore = vgot > 0 && vgot >= pageSize;
+                        if (vgot == 0)
+                            result.Error = kind switch
+                            {
+                                ContentKind.Live => "没有找到相关直播间",
+                                ContentKind.Bangumi => "没有找到相关番剧",
+                                _ => "没有找到相关视频"
+                            };
+                        return result;
                     }
                     result.Blocked = true;
                     result.Error = "搜索被风控拦截";
@@ -2666,8 +2702,51 @@ public class ApiClient
                 return result;
             }
 
+            // ★ HTML 风控页(2026-10-31): 番剧注释里实测过"无 buvid 时该端点回 HTTP 200 +
+            //   <!DOCTYPE HTML 风控页", GetJsonAsync 解析 JSON 失败回 -2「响应解析失败」。
+            //   它本质就是被风控了, 和 -352 一样走降级链, 别把解析错误文案甩给用户。
+            if (code == -2 && IsHtmlRiskPage())
+                code = -352;
+
             if (code is -352 or -412 or -403 or -404)
             {
+                // ★★★ 游客态风控降级链(2026-10-31 修"未登录搜索被风控"):
+                //   探针(bd-probe-search)实测游客态第一次搜索就 Blocked、第二次又自己好了
+                //   —— 同一条路径、同一对 buvid, 唯一稳定的解法是**换一条路再试**。
+                //   依次降级, 哪一步通了就走哪一步:
+                //   ① wbi 端点 → 裸端点(不签名; 探针实测游客可用, 番剧搜索本来就在用这条);
+                //   ② 仍被拦 → 换一对全新 buvid(spi 重领+落盘)后回 wbi 端点重试一次。
+                //      登录态有 SESSDATA 背书, 被标记的指纹常常也能过; 游客没有这层保护,
+                //      一对被服务端盯上的 buvid 会**稳定**吃 -352, 只有换指纹才救得回来。
+                //      只轮换一次: 每次失败都换身份反而更像脚本, 会加剧风控。
+                //   全部走完仍被拦才真正置 Blocked, 保留"试试网页版搜索"的提示。
+                // ★ ps 会被 SignParams 原地写入 wts/w_rid, 裸端点不能带这两个参数
+                //   (签名对不上直接影响放行), 复制一份剥掉。
+                var psBare = new Dictionary<string, string>(ps);
+                psBare.Remove("wts");
+                psBare.Remove("w_rid");
+                var (fbCode, fbMsg, fbData) = await SearchRiskFallbackAsync(ps, psBare, sign: !isBangumi);
+                if (fbCode == 0 && fbData != null &&
+                    fbData.Value.TryGetProperty("result", out var fbList) &&
+                    fbList.ValueKind == JsonValueKind.Array)
+                {
+                    AppendSearchItems(result, fbList, kind);
+                    var got = kind == ContentKind.Bangumi ? result.BangumiItems.Count : result.Items.Count;
+                    result.Ok = got > 0;
+                    // 与主路径同规则: 页大小固定, 拿本页条数与它比(裸端点也回 numResults)
+                    var fbNum = fbData.Value.TryGetProperty("numResults", out var fbNr) &&
+                                fbNr.ValueKind == JsonValueKind.Number ? fbNr.GetInt32() : 0;
+                    result.HasMore = got > 0 &&
+                                     (fbNum <= 0 ? got >= pageSize : page * pageSize < fbNum);
+                    if (got == 0)
+                        result.Error = kind switch
+                        {
+                            ContentKind.Live => "没有找到相关直播间",
+                            ContentKind.Bangumi => "没有找到相关番剧",
+                            _ => "没有找到相关视频"
+                        };
+                    return result;
+                }
                 result.Blocked = true;
                 result.Error = $"搜索被风控拦截 (code {code})";
             }
@@ -2682,6 +2761,87 @@ public class ApiClient
         }
         return result;
     }
+
+    /// <summary>
+    /// 判断刚才那次 -2「响应解析失败」是不是 HTML 风控页。
+    ///
+    /// GetJsonAsync 失败时把原始 body 留在 _lastNonJsonBody, 这里只看它长什么样, 不重发请求。
+    /// 实测(番剧搜索): 无 buvid 时该端点回 HTTP 200 + &lt;!DOCTYPE HTML 风控页, 本质就是被风控,
+    /// 调用方应与 -352 同样处理(走降级链)。
+    /// </summary>
+    private bool IsHtmlRiskPage()
+    {
+        var head = _lastNonJsonBody?.TrimStart();
+        return head != null &&
+               (head.StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) ||
+                head.StartsWith("<html", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// 搜索被风控(-352/-412/-403/-404)后的降级链, 见 <see cref="SearchAsync"/> 里那段说明。
+    ///
+    ///   ① 换裸端点(不带 WBI 签名)。签名并不是风控放行证 —— 探针实测裸请求游客照样 code=0,
+    ///     而 wbi 端点对游客的 -352 往往是"这对指纹+这条路径"被盯上了, 换路径常能直接过。
+    ///   ② 还不行, 换一对全新 buvid(spi 重领并覆盖落盘)再回 wbi 端点试最后一次。
+    ///
+    /// 返回值与 <see cref="GetJsonAsync"/> 同形: 全链失败时返回**最后一次**的 code/msg。
+    /// 注意只在此处轮换指纹; 常规路径必须保持"一对 buvid 用到底"(见 EnsureBuvidAsync 注释)。
+    /// </summary>
+    private async Task<(int code, string? msg, JsonElement? data)> SearchRiskFallbackAsync(
+        Dictionary<string, string> ps, Dictionary<string, string> psBare, bool sign)
+    {
+        // ① 裸端点(番剧搜索已在用的那条路, Referer 同样用 search 域)
+        var (code, msg, data) = await GetJsonAsync(
+            "https://api.bilibili.com/x/web-interface/search/type", psBare,
+            referer: "https://search.bilibili.com/");
+        System.Diagnostics.Trace.WriteLine($"[Api] 搜索降级①裸端点 code={code} msg={msg}");
+        if (code == 0) return (code, msg, data);
+        if (code is not (-352 or -412 or -403 or -404)) return (code, msg, data);
+
+        // ② 换指纹重试 wbi 端点。spi 每次都发全新的一对(见 EnsureBuvidAsync 注释),
+        //    这里要的就是"全新身份", 所以直接覆盖内存与磁盘(ForceSet)。
+        await RotateBuvidAsync();
+        var (code3, msg3, data3) = await GetJsonAsync(
+            "https://api.bilibili.com/x/web-interface/wbi/search/type", ps, sign: sign);
+        System.Diagnostics.Trace.WriteLine($"[Api] 搜索降级②换buvid+wbi code={code3} msg={msg3}");
+        return (code3, msg3, data3);
+    }
+
+    /// <summary>
+    /// 风控专用: 从 spi 领一对**全新** buvid 并强制覆盖内存/磁盘。
+    ///
+    /// ★ 与 <see cref="EnsureBuvidAsync"/> 的区别是"覆盖"而不是"补缺" —— 那边的原则是
+    ///   设备身份稳定, 这边的前提恰恰是"现有身份已被服务端盯上, 必须换人"。
+    /// ★ 失败静默: 拿不到新指纹就带着旧指纹做最后一次重试, 行为退回修复前, 不多不少。
+    /// </summary>
+    private async Task RotateBuvidAsync()
+    {
+        try
+        {
+            var (code, _, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/frontend/finger/spi", null);
+            if (code != 0 || data == null) return;
+            var b3 = data.Value.TryGetProperty("b_3", out var b3v) && b3v.ValueKind == JsonValueKind.String
+                ? b3v.GetString() : null;
+            var b4 = data.Value.TryGetProperty("b_4", out var b4v) && b4v.ValueKind == JsonValueKind.String
+                ? b4v.GetString() : null;
+            if (!string.IsNullOrEmpty(b3))
+            {
+                _buvid3 = b3;
+                SessionManager.Instance.ForceSetBuvid3(b3);
+            }
+            if (!string.IsNullOrEmpty(b4))
+            {
+                _buvid4 = b4;
+                SessionManager.Instance.ForceSetBuvid4(b4);
+            }
+        }
+        catch
+        {
+            // 忽略: 拿不到新指纹就用旧的试最后一把
+        }
+    }
+
     /// <summary>
     /// 把 **media_ft(影视)** 的搜索结果合并进番剧结果集。
     ///
@@ -4138,7 +4298,11 @@ public class ApiClient
                     Encoding.UTF8, "application/json")
             };
             req.Headers.TryAddWithoutValidation("Referer", "https://www.bilibili.com/");
-            var cookie = SessionManager.Instance.BuildCookieHeader();
+            // ★ 先补指纹再拼 cookie(2026-10-31): 未登录时 BuildCookieHeader() 可能一个 cookie
+            //   都不剩 —— 而 gaia-vgate 是风控网关, 裸游客请求它大概率不放行, voucher 验证
+            //   流程等于白走。EnsureBuvidAsync 有内存/磁盘两级缓存, 已有指纹时零网络开销。
+            await EnsureBuvidAsync();
+            var cookie = AppendFingerprint(SessionManager.Instance.BuildCookieHeader());
             if (cookie.Length > 0) req.Headers.TryAddWithoutValidation("Cookie", cookie);
 
             using var resp = await _http.SendAsync(req);
