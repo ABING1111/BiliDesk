@@ -119,9 +119,22 @@ public partial class ImagePreviewWindow : FluentWindow
     /// </summary>
     private void FitToWindow(BitmapSource img)
     {
-        // 窗口可用区 = 客户区减去标题栏/底栏的留白; ActualWidth 在首帧布局前是 0, 给保守兜底
-        var availW = Math.Max(100, ImageHost.ActualWidth > 0 ? ImageHost.ActualWidth - 16 : ActualWidth - 40);
-        var availH = Math.Max(100, ImageHost.ActualHeight > 0 ? ImageHost.ActualHeight - 16 : ActualHeight - 100);
+        // ★ 容器还没完成布局(ActualWidth=0)时**推迟适配**, 而不是用保守兜底值:
+        //   Show() 后同步命中内存缓存时, LoadAsync 在首帧布局前就跑到这里 ——
+        //   兜底 900x600 算出的比例与真实窗口无关, 窗口一大图就只占中间一小块,
+        //   窗口一小则又显示不全。推迟到 Loaded 优先级, ImageHost 尺寸就绪后再算。
+        if (ImageHost.ActualWidth <= 0 || ImageHost.ActualHeight <= 0)
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (ReferenceEquals(PreviewImage.Source, img) && ImageHost.ActualWidth > 0)
+                    FitToWindow(img);
+            }), System.Windows.Threading.DispatcherPriority.Loaded);
+            return;
+        }
+
+        var availW = Math.Max(100, ImageHost.ActualWidth - 16);
+        var availH = Math.Max(100, ImageHost.ActualHeight - 16);
 
         // DPI 感知: 拿不到 DIP 尺寸(=0)时退回像素数, 96/DPI 修正只对像素路径生效
         var dipW = img.Width > 0 ? img.Width : img.PixelWidth * 96.0 / img.DpiX;
@@ -147,6 +160,38 @@ public partial class ImagePreviewWindow : FluentWindow
         _scale.ScaleX = s;
         _scale.ScaleY = s;
         if (ZoomText != null) ZoomText.Text = (int)Math.Round(s * 100) + "%";
+        // ★ 缩放后钳制平移(2026-10-31 修"缩小后仍看到中间裁片"):
+        //   拖动过的图 trans 残留非零, 此时缩小, 图心随 origin 保持在偏移处 ——
+        //   缩得越小, 图越"缩回"到偏移位置, 用户看到的还是局部而不是整图。
+        //   钳制规则: 图比容器小 ⇒ 必须居中(trans=0); 比容器大 ⇒ 平移不得把图边缘
+        //   拖进容器内(留边), 即 ±(渲染尺寸-容器尺寸)/2。这样任何操作序列之后
+        //   图要么完整居中、要么边缘贴边, 永远能拖回完整视图。
+        ClampTranslation();
+    }
+
+    /// <summary>
+    /// 把平移钳制到有效范围。
+    /// ★ 渲染尺寸(图片 DIP × scale) ≤ 容器时图必须**居中** —— 用户截图里的
+    ///   "缩到 60% 图还偏向一角、四周黑边"就是这里没钳制, trans 残留导致的。
+    /// </summary>
+    private void ClampTranslation()
+    {
+        if (PreviewImage.Source is not BitmapSource img) return;
+        var hostW = ImageHost.ActualWidth;
+        var hostH = ImageHost.ActualHeight;
+        if (hostW <= 0 || hostH <= 0) return;
+
+        var dipW = img.Width > 0 ? img.Width : img.PixelWidth * 96.0 / img.DpiX;
+        var dipH = img.Height > 0 ? img.Height : img.PixelHeight * 96.0 / img.DpiY;
+        var rw = dipW * _scale.ScaleX;
+        var rh = dipH * _scale.ScaleY;
+
+        // 图比容器小: 居中(平移归零)。origin=0.5 时缩放不改元素中心, 平移是唯一偏移源。
+        if (rw <= hostW) _trans.X = 0;
+        else _trans.X = Math.Clamp(_trans.X, -(rw - hostW) / 2, (rw - hostW) / 2);
+
+        if (rh <= hostH) _trans.Y = 0;
+        else _trans.Y = Math.Clamp(_trans.Y, -(rh - hostH) / 2, (rh - hostH) / 2);
     }
 
     /// <summary>用户有没有手动缩放/拖过图 —— 动过之后窗口尺寸变化就**不再**自动重适配,
@@ -216,6 +261,12 @@ public partial class ImagePreviewWindow : FluentWindow
 
     private void OnImageMouseUp(object sender, MouseButtonEventArgs e)
     {
+        if (_dragging)
+        {
+            // 拖动结束钳制: 图比容器小时回到居中, 比容器大时不许把边缘拖进容器内 ——
+            // 保证"想看全图"永远只需要往回拖, 图不会整个跑出视野找不回来。
+            ClampTranslation();
+        }
         _dragging = false;
         PreviewImage.ReleaseMouseCapture();
         PreviewImage.Cursor = Cursors.Hand;
