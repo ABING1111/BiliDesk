@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <!-- 鎵樼洏鍥炬爣鐢?WinForms 鐨?NotifyIcon: 杩欐槸鎵樼洏浜や簰(姘旀场/鍙屽嚮/鍙抽敭鑿滃崟)鏈€鐪佷簨涓旀渶绋崇殑鏂规,
          姣旀墜鎼?Shell_NotifyIcon P/Invoke 灏戝嚑鐧捐marshalling浠ｇ爜 -->
@@ -16,8 +16,14 @@
     <Version>1.4.2</Version>
     <PlatformTarget>x64</PlatformTarget>
     <!--
-      RollForward=Major: 妗嗘灦渚濊禆鐗?瀹夎鍣?鍦ㄦ満鍣ㄤ笂娌℃湁 .NET 8 妗岄潰杩愯鏃躲€佷絾瑁呬簡鏇撮珮澶х増鏈?      (濡?.NET 10)鏃? 鍏佽鐩存帴璺戝湪涓婇潰, 涓嶅啀寮?缂?.NET Desktop Runtime 8"銆傝浜?8 灏变粛鐢?8
-      (Major 璇箟鏄粴鍒?*鏈€浣?*鐨勫彲鐢ㄥぇ鐗堟湰), 涓嶄細涓€瑙夐啋鏉ユ崲鍒版病楠岃瘉杩囩殑鏈€鏂扮増銆?      渚挎惡鐗堣嚜鍖呭惈, 姝ゅ睘鎬у瀹冩棤褰卞搷銆傚畨瑁呭櫒渚х殑妫€娴嬮€昏緫鍚屾鏀惧鍦?Publish\installer.iss銆?    -->
+      RollForward=Major: 框架依赖版(安装器)在机器上没有 .NET 10 桌面运行时、
+      但装了更高大版本(如 .NET 11)时, 允许直接跑在上面, 不再强求用户装对应版本的
+      Desktop Runtime。(Major 语义是滚到*最低*的可用大版本), 不会一觉醒来换到没验证过的最新版本。
+      便携版自包含, 此属性对它无影响。安装器侧的检测逻辑同步放在 Publish\installer.iss。
+
+      ★ 2026-10-31 目标框架 net8.0-windows → net10.0-windows: .NET 8 桌面运行时
+        2026-11 停止支持, 依赖框架的安装器版从此要求 .NET 10+(检测下限同步改为 10)。
+    -->
     <RollForward>Major</RollForward>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>

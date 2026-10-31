@@ -33,7 +33,7 @@ dotnet publish (Join-Path $Root "BiliDesk\BiliDesk.csproj") -c Release -r win-x6
     -o $PortableDir
 if ($LASTEXITCODE -ne 0) { throw "便携版发布失败" }
 
-Write-Host "== 2/4 安装器载荷(依赖 .NET 8+ 桌面运行时) =="
+Write-Host "== 2/4 安装器载荷(依赖 .NET 10+ 桌面运行时) =="
 dotnet publish (Join-Path $Root "BiliDesk\BiliDesk.csproj") -c Release -r win-x64 `
     --self-contained false -p:PublishSingleFile=false `
     -o $InstallerDir
