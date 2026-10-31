@@ -147,7 +147,7 @@ public class SettingsViewModel : ObservableObject
     /// 不在这里重复版本号 —— 卡片下方本来就有独立的「版本号」一栏,
     /// 两处都写版本会显得啰嗦, 而且改版本时要同步的地方多一处。
     /// </summary>
-    public string RuntimeInfo => ".NET 8 / WPF";
+    public string RuntimeInfo => ".NET 10 / WPF";
 
     /// <summary>「关于 → 版本号」一栏右侧显示的版本(与 App.AppVersion 单一来源, 别在这里写死)</summary>
     public string VersionNumber => "v" + App.AppVersion;
