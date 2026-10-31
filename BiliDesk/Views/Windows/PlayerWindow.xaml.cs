@@ -1222,6 +1222,9 @@ public partial class PlayerWindow : FluentWindow
         _videoBackdropGuardTicks = 0;
         // 音频自愈的"上次检查时刻"(_audioHealCheckAt)不清: 它是宽限期计时基准,
         // 跨片保持最多把新片的第一次检查推迟 1.5s; 清零反而会在 aout 未就绪时立刻误检。
+        // 遮罩安全网的"上次位置"同理要归零: 留着上一片的进度会让新片的第一次 TimeChanged
+        // 被当成"在推进", 把刚弹出的加载遮罩误收掉。
+        _lastLoadingRevealMs = -1;
         UpdateCommentSortUi(visible: false);
         // 换片时把评论详情也收掉(tab 文案与返回链接一并还原),
         // 否则新片子一进来右侧就挂着上一条视频的评论详情页
@@ -1376,6 +1379,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_seekGraceUntil), nameof(_seekMuteSavedVolume), nameof(_isSeeking),
         nameof(_seekRebuildTried), nameof(_seekBounceSeenMs), nameof(_audioHealCheckAt),
         nameof(_volumeRestoreDeadline), nameof(_volumeRestoreTries),
+        nameof(_lastLoadingRevealMs),
         // 卡顿检测
         nameof(_stallLastMs), nameof(_stallTicks),
         // 弹幕
@@ -3004,8 +3008,12 @@ public partial class PlayerWindow : FluentWindow
         //           这条路救不回来 —— 分段跳/重建补跳实测只是把"一次跳"换成
         //           "多次跳", 中途照样丢, 用户体感就是"卡在半路、无限缓冲"。
         //           既然主路已换成可靠源(见 ApiClient.GetPlayUrlAsync), 这里
-        //           **不再叠补偿**: 短跳直接发 + 看门狗兜底; 长跳直接重建
-        //           (2026-10-31, 修"跳 1 小时没声音", 见 SeekSingleMaxMs 的说明)。
+        //           **不再叠补偿**: 发一次 + 看门狗超时后重建一次, 重建也失败就如实
+        //           停在原地(让用户看见真实位置), 好过让进度条说谎。
+        //           ★ 2026-10-31: 曾试过"长跳一律直接重建"以修"跳 1 小时没声",
+        //             结果引入"打开黑屏 / 拖进度条卡死"两个更严重的回归(见 RebuildMediaAndSeek),
+        //             已回退。真正的无声根因是音量写回被 aout 就绪窗口吞掉, 由
+        //             RestoreVolumeWhenReady 那套补写修复 —— 与跳转距离无关。
         if (_isReliableSeekSource)
         {
             try { _mp.Time = targetMs; } catch { }
@@ -3013,11 +3021,7 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
 
-        // DASH: 短跳(≤ SeekSingleMaxMs)实测可靠, 一步到位。
-        // ★ 2026-10-31: 长跳(>60s)**不再先试 _mp.Time** —— 用户实测"跳 1 小时没声音":
-        //   双流的主输入远跳经常能过, 但音轨 slave(独立输入)掉线后 libvlc 不会重连,
-        //   AudioTrack 读数仍正常 ⇒ 无声且无法检测。重建 Media 是唯一可靠恢复
-        //   (换片同款, slave 一起新建)。见 SeekSingleMaxMs 的说明。
+        // DASH: 短跳(≤150s)实测可靠, 一步到位
         if (Math.Abs(delta) <= SeekSingleMaxMs)
         {
             try { _mp.Time = targetMs; } catch { }
@@ -3025,9 +3029,9 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
 
-        // 长跳: 直接重建 Media 再定位(等同换片那条路), 不赌 slave 的远跳存活率。
-        MarkSeekIssued(targetMs);          // 先钉住进度条/静音, 重建后由 Playing 续跳
-        RebuildMediaAndSeek(targetMs);
+        // 长跳: 发一次, 由看门狗确认; 确认不到就重建一次(见 UpdateProgressUi 的看门狗分支)
+        try { _mp.Time = targetMs; } catch { }
+        MarkSeekIssued(targetMs);
     }
 
     /// <summary>
@@ -3039,26 +3043,27 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool _isReliableSeekSource = true;
 
-    /// <summary>单次 seek 的"安全距离"(毫秒)。
-    ///
-    /// ★★ 2026-10-31 收紧(用户实测"跳 1 小时没声音, 跳几十分钟没事"):
-    ///   DASH 双流(input-slave)上远跳的主输入**经常**能过去, 但**音轨 slave 是独立输入**,
-    ///   它自己的解复用器同样要做远距离定位 —— 掉线时 libvlc **不会**为 slave 重连,
-    ///   也没有任何状态变化(AudioTrack 仍报"已选中") ⇒ 画面正常、无声、音频自愈判据抓不到。
-    ///   唯一可靠的恢复是重建 Media(slave 与主输入一起新建) —— 而"重建+定位"恰好是
-    ///   换片/切清晰度那条一直好用的路(vlc-debug 实例: 17.5min/32.5min 弹回重建后都有声)。
-    ///   ⇒ 双流的长跳在 <see cref="SeekTo"/> 里改为**直接重建**, 本常量只作为
-    ///   "仍然直接设 Time"的安全边界(一分钟内 slave 大概率活着)。
-    ///   单文件合流源不受影响 — 它没有 slave, 一次到位。
-    /// </summary>
-    private const long SeekSingleMaxMs = 60_000;
+    /// <summary>单次 seek 能可靠完成的最大距离(毫秒)。超过它 libvlc 会把位置丢回原处。</summary>
+    private const long SeekSingleMaxMs = 150_000;
 
     /// <summary>
-    /// 重建 Media 后跳到目标 —— 双流长跳的主路 + "往回"长跳的兜底。
+    /// 重建 Media 后跳到目标 —— **看门狗放弃时的兜底**(不是长跳的常规路径)。
     ///
     /// ★ 这就是"换片/切清晰度"那条路: 丢一条全新的 Media 进去, 起播后立刻设目标。
     ///   实测落点偏差 416ms(见探针 I 段)。音轨 slave 与主输入**一起新建**,
-    ///   不存在"slave 远跳掉线"的状态 —— 这正是长跳改走这里的理由(见 SeekSingleMaxMs)。
+    ///   不存在"slave 远跳掉线"的状态。
+    ///
+    /// ★★★ 2026-10-31 补 `Stop()`(修"打开长视频黑屏 / 拖进度条程序卡死"):
+    ///   这条路径原先**漏了 Stop**。它此前只在看门狗彻底放弃时才走到, 而那种时刻旧
+    ///   input 往往已经死了(seek 失败 → 状态回落), 所以 `play()` 还能被接受, 一直没暴露。
+    ///   一旦让它承接更常见的情形, 就会踩中 LibVLC 3 的硬规则:
+    ///   **已有 input 在播时 `play()` 被直接忽略**(返回值 false, 见 SwitchQualityAsync 的同款
+    ///   注释) ⇒ 新 Media 根本没起播, 画面被 ShowLoading 遮着 ⇒ **黑屏**;
+    ///   而 `_resumeAfterSwitchMs` 永远等不到 Playing, 那次跳转的恢复也一并丢失。
+    ///   ⇒ 必须先 Stop 再 Play(与换片/切清晰度/重播那几条路完全一致)。
+    ///   ★ 代价: `Stop()` 会阻塞约 1 秒(见 TeardownAndCloseAsync 的实测)。这条路径本来就
+    ///     已经压着"正在跳转…"遮罩, 用户感知是"缓冲了一下", 可接受; 但**绝不能让它在
+    ///     常规操作里反复触发** —— 那才会变成"卡死"。这正是长跳不再一律走这里的理由。
     /// </summary>
     private void RebuildMediaAndSeek(long targetMs)
     {
@@ -3069,7 +3074,9 @@ public partial class PlayerWindow : FluentWindow
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
             ShowLoading("正在跳转…");
             _resumeAfterSwitchMs = targetMs;
-            PlayMedia(new Media(_libVLC, path, FromType.FromPath));
+            try { _mp.Stop(); } catch { }   // 同上: 不 Stop 则 play() 被忽略
+            if (!PlayMedia(new Media(_libVLC, path, FromType.FromPath)))
+                WriteLibVLCDebug("[Seek] 重建后 play() 未被接受(本地文件)\n");
             return;
         }
 
@@ -3081,7 +3088,11 @@ public partial class PlayerWindow : FluentWindow
         _lastKnownMs = 0;
         // 起播后由 Playing 事件读到这个值并跳到目标(见 _resumeAfterSwitchMs 那套机制)
         _resumeAfterSwitchMs = targetMs;
-        PlayMedia(BuildMedia(url, _isListenMode ? null : _lastAudioUrl));
+        // ★★ 必须先 Stop: LibVLC 3 里已有 input 在播时 play() 会被**直接忽略**
+        //    —— 漏掉这一步就是"黑屏 + 恢复进度丢失"(见方法说明)。
+        try { _mp.Stop(); } catch { }
+        if (!PlayMedia(BuildMedia(url, _isListenMode ? null : _lastAudioUrl)))
+            WriteLibVLCDebug("[Seek] 重建后 play() 未被接受(远端流)\n");
     }
 
     /// <summary>进度条值变化: 点击轨道任意位置直接跳转(IsMoveToPointEnabled + 本处理器)。
@@ -3106,6 +3117,9 @@ public partial class PlayerWindow : FluentWindow
             UpdateTotalDurationText();
         }));
 
+    /// <summary>上一次 TimeChanged 的位置(遮罩安全网用来判"位置真的在推进")。-1 = 还没收到。</summary>
+    private long _lastLoadingRevealMs = -1;
+
     private void OnTimeChanged(object? sender, MediaPlayerTimeChangedEventArgs e) =>
         Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -3121,6 +3135,25 @@ public partial class PlayerWindow : FluentWindow
             // ★ 全屏黑幕: 能收到时间推进 = 视频正在出帧, 这一刻撤掉最准。
             //   不能只靠 Playing 事件 —— 进全屏时视频本来就在播, Playing 不会再来一次。
             ReleaseFullscreenCover();
+            // ★★ 2026-10-31 遮罩安全网(修"打开长视频黑屏"的兜底):
+            //   "正在跳转…""正在缓冲视频…"这类遮罩**只由 Playing 事件收掉**。万一那次
+            //   play() 没被接受(或被 LibVLC 直接忽略), Playing 永远不来, 遮罩就一直盖着
+            //   画面 —— 用户看到的就是"黑屏"(其实背后可能已经在播)。
+            //   这里加一道客观判据: **位置真的在推进**(连续两次 TimeChanged 且值在涨)说明
+            //   画面已经在出帧, 遮罩没有存在意义, 强制收起。
+            //   ★ 只收"跳转/缓冲"这一类, 不动"正在切换清晰度""正在获取播放地址" ——
+            //     那些是加载链自己的生命周期(见 HideBufferingIfShown 的同款约定)。
+            if (e.Time >= 0 && e.Time != _lastLoadingRevealMs)
+            {
+                if (_lastLoadingRevealMs >= 0 && e.Time > _lastLoadingRevealMs &&
+                    LoadingOverlay != null && LoadingOverlay.Visibility == Visibility.Visible &&
+                    LoadingText != null &&
+                    (LoadingText.Text == BufferingText || LoadingText.Text.StartsWith("正在跳转", StringComparison.Ordinal)))
+                {
+                    HideLoading();
+                }
+                _lastLoadingRevealMs = e.Time;
+            }
             // ★ 这里**不**调 UpdateProgressUi —— 进度条与跳转看门狗的唯一心跳是 _progressTimer。
             //   曾经这里也在调, 于是进度 UI 有两个时钟: 等待期定时器 100ms 一跳, 而 TimeChanged
             //   会在两跳之间插进来。这不只是重复干活 —— 看门狗判"落地但偏早"要求
