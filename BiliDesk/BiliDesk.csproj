@@ -53,6 +53,11 @@
       ★ 别把它"顺手"删掉改回依赖推导 —— 那就是把这个错误再种一遍。
     -->
     <VlcWindowsX64Enabled>true</VlcWindowsX64Enabled>
+    <!--
+      ★ 3.0.24 的 targets 新增了 ARM64 那一份, 默认判据与 x86 相同(AnyCPU 时自动开) ——
+      不显式关掉它, 90MB 的 arm64 原生库会被静默带进发布包(1.5.0 首发踩过:
+      setup 20.7MB → 46.4MB), 本工程 x64-only, 与上面的 x86 开关同款处理。    -->
+    <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
   </PropertyGroup>
 
   <!--
