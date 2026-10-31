@@ -71,7 +71,12 @@
     <PackageReference Include="LibVLCSharp" Version="3.8.0" />
     <PackageReference Include="LibVLCSharp.WPF" Version="3.8.0" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
-    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.20" />
+    <!-- ★ 3.0.20 → 3.0.24(2026-10-31 修"所有视频破音/爆音"): 3.0.21~3.0.24 累积了一整批
+         Windows 音频输出(mmdevice/WASAPI)修复 —— 线程模型重写、nonblocking play 重写、
+         缓冲 underrun 修复, 3.0.24 更新说明明确写有 "Fixes Windows audio crashes";
+         同时内置 FFmpeg 从 4.4 升到 8.1.2(AAC 解码三年的改进)。升级后必须实测
+         DASH 双流(input-slave)与短视频本地合流两条路(见 VlcCore.Get 的注释)。 -->
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
   </ItemGroup>
 
   <!--
@@ -93,7 +98,7 @@
       路 鍏夌洏/褰遍櫌: dvdnav/dvdread(DVD), libbluray(钃濆厜), dcp(鏁板瓧褰遍櫌鍖?
       路 浼犺緭鍗忚: srt, vnc, sftp, nfs, rtp, live555(RTSP 鏈嶅姟鍣?
       路 鐢ㄤ笉鍒扮殑闊充箰鏍煎紡: sid/gme/mod(娓告垙闊虫簮), schroedinger(Dirac), theora, zvbi(鍥炬枃鐢佃)
-      路 鍏冩暟鎹?婊ら暅: taglib(闊抽鏍囩), samplerate/spatialaudio/mad(閲嶉噰鏍蜂笌绌洪棿闊抽)
+      路 鍏冩暟鎹?婊ら暅: taglib(闊抽鏍囩), spatialaudio/mad(閲嶉噰鏍蜂笌绌洪棿闊抽)
       路 绾紪鐮佸櫒: x264/x265/aom/twolame/shine 鈥斺€?鎴戜滑鍙В鐮侊紝缂栫爜璧拌嚜鐮斾笅杞界閬?      路 VLC 鑷甫鐣岄潰/鎺ㄦ祦/鑴氭湰: gui, visualization, stream_out, access_output, services_discovery, lua, mux
     鈽?涓€寰?*淇濈暀**: 瑙ｇ爜(avcodec/dav1d)銆佽В灏佽(mp4/mkv/ts/adaptive)銆佽緭鍑?d3d11/d3d11va/dxva2/mmdevice/wasapi)銆?      璁块棶(http/https/file)銆佸瓧骞?libass/freetype)銆佺缉鏀?swscale)銆佹墦鍖?packetizer)銆?  -->
   <Target Name="TrimLibVLCPlugins" AfterTargets="Publish">
@@ -135,7 +140,6 @@
                            $(PublishDir)libvlc\win-x64\plugins\demux\libsid_plugin.dll;
                            $(PublishDir)libvlc\win-x64\plugins\demux\libgme_plugin.dll;
                            $(PublishDir)libvlc\win-x64\plugins\demux\libmod_plugin.dll;
-                           $(PublishDir)libvlc\win-x64\plugins\audio_filter\libsamplerate_plugin.dll;
                            $(PublishDir)libvlc\win-x64\plugins\audio_filter\libspatialaudio_plugin.dll;
                            $(PublishDir)libvlc\win-x64\plugins\audio_filter\libmad_plugin.dll;
                            $(PublishDir)libvlc\win-x64\plugins\video_output\libcaca_plugin.dll;
