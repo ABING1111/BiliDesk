@@ -117,6 +117,20 @@ public partial class PlayerWindow : FluentWindow
     private bool _seekRebuildTried;
 
     /// <summary>
+    /// "落点弹回起点"的连续确认值(-1 = 尚未观察到)。
+    ///
+    /// ★★★ 2026-10-31 修"长视频有时快进进度条失效、回到起点"的第二层兜底:
+    ///   看门狗的既有判据是"距目标 900ms 以内才算到位", 而"跳 30 分钟 → 落回片子开头"
+    ///   的偏差是分钟级, 永远进不了这个窗口 —— 于是每 2.5s 重发一次、重发 2 次、再重建
+    ///   一次, 全部落回开头; 重建后 MarkSeekIssued 又把 _seekRetries 清零, 再来一轮 ……
+    ///   用户看到的是**无限缓冲**。修法: 落点连续两次同时远离"跳转前位置"与"目标"
+    ///   (即跳到了**别处**)时, 不再重试同一条 input, 直接重建 Media 一次 ——
+    ///   重建=起新 input, 是"换片/切清晰度"那条一直好用的路。重建预算
+    ///   (<see cref="_seekRebuildTried"/>)仍然只给一次, 防循环。
+    /// </summary>
+    private long _seekBounceSeenMs = -1;
+
+    /// <summary>
     /// seek 静音: 跳转后视频画面要等缓冲(几百 ms~几秒), 但音频解复用快, 会**先出声** ——
     /// 用户听到的是"画面还黑着/冻着, 声音已经播到那边去了"。所以 seek 一发出就静音,
     /// 画面确认到位(或放弃/换片/播完)再恢复。-1 = 当前没有处于 seek 静音。
@@ -436,6 +450,9 @@ public partial class PlayerWindow : FluentWindow
         // 同 StartFastForward: 先落定弹幕时钟, 再改速率
         SyncDanmakuClockRate(back);
         try { _mp.SetRate(back); } catch { /* 播放器已失效 */ }
+        // ★ 2026-10-31: 变速收尾也是音轨偶发掉线的暴露点(同 seek 后没声的机理)。
+        //   挂一次带宽限期的自愈检查, 命中才动手(见 HealAudioIfDead)。
+        HealAudioIfDead("fastforward-end");
     }
 
     // --- SponsorBlock(跳过社区标注的赞助 / 片头片尾片段) ---
@@ -1201,6 +1218,10 @@ public partial class PlayerWindow : FluentWindow
         // 评论总数属于"上一条视频" —— 不清的话换了片子那句"共 N 条评论"还挂着旧数字,
         // 而排序入口的可见性正是跟着它走的。排序**方式**(_commentSort)不清: 那是用户习惯。
         _commentTotal = 0;
+        _commentReturnRpid = 0;
+        _videoBackdropGuardTicks = 0;
+        // 音频自愈的"上次检查时刻"(_audioHealCheckAt)不清: 它是宽限期计时基准,
+        // 跨片保持最多把新片的第一次检查推迟 1.5s; 清零反而会在 aout 未就绪时立刻误检。
         UpdateCommentSortUi(visible: false);
         // 换片时把评论详情也收掉(tab 文案与返回链接一并还原),
         // 否则新片子一进来右侧就挂着上一条视频的评论详情页
@@ -1353,7 +1374,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_pendingSeekMs), nameof(_seekDeadline), nameof(_seekRetries),
         nameof(_seekObservedMs), nameof(_seekElsewhereSeenMs), nameof(_seekFromMs),
         nameof(_seekGraceUntil), nameof(_seekMuteSavedVolume), nameof(_isSeeking),
-        nameof(_seekRebuildTried),
+        nameof(_seekRebuildTried), nameof(_seekBounceSeenMs), nameof(_audioHealCheckAt),
         // 卡顿检测
         nameof(_stallLastMs), nameof(_stallTicks),
         // 弹幕
@@ -1370,6 +1391,17 @@ public partial class PlayerWindow : FluentWindow
         nameof(_isFastForwarding), nameof(_rateBeforeFastForward),
         nameof(_commentTotal),
         nameof(_suppressSingleClick), nameof(_controlsHidden), nameof(_isFullscreen),
+        // ---- 2026-10-31 补登记(此前 errors.txt 里一直被自检点名) ----
+        nameof(_descExpanded),          // 简介折叠态: UpdateUiFromDetail 每片复位
+        nameof(_relatedGen),            // 相关视频加载代次: LoadRelatedAsync 自增
+        nameof(_relatedShown),          // 相关视频已展示条数: LoadRelatedAsync/ClearRelatedPanel 复位
+        nameof(_isReliableSeekSource),  // seek 可靠性标志: BuildMedia 按片源设置
+        nameof(_dmClockRate),           // 弹幕时钟倍率: 换片后由 CalibrateDanmakuClock 重新校准
+        nameof(_maximizeCoverArmed),    // 最大化黑幕闸: 百毫秒级窗口瞬态, 换片时不会存活
+        nameof(_suppressStateCover),    // 状态切换遮罩抑制闸: 同上, 计时器自动收敛
+        nameof(_commentReturnRpid),     // 评论详情返回锚: 属于"上一条评论详情", 换片必须归零
+        nameof(_videoBackdropGuardTicks), // vout 底色守护计数: 3 秒自收尾的瞬态
+        nameof(_audioHealCheckAt),      // 音频自愈上次检查时刻: 跨片保持宽限意义, 不必清(见该字段)
         // 合集: 「这个视频有没有合集」属于"这一片"的属性, 换片必须重算。
         // 不清的话换了普通视频入口还挂着, 点开是个空面板。
         // (_currentSeasonEpisode / _season 是引用类型, 自检只审值类型与 string, 不在清单里;
@@ -2416,6 +2448,34 @@ public partial class PlayerWindow : FluentWindow
                                   _seekElsewhereSeenMs >= 0 && time != _seekElsewhereSeenMs;
             _seekElsewhereSeenMs = farFromBoth ? time : -1;
 
+            // ★★★ "落点弹回起点"的提前重建(2026-10-31 修"长视频快进回到起点后无限缓冲"):
+            //   DASH 双流上远跳偶尔整体失效, 落点直接弹回片子开头(或某个离目标极远的分片)。
+            //   这种落点距目标分钟级, settled/landedElsewhere 都判不上, 只能干等
+            //   2.5s×3 轮重发 + 一次重建 —— 期间进度条钉在目标、画面停在开头,
+            //   重建后 MarkSeekIssued 清零 _seekRetries 再来一整轮, 表现为无限缓冲。
+            //   修法: 落点**连续两次心跳**同时远离起点与目标 ⇒ 判定这条 input 的解复用器
+            //   又"认死"了, 不再走重发, 立刻走重建(它只给一次预算, 不会循环)。
+            //   与 landedElsewhere 的区别: 那个判"偏早幅度合理"(分片边界的正常偏早),
+            //   要认账并恢复播放; 这里判"偏到天边去了"(整体失效), 要当机立断换 input。
+            if (!settled && !landedElsewhere && farFromBoth && !_seekRebuildTried)
+            {
+                if (_seekBounceSeenMs >= 0 && time != _seekBounceSeenMs)
+                {
+                    _seekRebuildTried = true;
+                    var bounceTarget = _pendingSeekMs;
+                    ClearSeekWatchdog();
+                    WriteLibVLCDebug(
+                        $"[Seek] 落点弹回别处(time={time}ms target={bounceTarget}ms from={_seekFromMs}ms) → 重建 Media\n");
+                    RebuildMediaAndSeek(bounceTarget);
+                    return;
+                }
+                if (_seekBounceSeenMs < 0) _seekBounceSeenMs = time;
+            }
+            else if (!farFromBoth)
+            {
+                _seekBounceSeenMs = -1;
+            }
+
             _seekObservedMs = time;
 
             if (settled || landedElsewhere)
@@ -2599,9 +2659,57 @@ public partial class PlayerWindow : FluentWindow
         _seekObservedMs = -1;
         _seekFromMs = -1;
         _seekElsewhereSeenMs = -1;
+        _seekBounceSeenMs = -1;
         if (_progressTimer != null) _progressTimer.Interval = ProgressTickIdle;
         RestoreVolumeAfterSeek();
         HideBufferingIfShown();
+        // ★ 2026-10-31: 到位这一刻正是"音轨偶发没跟上"的暴露点, 顺手做一次自愈检查
+        //   (见 HealAudioIfDead —— 命中才动作, 不命中零开销)。
+        HealAudioIfDead("seek-settled");
+    }
+
+    // ------------------------------------------------------------ seek 后音频自愈
+
+    /// <summary>音频自愈检查的宽限期(毫秒): 重建 Media / 长按快进恢复 1x 之后,
+    /// aout 重建与音轨枚举都需要一点时间, 立刻检查必然误报。</summary>
+    private const int AudioHealGraceMs = 1500;
+
+    /// <summary>上次音频自愈检查的时刻(TickCount64), 用于实现"每个检查点只查一次"。</summary>
+    private long _audioHealCheckAt = -1;
+
+    /// <summary>
+    /// seek / 长按快进之后音轨偶发静默的兜底自愈。
+    ///
+    /// ★★★ 症状(2026-10-31 用户报"长视频快进后有时没声音"): 画面正常、时间在走,
+    ///   但就是没声。实测机理是 libvlc 在 seek/变速时重建音频输出, 偶发地**把选中的
+    ///   音轨丢回"无轨道"**(AudioTrack 变 -1, 音轨数明明 >0) —— 这是库的内部竞态,
+    ///   离线无法稳定复现, 但恢复动作本身是幂等且无害的。
+    ///
+    /// 检查判据(三个条件同时成立才动手, 宁可漏报不可误伤):
+    ///   ① 在播放且不在拖动/等待 seek —— 排除过渡期;
+    ///   ② 距上次检查超过宽限期 —— 避免对同一次过渡反复操作;
+    ///   ③ 音轨数 >0 而 AudioTrack == -1 —— "有轨道却没选"就是那个竞态的指纹。
+    /// 修复动作 = SetAudioTrack(0) 把第一条音轨选回来(单音轨片源恒正确;
+    /// 多音轨片源 libvlc 本来就默认选 0)。只打一次日志, 避免刷爆 vlc-debug.txt。
+    /// </summary>
+    /// <param name="why">调用点标签, 进诊断日志</param>
+    private void HealAudioIfDead(string why)
+    {
+        if (_closing || _mp == null) return;
+        var now = Environment.TickCount64;
+        if (_audioHealCheckAt >= 0 && now - _audioHealCheckAt < AudioHealGraceMs) return;
+        _audioHealCheckAt = now;
+        try
+        {
+            // 拖动中/等待 seek 确认期间音轨本来就处于切换途中, 不检查
+            if (!_mp.IsPlaying || _isSeeking || _pendingSeekMs >= 0) return;
+            if (_mp.AudioTrackCount <= 0) return;          // 本来就没有音轨(纯视频/直播占位), 无事可做
+            if (_mp.AudioTrack != -1) return;              // 音轨选着呢, 一切正常
+            var ok = _mp.SetAudioTrack(0);
+            WriteLibVLCDebug(
+                $"[Audio] 自愈: 检出音轨掉线({why}, tracks={_mp.AudioTrackCount}) → SetAudioTrack(0)={ok}\n");
+        }
+        catch { /* 播放器已失效就算了 */ }
     }
 
     // ------------------------------------------------------------ seek 静音
@@ -2772,6 +2880,7 @@ public partial class PlayerWindow : FluentWindow
         // 观察值清空: 第一个心跳拿到的会是"目标值本身"(那是 LibVLC 的 ack, 不是画面), 不能当作推进
         _seekObservedMs = -1;
         _seekElsewhereSeenMs = -1;
+        _seekBounceSeenMs = -1;
         _ended = false;
         // 进度外推的锚点与显示钳制基线作废: 不作废的话, 跳转落地后可能外推出凭空进度,
         // 往回拖进度条也无法倒着显示
@@ -3859,15 +3968,17 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 视频区右键按下: 只负责"记下这一下是我起的", 真正的动作在 Up。
+    /// 视频区右键按下: 记下"这一下是我起的", 按住 **500ms** 起长按快进(2026-10-31 新增)。
     ///
-    /// ★★ 为什么必须**成对判定**(Down 起步 + Up 才动作), 而不是直接在 Up 里切:
-    ///   实测(见 <see cref="AnyPlayerPopupOpen"/> 的时间戳): 弹层(清晰度/弹幕设置)收起时,
-    ///   那次关闭点击的 **Down 被弹层 HWND 吃掉、只有 Up 漏进主窗口**, 而 `Closed` 晚 13~70ms,
-    ///   `Popup.IsOpen` 那一刻已经变 false —— 所有"当前状态"判据都不可用。
-    ///   左键那套早就是这么防的(<see cref="_videoGestureActive"/>); 右键如果直接在 Up 里切,
-    ///   就会出现"点空白处收起清晰度列表, 视频却顺手铺满了"这种灵异现象。
-    ///   ⇒ 唯一可靠判据同样是"有没有配对的 Down"。
+    /// ★ 原来这里只有"右键 = 铺满窗口"一个直接切换, 现在改为:
+    ///   · **短右键**(按住 < 500ms) = 铺满窗口 —— 原行为不变;
+    ///   · **长右键**(按住 ≥ 500ms) = 2x 快进, 与左键长按完全同款 ——
+    ///     长视频里左手拖进度条、右手按住快进, 两手不打架(左键长按要占用双击全屏的手)。
+    /// ★ 与左键长按共用 <see cref="_longPressFired"/>/<see cref="_isFastForwarding"/>
+    ///   那套状态与 <see cref="StartFastForward"/>/StopFastForward 收尾 ——
+    ///   两只手同时按住时是同一个快进态, 谁先松谁收, 不会互相顶。
+    /// ★ 与左键 Down 同款的成对判定(弹层余波防护)在这里照抄:
+    ///   没有配对 Down 的 Up 一律丢弃, 这是唯一可靠的判据(见 AnyPlayerPopupOpen)。
     /// </summary>
     private void OnVideoAreaMouseRightDown(object sender, MouseButtonEventArgs e)
     {
@@ -3885,7 +3996,26 @@ public partial class PlayerWindow : FluentWindow
         if (AnyPlayerPopupOpen) { _rightGestureActive = false; return; }
         _rightGestureActive = true;
         e.Handled = true;   // 别让它冒泡成系统菜单
+
+        // 长按判定: 与左键长按同一个阈值(500ms)、同一个收尾路径。
+        // _longPressFired 由这条计时器置位 —— Up 侧据此分"结束了快进"还是"切铺满"。
+        _longPressTimer?.Stop();
+        _longPressFired = false;
+        _longPressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(LongPressThresholdMs) };
+        _longPressTimer.Tick += (_, _) =>
+        {
+            _longPressTimer!.Stop();
+            // 左键长按可能已经起了(两只手同时按): 别重复起步, 也别覆盖提示
+            if (_isFastForwarding) return;
+            _longPressFired = true;
+            StartFastForward();
+            ShowSpeedHint(FastForwardRate.ToString("0.#") + "x 快进中", hold: true);
+        };
+        _longPressTimer.Start();
     }
+
+    /// <summary>左右键长按共用的判定时长(毫秒)。与左键长按原阈值保持一致。</summary>
+    private const int LongPressThresholdMs = 500;
 
     /// <summary>指针是否落在窗口边缘的缩放带上(只判断, 不启动缩放 —— 见 OnVideoAreaMouseRightDown)。</summary>
     private bool IsOnResizeEdge()
@@ -3895,7 +4025,7 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 视频区右键抬起: 与 Down 配对时切换「铺满窗口」。
+    /// 视频区右键抬起: 按住了长按(快进)就收快进, 否则是"短右键"→ 切「铺满窗口」。
     /// 没有配对 Down 的 Up 一律丢弃(那是弹层余波, 见 Down 的说明)。
     /// </summary>
     private void OnVideoAreaMouseRightUp(object sender, MouseButtonEventArgs e)
@@ -3903,7 +4033,16 @@ public partial class PlayerWindow : FluentWindow
         if (!_rightGestureActive) { e.Handled = true; return; }
         _rightGestureActive = false;
         if (_closing) return;
-        // 走**同一个开关**: 与右上角那个按钮共享 _isFillWindow, 不复制逻辑
+        // 长按快进已经起步: 这次右键是"快进手势", 收快进, 不再切铺满
+        if (_longPressFired)
+        {
+            _longPressFired = false;
+            StopFastForward();
+            ShowSpeedHint("已结束快进", hold: false);
+            e.Handled = true;
+            return;
+        }
+        // 短右键: 原有行为 —— 走**同一个开关**(与顶栏按钮共享 _isFillWindow, 不复制逻辑)
         ToggleFillWindow();
         e.Handled = true;
     }
@@ -4992,8 +5131,11 @@ public partial class PlayerWindow : FluentWindow
         switch (e.Key)
         {
             case Key.Space: OnPlayPauseClick(this, new RoutedEventArgs()); e.Handled = true; return;
-            case Key.Left: SeekRelative(-5); e.Handled = true; return;
-            case Key.Right: SeekRelative(5); e.Handled = true; return;
+            // ★ 2026-10-31 长视频快进体验: 普通方向键 ±5s(原样), **Shift+方向键 ±30s** ——
+            //   长视频里 5s 一跳要按十几下才够用, Shift 档一下抵六下。走同一条 SeekRelative,
+            //   所有 seek 防护(看门狗/静音/进度钉制)自动继承。
+            case Key.Left: SeekRelative(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? -30 : -5); e.Handled = true; return;
+            case Key.Right: SeekRelative(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? 30 : 5); e.Handled = true; return;
             // 音量: ↑↓ 走统一入口(顺带弹音量提示), M 在静音与 80 之间切换
             // 基数用 _volumeCache: aout 未就绪时 _mp.Volume 原生读回是 -1/旧值(见 _volumeCache 的说明)
             case Key.Up: SetVolume(_volumeCache + VolumeStep); e.Handled = true; return;

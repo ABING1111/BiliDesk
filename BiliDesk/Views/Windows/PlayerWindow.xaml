@@ -878,11 +878,11 @@
                           PreviewMouseWheel="OnVideoAreaMouseWheel"
                           MouseMove="OnVideoAreaMouseMove"
                           MouseLeave="OnVideoAreaMouseLeave">
-                            <!-- ===== 视频区右键 = 「铺满窗口」开关(2026-10-16) =====
-                                 ★ **直接切换, 不弹菜单**: 这一个手势只对应一个开关, 弹一层菜单
-                                   反而多一次点击, 而菜单里也没有别的项可放。
-                                 ★ 与右上角那个「铺满窗口」按钮是**同一个开关、同一份状态**
-                                   (两边都走 ToggleFillWindow), 不复制逻辑。
+                            <!-- ===== 视频区右键 = 短按铺满窗口 / 长按 2x 快进(2026-10-31) =====
+                                 ★ 短右键(按住 < 500ms) = 铺满窗口 —— 原行为不变, 与右上角按钮
+                                   同一个开关(ToggleFillWindow);
+                                 ★ 长右键(≥ 500ms) = 2x 快进 —— 与左键长按同款(SetRate 式),
+                                   长视频里可以左手拖进度条右手按住快进。
                                  ★ 为什么挂在这层: 视频区被两层原生 HWND 占着, 而这层 Grid 是
                                    VideoView.Content 里那个浮层窗口的一部分(见上面 VideoAreaRoot
                                    的说明)—— 右键在这里收得到。
