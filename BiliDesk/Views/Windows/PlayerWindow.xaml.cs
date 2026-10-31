@@ -1375,6 +1375,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_seekObservedMs), nameof(_seekElsewhereSeenMs), nameof(_seekFromMs),
         nameof(_seekGraceUntil), nameof(_seekMuteSavedVolume), nameof(_isSeeking),
         nameof(_seekRebuildTried), nameof(_seekBounceSeenMs), nameof(_audioHealCheckAt),
+        nameof(_volumeRestoreDeadline), nameof(_volumeRestoreTries),
         // 卡顿检测
         nameof(_stallLastMs), nameof(_stallTicks),
         // 弹幕
@@ -2530,6 +2531,8 @@ public partial class PlayerWindow : FluentWindow
 
         // ---- 播放中途卡顿(网络缓冲)检测: 与"跳转"无关, 纯播放中卡住 ----
         UpdateStallDetector(inSeekGrace);
+        // ★ seek 后音量写回被 aout 就绪窗口吞掉的延迟补写(没排队时零开销)
+        RestoreVolumeWhenReady();
 
         if (_mp.Length > 0 && !inSeekGrace)
         {
@@ -2730,14 +2733,78 @@ public partial class PlayerWindow : FluentWindow
         catch { /* 播放器已失效就算了 */ }
     }
 
-    /// <summary>画面确认到位(或放弃/换片/播完): 恢复跳转前的音量。</summary>
+    /// <summary>画面确认到位(或放弃/换片/播完): 恢复跳转前的音量。
+    ///
+    /// ★★ 2026-10-31 补"写回被吞"的兜底: aout 未就绪时 libvlc_audio_set_volume 是
+    ///   **静默丢弃**的(反编译 3.8.0 确认 setter 不看返回值), 而 seek 到位的那一刻
+    ///   新 input 的 aout 可能刚好还没建好 —— 写回丢了, aout 就绪后音量停在 0,
+    ///   表现就是"快进过去画面正常但一直没声"。所以写回后要读一次原生值核对,
+    ///   读不回(-1)或没写上(≠v)就交给 <see cref="RestoreVolumeWhenReady"/> 延迟补写。</summary>
     private void RestoreVolumeAfterSeek()
     {
         if (_seekMuteSavedVolume < 0) return;
         var v = _seekMuteSavedVolume;
         _seekMuteSavedVolume = -1;
         _volumeCache = v;   // 静音期间滚轮/滑块一直在改权威值, 恢复时对齐一次, 防止两条账本漂移
-        try { if (_mp != null) _mp.Volume = v; } catch { }
+        try
+        {
+            if (_mp == null) return;
+            _mp.Volume = v;
+            var applied = _mp.Volume;   // aout 未就绪时读回 -1
+            if (applied != v)
+            {
+                _volumeRestoreDeadline = Environment.TickCount64 + VolumeRestoreTimeoutMs;
+                WriteLibVLCDebug($"[Audio] 音量写回未生效(applied={applied}, want={v}) → 稍后补写\n");
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>音量补写的最长等待(毫秒): 超过就放弃(避免无限期挂着)。</summary>
+    private const int VolumeRestoreTimeoutMs = 8000;
+
+    /// <summary>音量补写的截止时刻(>0 表示有补写在排队, 见 RestoreVolumeWhenReady)。</summary>
+    private long _volumeRestoreDeadline;
+
+    /// <summary>补写已重试的次数(每次心跳 +1, 夹在超时内; 日志防刷)。</summary>
+    private int _volumeRestoreTries;
+
+    /// <summary>
+    /// 心跳里调: seek 后音量写回被 aout 就绪窗口"吞掉"时的延迟补写。
+    /// 只在 <see cref="_volumeRestoreDeadline"/> 排了队时才干活, 平时零开销。
+    /// 超时放弃时按权威值再硬写一次 —— 哪怕这次仍被丢弃, 下一次 Playing/调音量也会对齐。
+    /// </summary>
+    private void RestoreVolumeWhenReady()
+    {
+        if (_volumeRestoreDeadline <= 0 || _closing || _mp == null) return;
+        var now = Environment.TickCount64;
+        try
+        {
+            var v = _volumeCache;
+            if (v <= 0) { _volumeRestoreDeadline = 0; return; }   // 用户自己静音了, 收队
+            if (_seekMuteSavedVolume >= 0) return;                // 新一轮 seek 静音接管了, 让位
+            _mp.Volume = v;
+            var applied = _mp.Volume;
+            if (applied == v)
+            {
+                WriteLibVLCDebug($"[Audio] 音量补写成功(第{_volumeRestoreTries + 1}次尝试, v={v})\n");
+                _volumeRestoreDeadline = 0;
+                _volumeRestoreTries = 0;
+                return;
+            }
+        }
+        catch { _volumeRestoreDeadline = 0; _volumeRestoreTries = 0; return; }
+
+        if (now >= _volumeRestoreDeadline)
+        {
+            // 超时: 别再耗着, 直接按权威值硬写一次然后收队(playing 事件还会再补一轮)
+            try { _mp.Volume = _volumeCache; } catch { }
+            WriteLibVLCDebug($"[Audio] 音量补写超时放弃(tried={_volumeRestoreTries + 1})\n");
+            _volumeRestoreDeadline = 0;
+            _volumeRestoreTries = 0;
+            return;
+        }
+        _volumeRestoreTries++;
     }
 
     // ------------------------------------------------------------ 倍速切换与"松手后静音"
@@ -2937,8 +3004,8 @@ public partial class PlayerWindow : FluentWindow
         //           这条路救不回来 —— 分段跳/重建补跳实测只是把"一次跳"换成
         //           "多次跳", 中途照样丢, 用户体感就是"卡在半路、无限缓冲"。
         //           既然主路已换成可靠源(见 ApiClient.GetPlayUrlAsync), 这里
-        //           **不再叠补偿**: 发一次 + 看门狗超时后重建一次, 重建也失败就如实
-        //           停在原地(让用户看见真实位置), 好过让进度条说谎。
+        //           **不再叠补偿**: 短跳直接发 + 看门狗兜底; 长跳直接重建
+        //           (2026-10-31, 修"跳 1 小时没声音", 见 SeekSingleMaxMs 的说明)。
         if (_isReliableSeekSource)
         {
             try { _mp.Time = targetMs; } catch { }
@@ -2946,7 +3013,11 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
 
-        // DASH: 短跳(≤150s)实测可靠, 一步到位
+        // DASH: 短跳(≤ SeekSingleMaxMs)实测可靠, 一步到位。
+        // ★ 2026-10-31: 长跳(>60s)**不再先试 _mp.Time** —— 用户实测"跳 1 小时没声音":
+        //   双流的主输入远跳经常能过, 但音轨 slave(独立输入)掉线后 libvlc 不会重连,
+        //   AudioTrack 读数仍正常 ⇒ 无声且无法检测。重建 Media 是唯一可靠恢复
+        //   (换片同款, slave 一起新建)。见 SeekSingleMaxMs 的说明。
         if (Math.Abs(delta) <= SeekSingleMaxMs)
         {
             try { _mp.Time = targetMs; } catch { }
@@ -2954,9 +3025,9 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
 
-        // 长跳: 发一次, 由看门狗确认; 确认不到就重建一次(见 UpdateProgressUi 的看门狗分支)
-        try { _mp.Time = targetMs; } catch { }
-        MarkSeekIssued(targetMs);
+        // 长跳: 直接重建 Media 再定位(等同换片那条路), 不赌 slave 的远跳存活率。
+        MarkSeekIssued(targetMs);          // 先钉住进度条/静音, 重建后由 Playing 续跳
+        RebuildMediaAndSeek(targetMs);
     }
 
     /// <summary>
@@ -2968,14 +3039,26 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool _isReliableSeekSource = true;
 
-    /// <summary>单次 seek 能可靠完成的最大距离(毫秒)。超过它 libvlc 会把位置丢回原处。</summary>
-    private const long SeekSingleMaxMs = 150_000;
+    /// <summary>单次 seek 的"安全距离"(毫秒)。
+    ///
+    /// ★★ 2026-10-31 收紧(用户实测"跳 1 小时没声音, 跳几十分钟没事"):
+    ///   DASH 双流(input-slave)上远跳的主输入**经常**能过去, 但**音轨 slave 是独立输入**,
+    ///   它自己的解复用器同样要做远距离定位 —— 掉线时 libvlc **不会**为 slave 重连,
+    ///   也没有任何状态变化(AudioTrack 仍报"已选中") ⇒ 画面正常、无声、音频自愈判据抓不到。
+    ///   唯一可靠的恢复是重建 Media(slave 与主输入一起新建) —— 而"重建+定位"恰好是
+    ///   换片/切清晰度那条一直好用的路(vlc-debug 实例: 17.5min/32.5min 弹回重建后都有声)。
+    ///   ⇒ 双流的长跳在 <see cref="SeekTo"/> 里改为**直接重建**, 本常量只作为
+    ///   "仍然直接设 Time"的安全边界(一分钟内 slave 大概率活着)。
+    ///   单文件合流源不受影响 — 它没有 slave, 一次到位。
+    /// </summary>
+    private const long SeekSingleMaxMs = 60_000;
 
     /// <summary>
-    /// 重建 Media 后跳到目标 —— 用于**往回**的长跳(libvlc 往回长跳实测原地不动)。
+    /// 重建 Media 后跳到目标 —— 双流长跳的主路 + "往回"长跳的兜底。
     ///
     /// ★ 这就是"换片/切清晰度"那条路: 丢一条全新的 Media 进去, 起播后立刻设目标。
-    ///   实测落点偏差 416ms(见探针 I 段)。
+    ///   实测落点偏差 416ms(见探针 I 段)。音轨 slave 与主输入**一起新建**,
+    ///   不存在"slave 远跳掉线"的状态 —— 这正是长跳改走这里的理由(见 SeekSingleMaxMs)。
     /// </summary>
     private void RebuildMediaAndSeek(long targetMs)
     {
