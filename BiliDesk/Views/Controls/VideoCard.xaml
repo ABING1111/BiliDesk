@@ -104,7 +104,7 @@
                  与"下载封面"共用同一个 Cover URL。 -->
             <MenuItem Header="预览封面" Click="OnPreviewCover">
                 <MenuItem.Icon>
-                    <TextBlock Text="&#xE8B3;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                    <TextBlock Text="&#xE8B9;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                FontSize="13" VerticalAlignment="Center" />
                 </MenuItem.Icon>
             </MenuItem>
