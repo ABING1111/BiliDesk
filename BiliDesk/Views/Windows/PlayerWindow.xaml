@@ -1928,28 +1928,38 @@
                                           现在换成右下角一颗悬浮的"写评论"按钮(颜色跟主题强调色),
                                           点开后从底部展开输入面板 —— 评论区回归"看"的本质, 输入是按需的。
                                           (输入面板与回复提示条挪到下方 CommentComposerOverlay, 与 FAB 同级。) -->
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                        <controls:LoadingRing x:Name="CommentLoadingRing" Width="14" Height="14" Visibility="Collapsed" />
-                                        <TextBlock x:Name="CommentHint" Style="{StaticResource MetaTextStyle}"
-                                                   Text="加载评论中…" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                    <!-- ★★ 2026-11-01 修"发表后提示把热门/时间挤出画面": 这行原来是横向
+                                         StackPanel —— 它不约束子项宽度, 提示语一长("评论已发表 · 列表按
+                                         热度排序…")就把右边的排序按钮顶出容器, 被视口裁掉。
+                                         改 DockPanel: 两个排序按钮 Dock=Right **先**布局(占住右侧),
+                                         提示文字填剩余宽度, 超长截省略号 —— 按钮永远在画面内。 -->
+                                    <DockPanel Margin="0,0,0,8" LastChildFill="True">
                                         <!-- ===== 排序入口(热门 / 时间) =====
                                              用户要求: 摆在「共 N 条评论」**右边**, 带**矩形底色**便于识别(见样式注释)。
-                                             ★ 间隔: 与左边那句说明文字留 12px(比两个词之间的 6px 大) ——
-                                               不然"评论"和"热门"的底色会挤在一起看不出是两块。
+                                             ★ DockPanel 里 Dock=Right 的元素按声明顺序**从右往左**排:
+                                               先声明"时间"再声明"热门", 结果才是 [热门][时间]。
                                              ★ 两个词之间只留 6px: 底色本身已经把边界画清楚了,
                                                再拉宽会显得是两个不相干的东西。
                                              ★ 只在一开始**加载完成**后才显示(见 UpdateCommentSortUi):
                                                加载中/失败/没评论时挂两个底色块在"加载评论中…"右边很怪。
                                              ★ 选中态由代码写 Tag="on"/"off" 驱动(见 UpdateCommentSortUi)。 -->
-                                        <Button x:Name="BtnCommentSortHot" Style="{StaticResource CommentSortLinkStyle}"
-                                                Content="热门" Margin="12,0,0,0"
-                                                Tag="on" Visibility="Collapsed"
-                                                Click="OnCommentSortHotClick" ToolTip="按热度排序" />
-                                        <Button x:Name="BtnCommentSortTime" Style="{StaticResource CommentSortLinkStyle}"
+                                        <Button x:Name="BtnCommentSortTime" DockPanel.Dock="Right"
+                                                Style="{StaticResource CommentSortLinkStyle}"
                                                 Content="时间" Margin="6,0,0,0"
                                                 Tag="off" Visibility="Collapsed"
                                                 Click="OnCommentSortTimeClick" ToolTip="按时间排序" />
-                                    </StackPanel>
+                                        <Button x:Name="BtnCommentSortHot" DockPanel.Dock="Right"
+                                                Style="{StaticResource CommentSortLinkStyle}"
+                                                Content="热门" Margin="12,0,0,0"
+                                                Tag="on" Visibility="Collapsed"
+                                                Click="OnCommentSortHotClick" ToolTip="按热度排序" />
+                                        <StackPanel Orientation="Horizontal">
+                                            <controls:LoadingRing x:Name="CommentLoadingRing" Width="14" Height="14" Visibility="Collapsed" />
+                                            <TextBlock x:Name="CommentHint" Style="{StaticResource MetaTextStyle}"
+                                                       Text="加载评论中…" Margin="6,0,0,0" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </DockPanel>
                                     <ItemsControl x:Name="CommentList"
                                                   ItemTemplate="{StaticResource CommentCardTemplate}" />
 
