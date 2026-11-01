@@ -81,6 +81,12 @@ public sealed class CdnService
     private DateTime _cachedAt = DateTime.MinValue;
     private string? _lastReport;
 
+    /// <summary>最近一轮测速冠军的吞吐(字节/秒); 没测过为 0。给 BufferPolicy 自动档用</summary>
+    private long _lastMeasuredBytesPerSecond;
+
+    /// <summary>最近一次后台测速是否在飞(防止重复排任务)</summary>
+    private int _warmingUp;
+
     private CdnService()
     {
         _http = new HttpClient(new SocketsHttpHandler
@@ -99,6 +105,17 @@ public sealed class CdnService
     public string LastReport
     {
         get { lock (_gate) return _lastReport ?? "尚未测速"; }
+    }
+
+    /// <summary>
+    /// 最近一轮测速冠军线路的吞吐(字节/秒); 从未测过为 0。
+    /// 只读属性(内部加锁), 供 BufferPolicy 自动档挑预读深度用 ——
+    /// 它与 CachedBest 一样有 10 分钟 TTL 语义: 过期值照样返回, 由调用方接受"略旧"的误差
+    /// (挑缓冲档位不需要精确, 差一档无所谓; 再为它做读取时的过期清零反而引入抖动)。
+    /// </summary>
+    public long LastMeasuredBytesPerSecond
+    {
+        get { lock (_gate) return _lastMeasuredBytesPerSecond; }
     }
 
     /// <summary>缓存的"当前最快"是哪一家(没测过或已过期返回 null)</summary>
@@ -123,6 +140,9 @@ public sealed class CdnService
         {
             _cachedBestHost = null;
             _cachedAt = DateTime.MinValue;
+            // 吞吐也一起作废: BufferPolicy 会据此回落 1000 兜底, 与"没测过"同义。
+            // (设置页改线路模式后旧吞吐属于另一条线路的排名, 留着会误导自动档。)
+            _lastMeasuredBytesPerSecond = 0;
         }
     }
 
@@ -130,10 +150,12 @@ public sealed class CdnService
     /// 给一条媒体 URL 选线路。
     ///
     /// 返回的 URL 只换了 host(scheme/path/query 原样保留)。
+    /// ★ 2026-11-01 起本方法**同步返回**(不再有内部 await): 测速与手动线路的可用性探测
+    ///   都挪到了后台, 起播路径上零等待。保留 Task 返回值以免改动 8 个调用点的签名。
     /// </summary>
     /// <param name="url">服务端给的一条 baseUrl(作为原样回退用)</param>
     /// <param name="allCandidates">该流的全部候选(含 baseUrl 与所有 backupUrl)</param>
-    public async Task<string> SelectUrlAsync(string url, IReadOnlyList<string> allCandidates)
+    public Task<string> SelectUrlAsync(string url, IReadOnlyList<string> allCandidates)
     {
         var settings = SettingsStore.Instance;
 
@@ -146,27 +168,33 @@ public sealed class CdnService
         if (pool.Count == 0) pool = new List<string> { url };
 
         if (settings.CdnMode == CdnSelectMode.ServerDefault)
-            return pool[0];
+            return Task.FromResult(pool[0]);
 
-        // 手动: 想要的那一家能验证通过就用它, 否则退回自动
+        // 手动: 想要的那一家能验证通过就用它, 否则退回自动。
+        // ★ 2026-11-01: 手动模式的可用性探测(ProbeAsync ≤3s)也挪到了**后台** ——
+        //   它同样是起播路径上的固定等待。现在先用指定线路起播; 探测发现拉不动时
+        //   只更新报告并预热缓存, 让下一条视频走赢家(不在播放中途换源)。
         if (settings.CdnMode == CdnSelectMode.Manual)
         {
             var target = CdnOption.ById(settings.CdnManualId);
-            if (target != null)
+            var manualUrl = target == null ? null : TryBuildSwapped(pool, target.Host);
+            if (manualUrl != null)
             {
-                var manualUrl = TryBuildSwapped(pool, target.Host);
-                if (manualUrl != null)
+                _ = Task.Run(async () =>
                 {
-                    var (ok, _, _) = await ProbeAsync(manualUrl).ConfigureAwait(false);
-                    if (ok) return manualUrl;
-                    // 指定的这家拉不动(实测个别 CDN 会 403): 退回自动, 别给死线路
+                    var (ok, _, _) = await ProbeAsync(manualUrl!).ConfigureAwait(false);
+                    if (ok) return;
+                    // 指定的这家拉不动(实测个别 CDN 会 403): 预热一轮测速,
+                    // 让下一条视频直接用赢家; 本条已经用指定线路在播, 不动它。
                     lock (_gate)
-                        _lastReport = $"{DateTime.Now:HH:mm:ss} 指定的 {target.Name} 不可用, 已自动改用最快线路";
-                }
+                        _lastReport = $"{DateTime.Now:HH:mm:ss} 指定的 {target!.Name} 不可用, 下一条起将自动改用最快线路";
+                    WarmUpInBackground(pool);
+                });
+                return Task.FromResult(manualUrl);
             }
         }
 
-        return await AutoPickAsync(pool).ConfigureAwait(false);
+        return Task.FromResult(AutoPick(pool));
     }
 
     /// <summary>
@@ -205,9 +233,18 @@ public sealed class CdnService
     }
 
     /// <summary>
-    /// 自动: 有缓存且没过期就直接用(不再按候选池比对), 否则做一轮**限时**测速。
+    /// 自动: 有缓存且没过期就直接用(不再按候选池比对)。
+    ///
+    /// ★★ 2026-11-01 起播路径**不再等待测速**(用户已确认接受该行为变化):
+    ///   之前这里会同步等一轮 800ms 预算的测速 —— 那是每个会话首条视频起播前
+    ///   最固定的一块等待(10 分钟缓存过期后的第一条必中)。现在改为:
+    ///     ① 立即返回服务端首选线路(PCDN 屏蔽在 SelectUrlAsync 里已做, 与测速无关);
+    ///     ② 后台延迟 1.5 秒再预热测速 —— 等首帧把带宽用起来之后再跑, 免得跟它抢;
+    ///     ③ 测完写进缓存, 只影响**下一条**视频/下一次切清晰度。
+    ///   绝不在播放中途换源: 换 host 重连曾实测踩过"跳转花屏 + 音画不同步"
+    ///   (见 ShortVideoCache 顶注), 收益不抵风险。
     /// </summary>
-    private async Task<string> AutoPickAsync(List<string> pool)
+    private string AutoPick(List<string> pool)
     {
         lock (_gate)
         {
@@ -220,19 +257,46 @@ public sealed class CdnService
             }
         }
 
-        // 起播路径用硬预算: 只等 StartupRankBudget, 到点取已完成的结果。
-        // RankAsync 会顺带写好测速报告与缓存(见其说明)
-        var ranked = await RankAsync(pool, StartupRankBudget).ConfigureAwait(false);
+        // 缓存没命中: 先用服务端线路起播, 后台补测速(见方法顶注)
+        WarmUpInBackground(pool);
 
-        // 一条都没测通 → 回退服务端原样线路(而不是返回空)
-        return ranked.Count > 0 ? ranked[0].Url : pool[0];
+        // ★ 起播路径到此就返回服务端线路 —— 不再等测速。
+        //   (RankAsync 的完整等待只保留给设置页「开始测速」, 那里的语义是"把家底都测一遍"。)
+        return pool[0];
+    }
+
+    /// <summary>
+    /// 后台预热测速: 延迟 1.5 秒(让首帧先跑), 再以 800ms 预算跑一轮完整 RankAsync。
+    /// 结果经 Publish 落进缓存与 LastMeasuredBytesPerSecond, 服务下一条视频。
+    /// 同时只有一个预热在飞(Interlocked 闸); 失败静默 —— 下一 条视频还会再试。
+    /// </summary>
+    private void WarmUpInBackground(List<string> pool)
+    {
+        if (Interlocked.CompareExchange(ref _warmingUp, 1, 0) != 0) return;
+        var candidates = pool.ToList();   // 调用方的池可能被复用, 拷一份给后台
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(1500).ConfigureAwait(false);
+                await RankAsync(candidates, StartupRankBudget).ConfigureAwait(false);
+            }
+            catch
+            {
+                // 预热是纯增益: 失败不影响本次播放, 也不值得记错误日志
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _warmingUp, 0);
+            }
+        });
     }
 
     /// <summary>
     /// 对候选池做一轮完整测速(设置页「开始测速」用), 返回按吞吐从高到低排序且**已验证可用**的线路。
     ///
     /// ★ 它同时负责更新测速报告与缓存 —— 因为设置页的「开始测速」按钮直接调这个方法,
-    ///   如果报告只在 AutoPickAsync 里写, 用户点按钮后看到的会是**上一次的旧结果**
+    ///   如果报告只在测速完成处写, 用户点按钮后看到的会是**上一次的旧结果**
     ///   (实测踩过: 报告写"阿里云 2461KB/s", 而真实第一名是 13473KB/s)。
     ///
     /// 并排测: 总耗时 ≈ 最慢那条的窗口时间, 而不是累加。
@@ -293,7 +357,7 @@ public sealed class CdnService
             return (poolSet.Contains(b.Url) ? 1 : 0) - (poolSet.Contains(a.Url) ? 1 : 0);
         });
 
-        // 写报告 + 缓存(与 AutoPickAsync 共用同一份写入逻辑, 免得两处写法漂移)
+        // 写报告 + 缓存(设置页测速与后台预热共用这一份写入逻辑, 免得两处写法漂移)
         Publish(ranked);
         return ranked;
     }
@@ -307,6 +371,7 @@ public sealed class CdnService
             {
                 _cachedBestHost = SafeHost(ranked[0].Url);
                 _cachedAt = DateTime.UtcNow;
+                _lastMeasuredBytesPerSecond = ranked[0].BytesPerSecond;
 
                 var others = ranked.Skip(1).Take(3)
                     .Select(r => $"{CdnOption.All.FirstOrDefault(o =>
@@ -319,6 +384,7 @@ public sealed class CdnService
             else
             {
                 _cachedBestHost = null;
+                _lastMeasuredBytesPerSecond = 0;
                 _lastReport = $"{DateTime.Now:HH:mm:ss} 测速失败: 候选线路都不可达, 已回退服务端线路";
             }
         }

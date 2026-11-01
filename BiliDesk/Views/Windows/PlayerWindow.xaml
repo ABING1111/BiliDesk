@@ -301,10 +301,16 @@
                   把整排图挤一下; 裁掉的部分点开大图都能看到。
             -->
             <DataTemplate x:Key="CommentPicturesTemplate">
+                <!-- ★★ 2026-11-01 修"多图评论只显示一张": 原来的 ItemsPanel 是横向 StackPanel,
+                     它**不会换行** —— 多图评论里只要有一张横图(2666x1500 那种, 缩略宽 284px),
+                     两张加起来就超出评论卡宽度, 溢出的整张被 InfoScroll 视口裁掉,
+                     用户看到的就是"明明发了两张图却只有一张"。
+                     换 WrapPanel: 排不下就折到下一行, 与 B 站网页版行为一致。
+                     (窄图多的评论一排能放下好几张, 仍是一排; 只有真放不下才换行。) -->
                 <ItemsControl ItemsSource="{Binding Pictures}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" />
+                            <WrapPanel Orientation="Horizontal" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
@@ -313,6 +319,7 @@
                                  图画在 Border 的 Background(ImageBrush), 尺寸固定的外框 + UniformToFill
                                  保证"加载完不变宽", 一排缩略图不会互相挤。 -->
                             <Border Width="{Binding ThumbWidth}" Height="160"
+                                    Margin="0,0,6,6"
                                     CornerRadius="6" ClipToBounds="True"
                                     Cursor="Hand" ToolTip="点击查看大图"
                                     MouseLeftButtonUp="OnCommentPictureClick"
@@ -1916,48 +1923,11 @@
                                     </StackPanel>
                                 </StackPanel>
                                 <StackPanel x:Name="CommentsPanel" Visibility="Collapsed">
-                                    <!-- ===== 发表评论 =====
-                                         放在列表上方(和 B 站网页版一致): 先能说话, 再看别人说什么。 -->
-                                    <!-- ===== 回复态提示条(整个评论区只有这一个输入框) =====
-                                         在列表页 = 发表评论(新楼层); 进详情页后自动切成"回复 @这层楼",
-                                         点某条回复的"回复"按钮则切成"回复 @那个人" —— 发布时带 root/parent。
-                                         这里的"取消"退回"发表评论"。 -->
-                                    <Border x:Name="CommentDetailReplyHint" Visibility="Collapsed"
-                                            Background="{DynamicResource AccentSoftFillBrush}"
-                                            CornerRadius="4" Padding="8,3" Margin="0,0,0,6">
-                                        <DockPanel>
-                                            <Button DockPanel.Dock="Right" Style="{StaticResource LinkButtonStyle}"
-                                                    Content="取消" FontSize="11" Padding="4,0"
-                                                    Click="OnCommentReplyCancel"
-                                                    ToolTip="取消回复, 改为发表评论" />
-                                            <TextBlock x:Name="CommentDetailReplyTarget" FontSize="11"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       VerticalAlignment="Center"
-                                                       Foreground="{DynamicResource AccentTextBrush}" />
-                                        </DockPanel>
-                                    </Border>
-                                    <Grid Margin="0,0,0,10">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBox x:Name="CommentDraft" Grid.Column="0"
-                                                 Style="{StaticResource FluentTextBoxStyle}"
-                                                 Height="66" MaxLength="1000"
-                                                 TextWrapping="Wrap" AcceptsReturn="True"
-                                                 VerticalScrollBarVisibility="Auto"
-                                                 TextChanged="OnCommentDraftChanged"
-                                                 PreviewKeyDown="OnCommentDraftPreviewKeyDown" />
-                                        <Button x:Name="PostCommentButton" Grid.Column="1" Content="发表"
-                                                Margin="8,0,0,0" Padding="20,8"
-                                                VerticalAlignment="Bottom"
-                                                Style="{StaticResource AccentButtonStyle}"
-                                                Click="OnPostCommentClick"
-                                                ToolTip="发表评论 (Enter)" />
-                                    </Grid>
-                                    <TextBlock x:Name="CommentPostHint" Style="{StaticResource MetaTextStyle}"
-                                               Margin="0,0,0,10" TextWrapping="Wrap" />
-
+                                    <!-- ★★ 2026-11-01 评论输入改为右下角悬浮按钮(FAB):
+                                          原来的输入框长在列表顶部, 占掉 90px 高度, 一进评论区就是一大块灰;
+                                          现在换成右下角一颗悬浮的"写评论"按钮(颜色跟主题强调色),
+                                          点开后从底部展开输入面板 —— 评论区回归"看"的本质, 输入是按需的。
+                                          (输入面板与回复提示条挪到下方 CommentComposerOverlay, 与 FAB 同级。) -->
                                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                         <controls:LoadingRing x:Name="CommentLoadingRing" Width="14" Height="14" Visibility="Collapsed" />
                                         <TextBlock x:Name="CommentHint" Style="{StaticResource MetaTextStyle}"
@@ -2037,7 +2007,8 @@
                                                                     </StackPanel>
                                                                 </StackPanel>
                                                                 <controls:CommentText Comment="{Binding}" FontSize="14" Margin="0,8,0,0"
-                                                                                      Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                                                      Foreground="{DynamicResource TextPrimaryBrush}"
+                                                                                      MentionForeground="{DynamicResource AccentTextBrush}" />
                                                                 <!-- 评论图片(2026-10-31): 与列表页同一份缩略图模板 -->
                                                                 <ContentControl Content="{Binding}" Margin="0,6,0,0" HorizontalAlignment="Left"
                                                                                 ContentTemplate="{StaticResource CommentPicturesTemplate}"
@@ -2095,7 +2066,8 @@
                                                                            昵称 12→13、正文 12→14, 与 CommentCardTemplate 逐项一致。 -->
                                                                     </StackPanel>
                                                                     <controls:CommentText Comment="{Binding}" FontSize="14" Margin="0,3,0,0"
-                                                                                          Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                                                          Foreground="{DynamicResource TextPrimaryBrush}"
+                                                                                          MentionForeground="{DynamicResource AccentTextBrush}" />
                                                                     <!-- 评论图片(2026-10-31): 与列表页同一份缩略图模板 -->
                                                                     <ContentControl Content="{Binding}" Margin="0,4,0,0" HorizontalAlignment="Left"
                                                                                     ContentTemplate="{StaticResource CommentPicturesTemplate}"
@@ -2324,6 +2296,104 @@
                         </StackPanel>
                     </Border>
                 </Grid>
+                <!-- ============ 评论输入(FAB + 展开面板, 2026-11-01) ============
+                     ★ 结构: 右下角一颗悬浮圆角按钮(强调色底 + 笔形图标, 颜色跟主题走),
+                       点击后从底部优雅展开输入面板(输入框 + 发送按钮), 再点收起。
+                     ★ 挂在 InfoPanel 这一层(与 SeasonPanel/LocalToastBorder 同级)而不是
+                       CommentsPanel 里: 浮层要悬浮在列表**之上**, 且滚动列表时它不跟着走;
+                       不用 Popup(独立 HWND 会盖过 airspace, 与合集面板同款理由用 Grid)。
+                     ★ 显隐规则(代码 UpdateCommentComposerVisibility):
+                       · 只在「评论」tab 且非直播/本地文件时出现;
+                       · 面板展开时 FAB 变成"收起"图标, 面板收起时是"笔"图标;
+                       · 未登录/直播/本地文件点 FAB → Toast 说明原因, 不展开。 -->
+                <Button x:Name="CommentFab" Grid.Row="0" Visibility="Collapsed"
+                        Panel.ZIndex="2"
+                        HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                        Margin="0,0,16,16" Width="46" Height="46"
+                        Style="{StaticResource CommentFabStyle}"
+                        Click="OnCommentFabClick"
+                        ToolTip="写评论">
+                    <TextBlock x:Name="CommentFabIcon" Text="&#xE70F;"
+                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="18"
+                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                </Button>
+
+                <!-- 展开的输入面板: 底部对齐, 从下往上滑出(展开动画在代码里)。
+                     ★ 内部就是原来那套输入控件(CommentDraft/PostCommentButton/回复提示条),
+                       只换了外壳与位置 —— 发表/回复/Enter 的既有逻辑零改动。 -->
+                <Border x:Name="CommentComposerPanel" Grid.Row="0" Visibility="Collapsed"
+                        VerticalAlignment="Bottom" Margin="12,0,70,12"
+                        Background="{DynamicResource OverlaySurfaceBrush}"
+                        BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="12">
+                    <!-- 右侧 Margin 70: 给 FAB 留位 —— 展开态 FAB(变收起箭头)悬在面板右上角,
+                         不去挡面板里右下的"发表"按钮(2026-11-01 探针截图发现遮挡)。 -->
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.25"
+                                          Direction="270" Color="#000000" />
+                    </Border.Effect>
+                    <StackPanel>
+                        <!-- ★ 面板头行: 展开高度切换(2026-11-01)。
+                             长评(1000 字上限)在 66px 的默认框里只能看见两三行, 写到后面全是"摸黑改";
+                             这个小按钮把输入框拉到 200px, 写长文时能整篇通读再发。
+                             图标随状态换(下箭头=展开 / 上箭头=收回), 动画在代码 ApplyComposerSize。 -->
+                        <DockPanel Margin="0,0,0,6">
+                            <Button DockPanel.Dock="Right" x:Name="BtnComposerExpand"
+                                    Style="{StaticResource SubtleButtonStyle}"
+                                    Width="26" Height="26" Padding="0" Margin="0"
+                                    Click="OnComposerExpandClick"
+                                    ToolTip="展开输入框, 写长评时能通读全文">
+                                <TextBlock x:Name="ComposerExpandIcon" Text="&#xE70D;"
+                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="11"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                            </Button>
+                            <!-- 头行左侧给一行小标题, 让"这是什么面板"自解释; 空着会显得突兀 -->
+                            <TextBlock Text="发表评论" FontSize="12" FontWeight="SemiBold"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                        </DockPanel>
+                        <!-- 回复态提示条(原位保留): 进详情页后自动切成"回复 @这层楼" -->
+                        <Border x:Name="CommentDetailReplyHint" Visibility="Collapsed"
+                                Background="{DynamicResource AccentSoftFillBrush}"
+                                CornerRadius="4" Padding="8,3" Margin="0,0,0,6">
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Style="{StaticResource LinkButtonStyle}"
+                                        Content="取消" FontSize="11" Padding="4,0"
+                                        Click="OnCommentReplyCancel"
+                                        ToolTip="取消回复, 改为发表评论" />
+                                <TextBlock x:Name="CommentDetailReplyTarget" FontSize="11"
+                                           TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource AccentTextBrush}" />
+                            </DockPanel>
+                        </Border>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <!-- Height 由代码控制(普通 66 / 展开 200, 带动画); XAML 只给初值 -->
+                            <TextBox x:Name="CommentDraft" Grid.Column="0"
+                                     Style="{StaticResource FluentTextBoxStyle}"
+                                     Height="66" MaxLength="1000"
+                                     TextWrapping="Wrap" AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Auto"
+                                     TextChanged="OnCommentDraftChanged"
+                                     PreviewKeyDown="OnCommentDraftPreviewKeyDown" />
+                            <Button x:Name="PostCommentButton" Grid.Column="1" Content="发表"
+                                    Margin="8,0,0,0" Padding="16,8"
+                                    VerticalAlignment="Bottom"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Click="OnPostCommentClick"
+                                    ToolTip="发表评论 (Enter)" />
+                        </Grid>
+                        <TextBlock x:Name="CommentPostHint" Style="{StaticResource MetaTextStyle}"
+                                   Margin="0,6,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
                 <!-- 本地 Toast -->
                 <Border x:Name="LocalToastBorder" HorizontalAlignment="Right" VerticalAlignment="Top"
                         Margin="0,12,12,0" Padding="12,7" CornerRadius="6"

@@ -285,6 +285,25 @@ public class SettingsStore
     public const int NetworkCachingDefaultMs = 1000;
 
     /// <summary>
+    /// 缓冲策略(2026-11-01 新增): 自动按带宽/码率挑缓冲值, 还是手动用固定值。
+    ///
+    /// ★ 默认**自动**: 决策依据见 Services/BufferPolicy.cs —— 实测(探针 bd-probe-startcfix)
+    ///   缓冲值对起播几乎无影响, 真正影响的是播放中的抗抖动余量, 而"该留多少余量"
+    ///   恰恰取决于网络状况: 固定 1000ms 在快线上浪费内存与延迟, 在慢线上又不够扛抖动。
+    ///   最坏情况(测速失败/没测过)自动档回落 1000, 与旧默认一致 —— 风险面极小。
+    ///   想要完全旧行为的用户切到"手动"即可(那档恒用 NetworkCachingMs)。
+    /// </summary>
+    public bool AutoBufferPolicy { get; set; } = true;
+
+    /// <summary>设置缓冲策略并落盘</summary>
+    public void SetAutoBufferPolicy(bool auto)
+    {
+        if (AutoBufferPolicy == auto) return;
+        AutoBufferPolicy = auto;
+        Save();
+    }
+
+    /// <summary>
     /// 上次用的搜索类别(见 <see cref="Models.ContentKind"/>: 0=视频 1=直播间 2=番剧)。
     ///
     /// ★ 为什么要记住它(2026-11-12 用户报"番剧依然无法被搜索"):
@@ -499,6 +518,12 @@ public class SettingsStore
             ? NetworkCachingDefaultMs
             : Math.Clamp(s.NetworkCachingMs, NetworkCachingMinMs, NetworkCachingMaxMs);
 
+        // 缓冲策略: 老配置缺字段 ⇒ bool 默认 false…但这里的语义默认是**自动**,
+        // 所以不能靠反序列化的默认值, 必须显式写(老配置没有该字段时 s.* 就是 false)。
+        // ★ JSON 反序列化无法区分"没写"与"写了 false" —— 折衷: 用可空类型接,
+        //   null = 老配置没这个字段 = 自动(true)。
+        AutoBufferPolicy = s.AutoBufferPolicy ?? true;
+
         // 上次的搜索类别: 老配置没这个字段 ⇒ 视频(与搜索页初始类别一致)。
         SearchKind = Enum.IsDefined(typeof(ContentKind), s.LastSearchKind)
             ? (ContentKind)s.LastSearchKind
@@ -554,6 +579,7 @@ public class SettingsStore
         DisclaimerVersion = AcceptedDisclaimerVersion,
         PlayerVolume = PlayerVolume,
         NetworkCachingMs = NetworkCachingMs,
+        AutoBufferPolicy = AutoBufferPolicy,
         LastSearchKind = (int)SearchKind
     };
 

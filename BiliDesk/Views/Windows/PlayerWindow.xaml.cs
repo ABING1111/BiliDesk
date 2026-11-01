@@ -1075,14 +1075,18 @@ public partial class PlayerWindow : FluentWindow
             // 直播流地址同样要带 Referer / UA —— 直播 CDN 比点播校验得更严:
             // 不带 Referer 时常见表现就是"能拿到地址但播不出来"(403/直接 EOF)。
             // 之前这里只加了 :no-video-title-show, 于是直播一直播不动。
+            // ★ 2026-11-01: 缓冲值不再硬编码 2000 —— 走 BufferPolicy 统一决策
+            //   (手动档取 max(用户值, 1000), 自动档 2000, 规则见 Services/BufferPolicy.cs)。
+            var liveCaching = BufferPolicy.Resolve(BufferMediaKind.Live, url, shortVideo: false,
+                Svc.Settings.NetworkCachingMs, Svc.Settings.AutoBufferPolicy);
             var liveOptions = new List<string>
             {
                 ":no-video-title-show",
                 ":http-referrer=https://live.bilibili.com/" + roomId,
                 ":http-user-agent=" + PlayerUserAgent,
                 // 直播是持续流: 加大缓存, 别让 LibVLC 因为"看起来卡住"就早早判定结束
-                ":network-caching=2000",
-                ":live-caching=2000"
+                ":network-caching=" + liveCaching,
+                ":live-caching=" + liveCaching
             };
 
             var media = new Media(_libVLC, new Uri(url), liveOptions.ToArray());
@@ -1481,6 +1485,12 @@ public partial class PlayerWindow : FluentWindow
         // 弹幕滑杆的回灌闸门(2026-10-30): 构造期间必须保持 true 挡住 XAML 初始 Value 的写回;
         //   换片不该碰它 —— 它是窗口级初始化状态, 不是"这一片"的弹幕设置。
         nameof(_syncingDanmakuLook),
+        // 评论输入面板的展开态(2026-11-01): 窗口级 UI 瞬态 ——
+        //   用户开着面板换片是常态(草稿都不清, 面板更不能收), 保持原样即可。
+        nameof(_composerOpen),
+        // 输入框的"展开高度"态(2026-11-01): 同样是窗口级 UI 偏好 ——
+        //   用户展开了写长文, 换片/收面板再回来不该被打回 66px。发成功才归位(见 PostCommentAsync)。
+        nameof(_composerExpanded),
     };
 
     /// <summary>
@@ -1767,7 +1777,8 @@ public partial class PlayerWindow : FluentWindow
                 $"\n[Timing] bvid={_currentBvid} detail={tDetail}ms " +
                 $"playurl={tPlayUrl - tDetail}ms remux={tRemux - tPlayUrl}ms " +
                 $"sponsor={tSponsor - tRemux}ms toPlay={sw.ElapsedMilliseconds}ms " +
-                $"source={(local != null ? "local" : "remote")} qn={actualQn}\n");
+                $"source={(local != null ? "local" : "remote")} qn={actualQn} " +
+                $"cdnWait=0\n");
 
             // B站 CDN 对 Referer 和 User-Agent 有校验, 必须通过 Media 选项告诉 LibVLC;
             // DASH 流音视频分离, 用 input-slave 把音轨挂到视频流上一起播放。
@@ -1875,16 +1886,29 @@ public partial class PlayerWindow : FluentWindow
         //     ★★ 千万别给"带 input-slave"的那条路也加 —— 实测那样 seek 落点准但
         //        state 直接变 **Ended**(画面永久卡死), 见 bd-probe-muxed5 的候选组。
         //        这也是当年 avformat 被否掉的真正原因: 问题是"组合", 不是 demuxer 本身。
-        if (string.IsNullOrEmpty(audioUrl))
+        //
+        //   ★★ 2026-11-01 修「听视频模式快进直接提示已播完」: 「听视频」播的 DASH 音轨
+        //      也是**远端分片 fMP4**, 不是普通 MP4 —— avformat 对它的远跳会把落点甩到
+        //      流尾直接 EOF。所以它必须与 DASH 双流走同一条"不可靠"路(看门狗 + 重建),
+        //      既不加 avformat 也不标可靠。判据: 聆听态且 url 就是聆听音轨那条地址。
+        //      (durl 合流单流是普通 MP4, 不受影响; 本地文件同理。)
+        var isListenAudio = _isListenMode &&
+                            string.Equals(url, _listenAudioUrl, StringComparison.Ordinal);
+        if (string.IsNullOrEmpty(audioUrl) && !isListenAudio)
         {
             options.Add(":demux=avformat");
             _isReliableSeekSource = true;
         }
-        else
+        else if (!string.IsNullOrEmpty(audioUrl))
         {
             // DASH 双流: 远距离 seek 实测会被 libvlc 丢掉(位置掉回开头), 保留旧路兜底
             _isReliableSeekSource = false;
             options.Add(":input-slave=" + audioUrl);
+        }
+        else
+        {
+            // 听视频音轨单流: demux 用默认(fMP4 与 input-slave 那条同款), seek 走不可靠路
+            _isReliableSeekSource = false;
         }
 
         if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
@@ -1897,7 +1921,15 @@ public partial class PlayerWindow : FluentWindow
         // 起播缓冲(2026-10-30 新增, 设置页「起播缓冲」): 只加给网络流。
         // ★ 用**媒体级**选项而不是重建 LibVLC: 全局实例是进程单例, 改它等于要重启内核;
         //   媒体级选项下一条视频就生效, 且能各走各的(直播也一样)。
-        options.Add(":network-caching=" + Svc.Settings.NetworkCachingMs);
+        // ★ 2026-11-01: 值不再直接取用户设置 —— 统一走 BufferPolicy(自动/手动两档),
+        //   直播/自动档的规则见 Services/BufferPolicy.cs。
+        var isShortVideo = _totalMs > 0 && _totalMs <= 60_000;
+        var kind = string.IsNullOrEmpty(audioUrl) ? BufferMediaKind.VodSingle : BufferMediaKind.VodDash;
+        var cachingMs = BufferPolicy.Resolve(kind, url, isShortVideo,
+            Svc.Settings.NetworkCachingMs, Svc.Settings.AutoBufferPolicy);
+        WriteLibVLCDebug($"[BufferPolicy] kind={kind} short={isShortVideo} nc={cachingMs}ms " +
+                         $"auto={Svc.Settings.AutoBufferPolicy} measured={CdnService.Instance.LastMeasuredBytesPerSecond}B/s\n");
+        options.Add(":network-caching=" + cachingMs);
         return new Media(_libVLC, new Uri(url), options.ToArray());
     }
 
@@ -2925,6 +2957,9 @@ public partial class PlayerWindow : FluentWindow
             {
                 // 遮罩上已经有别的内容(切清晰度等)就不抢, 免得把对方的文案顶掉
                 ShowLoading(BufferingText);
+                // 给 BufferPolicy 记一笔(按 CDN host 归因): 同一线路 60s 内卡 2 次,
+                // 后续媒体自动加深 1s 预读 —— 只影响下一条, 不动当前在播的源。
+                BufferPolicy.ReportStall(_lastPlayUrl);
             }
             return;
         }
@@ -3037,9 +3072,9 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 当前片源的 seek 是否"一发就准"(单文件合流, 无 input-slave)。
     ///
-    /// 由 <see cref="BuildMedia"/> 在建 Media 时顺带置位 —— 判定依据就是
-    /// "有没有挂 input-slave": 挂了就是 DASH 双流(远跳不可靠), 没挂就是
-    /// durl 合流单流或本地文件(可靠)。
+    /// 由 <see cref="BuildMedia"/> 在建 Media 时顺带置位 —— 判定依据是"远端分片流":
+    /// 挂了 input-slave 的 DASH 双流、以及「听视频」的音轨单流都是**分片 fMP4**
+    /// (远跳不可靠), 只有 durl 合流单流与本地文件是普通 MP4(可靠)。
     /// </summary>
     private bool _isReliableSeekSource = true;
 
@@ -3091,6 +3126,9 @@ public partial class PlayerWindow : FluentWindow
         // ★★ 必须先 Stop: LibVLC 3 里已有 input 在播时 play() 会被**直接忽略**
         //    —— 漏掉这一步就是"黑屏 + 恢复进度丢失"(见方法说明)。
         try { _mp.Stop(); } catch { }
+        // ★ 2026-11-01: 聆听态下重建必须继续播**音轨单流**(audioUrl 传 null) ——
+        //   与 EnterListenMode/重播/切清晰度那几条路的既有约定一致; 传 _lastAudioUrl
+        //   会把"视频+音轨"的组合塞回聆听态, 画面直接复活。
         if (!PlayMedia(BuildMedia(url, _isListenMode ? null : _lastAudioUrl)))
             WriteLibVLCDebug("[Seek] 重建后 play() 未被接受(远端流)\n");
     }
@@ -3224,8 +3262,15 @@ public partial class PlayerWindow : FluentWindow
         //   2. 单文件源(_lastAudioUrl == null, durl/合流)没有 input-slave,
         //      根本不存在"音轨先 EOF"这个问题, 直接跳过自救 —— 否则任何风吹草动的
         //      提前 EOF 都会在单文件源上触发一次无谓的回跳续播。
+        //
+        //   ★★★ 3(2026-11-01 修「4h 视频快进回到 9s 处」): **跳转进行中绝不自救**。
+        //      DASH 双流远跳失效时, 音轨 seek 失败会拖死整个 input 触发本事件 ——
+        //      而此刻 _lastKnownMs 已经掉回片头(用户报的就是 ~9s), 用它当断点续播
+        //      等于"从坏位置再播一次", 正是"快进 → 缓冲几次 → 回到 9s"的最后一环。
+        //      看门狗自己会重建到目标(_pendingSeekMs 还挂着), 这里必须让路。
         var effectiveTotalMs = _mp.Length > 0 ? _mp.Length : _totalMs;
-        if (!_isLive && !_isLocalPlayback && !_ended && effectiveTotalMs > 0 &&
+        if (!_isLive && !_isLocalPlayback && !_ended && _pendingSeekMs < 0 &&
+            effectiveTotalMs > 0 &&
             !string.IsNullOrEmpty(_lastAudioUrl) &&
             // 尾部静默区见 TailQuietZoneMs 的说明: 音轨缺口之内自救救不回任何数据,
             // 只会"黑屏缓冲一趟 → 立刻再 EOF → 重播遮罩"(2026-10-01 用户两轮实测)
@@ -3258,6 +3303,21 @@ public partial class PlayerWindow : FluentWindow
         //   画面全黑(用户报的正是这个)。原先这里是直接赋值 + `Playing` 里也直接赋值,
         //   两边对称; cf76cc6 把"起播那侧"改成走 ReleaseFullscreenCover(为了不吃掉
         //   _resizeHold 闸), 却没给"压下这侧"补上标志, 就成了单边。
+        //   ★★★ 2026-11-01 修「听视频模式快进提示已播完」: EOF 时若还有**未确认的跳转**
+        //     在飞, 那多半是远跳甩到流尾的假 EOF(音轨 seek 失败被当成播完) ——
+        //     上面那条"跳转中不自救"的闸会放它落到这里。此刻不能宣告播完:
+        //     把 _ended 压回去、给目标重新打上 MarkSeekIssued 走看门狗重建, 唯独不进重播态。
+        if (_pendingSeekMs >= 0 && !_isLive && !_isLocalPlayback &&
+            !string.IsNullOrEmpty(_lastPlayUrl))
+        {
+            var target = _pendingSeekMs;
+            _ended = false;
+            WriteLibVLCDebug(
+                $"[EndReached] 疑似远跳假EOF(target={target}ms time={_lastKnownMs}ms) → 重建 Media 续跳\n");
+            ClearSeekWatchdog();
+            RebuildMediaAndSeek(target);
+            return;
+        }
         WriteLibVLCDebug(
             $"[EndReached] 压黑手势层 time={_lastKnownMs} bgBefore={DescribeVideoAreaBg()}\n");
         VideoAreaRoot.Background = Brushes.Black;
@@ -6807,13 +6867,16 @@ public partial class PlayerWindow : FluentWindow
         IntroPanel.Visibility = Visibility.Visible;
         CommentsPanel.Visibility = Visibility.Collapsed;
         CloseCommentDetail();
+        // 切走评论 tab: FAB 与展开的输入面板一起收掉(它们只属于评论区)
+        UpdateCommentComposer();
     }
 
     private async void TabComments_Checked(object sender, RoutedEventArgs e)
     {
         IntroPanel.Visibility = Visibility.Collapsed;
         CommentsPanel.Visibility = Visibility.Visible;
-        // 切到评论页时顺手校准一次输入框状态: 用户可能是先登录/换号再回来发的
+        // 切到评论页时顺手校准一次输入框状态(FAB 显隐跟着 tab 走):
+        // 用户可能是先登录/换号再回来发的
         UpdateCommentComposer();
         await LoadCommentsAsync();
     }
@@ -7469,12 +7532,16 @@ public partial class PlayerWindow : FluentWindow
     /// 把详情页输入框切到"回复 @XXX"模式(顶部冒出提示条, 发布时带 root/parent)。
     /// focus: 是否顺手把光标放进输入框 —— 点"回复"按钮时该给(用户接着就要打字),
     /// 进详情页时不给(一进门就抢焦点容易误触输入法)。
+    /// ★ 2026-11-01 输入框改为悬浮面板后, "点回复"要**顺手把面板展开** ——
+    ///   不展开的话提示条是展开的、输入框却是收着的, 用户找不到该在哪打字。
     /// </summary>
     private void SetReplyTarget(CommentItem target, bool focus = true)
     {
         _replyTarget = target;
         if (CommentDetailReplyHint != null) CommentDetailReplyHint.Visibility = Visibility.Visible;
         if (CommentDetailReplyTarget != null) CommentDetailReplyTarget.Text = "回复 @" + target.UserName;
+        // 面板要开着才能打字; focus=false(进详情页)时展开但不抢键盘焦点
+        if (!_composerOpen) OpenComposer();
         if (focus) CommentDraft?.Focus();
         // 提示文案("Enter 发表" → "Enter 发送回复")与按钮可用性都跟着回复目标变
         UpdateCommentComposer();
@@ -7707,6 +7774,136 @@ public partial class PlayerWindow : FluentWindow
                         ? "Enter 发送回复 · Shift+Enter 换行 · 点提示条上的“取消”改发评论"
                         : "Enter 发表 · Shift+Enter 换行";
         UpdatePostCommentButton();
+        // FAB 的显隐跟着同一套前提走(2026-11-01 评论输入改为悬浮按钮)
+        UpdateCommentFabVisibility();
+    }
+
+    // ------------------------------------------------------------ 评论输入 FAB(悬浮按钮 + 展开面板)
+
+    /// <summary>面板是否已展开。true = 显示输入面板、FAB 变收起图标</summary>
+    private bool _composerOpen;
+
+    /// <summary>
+    /// 输入框是否处于"展开高度"(2026-11-01 加, 写长评用)。
+    /// ★ 它与 <see cref="_composerOpen"/> 是两回事: 面板收起后再打开, 展开**高度**保持
+    ///   —— 用户写了长文收起面板看一眼列表再回来, 不该被打回 66px 的"摸黑"模式。
+    ///   只有发成功(草稿清空)才回到普通高度。
+    /// </summary>
+    private bool _composerExpanded;
+
+    /// <summary>输入框普通高度(两三行, 与旧版内嵌输入框一致)</summary>
+    private const double ComposerNormalHeight = 66;
+
+    /// <summary>输入框展开高度(约 9 行, 1000 字长评能整篇通读)</summary>
+    private const double ComposerExpandedHeight = 200;
+
+    /// <summary>
+    /// 展开/收回输入框高度。
+    /// ★ 直接赋值 Height, 不做动画: 试过 DoubleAnimation, 探针/真机上都出现过"动画时钟
+    ///   未推进、Height 弹回原值"的不稳(WPF 高度动画依赖渲染节拍, 在面板刚展开/布局
+    ///   未稳时不可靠)。这里是功能性切换不是装饰, 行为确定性优先 —— 高度瞬变虽不如
+    ///   动画顺滑, 但 66↔200 的变化只发生在用户主动点击的那一下, 视觉可接受。
+    /// </summary>
+    private void ApplyComposerSize()
+    {
+        if (_closing || CommentDraft == null || ComposerExpandIcon == null) return;
+        var target = _composerExpanded ? ComposerExpandedHeight : ComposerNormalHeight;
+        ComposerExpandIcon.Text = _composerExpanded ? "\uE70E" : "\uE70D";  // 上下箭头互换
+        var btn = BtnComposerExpand;
+        if (btn != null) btn.ToolTip = _composerExpanded ? "收回输入框" : "展开输入框, 写长评时能通读全文";
+
+        // 先摘掉可能残留的旧高度动画(历史遗留防御: 早期版本用过动画), 再落本地值
+        CommentDraft.BeginAnimation(HeightProperty, null);
+        CommentDraft.Height = target;
+    }
+
+    /// <summary>面板头行的"展开/收回"按钮</summary>
+    private void OnComposerExpandClick(object sender, RoutedEventArgs e)
+    {
+        if (_closing) return;
+        _composerExpanded = !_composerExpanded;
+        ApplyComposerSize();
+        // 展开后把光标挪回输入框(用户就是要看/写内容)
+        if (_composerOpen) CommentDraft?.Focus();
+    }
+
+    /// <summary>
+    /// FAB 的显隐。只在「评论」tab 且有"能评论的前提"时出现 ——
+    /// 直播/本地文件/简介 tab 下整颗收起来, 别让用户点了个寂寞。
+    /// ★ tab 状态从 TabComments.IsChecked 读, 换片/切 tab 后由 UpdateCommentComposer 统一刷新。
+    /// </summary>
+    private void UpdateCommentFabVisibility()
+    {
+        if (_closing || CommentFab == null) return;
+        var usable = !_isLive && !_isLocalPlayback && _aid > 0 &&
+                     CommentsPanel != null && CommentsPanel.Visibility == Visibility.Visible;
+        CommentFab.Visibility = usable ? Visibility.Visible : Visibility.Collapsed;
+        // 前提没了(切到直播/本地文件)时把展开的面板一起收掉
+        if (!usable && _composerOpen) CloseComposer();
+    }
+
+    /// <summary>FAB 点击: 展开 ↔ 收起。未登录等"不能评论"的情形给 Toast 说明, 不展开空面板</summary>
+    private void OnCommentFabClick(object sender, RoutedEventArgs e)
+    {
+        if (_closing) return;
+        if (_composerOpen) { CloseComposer(); return; }
+
+        // 与 UpdateCommentComposer 同一套前提; 不满足时说明原因(不展开空面板)
+        if (!Svc.Session.HasLogin) { Svc.Toast.Show("登录后才能发表评论"); return; }
+        if (_isLive) { Svc.Toast.Show("直播没有评论区"); return; }
+        if (_isLocalPlayback) { Svc.Toast.Show("本地文件没有评论区"); return; }
+        if (_aid <= 0) { Svc.Toast.Show("没拿到视频 aid, 暂时不能评论"); return; }
+
+        OpenComposer();
+    }
+
+    /// <summary>
+    /// 展开输入面板: 面板从底部滑入(位移 + 淡入), FAB 图标换成收起箭头, 焦点进输入框。
+    /// ★ 动画用 RenderTransform(TranslateY)而不是改 Margin: 不触发布局重排, 顺滑且零开销。
+    /// </summary>
+    private void OpenComposer()
+    {
+        if (_composerOpen || CommentComposerPanel == null || CommentFabIcon == null) return;
+        _composerOpen = true;
+        CommentFabIcon.Text = "\uE74A";   // ChevronDown: 收起
+        CommentFab.ToolTip = "收起评论框";
+
+        var panel = CommentComposerPanel;
+        panel.Visibility = Visibility.Visible;
+        // 初始态: 压在底下 24px + 全透明, 再动画回来
+        var translate = new TranslateTransform(0, 24);
+        panel.RenderTransform = translate;
+        panel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180))
+        { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+        translate.BeginAnimation(TranslateTransform.YProperty,
+            new DoubleAnimation(24, 0, TimeSpan.FromMilliseconds(200))
+            { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+
+        // 焦点进输入框(等可见性生效之后; 走 Dispatcher 排一轮)
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input,
+            new Action(() => { if (!_closing && _composerOpen) CommentDraft?.Focus(); }));
+
+        // 输入框高度按"展开"状态对齐(上次展开过高、收起面板后再开, 仍保持大框)
+        ApplyComposerSize();
+    }
+
+    /// <summary>收起输入面板: 淡出后 Visibility=Collapsed。草稿**不清**(只是收起, 不是放弃)</summary>
+    private void CloseComposer()
+    {
+        if (!_composerOpen || CommentComposerPanel == null || CommentFabIcon == null) return;
+        _composerOpen = false;
+        CommentFabIcon.Text = "\uE70F";   // Edit: 笔
+        CommentFab.ToolTip = "写评论";
+
+        var panel = CommentComposerPanel;
+        var anim = new DoubleAnimation(panel.Opacity, 0, TimeSpan.FromMilliseconds(140))
+        { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
+        anim.Completed += (_, _) =>
+        {
+            // 期间可能又被打开(快速连点): 只有仍处于收起态才落 Collapsed
+            if (!_composerOpen) panel.Visibility = Visibility.Collapsed;
+        };
+        panel.BeginAnimation(OpacityProperty, anim);
     }
 
     private void UpdatePostCommentButton()
@@ -7774,6 +7971,14 @@ public partial class PlayerWindow : FluentWindow
             CommentDraft.Clear();
             ClearReplyTarget();     // 发完退回"发表"模式, 免得下一条手滑又回给同一个人
             Svc.Toast.Show(isReply ? "回复已发布" : "评论已发表");
+            // 发完把面板收起来: 输入使命完成, 别挡着用户看列表。
+            // ★ 展开高度一并归位: 内容已清空, 大框没有存在的意义(下次写长评再点展开)。
+            if (_composerExpanded)
+            {
+                _composerExpanded = false;
+                ApplyComposerSize();
+            }
+            CloseComposer();
 
             if (isReply && root != null)
                 await ReloadThreadRepliesAsync(root);   // 回复: 只重拉这条线程

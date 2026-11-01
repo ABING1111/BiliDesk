@@ -69,6 +69,8 @@ public static class VlcCore
             // 网络缓冲: 用用户设置(设置页「网络缓冲」, 默认 1000 = 旧版行为)。
             // ★ 媒体级还会再带一份(见 PlayerWindow.BuildMedia), 这里给"没有带选项的路径"
             //   (直播/重播兜底/探针)一个一致的值; 运行中改设置不重建内核, 所以这里只在首次生效。
+            // ★ 2026-11-01: 自动档时这里也用 BufferPolicy 算出的值 —— 没有媒体选项的路径
+            //   一样该吃到"按带宽挑预读"的收益; 手动档等价于直接用设置值。
             // ★ 实测它对**起播速度**几乎没影响(缓存按网速灌), 影响的是播放中的抗抖动余量。
             //
             // ★★★ 别加 `--demux=avformat`(2026-10-17 试过, 有致命副作用, 已撤回):
@@ -79,7 +81,8 @@ public static class VlcCore
             //   (裸 libvlc 不带 slave 时是好的, 所以只测裸 libvlc 会得出错误结论 ——
             //    必须用 bd-probe-seekstick 走**产品自己的路径**验。)
             //   ⇒ seek 的问题改为在播放器层处理(见 PlayerWindow.RecoverFromFailedSeek)。
-            var caching = SettingsStore.Instance.NetworkCachingMs;
+            var caching = BufferPolicy.Resolve(BufferMediaKind.VodSingle, null, shortVideo: false,
+                SettingsStore.Instance.NetworkCachingMs, SettingsStore.Instance.AutoBufferPolicy);
             _instance = new LibVLC(
                 "--intf=dummy",
                 "--no-osd",

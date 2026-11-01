@@ -674,6 +674,41 @@ public class SettingsViewModel : ObservableObject
     // ----------------- 起播缓冲(网络缓存) -----------------
 
     /// <summary>
+    /// 缓冲策略下拉框的显示项: 自动(按带宽挑值) / 手动(固定值)。
+    /// 顺序即 CdnSelectMode…不对, 是 BufferPolicy 的语义顺序, 取值 = index 0 自动 / 1 手动。
+    /// </summary>
+    public string[] BufferPolicyOptions { get; } = { "自动(推荐)", "手动" };
+
+    /// <summary>当前缓冲策略(字符串投影, 理由同 CdnModeSelected —— 设置对象没有变化通知)</summary>
+    public string BufferPolicySelected
+    {
+        get => BufferPolicyOptions[Svc.Settings.AutoBufferPolicy ? 0 : 1];
+        set
+        {
+            var idx = Array.IndexOf(BufferPolicyOptions, value);
+            if (idx < 0) return;
+            var auto = idx == 0;
+            if (auto == Svc.Settings.AutoBufferPolicy) return;
+            Svc.Settings.SetAutoBufferPolicy(auto);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(BufferPolicyHint));
+            OnPropertyChanged(nameof(CanPickNetworkCaching));
+        }
+    }
+
+    /// <summary>
+    /// 副标题: 写清自动档挑值的依据与手动档的语义 ——
+    /// 自动档的值随每条视频变化, 固定写一个数字反而会变成错报。
+    /// </summary>
+    public string BufferPolicyHint =>
+        Svc.Settings.AutoBufferPolicy
+            ? "按最近一次 CDN 测速的带宽与码率自动挑预读深度(快线更省内存, 慢线更抗卡顿), 下一条视频生效"
+            : $"恒用下面设置的固定缓冲值 · 当前 {Svc.Settings.NetworkCachingMs}ms, 下一条视频生效";
+
+    /// <summary>手动缓冲值下拉框只在手动档可用(自动档置灰但保留可见, 同 CanPickCdn 的做法)</summary>
+    public bool CanPickNetworkCaching => !Svc.Settings.AutoBufferPolicy;
+
+    /// <summary>
     /// 网络缓冲的可选档位(文字 + 毫秒)。顺序即下拉框顺序: 从"最小/最省"到"最抗抖动"。
     /// ★ 值为 300/500/1000/3000, 与 SettingsStore.NetworkCachingMin/Max 的夹取范围一致。
     /// </summary>
@@ -715,9 +750,10 @@ public class SettingsViewModel : ObservableObject
     /// <summary>
     /// 副标题: 说清它是"抗抖动余量"而不是"起播开关" —— 实测起播阶段 300/3000 几乎测不出差别
     /// (见 SettingsStore.NetworkCachingMs 的说明), 不写清楚会让人以为调小就能秒开。
+    /// 自动档时这个值只是"手动时的预选项", 提示里要交代清楚。
     /// </summary>
     public string NetworkCachingHint =>
-        $"流式播放的预读缓冲: 越大越抗网络抖动, 越小越省内存 · 当前 {Svc.Settings.NetworkCachingMs}ms, 下一条视频生效";
+        $"固定预读缓冲(手动档生效): 越大越抗网络抖动, 越小越省内存 · 当前 {Svc.Settings.NetworkCachingMs}ms, 下一条视频生效";
 
     // ----------------- CDN(线路)设置 -----------------
     // 逻辑见 Services/CdnService.cs; 实测依据见该文件顶部注释

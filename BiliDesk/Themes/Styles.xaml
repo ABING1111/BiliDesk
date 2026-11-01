@@ -274,6 +274,48 @@
         </Setter>
     </Style>
 
+    <!-- 评论输入的悬浮按钮(FAB, 播放器评论区右下角)。
+         ★ 颜色跟主题强调色走(AccentBrush), 圆角大(14)近似 app 圆形悬浮钮的观感;
+           悬停/按压复用 AccentHover/AccentPressed —— 与 AccentButtonStyle 同一套手感。
+         ★ 阴影让它从列表上"浮"起来; 展开态图标由代码切换(笔 ⇄ 收起箭头)。 -->
+    <Style x:Key="CommentFabStyle" TargetType="Button">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid>
+                        <!-- 阴影层: 独立一块与底同形的元素, 不把 Effect 挂在按钮自身上
+                             (Effect 挂按钮会连图标一起重采样, 悬停时还可能糊) -->
+                        <Ellipse Fill="{TemplateBinding Background}" Margin="0,3,0,0" Opacity="0.35">
+                            <Ellipse.Effect>
+                                <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="1" Color="#000000" />
+                            </Ellipse.Effect>
+                        </Ellipse>
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="14">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentHoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentPressedBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- 强调色按钮(主按钮) -->
     <Style x:Key="AccentButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
