@@ -7014,10 +7014,13 @@ public partial class PlayerWindow : FluentWindow
         // tab 文案随状态走: 进详情后"评论"变"评论详情", 返回链接就摆在它右边(用户指定)
         TabComments.Content = "评论详情";
         BtnBackToComments.Visibility = Visibility.Visible;
-        // 评论区只有一个输入框(列表页顶部那个), 进详情页它自动切成"回复 @这层楼"
+        // 评论区只有一个输入框(悬浮面板), 进详情页它自动切成"回复 @这层楼"
         // (用户规则: 在详情页评论 = 给这层楼评论); 点提示条上的"取消"才改回发新楼层。
         // **不动用户已经写了一半的草稿** —— 只是想看看回复, 不该把评论内容清掉。
         // focus: false —— 一进门就抢焦点容易误触输入法。
+        // ★ openPanel: false(2026-11-01 修"每次进详情页都弹输入框"): 进详情页只切语义,
+        //   不弹面板 —— 想回复时点某条的"回复"按钮或右下角 FAB, 面板自然会展开,
+        //   且语义已经是对的(回复这层楼)。
         SetReplyTarget(threadRoot, focus: false);
         CommentList.Visibility = Visibility.Collapsed;
         CommentDetailPanel.Visibility = Visibility.Visible;
@@ -7525,23 +7528,25 @@ public partial class PlayerWindow : FluentWindow
             ? _detailThreadRoot
             : item;
         ShowCommentDetail(threadRoot: root, focus: root);
-        SetReplyTarget(item);
+        // 点"回复"按钮: 用户明确要打字 → 弹出输入面板并抢焦点
+        SetReplyTarget(item, focus: true, openPanel: true);
     }
 
     /// <summary>
     /// 把详情页输入框切到"回复 @XXX"模式(顶部冒出提示条, 发布时带 root/parent)。
     /// focus: 是否顺手把光标放进输入框 —— 点"回复"按钮时该给(用户接着就要打字),
     /// 进详情页时不给(一进门就抢焦点容易误触输入法)。
-    /// ★ 2026-11-01 输入框改为悬浮面板后, "点回复"要**顺手把面板展开** ——
-    ///   不展开的话提示条是展开的、输入框却是收着的, 用户找不到该在哪打字。
+    /// openPanel: 是否**弹出输入面板**(2026-11-01 加)。
+    /// ★ 只有"点回复按钮"才弹 —— 进详情页只是切回复**语义**, 每次都弹面板是打扰
+    ///   (用户点进详情页多半只是想看回复, 上一版因此变成"一进详情页就弹输入框")。
     /// </summary>
-    private void SetReplyTarget(CommentItem target, bool focus = true)
+    private void SetReplyTarget(CommentItem target, bool focus = true, bool openPanel = false)
     {
         _replyTarget = target;
         if (CommentDetailReplyHint != null) CommentDetailReplyHint.Visibility = Visibility.Visible;
         if (CommentDetailReplyTarget != null) CommentDetailReplyTarget.Text = "回复 @" + target.UserName;
         // 面板要开着才能打字; focus=false(进详情页)时展开但不抢键盘焦点
-        if (!_composerOpen) OpenComposer();
+        if (openPanel && !_composerOpen) OpenComposer();
         if (focus) CommentDraft?.Focus();
         // 提示文案("Enter 发表" → "Enter 发送回复")与按钮可用性都跟着回复目标变
         UpdateCommentComposer();
@@ -7870,7 +7875,10 @@ public partial class PlayerWindow : FluentWindow
 
         var panel = CommentComposerPanel;
         panel.Visibility = Visibility.Visible;
-        // 初始态: 压在底下 24px + 全透明, 再动画回来
+        // 初始态: 压在底下 24px + 全透明, 再动画回来。
+        // ★ Opacity 必须先显式归 0: 收起路径(FinishCloseComposer)会把基准值复位成 1,
+        //   不归 0 的话"收起 → 立刻再打开"这次淡入是 1→1, 看不到过渡。
+        panel.Opacity = 0;
         var translate = new TranslateTransform(0, 24);
         panel.RenderTransform = translate;
         panel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180))
@@ -7898,12 +7906,22 @@ public partial class PlayerWindow : FluentWindow
         var panel = CommentComposerPanel;
         var anim = new DoubleAnimation(panel.Opacity, 0, TimeSpan.FromMilliseconds(140))
         { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
-        anim.Completed += (_, _) =>
-        {
-            // 期间可能又被打开(快速连点): 只有仍处于收起态才落 Collapsed
-            if (!_composerOpen) panel.Visibility = Visibility.Collapsed;
-        };
+        anim.Completed += (_, _) => FinishCloseComposer(panel);
         panel.BeginAnimation(OpacityProperty, anim);
+        // ★ 兜底(2026-11-01): Completed 回调依赖渲染节拍, 个别环境(布局刚抖过/窗口后台)会不回调,
+        //   面板就"看不见但还占着命中测试"。300ms 后(动画早已该结束)再落一次 ——
+        //   FinishCloseComposer 幂等, 重复调无副作用; 若期间面板又被打开(_composerOpen=true)则跳过。
+        _ = Task.Delay(300).ContinueWith(_ => Dispatcher.BeginInvoke(new Action(() =>
+            FinishCloseComposer(panel))));
+    }
+
+    /// <summary>把面板真正落回 Collapsed(幂等: 淡出动画回调与兜底定时器都会调它)</summary>
+    private void FinishCloseComposer(Border panel)
+    {
+        if (_closing || _composerOpen) return;   // 期间又被打开就不收
+        panel.BeginAnimation(OpacityProperty, null);
+        panel.Opacity = 1;                        // 复位基准值, 下次 OpenComposer 从 0 淡入
+        panel.Visibility = Visibility.Collapsed;
     }
 
     private void UpdatePostCommentButton()
