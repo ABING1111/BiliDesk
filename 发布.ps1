@@ -12,11 +12,11 @@
 # (2026-10-03 由 "Pulish" 更正为 "Publish" —— 这是拼写错误, 目录、脚本、.gitignore、.iss 一起改。)
 #
 # 用法(在仓库根目录):
-#   powershell -ExecutionPolicy Bypass -File 发布.ps1 [-Version 1.3.2]
+#   powershell -ExecutionPolicy Bypass -File 发布.ps1 [-Version 1.5.2]
 #
 # 注意: 这里的默认版本号要跟 App.AppVersion / csproj 的 <Version> / installer.iss 的
 # MyAppVersion 一起改 —— 它只决定 zip 的文件名, 不参与程序内部显示。
-param([string]$Version = "1.5.1")
+param([string]$Version = "1.5.2")
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -24,23 +24,61 @@ $Out = Join-Path $Root "Publish"
 $PortableDir = Join-Path $Out "BiliDesk-便携版"
 $InstallerDir = Join-Path $Out "BiliDesk-安装器-files"
 
-# 只建目录, 不清理: Publish 下还放着 installer.iss, 任何 Remove-Item Publish\* 都会连带删掉它。
+# Publish 根目录只建不清理: 里面还放着 installer.iss, 任何 Remove-Item Publish\* 都会连带删掉它。
 if (-not (Test-Path $Out)) { New-Item -ItemType Directory -Path $Out -Force | Out-Null }
 
-Write-Host "== 1/4 便携版(自包含 + 压缩) =="
+# ============================================================
+# ★★★ 两个**产物目录**必须先清空 —— 2026-11-02 的事故就是漏了这一步
+#
+# dotnet publish -o 不是"干净输出": 它在原有目录上增量复制, 判据是"源文件更新才覆盖"。
+# .NET 8 → .NET 10 升级后, 目录里留着 .NET 8 的 WPF 原生库
+# (wpfgfx_cor3.dll / PresentationNative_cor3.dll / PenImc_cor3.dll, 文件版本 8.0.x),
+# 它们的修改时间恰好比 .NET 10 运行时包里那几份**更晚** ⇒ 复制一直被跳过, 于是一直留在原地。
+# 而单文件发布**不打包 WPF 原生库**(它们就是散在 exe 旁边的), 于是 .NET 10 的托管代码去调
+# .NET 8 的 PresentationNative_cor3.dll 里根本不存在的导出 LsDisableSpecialCharacterLigature:
+#     System.EntryPointNotFoundException: Entry point was not found.
+#     at MS.Internal.WindowsBase.NativeMethodsSetLastError.LsDisableSpecialCharacterLigature(...)
+#     at System.Windows.Interop.HwndTarget..ctor(...)   ← 首个窗口一显示就炸
+# 1.5.1 便携版就是这么发出去的(1.5.0 同样中招)。清目录, 再配合下面第 3 步的版本校验。
+# ============================================================
+foreach ($dir in @($PortableDir, $InstallerDir)) {
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+}
+
+Write-Host "== 1/5 便携版(自包含 + 压缩) =="
 dotnet publish (Join-Path $Root "BiliDesk\BiliDesk.csproj") -c Release -r win-x64 `
     --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true `
     -o $PortableDir
 if ($LASTEXITCODE -ne 0) { throw "便携版发布失败" }
 
-Write-Host "== 2/4 安装器载荷(依赖 .NET 10+ 桌面运行时) =="
+Write-Host "== 2/5 安装器载荷(依赖 .NET 10+ 桌面运行时) =="
 dotnet publish (Join-Path $Root "BiliDesk\BiliDesk.csproj") -c Release -r win-x64 `
     --self-contained false -p:PublishSingleFile=false `
     -o $InstallerDir
 if ($LASTEXITCODE -ne 0) { throw "安装器载荷发布失败" }
 
+Write-Host "== 3/5 校验 WPF 原生库版本(防旧 .NET 残留混进包) =="
+# 只查 WPF 那三个 dll: 它们的文件版本大版本号必须等于 app 目标框架的大版本(net10.0 → 10)。
+# D3DCompiler_47_cor3.dll 是 Windows SDK 的、vcruntime140_cor3.dll 是 VC 运行时的,
+# 版本号与 .NET 无关, 排除在外。
+$tfm = ([xml](Get-Content (Join-Path $Root "BiliDesk\BiliDesk.csproj") -Raw)).Project.PropertyGroup |
+       ForEach-Object { $_.TargetFramework } | Where-Object { $_ } | Select-Object -First 1
+if (-not ($tfm -match '^net(\d+)\..*$')) { throw "无法从 csproj 读出 TargetFramework: $tfm" }
+$expectedMajor = [int]$Matches[1]
+$wpfNative = @("wpfgfx_cor3.dll", "PresentationNative_cor3.dll", "PenImc_cor3.dll")
+foreach ($dll in Get-ChildItem (Join-Path $PortableDir "*_cor3.dll") | Where-Object { $_.Name -in $wpfNative }) {
+    $major = 0
+    if ($dll.VersionInfo.FileVersion -match '^\s*(\d+)') { $major = [int]$Matches[1] }
+    if ($major -ne $expectedMajor) {
+        $msg = "便携版里 $($dll.Name) 是 $($dll.VersionInfo.FileVersion), 与 $tfm 不符 —— " +
+               "输出目录混进了旧 .NET 的残留, 这种包发出去会启动即报 EntryPointNotFoundException。"
+        throw $msg
+    }
+    Write-Host ("  {0,-28} {1}" -f $dll.Name, $dll.VersionInfo.FileVersion)
+}
+
 # ============================================================
-# ★★★ 3/4 把产物从 Low 完整性提回 Medium —— **不做这一步, 发出去的包全是坏的**
+# ★★★ 4/5 把产物从 Low 完整性提回 Medium —— **不做这一步, 发出去的包全是坏的**
 #
 # 为什么需要: 本机(DSH 沙箱)会给**工作区内**新建的文件打 Low 完整性标签
 # (`Mandatory Label\Low Mandatory Level`)。带这个标签的 exe 一旦被跑起来,
@@ -60,10 +98,10 @@ if ($LASTEXITCODE -ne 0) { throw "安装器载荷发布失败" }
 # ★ 顺序必须在"打包 zip / 编译安装器"**之前**, 否则后一步产出的文件又变成 Low。
 # ★ 这条在 CI 或别的机器上跑是无害的空操作(那些文件本来就不是 Low)。
 # ============================================================
-Write-Host "== 3/4 提回 Medium 完整性(修 Low 标签导致的放不出视频 / 安装包打不开) =="
+Write-Host "== 4/5 提回 Medium 完整性(修 Low 标签导致的放不出视频 / 安装包打不开) =="
 icacls $Out /setintegritylevel Medium /T /C | Out-Null
 
-Write-Host "== 4/4 打包便携版 =="
+Write-Host "== 5/5 打包便携版 =="
 # 文件名用纯 ASCII: GitHub 会把非 ASCII 的资产名截掉(1.2.0 的 zip 在下载页显示成 "BiliDesk-1.2.0-.zip")
 $zip = Join-Path $Out "BiliDesk-$Version-portable.zip"
 if (Test-Path $zip) { Remove-Item $zip }
