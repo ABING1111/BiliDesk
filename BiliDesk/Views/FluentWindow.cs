@@ -40,6 +40,38 @@ public class FluentWindow : Window
     }
 
     /// <summary>
+    /// 把窗口的初始 Width/Height 夹进当前鼠标所在显示器的工作区(单位 DIP)。
+    ///
+    /// 只处理"尺寸大于工作区"这一种情况; 小窗口、手动定位、CenterOwner 等一概不碰。
+    /// 取鼠标所在屏而不是主屏: 用户从副屏任务栏/副屏上的主窗口打开播放器时,
+    /// 新窗口默认就落在副屏上, 夹的应该是副屏的工作区。
+    /// </summary>
+    private void ClampInitialSizeToWorkArea()
+    {
+        try
+        {
+            var screen = System.Windows.Forms.Screen.FromPoint(
+                System.Windows.Forms.Cursor.Position);
+            var dpi = VisualTreeHelper.GetDpi(this);
+            var workW = screen.WorkingArea.Width / dpi.DpiScaleX;
+            var workH = screen.WorkingArea.Height / dpi.DpiScaleY;
+            if (workW <= 0 || workH <= 0) return;
+
+            if (!double.IsNaN(Width) && Width > workW) Width = workW;
+            if (!double.IsNaN(Height) && Height > workH) Height = workH;
+
+            // 极小屏/夸张缩放下, XAML 里写死的 MinWidth 可能比工作区还宽。
+            // 此时下限让位 —— 否则窗口仍然会超出屏幕, 用户拖都拖不回来。
+            if (!double.IsNaN(MinWidth) && MinWidth > workW) MinWidth = workW;
+            if (!double.IsNaN(MinHeight) && MinHeight > workH) MinHeight = workH;
+        }
+        catch
+        {
+            // 拿不到屏幕信息就保持 XAML 尺寸, 不因尺寸优化影响启动
+        }
+    }
+
+    /// <summary>
     /// 本窗口参与全局「软件缩放」的根元素。**返回 null = 本窗口整体不参与缩放。**
     ///
     /// ★ 默认是**整窗内容**(Content)。
@@ -52,6 +84,14 @@ public class FluentWindow : Window
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
+        // 初始尺寸先夹进**当前鼠标所在显示器**的工作区, 再交给 WindowStartupLocation 居中。
+        // ★ 为什么必须做(2026-11-03 修 issue #31): 主窗口/播放器默认 1280 宽, 竖屏副屏
+        //   1080×1920@125% 只有 864 DIP 可用宽度 —— 不夹的话窗口一出现右边就少一截,
+        //   右上角按钮直接跑到屏幕外, 用户连"铺满窗口/关闭"都点不到。
+        // ★ 只改尺寸、不改 Left/Top: 定位仍由各窗口自己的 WindowStartupLocation 决定,
+        //   避免与 CenterScreen/CenterOwner 抢。
+        ClampInitialSizeToWorkArea();
+
         try
         {
             DwmInterop.SetRoundCorners(this);

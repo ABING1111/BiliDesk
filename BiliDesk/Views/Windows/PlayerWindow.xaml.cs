@@ -5750,11 +5750,14 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>常规模式(信息栏展开)的窗口最小尺寸 —— 与 XAML 里的 MinWidth/MinHeight 保持一致</summary>
-    private const double NormalWindowMinWidth = 1100;
+    private const double NormalWindowMinWidth = 840;
     private const double NormalWindowMinHeight = 600;
 
-    /// <summary>视频列在常规模式下的最小宽度(与 XAML 的 MinWidth 一致); 信息栏收起后放开到 0</summary>
-    private const double VideoColumnNormalMinWidth = 480;
+    /// <summary>
+    /// 视频列在常规模式下的最小宽度(与 XAML 的 MinWidth 一致); 信息栏收起后放开到 0。
+    /// ★ 480 → 320(2026-11-03, issue #31): 竖屏副屏 864 DIP 要能同时放下"视频 + 400 信息栏"。
+    /// </summary>
+    private const double VideoColumnNormalMinWidth = 320;
 
     /// <summary>
     /// 铺满窗口/全屏(信息栏收起)时允许缩到的最小尺寸 —— 此时窗口里只剩视频,
@@ -5787,14 +5790,36 @@ public partial class PlayerWindow : FluentWindow
             RightColumn.Width = new GridLength(hide ? 0 : 400);
 
         // ★ 最小尺寸必须跟着状态走(2026-10-05 修"铺满窗口后缩到某个程度就被卡住"):
-        //   常规的 1100×600 是按"视频列 480 + 信息栏 400"的布局定的下限; 信息栏收起后
-        //   整个窗口只剩视频, 再拿它当底线没有道理。视频列的 MinWidth 同理 —— 不跟着放开,
-        //   窗口缩到 480 以下时列宽比窗口还宽, 画面会被裁偏。
+        //   常规的 840×600 是按"视频列 320 + 信息栏 400"的布局定的下限(2026-11-03 从
+        //   1100/480 降下来, 为了竖屏副屏能放下); 信息栏收起后整个窗口只剩视频,
+        //   再拿它当底线没有道理。视频列的 MinWidth 同理 —— 不跟着放开,
+        //   窗口缩到 320 以下时列宽比窗口还宽, 画面会被裁偏。
         //   (FluentWindow 的 WM_GETMINMAXINFO 在每次拖动时重读 MinWidth/MinHeight, 改属性即可。)
         if (VideoColumn != null)
             VideoColumn.MinWidth = hide ? 0 : VideoColumnNormalMinWidth;
         MinWidth = hide ? FillWindowMinWidth : NormalWindowMinWidth;
         MinHeight = hide ? FillWindowMinHeight : NormalWindowMinHeight;
+    }
+
+    // ------------------------------------------------------------ 窄视频区控制栏
+
+    /// <summary>
+    /// 视频区窄于这个宽度时, 控制栏先收起"弹幕区域"和音量滑杆这两个次要项。
+    ///
+    /// ★ 背景(issue #31): 竖屏副屏 864 DIP, 右栏占 400 后视频只剩 464 DIP;
+    ///   而操作行的固定项(播放/时间/音量/倍速/清晰度/弹幕/全屏)加起来约 530 DIP,
+    ///   不收起就会挤成一团甚至被裁掉。只收这两项后约 390 DIP, 常规窄窗仍可用。
+    /// ★ 用 VideoAreaRoot 的实际宽度判断而不是窗口宽度: 信息栏一收/一展、
+    ///   窗口一拖, 视频列宽度都会变, 这个信号最直接。
+    /// </summary>
+    private const double CompactControlBarWidth = 560;
+
+    private void OnVideoAreaSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (BtnDanmakuArea == null || VolumeSlider == null) return;
+        var compact = e.NewSize.Width > 0 && e.NewSize.Width < CompactControlBarWidth;
+        BtnDanmakuArea.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        VolumeSlider.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// <summary>

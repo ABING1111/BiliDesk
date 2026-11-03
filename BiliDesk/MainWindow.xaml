@@ -8,8 +8,15 @@
              xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
              Title="BiliDesk" Width="1280" Height="800"
-             MinWidth="1060" MinHeight="660" WindowStartupLocation="CenterScreen"
+             MinWidth="840" MinHeight="660" WindowStartupLocation="CenterScreen"
              WindowStyle="None" ResizeMode="CanResize" UseLayoutRounding="True">
+    <!--
+        ★ MinWidth 1060 → 840(2026-11-03, issue #31): 1080×1920 竖屏副屏在 125% 缩放下
+          可用宽度只有 864 DIP, 原来的下限比屏幕还宽 —— 窗口右侧(含自绘的关闭/最大化按钮)
+          永远在屏幕外, 用户往左拖也会被这个下限卡住。
+          840 给 864 留了 24 DIP 余量; 再窄的屏由 FluentWindow 启动时按工作区夹取。
+    -->
+
     <!--
         布局回到"左侧竖导航 + 右侧内容"这一套。
 

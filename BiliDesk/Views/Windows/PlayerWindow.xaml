@@ -9,7 +9,7 @@
              xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
      xmlns:sys="clr-namespace:System;assembly=mscorlib"
              Title="BiliDesk 播放器" Width="1280" Height="760"
-             MinWidth="1100" MinHeight="600" WindowStartupLocation="CenterScreen"
+             MinWidth="840" MinHeight="600" WindowStartupLocation="CenterScreen"
              WindowStyle="None" ResizeMode="CanResize" UseLayoutRounding="True">
     <!--
         顶栏(标题 + 全屏; 2026-09-26 左上角"返回主界面"按钮已按用户要求删除,
@@ -828,7 +828,7 @@
                            setter, 会吃掉 Button.Foreground(项目里反复踩的那个坑)。 -->
                     <Button x:Name="BtnFillWindow" Style="{StaticResource IconButtonStyle}"
                             Width="34" Height="34"
-                            ToolTip="铺满窗口" Click="OnFillWindowClick"
+                            ToolTip="铺满窗口（收起右侧信息栏）" Click="OnFillWindowClick"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
                         <TextBlock x:Name="FillWindowGlyph" Text="&#xE9A6;"
                                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -846,7 +846,10 @@
         <!-- 主区: 左右分割 -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="VideoColumn" Width="*" MinWidth="480" />
+                <!-- 视频列下限从 480 降到 320: 竖屏副屏 864 DIP 宽时, 右栏 400 之后
+                     仍要留出可用的画面宽度。窄到控件栏放不下时由代码收起次要按钮
+                     (见 OnVideoAreaSizeChanged), 不让它们被裁掉。 -->
+                <ColumnDefinition x:Name="VideoColumn" Width="*" MinWidth="320" />
                 <ColumnDefinition x:Name="RightColumn" Width="400" />
             </Grid.ColumnDefinitions>
 
@@ -878,6 +881,7 @@
                            经过这里, 不会被底部控制栏里的 Slider / 清晰度 Popup 里的 ListBox 先截走;
                            也只挂视频区(右侧信息面板的滚轮仍然该滚它自己的列表)。 -->
                     <Grid x:Name="VideoAreaRoot" Background="#01000000"
+                          SizeChanged="OnVideoAreaSizeChanged"
                           PreviewMouseLeftButtonDown="OnVideoAreaMouseLeftDown"
                           PreviewMouseLeftButtonUp="OnVideoAreaMouseLeftUp"
                           PreviewMouseRightButtonDown="OnVideoAreaMouseRightDown"
