@@ -309,6 +309,24 @@
                  默认档是 1080P —— 与播放器改动前写死的 qn=80 一致, 老用户升级后画质不变。 -->
             <Border Style="{StaticResource SettingsCardStyle}">
                 <StackPanel>
+                    <!-- 播放器窗口大小记忆(2026-11-03 新增): 只记宽高, 不记位置/最大化状态。
+                         关闭后播放器每次都回到 XAML 的默认 1280×760, 也不再写盘。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="记住播放器窗口大小" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding RememberPlayerWindowSizeHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding RememberPlayerWindowSize, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />

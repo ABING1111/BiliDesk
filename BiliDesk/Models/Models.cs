@@ -1325,6 +1325,18 @@ public class AppSettings
     public int PlayerVolume { get; set; } = 80;
 
     /// <summary>
+    /// 是否记住播放器窗口大小(默认开)。关闭后播放器每次都用 XAML 默认尺寸.
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool RememberPlayerWindowSize { get; set; } = true;
+
+    /// <summary>上次播放器窗口宽度(DIP; 0 = 尚未记录, 用默认 1280)。范围由 SettingsStore 夹取。</summary>
+    public int PlayerWindowWidth { get; set; }
+
+    /// <summary>上次播放器窗口高度(DIP; 0 = 尚未记录, 用默认 760)。范围由 SettingsStore 夹取。</summary>
+    public int PlayerWindowHeight { get; set; }
+
+    /// <summary>
     /// LibVLC 网络缓冲(毫秒)。控制流式播放的预读深度: 越小越省内存, 越大越抗网络抖动。
     /// 老配置没有这个字段 ⇒ 反序列化保持初始化值(1000, 与旧版全局值一致)。
     /// 手改成 0/越界值由 SettingsStore 读取时夹回 300~3000。

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -251,26 +252,22 @@ public partial class PlayerWindow : FluentWindow
     /// ★★ 2026-10-13 的回归教训: 我曾为了"盖住 letterbox 白底"把它改成**不透明黑**,
     ///   结果用户报"视频播放时全黑"。层级搞反了 —— 这一层在 VideoView.Content
     ///   (浮层窗口)里, 位于 vout HWND **之上**, 不透明会盖住**视频画面**而不是白底。
-    ///   想盖 vout 白底要用独立的遮罩层(EndOverlay / LoadingOverlay / 全屏黑幕那几层,
+    ///   想盖 vout 白底要用独立的遮罩层(EndOverlay / LoadingOverlay / FailOverlay 那几层,
     ///   平时 Collapsed), 手势层必须保持近透明。
     ///
     /// EOF 时手势层会切黑盖住露出白底的 vout HWND(见 OnEndReached), 起播时用它还原。
     /// </summary>
     private static readonly Brush VideoAreaBackBrush = CreateVideoAreaBackBrush();
 
-    // --- 全屏黑幕(见 ArmFullscreenCover 的说明) ---
-    /// <summary>黑幕已压下、等待首个新帧撤掉</summary>
-    private bool _fullscreenCoverArmed;
-    private DispatcherTimer? _fullscreenCoverTimer;
-
-    /// <summary>黑幕兜底超时(毫秒): 一直没等到新帧就自己撤掉, 免得挡住画面</summary>
-    private const int FullscreenCoverTimeoutMs = 600;
-
     /// <summary>
-    /// "拖动改大小期间的按住闸": 为真时 <see cref="ReleaseFullscreenCover"/> 拒绝撤罩。
-    /// 用来保证遮罩从 WM_ENTERSIZEMOVE 一直压到 WM_EXITSIZEMOVE ——
-    /// 拖动期间 LibVLC 会反复重协商 vout, 中途放行必然又露出白底(见 ArmResizeCover)。</summary>
-    private bool _resizeHold;
+    /// EOF(播完)时手势层是否压成了不透明黑。
+    ///
+    /// ★ 2026-11-03 起播放器**不再**为"改窗口大小/最大化/全屏"压黑布 —— 那些白闪改由
+    ///   原生宿主窗口(`VideoBackdropInterop.EnsureBlackVideoHost`)在根上治掉。
+    ///   剩下唯一需要压黑的路径就是 EOF: 那时 vout 被拆掉, 视频 HWND 会露出白底,
+    ///   而"重播"遮罩是半透明的, 不垫一层黑就会变成"浅色主题下一片白"。
+    /// </summary>
+    private bool _eofBlackActive;
 
     private static Brush CreateVideoAreaBackBrush()
     {
@@ -280,6 +277,20 @@ public partial class PlayerWindow : FluentWindow
         var b = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x01, 0, 0, 0));
         b.Freeze();
         return b;
+    }
+
+    /// <summary>
+    /// 撤掉 EOF 时压上的不透明黑, 把手势层还原成常态的近透明底。
+    ///
+    /// ★ 2026-11-03: 这是**唯一**还允许切黑手势层的路径(播完时 vout 被拆掉, 会露白底)。
+    ///   改窗口大小/最大化/全屏的白闪已经改由 <see cref="ApplyHwndHostBlackBackground"/>
+    ///   在原生宿主窗口上治理, 不再走这里。
+    /// </summary>
+    private void RestoreVideoAreaBackground()
+    {
+        if (VideoAreaRoot == null || !_eofBlackActive) return;
+        _eofBlackActive = false;
+        VideoAreaRoot.Background = VideoAreaBackBrush;
     }
 
     private bool _danmakuOn = true;
@@ -406,17 +417,24 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>长按快进的倍速</summary>
     private const float FastForwardRate = 2.0f;
 
-    /// <summary>当前是否处于"长按快进"中(即速率已被切成 <see cref="FastForwardRate"/>)。</summary>
+    /// <summary>当前是否处于"长按快进"中(速率已被切成 <see cref="_fastForwardTarget"/>)。</summary>
     private bool _isFastForwarding;
 
     /// <summary>
-    /// 长按快进开始: 切到 <see cref="FastForwardRate"/>。
+    /// 长按快进开始: 切到 <see cref="_fastForwardTarget"/>(至少 <see cref="FastForwardRate"/>)。
     ///
     /// ★ 松手时要恢复到的速率由 <c>_rateBeforeFastForward</c> 记住 —— 不能写死 1.0f:
     ///   用户可能先用倍速按钮设了 1.5x, 写死会让松手后悄悄变成 1x。
     ///   (旧版就有这个 bug, 2026-10-16 一并对齐。)
     /// </summary>
     private float _rateBeforeFastForward = 1.0f;
+
+    /// <summary>
+    /// 本次长按实际要切到的倍速 = max(2.0x, 按下前的倍速)。
+    /// ★ 不能写死 2.0x: 自定义倍速允许到 4.0x, 用户已经 3x 时再长按**不应该反而变慢**。
+    /// ★ 浮层提示也读这个值, 保证"看到的倍速 = 实际切到的倍速"。
+    /// </summary>
+    private float _fastForwardTarget = FastForwardRate;
 
     /// <summary>开始长按快进(改倍速)。见上方那段说明为什么用 SetRate 而不是 seek。</summary>
     private void StartFastForward()
@@ -428,13 +446,16 @@ public partial class PlayerWindow : FluentWindow
         try { _rateBeforeFastForward = _mp.Rate; }
         catch { _rateBeforeFastForward = 1.0f; }
         if (_rateBeforeFastForward <= 0) _rateBeforeFastForward = 1.0f;
-        // 已经在快进速率上(理论上到不了): 别把"该恢复的速率"记成 2x
-        if (Math.Abs(_rateBeforeFastForward - FastForwardRate) < 0.01f) _rateBeforeFastForward = 1.0f;
+
+        // ★ 2026-11-03: 不再把"当前已经是 2.0x"强行记成 1.0x。
+        //   自定义倍速下 2.0x/3x 都是常态, 那样会在松手时把用户的倍速偷偷改回 1x。
+        //   目标取 max(2x, 当前): 当前更快就保持更快, 绝不因为"快进"而减速。
+        _fastForwardTarget = Math.Max(FastForwardRate, _rateBeforeFastForward);
 
         _isFastForwarding = true;
         // ★ 顺序: 先让弹幕时钟按新倍速落定当前值, 再真正 SetRate(同 OnSpeedClick 那条说明)
-        SyncDanmakuClockRate(FastForwardRate);
-        try { _mp.SetRate(FastForwardRate); } catch { StopFastForward(); }
+        SyncDanmakuClockRate(_fastForwardTarget);
+        try { _mp.SetRate(_fastForwardTarget); } catch { StopFastForward(); }
     }
 
     /// <summary>停止长按快进: 恢复按下前的速率。</summary>
@@ -483,6 +504,11 @@ public partial class PlayerWindow : FluentWindow
     public PlayerWindow(string bvid)
     {
         InitializeComponent();
+        // 窗口大小记忆(2026-11-03 新增): 必须在 Show() 之前套用, 否则会先按 XAML 的
+        // 1280×760 闪一下再跳成记忆尺寸。SizeChanged 用来持续记录"最后一次常规尺寸"
+        // (全屏/最大化期间不记), 关闭时统一落盘(见 SavePlayerWindowSize)。
+        ApplyRememberedPlayerWindowSize();
+        SizeChanged += OnPlayerSizeChanged;
         Closed += OnClosed;
         Loaded += OnLoaded;
         PreviewKeyDown += OnPreviewKeyDown;
@@ -498,13 +524,15 @@ public partial class PlayerWindow : FluentWindow
         //   ★ 别再把 DisableWindowTransitions 调回来: 它一开, 系统动画就被掐掉, 全屏又变成硬切。
         //   (主窗口的最大化/还原同理 —— 见 FluentWindow.OnStateChanged。)
 
-        // 清晰度/弹幕区域弹层的定位目标**必须代码直连**: XAML 的 ElementName 绑定在
+        // 清晰度/弹幕区域/倍速弹层的定位目标**必须代码直连**: XAML 的 ElementName 绑定在
         // VideoView 的 ForegroundWindow 浮层里解析失败(内容被移进另一个可视树后名字
         // 查找断链), PlacementTarget 为空 → 弹层跑到了浮层左上角(真机截图实证)。
-        // 同时右缘对齐: Placement=Top 默认左缘对齐, 这两个弹层在控制栏右段, 左对齐偏丑;
+        // 同时右缘对齐: Placement=Top 默认左缘对齐, 这几个弹层在控制栏右段, 左对齐偏丑;
         // Opened 时量出宽度差做负偏移, 弹层右缘与按钮右缘平齐。
         QualityPopup.PlacementTarget = BtnQuality;
         DanmakuAreaPopup.PlacementTarget = BtnDanmakuArea;
+        // 倍速弹层(2026-11-03 自定义倍速): 与清晰度弹层同款, 右缘对齐 SpeedBtn。
+        SpeedPopup.PlacementTarget = SpeedBtn;
         // 右缘对齐(弹层右缘 = 按钮右缘)。注意必须等弹层布局完成后再量宽:
         // Opened 那一刻 ActualWidth 还是 0, 偏移会算成正数把弹层推出窗口右缘(真机实证)。
         // Loaded 优先级在 Popup 自身布局跑完之后, 那时 ActualWidth 才可信。
@@ -514,6 +542,14 @@ public partial class PlayerWindow : FluentWindow
         DanmakuAreaPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
                 RightAlignPopup(DanmakuAreaPopup, BtnDanmakuArea)));
+        SpeedPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+            {
+                RightAlignPopup(SpeedPopup, SpeedBtn);
+                // 当前倍速可能是列表底部的预设(如 3x/4x): 打开时滚到高亮项,
+                // 否则用户看到的永远是列表顶部, 以为没选中。
+                if (SpeedList.SelectedItem != null) SpeedList.ScrollIntoView(SpeedList.SelectedItem);
+            }));
         // ★ 两个弹层的"开着"状态本身就是判据(见 AnyPlayerPopupOpen), 不需要订阅 Closed。
         //   2026-10-13 第一版在这里订阅过 Closed 记时间窗, 实测证明 Closed 晚于视频区的
         //   Up(70ms), 时间窗一次都没生效过 —— 已删除。
@@ -608,35 +644,11 @@ public partial class PlayerWindow : FluentWindow
             HideLoading();
             // 把 EOF 时切黑的手势层还原成近透明(见 OnEndReached 里切黑的原因):
             // 新 input 的 vout 已经起来, 后面要能看见画面。
-            // ★★ 必须走 <see cref="ReleaseFullscreenCover"/> 而不是直接赋值(2026-10-13 修):
-            //   原来这里是 `VideoAreaRoot.Background = VideoAreaBackBrush;` + 顺手把
-            //   `_fullscreenCoverArmed = false;` —— 两条都**绕过了 _resizeHold 闸门**。
-            //   后果: 拖边缘 resize 期间 LibVLC 反复重协商 vout, 每出一帧就触发一次 Playing
-            //   ⇒ 遮罩被撤掉、露出黑底, 下一轮重协商又压黑 —— 用户看到的就是
-            //   "视频区边缘黑/亮交替抽动"(同一道闸本来就是为了这个才加的, 见 ArmResizeCover)。
-            //   顺带还解释了"拖动时偶尔能看到一块白": 撤罩那一瞬 vout 还没帧, 白底露出来。
-            ReleaseFullscreenCover();
-            // ★★★ 绝对兜底(2026-10-17 修"点重播黑屏", 第三版)。
-            //
-            //   前两版分别判 `_fullscreenCoverArmed`(被 OnModalResizeStarted 清零 ⇒ 失效)
-            //   与"底色 == Brushes.Black"(理论上无条件成立, 用户仍报黑屏)。两次都失败,
-            //   说明不能再猜 —— **要么这个 Playing 压根没触发, 要么压住画面的不是这一层。**
-            //   所以把现场全部记进 vlc-debug.txt: 下次复现看日志就能定位。
-            //
-            //   ★ 特别注意: VideoAreaRoot 是 VideoView.Content 浮层窗口里的一层, 位于
-            //   vout HWND **之上**; 若真正压住画面的是 vout HWND **自身的类背景刷**
-            //   (见 ApplyHwndHostBlackBackground / VideoBackdropInterop), 改这里就是改错了地方。
+            // ★ 2026-11-03: 只处理 EOF 那一层; 改窗口大小/最大化/全屏不再压黑布。
+            RestoreVideoAreaBackground();
             WriteLibVLCDebug(
-                $"\n[Playing] armed={_fullscreenCoverArmed} resizeHold={_resizeHold} " +
-                $"maxArmed={_maximizeCoverArmed} ended={_ended} " +
-                $"bg={DescribeVideoAreaBg()} " +
-                $"time={SafeReadTime()} state={_mp.State}\n");
-            if (VideoAreaRoot != null && VideoAreaRoot.Background == Brushes.Black)
-            {
-                _fullscreenCoverArmed = false;
-                VideoAreaRoot.Background = VideoAreaBackBrush;
-                WriteLibVLCDebug("[Playing] 已强制揭幕手势层\n");
-            }
+                $"\n[Playing] eofBlack={_eofBlackActive} ended={_ended} " +
+                $"bg={DescribeVideoAreaBg()} time={SafeReadTime()} state={_mp.State}\n");
             // ★ 视频没填满时的白色边带(2026-10-17): 起播后要把那块原生窗口底色刷黑。
             //   ★★ 不能只调一次就完事: 实测 `Playing` 触发时 libvlc 的 `Static` 子窗口
             //      **还没建出来**(那一刻拿到的句柄是 0, 修复静默跳过), vout 建好之后才有。
@@ -719,21 +731,9 @@ public partial class PlayerWindow : FluentWindow
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (_closing) return;
-                    // ★★★ 重播黑屏的**主修**(2026-10-17): 这里才是可靠的揭幕时机。
-                    //
-                    //   `Playing` 那侧连修三次都没生效, 因为 vout 窗口是**独立于 MediaPlayer
-                    //   状态**建起来的: 重播时 input 确实在播(Time 在走), 但若 `Playing`
-                    //   因 EOF→新 input 的状态切换而没再发一次, 那一侧的兜底就一次都不跑,
-                    //   手势层的不透明黑永久留着 —— 而它位于 vout HWND 之上, 于是"黑幕后面
-                    //   视频正常播放"(用户原话)。
-                    //   ★ `Vout` 每次重建 vout 都发, 重播必然过这里 ⇒ 揭幕不会漏。
-                    //   顺带解释了"双击全屏后恢复": 全屏必然重建 vout, 于是顺带把黑幕撤了。
-                    if (VideoAreaRoot != null && VideoAreaRoot.Background == Brushes.Black)
-                    {
-                        _fullscreenCoverArmed = false;
-                        VideoAreaRoot.Background = VideoAreaBackBrush;
-                        WriteLibVLCDebug("[Vout] vout 重建, 强制揭幕手势层\n");
-                    }
+                    // vout 重建 ⇒ EOF 那层黑一定可以撤了(新画面已经在出帧)。
+                    // ★ 2026-11-03: 这里只揭 EOF 黑层; resize/最大化/全屏不再有黑布。
+                    RestoreVideoAreaBackground();
                     StartVideoBackdropFix();
                 }));
             }
@@ -1248,6 +1248,8 @@ public partial class PlayerWindow : FluentWindow
         ProgressSlider.Value = 0;
         // 新片子当然还没播完: 清掉结尾状态与"重播"遮罩, 否则切下一条视频时会挂着上一段的遮罩
         _ended = false;
+        _eofBlackActive = false;
+        if (VideoAreaRoot != null) VideoAreaRoot.Background = VideoAreaBackBrush;
         _seekGraceUntil = 0;
         // 清掉跳转看门狗与"提前结束自救"的上一片痕迹
         _pendingSeekMs = -1;
@@ -1375,7 +1377,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_lastPlayUrl), nameof(_lastAudioUrl),   // 出错诊断日志要打"当时正在播的地址"
         // 进度 / 时长 / EOF 自救
         nameof(_totalMs), nameof(_lastKnownMs), nameof(_eofResumeCount), nameof(_lastEofResumeMs),
-        nameof(_resumeAfterSwitchMs), nameof(_ended), nameof(_anchorMs), nameof(_anchorWall),
+        nameof(_resumeAfterSwitchMs), nameof(_ended), nameof(_eofBlackActive), nameof(_anchorMs), nameof(_anchorWall),
         nameof(_displayedMs),
         // 跳转看门狗
         nameof(_pendingSeekMs), nameof(_seekDeadline), nameof(_seekRetries),
@@ -1398,6 +1400,8 @@ public partial class PlayerWindow : FluentWindow
         // ★ _rateBeforeFastForward 也登记在这里 —— 它决定"松手恢复到几倍速",
         //   不跟着换片复位的话, 新片子的第一次长按会恢复到上一片记下的速率。
         nameof(_isFastForwarding), nameof(_rateBeforeFastForward),
+        // 长按快进的目标倍速(2026-11-03): 同属"这一次长按"的瞬时态, 换片必须复位。
+        nameof(_fastForwardTarget),
         nameof(_commentTotal),
         nameof(_suppressSingleClick), nameof(_controlsHidden), nameof(_isFullscreen),
         // ---- 2026-10-31 补登记(此前 errors.txt 里一直被自检点名) ----
@@ -1406,8 +1410,6 @@ public partial class PlayerWindow : FluentWindow
         nameof(_relatedShown),          // 相关视频已展示条数: LoadRelatedAsync/ClearRelatedPanel 复位
         nameof(_isReliableSeekSource),  // seek 可靠性标志: BuildMedia 按片源设置
         nameof(_dmClockRate),           // 弹幕时钟倍率: 换片后由 CalibrateDanmakuClock 重新校准
-        nameof(_maximizeCoverArmed),    // 最大化黑幕闸: 百毫秒级窗口瞬态, 换片时不会存活
-        nameof(_suppressStateCover),    // 状态切换遮罩抑制闸: 同上, 计时器自动收敛
         nameof(_commentReturnRpid),     // 评论详情返回锚: 属于"上一条评论详情", 换片必须归零
         nameof(_videoBackdropGuardTicks), // vout 底色守护计数: 3 秒自收尾的瞬态
         nameof(_audioHealCheckAt),      // 音频自愈上次检查时刻: 跨片保持宽限意义, 不必清(见该字段)
@@ -1445,6 +1447,10 @@ public partial class PlayerWindow : FluentWindow
         nameof(_danmakuScrollSeconds), nameof(_danmakuFixedSeconds),
         nameof(_teardownDone),       // 拆解只做一次
         nameof(_playerRegistered),   // 注册计数, 生命周期是窗口而非片源
+        // 倍速弹层/窗口尺寸记忆(2026-11-03 未提交改动)的窗口级状态
+        nameof(_fillingSpeedMenu),   // 填充倍速列表时抑制 SelectionChanged, 纯 UI 瞬时闸
+        nameof(_lastNormalWidth), nameof(_lastNormalHeight), // 最后一次常规窗口尺寸
+        nameof(_windowSizeSaved),    // 本次窗口是否已落盘尺寸
         nameof(_seasonOpen),         // 合集面板的展开态: 用户开着面板连看几集是常态, 换片收起它很烦
         nameof(_isFillWindow),       // 「铺满窗口」是窗口级的显示模式(同 _isFullscreen), 换片不该把它弹回去
         nameof(_commentSort),        // 评论排序是用户看评论的习惯(同 _seasonOpen): 选过一次就一直是那个顺序
@@ -1459,17 +1465,10 @@ public partial class PlayerWindow : FluentWindow
         //
         // 关闭流程标记(见字段声明处的说明): 窗口生命周期, 与片源无关
         nameof(_closing),
-        // 全屏黑幕/拖动按住闸: 都是**百毫秒级**的窗口显示瞬态 ——
-        //   黑幕压下来等首个新帧就撤(FullscreenCoverTimeoutMs = 600ms 兜底),
-        //   不可能活到用户换下一个视频。留着 false 的初值即可, 清了没有任何可观察差异。
-        nameof(_fullscreenCoverArmed),
-        nameof(_resizeHold),
         // 手势"这一下是否由 Down 起步"的标记(左键/右键各一份): 它们描述的是**当前这一次点击**,
         //   窗口关闭/换片时鼠标多半早已抬起, 留着初值 false 即可;
         //   真按住不放时换片本来就是不可能的操作, 清了也没有可观察差异。
         nameof(_videoGestureActive), nameof(_rightGestureActive),
-        // CompositionTarget.Rendering / 弹幕时钟的订阅只挂一次, 属窗口级(同 _playerRegistered)
-        nameof(_modalSizeWatchAttached),
         nameof(_danmakuClockAttached),
         // 弹幕时钟的三个量: 靠 _mp.TimeChanged(约 4Hz)自动校准 —— 换片后新片一开播,
         //   下一次 TimeChanged 就把 _dmClockMedia 推到新片时间, 260ms 内自然收敛。
@@ -1606,6 +1605,14 @@ public partial class PlayerWindow : FluentWindow
         UpdateButtonState();
         // 窗口是复用的: 按当前状态(铺满/常规)同步一次信息栏与窗口最小尺寸
         ApplyInfoPanelState();
+        // 窗口大小记忆: 起播时先记下当前常规尺寸, 用户不动窗口直接关闭也能沿用上次的尺寸
+        // (铺满模式下的尺寸不记: 那是在"详情栏已收起"的布局里拖出来的, 下次按常规布局
+        //  打开会被最小宽度顶回去, 记了也用不上, 见 OnPlayerSizeChanged)
+        if (!_isFullscreen && !_isFillWindow && WindowState == WindowState.Normal)
+        {
+            _lastNormalWidth = ActualWidth;
+            _lastNormalHeight = ActualHeight;
+        }
         // 「铺满窗口」按钮的字形初值: XAML 里写的是"进入前"那个字形(E9A6), 这里按实际状态
         // 再同步一次 —— 窗口是复用的, 复用到一个"上次已铺满"的窗口时不能显示成未铺满。
         UpdateFillWindowButton();
@@ -1620,6 +1627,13 @@ public partial class PlayerWindow : FluentWindow
         // 覆盖层窗口(VideoView 的 ForegroundWindow)这时才建出来 —— 把键盘处理也挂上去,
         // 否则点过一次视频/控制栏之后快捷键就全哑了(见 HookOverlayKeyboard 的说明)
         HookOverlayKeyboard();
+        // ★ 2026-11-03: 尽早把视频宿主窗口治成黑底(不等第一帧/Vout)。
+        //   放在 Loaded 优先级: 此时 VideoView 的模板与原生宿主窗口已经建好;
+        //   拿不到句柄也没关系, Vout/Playing 还会再调(见 StartVideoBackdropFix)。
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (!_closing) ApplyHwndHostBlackBackground();
+        }));
         // ★ 不重复启动: 新窗口第一次打开时 PlayerService 已经先调过 PlayVideo(→LoadVideoAsync),
         //   Loaded 事件随后才到。没有这个闸门就会跑两遍详情/取流/测速, 甚至
         //   "先远端起播、下完再切本地"二次重启(2026-10-30 起播慢的隐藏原因之一)。
@@ -2380,10 +2394,9 @@ public partial class PlayerWindow : FluentWindow
         _eofResumeCount = 0;
         _lastEofResumeMs = 0;
         // 揭掉 EOF 那层黑(见上面说明: 重播期间不需要它, 遮罩由 LoadingOverlay 负责)
-        if (VideoAreaRoot != null && VideoAreaRoot.Background == Brushes.Black)
+        if (_eofBlackActive)
         {
-            _fullscreenCoverArmed = false;
-            VideoAreaRoot.Background = VideoAreaBackBrush;
+            RestoreVideoAreaBackground();
             WriteLibVLCDebug("[Replay] 起播前揭掉 EOF 黑层\n");
         }
     }
@@ -3170,9 +3183,9 @@ public partial class PlayerWindow : FluentWindow
             //   依赖它的分段跳/看门狗就会算出一个荒谬的目标(2026-10-17 修 seek 时踩到)。
             if (e.Time >= 0 && e.Time < 24L * 3600 * 1000)
                 _lastKnownMs = e.Time;
-            // ★ 全屏黑幕: 能收到时间推进 = 视频正在出帧, 这一刻撤掉最准。
+            // ★ EOF 黑层: 能收到时间推进 = 视频正在出帧, 这一刻撤掉最准。
             //   不能只靠 Playing 事件 —— 进全屏时视频本来就在播, Playing 不会再来一次。
-            ReleaseFullscreenCover();
+            RestoreVideoAreaBackground();
             // ★★ 2026-10-31 遮罩安全网(修"打开长视频黑屏"的兜底):
             //   "正在跳转…""正在缓冲视频…"这类遮罩**只由 Playing 事件收掉**。万一那次
             //   play() 没被接受(或被 LibVLC 直接忽略), Playing 永远不来, 遮罩就一直盖着
@@ -3296,13 +3309,9 @@ public partial class PlayerWindow : FluentWindow
         //   (airspace), RootGrid 切黑盖不住它。表现就是: 浅色主题全屏一块纯白;
         //   深色主题上半透明的"重播"遮罩(#CC000000)盖在白底上 = "一层阴影遮罩"。
         //   手势层在覆盖窗口(VideoView.Content)里, 位于 HWND **之上**, 切黑才真的盖得住。
-        //   ★★ 必须同时把 `_fullscreenCoverArmed` 置上(2026-10-17 修"点重播黑屏"):
-        //   起播时负责还原的是 <see cref="ReleaseFullscreenCover"/>, 而它开头就
-        //   `if (!_fullscreenCoverArmed) return;` —— 只改 Background 不改这个标志,
-        //   揭幕那一步会被整个跳过, 手势层就**永远**停在不透明黑上, 于是"重播"之后
-        //   画面全黑(用户报的正是这个)。原先这里是直接赋值 + `Playing` 里也直接赋值,
-        //   两边对称; cf76cc6 把"起播那侧"改成走 ReleaseFullscreenCover(为了不吃掉
-        //   _resizeHold 闸), 却没给"压下这侧"补上标志, 就成了单边。
+        //   ★ 2026-11-03: 这是**唯一**还压黑手势层的路径。resize/最大化/全屏的白闪已改为
+        //     在原生宿主窗口上根治(见 VideoBackdropInterop.EnsureBlackVideoHost), 不再压黑布。
+        //     所以这里只需记一个 `_eofBlackActive`, 起播时由 RestoreVideoAreaBackground() 撤掉。
         //   ★★★ 2026-11-01 修「听视频模式快进提示已播完」: EOF 时若还有**未确认的跳转**
         //     在飞, 那多半是远跳甩到流尾的假 EOF(音轨 seek 失败被当成播完) ——
         //     上面那条"跳转中不自救"的闸会放它落到这里。此刻不能宣告播完:
@@ -3321,7 +3330,7 @@ public partial class PlayerWindow : FluentWindow
         WriteLibVLCDebug(
             $"[EndReached] 压黑手势层 time={_lastKnownMs} bgBefore={DescribeVideoAreaBg()}\n");
         VideoAreaRoot.Background = Brushes.Black;
-        _fullscreenCoverArmed = true;
+        _eofBlackActive = true;
         // 播完了: 跳转看门狗必须收掉 —— 它在外面的条件是 !_ended, 留着 _pendingSeekMs >= 0
         // 会让卡顿检测被永久跳过(那个判断里也有 _pendingSeekMs >= 0), 之后重播的卡顿就不再提示了。
         _pendingSeekMs = -1;
@@ -3412,6 +3421,18 @@ public partial class PlayerWindow : FluentWindow
     private void OnVideoAreaMouseWheel(object sender, MouseWheelEventArgs e)
     {
         if (_mp == null || _closing || e.Delta == 0) return;
+
+        // ★★ 2026-11-03 修"自定义倍速弹层里滚轮会调音量":
+        //   弹层是独立 HWND, 但它的滚轮事件仍会冒到视频区这层 PreviewMouseWheel 上
+        //   (与"点弹层空白处会漏一个 Up"是同一套 airspace 特性)。
+        //   弹层开着时滚轮属于弹层自己 —— 倍速列表要滚动、自定义输入要正常操作,
+        //   这里必须直接放行(不设 Handled, 让 ListBox 的 ScrollViewer 接住),
+        //   同时清掉累计量, 免得回到视频区时突然跳一格音量。
+        if (AnyPlayerPopupOpen)
+        {
+            _wheelAccum = 0;
+            return;
+        }
 
         // 反向滚动时先清掉上次攒的余量, 否则要先"抵消"掉才动
         if (Math.Sign(e.Delta) != Math.Sign(_wheelAccum)) _wheelAccum = 0;
@@ -3597,23 +3618,149 @@ public partial class PlayerWindow : FluentWindow
         _speedOsdTimer = null;
     }
 
+    // ------------------------------------------------------------ 倍速(预设 + 自定义, 2026-11-03)
+
+    /// <summary>允许的最低/最高倍速。范围写在这里一处, 输入夹取与预设列表都引用它。</summary>
+    private const float MinPlaybackRate = 0.25f;
+    private const float MaxPlaybackRate = 4.0f;
+
+    /// <summary>常用预设档位(顺序即弹层里的顺序)。</summary>
+    private static readonly float[] SpeedPresets =
+    {
+        0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 4.0f
+    };
+
+    /// <summary>填充倍速列表时抑制 SelectionChanged, 避免"打开弹层就自动改一次倍速"。</summary>
+    private bool _fillingSpeedMenu;
+
     private void OnSpeedClick(object sender, RoutedEventArgs e)
     {
         if (_mp == null) return;
-        var cur = _mp.Rate;
-        var next = cur switch
+        FillSpeedMenu();
+        SpeedPopup.IsOpen = true;
+    }
+
+    /// <summary>
+    /// 填充预设倍速列表并高亮当前倍速, 同时把当前值预填进自定义输入框。
+    /// </summary>
+    private void FillSpeedMenu()
+    {
+        if (SpeedList == null) return;
+        _fillingSpeedMenu = true;
+        try
         {
-            1.0f => 1.5f,
-            1.5f => 2.0f,
-            2.0f => 0.5f,
-            _ => 1.0f
-        };
-        // ★ 顺序: 先让弹幕时钟按新倍速落定当前值, 再真正 SetRate。
-        //   反过来先 SetRate 的话, SyncDanmakuClockRate 内部那句 DanmakuClock() 会
-        //   用**旧速率**外推(而媒体已经按新速率跑了) —— 那一下就是用户看到的"顿一下"。
-        SyncDanmakuClockRate(next);
-        _mp.SetRate(next);
-        if (SpeedText != null) SpeedText.Text = next.ToString("0.#") + "x";
+            SpeedList.Items.Clear();
+            foreach (var rate in SpeedPresets)
+                SpeedList.Items.Add(new ListBoxItem { Tag = rate, Content = FormatRate(rate) });
+
+            var cur = _mp?.Rate ?? 1.0f;
+            if (cur <= 0) cur = 1.0f;
+            if (SpeedCustomText != null) SpeedCustomText.Text = FormatRateValue(cur);
+            if (SpeedCustomHint != null) SpeedCustomHint.Text = "";
+
+            // 只有与某个预设一致才高亮; 自定义值(如 1.15x)保持无选中
+            var idx = Array.FindIndex(SpeedPresets, r => Math.Abs(r - cur) < 0.005f);
+            SpeedList.SelectedIndex = idx;
+        }
+        finally
+        {
+            _fillingSpeedMenu = false;
+        }
+    }
+
+    private void OnSpeedSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (_fillingSpeedMenu || SpeedPopup == null) return;
+        if (SpeedList.SelectedItem is not ListBoxItem li || li.Tag is not float rate) return;
+        ApplyPlaybackRate(rate, closePopup: true);
+    }
+
+    private void OnSpeedCustomApply(object sender, RoutedEventArgs e) => ApplyCustomSpeed();
+
+    /// <summary>自定义输入框: Enter 应用, Esc 关闭弹层(不改变当前倍速)。</summary>
+    private void OnSpeedCustomKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            ApplyCustomSpeed();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            SpeedPopup.IsOpen = false;
+            e.Handled = true;
+        }
+    }
+
+    private void ApplyCustomSpeed()
+    {
+        if (_mp == null) return;
+        if (!TryParseSpeed(SpeedCustomText?.Text, out var rate))
+        {
+            ShowSpeedCustomHint($"请输入 {FormatRate(MinPlaybackRate)} – {FormatRate(MaxPlaybackRate)} 之间的数字, 例如 1.25");
+            return;
+        }
+        // 超出范围自动夹到边界(而不是拒绝): 用户输入 10x 时给他 4x 比什么都不做更符合预期
+        ApplyPlaybackRate(Math.Clamp(rate, MinPlaybackRate, MaxPlaybackRate), closePopup: true);
+    }
+
+    /// <summary>
+    /// 唯一的倍速应用入口(预设 / 自定义共用)。
+    /// ★ 顺序: 先让弹幕时钟按新倍速落定当前值, 再真正 SetRate ——
+    ///   反过来先 SetRate 的话, SyncDanmakuClockRate 内部那句 DanmakuClock() 会
+    ///   用**旧速率**外推(而媒体已经按新速率跑了), 那一下就是用户看到的"顿一下"。
+    /// </summary>
+    private void ApplyPlaybackRate(float rate, bool closePopup)
+    {
+        if (_mp == null) return;
+        // 保留两位小数: 避免自定义输入留下 1.1499999 这种值, 显示与存储都不好看
+        rate = Math.Clamp(MathF.Round(rate, 2), MinPlaybackRate, MaxPlaybackRate);
+
+        SyncDanmakuClockRate(rate);
+        try { _mp.SetRate(rate); }
+        catch
+        {
+            ShowSpeedCustomHint("设置倍速失败, 播放器可能正在切换片源");
+            return;
+        }
+
+        UpdateSpeedText(rate);
+        if (SpeedCustomHint != null) SpeedCustomHint.Text = "";
+        if (closePopup && SpeedPopup != null) SpeedPopup.IsOpen = false;
+    }
+
+    /// <summary>把控制栏上的倍速文字同步成实际速率(不传 = 读播放器当前值)。</summary>
+    private void UpdateSpeedText(float? rate = null)
+    {
+        var r = rate ?? _mp?.Rate ?? 1.0f;
+        if (r <= 0) r = 1.0f;
+        if (SpeedText != null) SpeedText.Text = FormatRate(r);
+    }
+
+    /// <summary>带 x 后缀的显示文字, 如 1.0x / 1.25x / 4.0x。</summary>
+    private static string FormatRate(float rate)
+        => FormatRateValue(rate) + "x";
+
+    /// <summary>纯数字显示(用于自定义输入框预填), 如 1.0 / 1.25。</summary>
+    private static string FormatRateValue(float rate)
+        => rate.ToString("0.0##", CultureInfo.InvariantCulture);
+
+    /// <summary>解析用户输入的倍速: 允许 "1.25"、"1.25x"、逗号小数点。</summary>
+    private static bool TryParseSpeed(string? text, out float rate)
+    {
+        rate = 0;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        var s = text.Trim();
+        if (s.EndsWith("x", StringComparison.OrdinalIgnoreCase)) s = s[..^1].Trim();
+        s = s.Replace(',', '.');
+        return float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out rate)
+               && float.IsFinite(rate);
+    }
+
+    private void ShowSpeedCustomHint(string message)
+    {
+        if (SpeedCustomHint != null) SpeedCustomHint.Text = message;
     }
 
     /// <summary>把弹层的右缘与目标按钮的右缘对齐(放在按钮正上方)。</summary>
@@ -3667,10 +3814,10 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 清晰度 / 弹幕区域弹层是否**有任意一个开着**。
+    /// 清晰度 / 弹幕区域 / 倍速弹层是否**有任意一个开着**。
     ///
     /// ★ 为什么需要它(2026-10-13 用户报"点清晰度 → 点空白处收起 → 视频变 2 倍速"):
-    ///   这两个 Popup 是 <c>StaysOpen="False"</c>, 而 Popup 是**独立 HWND**。
+    ///   这几个 Popup 是 <c>StaysOpen="False"</c>, 而 Popup 是**独立 HWND**。
     ///   实测(探针 bd-probe-coin, 真实 Win32 鼠标点击, 时间戳):
     ///     <code>
     ///     12:14:38.955  VIDEO UP                ← 只有 Up, 没有 Down!
@@ -3689,7 +3836,8 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool AnyPlayerPopupOpen
         => (QualityPopup != null && QualityPopup.IsOpen)
-        || (DanmakuAreaPopup != null && DanmakuAreaPopup.IsOpen);
+        || (DanmakuAreaPopup != null && DanmakuAreaPopup.IsOpen)
+        || (SpeedPopup != null && SpeedPopup.IsOpen);
 
     /// <summary>
     /// 视频区手势是否已经由一次 **Down** 正式起步。
@@ -3945,11 +4093,9 @@ public partial class PlayerWindow : FluentWindow
 
         // 先放掉 WPF 持有的鼠标捕获, 否则模态缩放循环拿不到鼠标
         ReleaseCapture();
-        // ★ 遮罩交给 FluentWindow 的 WM_ENTERSIZEMOVE/EXITSIZEMOVE 钩子管(见 OnModalResizeStarted):
-        //   DefWindowProc 进入的是**系统模态缩放循环**, 拖动全程由它占着消息循环,
-        //   WndProc 钩子照样能收到 ENTER/EXIT —— 所以这里不必手动压, 免得多一份状态。
-        //   (2026-10-05 第一版就是在这里手动压的, 压一次就撤 ⇒ 闪白依旧;
-        //    真因是"按一下就放行"而非"没压到", 正确修法见 ArmResizeCover。)
+        // ★ 2026-11-03: 拖边缘不再由 WPF 压黑遮罩 —— 白闪改由原生宿主窗口治理
+        //   (VideoBackdropInterop.EnsureBlackVideoHost)。这里直接把"按在缩放带上"
+        //   交给 DefWindowProc 进入系统模态缩放循环即可, 不再需要 ENTER/EXIT 的消息钩子。
         // 直接把"按在缩放带上"交给 DefWindowProc: 它进入系统模态缩放循环, 松开鼠标才返回
         DefWindowProc(hwnd, WmNcLButtonDown, (IntPtr)ht, IntPtr.Zero);
         return true;
@@ -4079,7 +4225,7 @@ public partial class PlayerWindow : FluentWindow
             // ★ 浮出提示(2026-10-13 用户要求): 长按快进是**无入口手势**,
             //   不提示的话用户只看到画面变快, 不知道发生了什么、也不知道松手会恢复。
             //   hold=true: 整个长按期间一直挂着, 松手时由 Up 那边换成"已恢复"并淡出。
-            ShowSpeedHint(FastForwardRate.ToString("0.#") + "x 快进中", hold: true);
+            ShowSpeedHint(FormatRate(_fastForwardTarget) + " 快进中", hold: true);
             // 长按触发了, 不再触发单击
             _singleClickTimer?.Stop();
         };
@@ -4144,15 +4290,14 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 视频区右键按下: 记下"这一下是我起的", 按住 **500ms** 起长按快进(2026-10-31 新增)。
+    /// 视频区右键按下: 只记下"这一下是我起的", 真正的动作在 Up(切换铺满窗口)。
     ///
-    /// ★ 原来这里只有"右键 = 铺满窗口"一个直接切换, 现在改为:
-    ///   · **短右键**(按住 < 500ms) = 铺满窗口 —— 原行为不变;
-    ///   · **长右键**(按住 ≥ 500ms) = 2x 快进, 与左键长按完全同款 ——
-    ///     长视频里左手拖进度条、右手按住快进, 两手不打架(左键长按要占用双击全屏的手)。
-    /// ★ 与左键长按共用 <see cref="_longPressFired"/>/<see cref="_isFastForwarding"/>
-    ///   那套状态与 <see cref="StartFastForward"/>/StopFastForward 收尾 ——
-    ///   两只手同时按住时是同一个快进态, 谁先松谁收, 不会互相顶。
+    /// ★★ 2026-11-03 修复"右键收起视频详情页会错误触发 2 倍速":
+    ///   之前这里挂过一条 500ms 长按计时器, 右键按住稍久就会 StartFastForward。
+    ///   但右键的既定语义是"铺满窗口 / 收起右侧详情栏", 用户点它时按住的时间并不固定 ——
+    ///   于是一次正常的收起动作只要稍慢就会莫名变成 2 倍速。
+    ///   ⇒ 右键**不再参与**长按快进; 长按快进只保留在左键上(见 OnVideoAreaMouseLeftDown)。
+    ///   两条手势的状态与计时器也因此彻底分开, 不再互相复位/抢用。
     /// ★ 与左键 Down 同款的成对判定(弹层余波防护)在这里照抄:
     ///   没有配对 Down 的 Up 一律丢弃, 这是唯一可靠的判据(见 AnyPlayerPopupOpen)。
     /// </summary>
@@ -4172,26 +4317,7 @@ public partial class PlayerWindow : FluentWindow
         if (AnyPlayerPopupOpen) { _rightGestureActive = false; return; }
         _rightGestureActive = true;
         e.Handled = true;   // 别让它冒泡成系统菜单
-
-        // 长按判定: 与左键长按同一个阈值(500ms)、同一个收尾路径。
-        // _longPressFired 由这条计时器置位 —— Up 侧据此分"结束了快进"还是"切铺满"。
-        _longPressTimer?.Stop();
-        _longPressFired = false;
-        _longPressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(LongPressThresholdMs) };
-        _longPressTimer.Tick += (_, _) =>
-        {
-            _longPressTimer!.Stop();
-            // 左键长按可能已经起了(两只手同时按): 别重复起步, 也别覆盖提示
-            if (_isFastForwarding) return;
-            _longPressFired = true;
-            StartFastForward();
-            ShowSpeedHint(FastForwardRate.ToString("0.#") + "x 快进中", hold: true);
-        };
-        _longPressTimer.Start();
     }
-
-    /// <summary>左右键长按共用的判定时长(毫秒)。与左键长按原阈值保持一致。</summary>
-    private const int LongPressThresholdMs = 500;
 
     /// <summary>指针是否落在窗口边缘的缩放带上(只判断, 不启动缩放 —— 见 OnVideoAreaMouseRightDown)。</summary>
     private bool IsOnResizeEdge()
@@ -4201,24 +4327,18 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 视频区右键抬起: 按住了长按(快进)就收快进, 否则是"短右键"→ 切「铺满窗口」。
+    /// 视频区右键抬起: 切「铺满窗口 / 还原」(收起或展开右侧详情栏)。
     /// 没有配对 Down 的 Up 一律丢弃(那是弹层余波, 见 Down 的说明)。
+    ///
+    /// ★ 右键**不参与**长按快进(2026-11-03), 见 <see cref="OnVideoAreaMouseRightDown"/>。
+    ///   所以这里不再检查 _longPressFired, 也不会误碰左键那条快进链。
     /// </summary>
     private void OnVideoAreaMouseRightUp(object sender, MouseButtonEventArgs e)
     {
         if (!_rightGestureActive) { e.Handled = true; return; }
         _rightGestureActive = false;
         if (_closing) return;
-        // 长按快进已经起步: 这次右键是"快进手势", 收快进, 不再切铺满
-        if (_longPressFired)
-        {
-            _longPressFired = false;
-            StopFastForward();
-            ShowSpeedHint("已结束快进", hold: false);
-            e.Handled = true;
-            return;
-        }
-        // 短右键: 原有行为 —— 走**同一个开关**(与顶栏按钮共享 _isFillWindow, 不复制逻辑)
+        // 走**同一个开关**(与顶栏按钮共享 _isFillWindow, 不复制逻辑)
         ToggleFillWindow();
         e.Handled = true;
     }
@@ -4277,6 +4397,7 @@ public partial class PlayerWindow : FluentWindow
         if (_closing || _mp == null || !_mp.IsPlaying) return false;
         if (QualityPopup != null && QualityPopup.IsOpen) return false;
         if (DanmakuAreaPopup != null && DanmakuAreaPopup.IsOpen) return false;
+        if (SpeedPopup != null && SpeedPopup.IsOpen) return false;
         if (_isSeeking) return false;                       // 拖进度条时别藏
         if (ControlBar.IsMouseOver) return false;           // 鼠标停在控制栏上(即使不动)也别藏
         if (LoadingOverlay != null && LoadingOverlay.Visibility == Visibility.Visible) return false;
@@ -5395,9 +5516,9 @@ public partial class PlayerWindow : FluentWindow
     ///        合计 340ms, 2026-09-30 删)与 FluentWindow 的整窗 Scale+淡入(2026-10-02 删)
     ///        都不存在了。现在这个窗口一切换就是"改布局 + 最大化", 剩下的动效由 DWM 负责。
     ///
-    /// ★ 那层**全屏黑幕(见 ArmFullscreenCover)必须保留** —— 它挡的是 LibVLC 重新协商 vout
-    ///   时的白底空窗, 不是动画: 交给系统播之后窗口尺寸照样在变, 空窗照样出现,
-    ///   去掉它浅色主题下就会重新闪白(2026-10-01 修过的老问题)。
+    /// ★ 2026-11-03: 全屏不再压"全屏黑幕"。LibVLC 重新协商 vout 时的白底空窗改由
+    ///   原生宿主窗口治理(见 VideoBackdropInterop.EnsureBlackVideoHost), 所以下面只保留
+    ///   "窗口底色先黑"与 `StartVideoBackdropFix()` 两条 —— 前者挡 WPF 缝隙, 后者刷原生底色。
     ///
     /// 窗口现在**始终**是 WindowStyle=None + WindowChrome 的自绘标题栏, 所以全屏不再靠
     /// 切换 WindowStyle 实现(之前那套 `None + Maximized` 会让自绘标题栏和系统框打架),
@@ -5427,13 +5548,6 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void ApplyFullscreenLayout(bool on)
     {
-        // ★★★ 全屏切换期间**不要**让"最大化/还原黑罩"插手(2026-10-17):
-        //   全屏 = 最大化 + 收顶栏, 所以它必然触发 WM_SYSCOMMAND / 尺寸剧变;
-        //   而这条路径本来就有自己的一套遮罩时序(下面的 ArmFullscreenCover / ReleaseFullscreenCover)。
-        //   两套叠加的实测后果: 退全屏后视频区**黑约 0.9 秒**(被这边的兜底计时器按住)。
-        //   ⇒ 整段(含之后由消息循环送达的状态变化)排掉, 时长给足 —— 进出全屏最慢也就几百毫秒。
-        SuppressStateCoverFor(1600);
-
         if (on)
         {
             // ★ 全屏期间**禁止**"失焦换窗口底色"那套处理接管(2026-10-06):
@@ -5449,13 +5563,11 @@ public partial class PlayerWindow : FluentWindow
             //   全屏期间露出来的任何缝隙就是一块白(2026-10-01 用户报"浅色全屏全白")。
             Background = Brushes.Black;
             RootGrid.Background = Brushes.Black;
-            // ★★★ 上面那两层**都盖不住视频区**(见 ArmFullscreenCover 的说明):
+            // ★★★ 上面那两层**都盖不住视频区**:
             //   VideoView 是 HwndHost(airspace), 画在所有 WPF 元素之上, 而"视频区那层
-            //   黑底 Grid"是它的**父容器** —— 父容器画不到子 HWND 上面, 以前那句
-            //   "视频区那层 Grid 本身是黑底, 无需处理"是错的。
-            //   真正能盖住 vout HWND 的只有覆盖窗口里的手势层 VideoAreaRoot,
-            //   所以全屏切换期间必须把它压黑(见 ArmFullscreenCover)。
-            ArmFullscreenCover();
+            //   黑底 Grid"是它的**父容器** —— 父容器画不到子 HWND 上面。
+            //   视频区内部的白底改由原生宿主窗口治理(见 StartVideoBackdropFix 的调用),
+            //   不再往 VideoAreaRoot 上压黑布。
 
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             TopBar.Visibility = Visibility.Collapsed;
@@ -5498,7 +5610,6 @@ public partial class PlayerWindow : FluentWindow
             //   在这里补会因为窗口还是 Maximized 而被跳过, 退全屏后就没动画了。
             //   (重复按钮的克制现在靠去掉 WS_SYSMENU, 不再靠摘 WS_CAPTION。)
 
-            ReleaseFullscreenCover();
             // ★★ 退出全屏后 libvlc 会按新尺寸**重建 vout**, 那里面的 `Static` 子窗口是新的,
             //   之前设的黑色类背景刷跟着旧窗口一起没了 ⇒ 视频区边缘又露出白(用户报的
             //   "先全屏再退全屏, 播放器页面部分出现白色区域")。
@@ -5532,195 +5643,18 @@ public partial class PlayerWindow : FluentWindow
         }
     }
 
-    /// <summary>
-    /// 视频区遮罩: 在"窗口尺寸正在变"的窗口期把手势层压黑, 盖住 vout HWND 露出的白底。
-    ///
-    /// ★★ 2026-10-05 用户报"拖动窗口边缘调节大小时视频区闪白"—— 本方法原先只挂在**全屏切换**上,
-    ///   而拖边缘 resize 走的是完全不同的代码路径, 从不经过这里, 于是白底照样露出来。
-    ///   它挡的机制与全屏完全相同(LibVLC 要重协商 vout, 那一瞬没有新帧 → 露出 vout 的默认白底),
-    ///   所以复用一个遮罩即可, 不必再造第二套。触发点见 <see cref="ArmFullscreenCover"/> /
-    ///   <see cref="ArmResizeCover"/>(后者由 WM_ENTERSIZEMOVE 驱动)。
-    /// </summary>
-    ///
-    /// <remarks>
-    /// ★ 为什么必须压手势层, 而不是切窗口/RootGrid 底色(2026-10-01 修长期未愈的白闪):
-    ///   `VideoView` 是 **HwndHost**(airspace), 它画在**所有 WPF 元素之上**。视频区那层
-    ///   `Background="Black"` 的 Grid 是 VideoView 的**父容器** —— 父容器画不到子 HWND 上面。
-    ///   所以历史上"底色先切黑就够"的前提其实不成立: 浅色主题下窗口尺寸剧变时,
-    ///   LibVLC 要重新协商 vout, 那一瞬视频 HWND 没有新帧可显示, 露出它的**默认白底**,
-    ///   而覆盖窗口里唯一能压住它的就是 `VideoAreaRoot`。深色主题下窗口底色本来就是
-    ///   #202020, 同一处露底不刺眼, 所以"只有浅色模式出问题" —— 与用户描述一致。
-    ///
-    /// ★ 为什么"部分视频": 命��� `ShortVideoCache` 的短视频是**已下完的本地单文件**,
-    ///   任意时刻都有已解出的帧; 远端 DASH 长视频要 flush/重协商 vout, 空窗明显得多。
-    ///   这与 2026-10-01 那条日志记的判别式完全一致。
-    ///
-    /// ★ 这不是"过渡动画": 不淡入、不用 _fsShadeTimer(那个已被删除且别复活),
-    ///   只是切换期间多压一层不透明黑, 首个新帧到达即撤掉。
-    ///   ★★ 2026-10-02 用户要求"全屏动画改用 Windows 自带的"之后**它仍然必须留着**:
-    ///   它挡的是 LibVLC vout 重协商时的**白底空窗**, 与"动画由谁播"完全无关 ——
-    ///   改成系统动画后窗口尺寸变化依旧发生, 空窗依旧存在, 去掉它浅色主题就会闪白。
-    /// </remarks>
-    private void ArmFullscreenCover()
-    {
-        if (_closing || VideoAreaRoot == null) return;
-        VideoAreaRoot.Background = Brushes.Black;
-        _fullscreenCoverArmed = true;
-        _fullscreenCoverTimer ??= new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(FullscreenCoverTimeoutMs)
-        };
-        _fullscreenCoverTimer.Tick -= OnFullscreenCoverTimeout;
-        _fullscreenCoverTimer.Tick += OnFullscreenCoverTimeout;
-        _fullscreenCoverTimer.Start();
-    }
+    // ------------------------------------------------------------ 尺寸变化的白闪
+    //
+    // ★★ 2026-11-03: 原先这里有一整套"改窗口大小时把手势层压黑"的遮罩
+    //   (ArmFullscreenCover / ArmResizeCover / ArmMaximizeCover + _resizeHold 闸)。
+    //   它确实能挡住 LibVLC vout 重协商时的白底, 但代价是拖动/最大化/全屏期间
+    //   整个视频区变成一块黑布。
+    //   ⇒ 现在改为在原生宿主窗口上根治: 给 Static 加 WS_CLIPCHILDREN + 子类化填黑,
+    //     见 Helpers/VideoBackdropInterop.EnsureBlackVideoHost 与
+    //     PlayerWindow.ApplyHwndHostBlackBackground。
+    //   ★ 不要再把这里的黑布加回来 —— 它挡的只是表象, 而且会让"改大小"看起来像黑屏。
+    //   ★ EOF(播完)那一层黑不受影响, 见 OnEndReached / RestoreVideoAreaBackground。
 
-    /// <summary>
-    /// 撤掉视频区遮罩(视频已经在出帧了, 再挡着就看不见画面了)。
-    ///
-    /// ★★ _resizeHold 这道闸是修"拖边缘闪白"的关键(2026-10-05):
-    ///   拖动期间 LibVLC 会**反复**重协商 vout, 每轮都露一次白底。若此时 TimeChanged /
-    ///   Playing 一发就把遮罩撤了, 后面每一轮重协商又白一下 —— 表现为"闪白依旧"。
-    ///   所以按住期间(TimeChanged/Playing/兜底超时 都会走到这里)**一律不撤**,
-    ///   只等 WM_EXITSIZEMOVE 由 ReleaseResizeHold 放闸后, 这里才真正生效。
-    /// </summary>
-    private void ReleaseFullscreenCover()
-    {
-        // ★ 拖动按住期间不放行(计时器也不停: 它只做"万一 EXIT 没送到"的兜底)
-        if (_resizeHold) return;
-        _fullscreenCoverTimer?.Stop();
-        if (_closing || !_fullscreenCoverArmed || VideoAreaRoot == null) return;
-        _fullscreenCoverArmed = false;
-        VideoAreaRoot.Background = VideoAreaBackBrush;
-    }
-
-    /// <summary>
-    /// 兜底: 一直没等到新帧(暂停中/静止帧/极短片)就把黑幕撤掉,
-    /// 否则画面会被自己挡住。超时取 600ms —— 正常情况下远早于此就已撤掉。
-    /// </summary>
-    private void OnFullscreenCoverTimeout(object? sender, EventArgs e) => ReleaseFullscreenCover();
-
-    /// <summary>
-    /// resize 期间的视频区遮罩。
-    ///
-    /// ★★★ 这一版与上一版的区别, 以及上一版为什么没修好(2026-10-05 用户反馈"闪白问题依旧"):
-    ///   上一版是"进 resize 时压一次, 靠 TimeChanged/Playing 收到新帧就撤"。看着对, 但拖动期间
-    ///   窗口尺寸**每帧都在变** ⇒ LibVLC 每一帧都在重协商 vout ⇒ 白底反复露出。
-    ///   第一次重协商一结束遮罩就被撤了, 后面每一轮重协商又白一下 —— 观感就是"闪白依旧",
-    ///   而且用户截图里那种整块白正是这一轮轮的叠加。
-    ///   ★ 所以正确语义是"按住整个拖动期": 进入压黑, **期间谁来撤都不放行**(见 _resizeHold),
-    ///     一直到 WM_EXITSIZEMOVE 才撤(见 OnModalResizeEnded)。
-    ///   ★ 为什么仍然复用 _fullscreenCoverArmed 而不是另开一个字段: 两者最终都只改
-    ///     VideoAreaRoot.Background, 各开一份状态就会出现两份状态互抢同一属性。
-    ///     _resizeHold 是"额外的闸": 它为真时 ReleaseFullscreenCover 拒绝撤罩。
-    /// </summary>
-    private void ArmResizeCover()
-    {
-        if (_closing || VideoAreaRoot == null) return;
-        _resizeHold = true;
-        VideoAreaRoot.Background = Brushes.Black;
-        _fullscreenCoverArmed = true;
-        // ★ 计时器在按住期间**只做兜底**: 它到期时若还在拖动就不撤(由 _resizeHold 挡住),
-        //   万一 WM_EXITSIZEMOVE 因为异常路径没送到, 至少不会永远黑屏。
-        _fullscreenCoverTimer ??= new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(FullscreenCoverTimeoutMs)
-        };
-        _fullscreenCoverTimer.Tick -= OnFullscreenCoverTimeout;
-        _fullscreenCoverTimer.Tick += OnFullscreenCoverTimeout;
-        _fullscreenCoverTimer.Start();
-    }
-
-    /// <summary>拖动结束: 放掉"按住不放"的闸, 正常恢复由新帧驱动</summary>
-    private void ReleaseResizeHold()
-    {
-        _resizeHold = false;
-    }
-
-    /// <summary>
-    /// 拖动期间**按住**遮罩(2026-10-05 修"拖边缘 resize 闪白"的真正修法)。
-    /// 见 <see cref="ArmResizeCover"/> 的说明。</summary>
-    protected override void OnModalResizeStarted()
-    {
-        // ★★ 2026-10-06 修"拖动窗口**移动位置**时黑屏":
-        //   这对钩子 WM_ENTERSIZEMOVE/EXITSIZEMOVE 对"移动"和"改大小"一视同仁, 但两者对视频
-        //   的意义完全不同 ——
-        //     · 改大小: 客户区尺寸每帧都变 ⇒ LibVLC 反复重协商 vout ⇒ 会露白底, **需要**压罩;
-        //     · 纯移动: 窗口尺寸**一点没变** ⇒ LibVLC 根本不重协商 vout ⇒ 没有任何东西会露白底,
-        //       此时压黑纯属多余, 而它的伤害是实的(见 OnModalResizeEnded 里"撤不掉"那条)。
-        //   原先不分两者 ⇒ 拖完位置黑屏一直不撤。
-        //
-        // ★★ 为什么**不能**在 ENTER 时就判断"这次是不是改大小"(第一版这么写, 已否掉):
-        //   ENTER 发在拖动**开始之前**, 那一刻尺寸当然还没变 ⇒ 任何"现在比一下"的判断都会
-        //   把"斜向拖边缘"(位置和尺寸同时变)误判成纯移动 ⇒ 不压罩 ⇒ 闪白回归。
-        //   所以改成**延迟判定**: ENTER 只记下矩形, 之后由尺寸真的变了再补压(见 StartModalResizeSizeWatch)。
-        _lastModalRect = new Rect(Left, Top, Width, Height);
-        _fullscreenCoverArmed = false;
-        _resizeHold = false;
-        // 不排计时器: 纯移动压根不该压罩, 计时器留给真正压上之后做兜底。
-        StartModalResizeSizeWatch();
-    }
-
-    /// <summary>
-    /// 拖动期间盯住"尺寸真的开始变了吗"。变了才补压遮罩(斜向拖边缘的场景)。
-    /// 用 <see cref="CompositionTarget"/> 的 Rendering 回调而不是 DispatcherTimer:
-    /// 它跟着渲染帧走, 每帧一次, 拖动结束自然停。
-    /// </summary>
-    private void StartModalResizeSizeWatch()
-    {
-        if (_modalSizeWatchAttached) return;
-        _modalSizeWatchAttached = true;
-        CompositionTarget.Rendering += OnModalResizeRendering;
-    }
-
-    private void OnModalResizeRendering(object? sender, EventArgs e)
-    {
-        if (_closing)
-        {
-            StopModalResizeSizeWatch();
-            return;
-        }
-
-        // 尺寸确实变了 ⇒ 这次是"改大小"(可能同时在移动), 按住遮罩
-        if (!_fullscreenCoverArmed &&
-            (Math.Abs(Width - _lastModalRect.Width) > 0.5 ||
-             Math.Abs(Height - _lastModalRect.Height) > 0.5))
-        {
-            ArmResizeCover();
-        }
-
-        // 一旦压上就不再需要盯了(遮罩要一直按住到 EXIT)
-        if (_fullscreenCoverArmed) StopModalResizeSizeWatch();
-    }
-
-    private void StopModalResizeSizeWatch()
-    {
-        if (!_modalSizeWatchAttached) return;
-        _modalSizeWatchAttached = false;
-        CompositionTarget.Rendering -= OnModalResizeRendering;
-    }
-
-    /// <summary>这次模态拖动开始时记下的窗口矩形, 用来判断尺寸有没有变过</summary>
-    private Rect _lastModalRect;
-    private bool _modalSizeWatchAttached;
-
-    /// <summary>
-    /// 拖动结束才撤遮罩 —— 不是靠"新帧到达"(那样会在拖动中途被反复放行, 闪白依旧)。
-    ///
-    /// ★★ 2026-10-06: 纯移动(尺寸未变)根本没压过遮罩, 这里必须**无条件**把底色还原 ——
-    ///   不能"只在压过时才撤": 用户拖完位置看到的黑屏, 恰恰是遮罩**已经撤不掉**的那一类
-    ///   (靠 TimeChanged 等新帧恢复, 而移动时视频尺寸没变、LibVLC 不出新帧; 暂停时更是完全不发)。
-    /// </summary>
-    protected override void OnModalResizeEnded()
-    {
-        StopModalResizeSizeWatch();
-        ReleaseResizeHold();
-        // ★★ 2026-10-06 纯移动(尺寸未变)时压根没压过遮罩, 但底色**必须**还原 ——
-        //   这正是"拖完位置黑屏"的那一类: 遮罩一旦压上就只能等 TimeChanged 等新帧来撤,
-        //   而移动时窗口尺寸没变、LibVLC 不出新帧, 暂停时更是完全不发 ⇒ 撤不掉。
-        //   这里无条件走一次撤罩, 无论压没压过。
-        ReleaseFullscreenCover();
-    }
     /// <summary>当前是否处于全屏(顶栏已收起、右侧信息栏已收成 0 宽)</summary>
     private bool _isFullscreen;
 
@@ -5801,6 +5735,64 @@ public partial class PlayerWindow : FluentWindow
         MinHeight = hide ? FillWindowMinHeight : NormalWindowMinHeight;
     }
 
+    // ------------------------------------------------------------ 播放器窗口大小记忆(2026-11-03)
+
+    /// <summary>最后一次"常规态"的窗口尺寸(全屏/最大化期间不更新)。关闭时从这里落盘。</summary>
+    private double _lastNormalWidth;
+    private double _lastNormalHeight;
+
+    /// <summary>本次窗口是否已经保存过尺寸(OnClosing 可能被调用两次: 先取消、拆解完再真关)。</summary>
+    private bool _windowSizeSaved;
+
+    /// <summary>
+    /// 套用设置里记住的窗口宽高(设置项关闭时什么都不做, 保持 XAML 默认 1280×760)。
+    ///
+    /// ★ 夹取规则: 不能小于窗口最小尺寸(常规态要放得下右侧详情栏), 也不能超过当前
+    ///   主屏工作区 —— 用户换到更小的显示器/改过缩放后, 旧的大尺寸会让窗口伸出屏幕外。
+    /// </summary>
+    private void ApplyRememberedPlayerWindowSize()
+    {
+        if (!Svc.Settings.RememberPlayerWindowSize) return;
+        var w = Svc.Settings.PlayerWindowWidth;
+        var h = Svc.Settings.PlayerWindowHeight;
+        if (w <= 0 || h <= 0) return;
+
+        var maxW = Math.Max(MinWidth, SystemParameters.WorkArea.Width - 32);
+        var maxH = Math.Max(MinHeight, SystemParameters.WorkArea.Height - 32);
+        Width = Math.Clamp((double)w, MinWidth, maxW);
+        Height = Math.Clamp((double)h, MinHeight, maxH);
+    }
+
+    /// <summary>
+    /// 记录最后一次常规尺寸。最大化/全屏时 SizeChanged 也会发, 但那时记录的是屏幕尺寸,
+    /// 带进下一次启动就会"一打开就铺满" —— 所以按窗口状态过滤。
+    /// ★ 铺满模式(_isFillWindow)也不记: 那个布局里窗口下限是 320×200, 用户拖出来的小窗
+    ///   下次按**常规布局**打开时会被 840×600 的最小尺寸顶回去, 记了等于没记。
+    /// </summary>
+    private void OnPlayerSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        if (!IsLoaded || _closing || _isFullscreen || _isFillWindow) return;
+        if (WindowState != WindowState.Normal) return;
+        if (ActualWidth < 100 || ActualHeight < 100) return;
+        _lastNormalWidth = ActualWidth;
+        _lastNormalHeight = ActualHeight;
+    }
+
+    /// <summary>
+    /// 关闭时保存窗口大小(设置项关掉时直接跳过, 也不清掉旧值 —— 重新打开还能沿用)。
+    /// ★ 在 OnClosing **最前面**调用: 后面会把全屏态还原成 Normal, 那时再读尺寸就不准了。
+    /// </summary>
+    private void SavePlayerWindowSize()
+    {
+        if (_windowSizeSaved) return;
+        _windowSizeSaved = true;
+        if (!Svc.Settings.RememberPlayerWindowSize) return;
+
+        var w = _lastNormalWidth > 0 ? _lastNormalWidth : Width;
+        var h = _lastNormalHeight > 0 ? _lastNormalHeight : Height;
+        Svc.Settings.SetPlayerWindowSize(w, h);
+    }
+
     // ------------------------------------------------------------ 窄视频区控制栏
 
     /// <summary>
@@ -5842,261 +5834,12 @@ public partial class PlayerWindow : FluentWindow
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreen();
 
     // ---------------------------------------- 最大化 / 还原: 视频区白块
-
-    /// <summary>
-    /// 窗口**最大化/还原**期间把视频区压黑, 盖住 libvlc 重协商 vout 时的白底。
-    ///
-    /// ★★★ 为什么必须有这一段(2026-10-17 用户澄清"全屏"其实是**窗口最大化**后立刻查清):
-    ///   视频区原有的黑罩(<see cref="ArmResizeCover"/>)**只挂在
-    ///   `WM_ENTERSIZEMOVE`/`WM_EXITSIZEMOVE` 上** —— 那是"用户拖窗口边缘改大小"的消息。
-    ///   而最大化/还原走的是 **WM_SYSCOMMAND + WM_SIZE**, 根本不经过 ENTERSIZEMOVE
-    ///   ⇒ 那段"客户区尺寸剧变 + vout 重协商"全程**没有任何遮罩**,
-    ///   于是浅色主题下还原之后视频区上下就露出白块。
-    ///   (深色主题下露出来的也是同一块白, 只是周围本来就暗, 不如浅色扎眼 —— 与用户
-    ///     "浅色才明显"的描述一致。)
-    ///
-    /// ★ 为什么还要重刷原生窗口底色(调 `StartVideoBackdropFix`):
-    ///   最大化/还原会让 libvlc 按新尺寸**重建 vout**, 新的 `Static` 子窗口又没被刷黑;
-    ///   而第一版的定时器在起播后几拍就停了(`_videoBackdropTries` 用完), 这时没人管。
-    ///
-    /// ★ 为什么用"遮罩 + 延迟撤"而不是直接切窗口底色:
-    ///   与全屏同一套理由 —— `VideoView` 是 HwndHost(airspace), 画在所有 WPF 元素之上,
-    ///   窗口/RootGrid 的底色**盖不住它**; 只有 `VideoAreaRoot`(在 VideoView.Content 浮层里)
-    ///   压得住, 见 <see cref="ArmFullscreenCover"/> 的说明。
-    ///
-    /// ★ 为什么不等状态稳定后再压、而是**先压**:
-    ///   白块出现在"尺寸正在变"的那几十毫秒里, 等 `StateChanged` 送达时窗口往往已经重绘完,
-    ///   那块白早就闪过去了。所以顺序是: 压黑 → 改状态 → 让新帧来撤。
-    ///
-    /// ★★★ 这里**不是"压一次就按住"**, 而是"每次尺寸变化都重新压 + 重新计时"(2026-10-17):
-    ///   最大化/还原在 DWM 过渡动画里会连着发好几次尺寸变化(几十毫秒一次),
-    ///   每次都会让 libvlc 重协商一轮 vout。如果只压第一次, 后面的每一轮又会露白
-    ///   (实测: 只压第一次 → 还原后边带亮度 242; 每次都重压 → 0)。
-    ///   ⇒ 语义是"**只要尺寸还在变, 就一直压着**", 与拖边缘那条(ENTER→EXIT)一致。
-    /// </summary>
-    private void ArmMaximizeCover()
-    {
-        if (_closing || VideoAreaRoot == null) return;
-        _resizeHold = true;
-        _maximizeCoverArmed = true;
-        VideoAreaRoot.Background = Brushes.Black;
-        _fullscreenCoverArmed = true;
-
-        // ★★ 同时**立刻**重刷 vout 原生底色并起短时守护(2026-10-17 加):
-        //   尺寸剧变后 libvlc 会重新协商 vout, 那一刻 `Static` 子窗口会用**自己的类默认背景(白)**
-        //   擦一次背景 —— 而它铺满整个视频区, 盖在画面之外的地方(letterbox/控制栏下方)。
-        //   实测(bd-probe-barwho): 三者的几何完全一致, 白条却出现在底部 12% 处
-        //   ⇒ 白不是"窗口没跟上布局", 就是 `Static` 自己擦出来的。
-        //   ⇒ 每次尺寸变化都重新藏它 + 刷黑, 并让守护把接下来 3 秒盖住。
-        StartVideoBackdropFix();
-
-        // ★ 关键: 每次进来都**重新起算** settle —— 尺寸还在变就一直压着。
-        _maximizeSettle ??= new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(MaximizeSettleMs)
-        };
-        _maximizeSettle.Tick -= OnMaximizeSettle;
-        _maximizeSettle.Tick += OnMaximizeSettle;
-        _maximizeSettle.Stop();
-        _maximizeSettle.Start();
-
-        // ★ 绝对兜底: `_resizeHold` 会让 ReleaseFullscreenCover 直接 return, 而最大化/还原
-        //   **没有** WM_EXITSIZEMOVE 那样的结束消息。万一 settle 也没等到, 遮罩就永远黑着
-        //   (用户会看到"视频区全黑")。所以再挂一道无条件放闸的计时器。
-        _maximizeCoverSafety ??= new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(MaximizeCoverSafetyMs)
-        };
-        _maximizeCoverSafety.Tick -= OnMaximizeCoverSafety;
-        _maximizeCoverSafety.Tick += OnMaximizeCoverSafety;
-        _maximizeCoverSafety.Stop();
-        _maximizeCoverSafety.Start();
-
-        // 普通兜底计时器在按住期间只做"万一"之用(见 OnFullscreenCoverTimeout → ReleaseFullscreenCover
-        // 会被 _resizeHold 挡住), 这里启动只是保持与拖边缘那条路同构。
-        _fullscreenCoverTimer ??= new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(FullscreenCoverTimeoutMs)
-        };
-        _fullscreenCoverTimer.Tick -= OnFullscreenCoverTimeout;
-        _fullscreenCoverTimer.Tick += OnFullscreenCoverTimeout;
-        _fullscreenCoverTimer.Start();
-    }
-
-    /// <summary>
-    /// 尺寸已经稳定(一段时间没有再变)⇒ 放闸, 让"下一帧到达"立刻揭幕。
-    /// ★ 只放闸、不直接揭幕: 尺寸刚停的这几帧 vout 可能还在重协商, 立刻揭幕会露白。
-    ///   交给新帧(TimeChanged/Playing 会调 ReleaseFullscreenCover)是最准的时机。
-    /// </summary>
-    private void OnMaximizeSettle(object? sender, EventArgs e)
-    {
-        _maximizeSettle?.Stop();
-        if (_closing) return;
-        _resizeHold = false;
-    }
-
-    /// <summary>
-    /// 绝对兜底: 无条件放闸并撤罩。
-    /// ★ 走到这里说明"新帧"和"状态回调"都没来 —— 再不放闸就是永久黑屏。
-    ///   宁可多露一帧白, 也不能让用户对着黑屏等下去。
-    /// </summary>
-    private void OnMaximizeCoverSafety(object? sender, EventArgs e)
-    {
-        _maximizeCoverSafety?.Stop();
-        if (_closing) return;
-        _resizeHold = false;
-        _maximizeCoverArmed = false;
-        ReleaseFullscreenCover();
-    }
-
-    /// <summary>
-    /// 尺寸"稳定"的判定窗口(ms)。
-    /// ★ 取 260 而不是 100: 最大化的 DWM 过渡动画实测约 200ms, 期间尺寸一直在变;
-    ///   窗口太短会在动画中途就放闸, 后半段的白又露出来(实测 160ms 时仍有 242 的白)。
-    ///   "尺寸停了再放闸"的代价只有这一小段黑屏, 而它正好被过渡动画盖住, 用户看不到。
-    /// </summary>
-    private const int MaximizeSettleMs = 260;
-
-    /// <summary>绝对兜底时长(ms)。见 <see cref="ArmMaximizeCover"/> 里那段说明。</summary>
-    private const int MaximizeCoverSafetyMs = 1200;
-
-    private DispatcherTimer? _maximizeSettle;
-    private DispatcherTimer? _maximizeCoverSafety;
-
-    /// <summary>
-    /// 最大化/还原结束: 放闸让遮罩能撤, 并把新 vout 的原生底色再刷一次。
-    ///
-    /// ★ 顺序必须是"先放闸再刷": 遮罩要靠"新帧到达"撤掉(TimeChanged/Playing 都会调
-    ///   <see cref="ReleaseFullscreenCover"/>), 而它会检查 `_resizeHold`。
-    /// ★ 这里**不**直接揭幕: 尺寸刚变完的这几帧 vout 可能还在重协商, 立刻揭幕会露白。
-    ///   交给"新帧到达"撤(最准), 计时器只兜底(暂停中/极短片没有新帧)。
-    /// </summary>
-    private void ReleaseMaximizeCover()
-    {
-        if (_closing) return;
-        _maximizeCoverSafety?.Stop();
-        _resizeHold = false;
-        _maximizeCoverArmed = false;
-
-        // 状态已经落定 ⇒ 现在的窗口尺寸就是最终尺寸, 此时改类背景刷不会被打断
-        StartVideoBackdropFix();
-    }
-
-    /// <summary>
-    /// 窗口状态落定(基类在 <c>OnStateChanged</c> 里调): 放掉最大化期间的黑罩 + 重刷 vout 底色。
-    /// ★ 全屏切换自己有一套更严格的收尾(见 ApplyFullscreenLayout), 这里跳过它免得两套互抢。
-    /// </summary>
-    protected override void OnWindowStateSettled()
-    {
-        if (_closing) return;
-        if (_isFullscreen || _suppressStateCover) return;   // 全屏那条路由 ApplyFullscreenLayout 自己收尾
-        if (!_maximizeCoverArmed) return;
-
-        _maximizeCoverArmed = false;
-        ReleaseMaximizeCover();
-    }
-
-    /// <summary>
-    /// 标记"接下来一段时间内, 窗口状态变化由调用方自己负责遮罩"。
-    ///
-    /// 见 <see cref="_suppressStateCover"/> 的说明 —— 进出全屏必须走这个,
-    /// 否则两套遮罩叠加会把画面压黑近一秒。
-    /// </summary>
-    private void SuppressStateCoverFor(int ms)
-    {
-        _suppressStateCover = true;
-        _suppressStateCoverTimer ??= new DispatcherTimer();
-        _suppressStateCoverTimer.Tick -= OnSuppressStateCoverDone;
-        _suppressStateCoverTimer.Tick += OnSuppressStateCoverDone;
-        _suppressStateCoverTimer.Stop();
-        _suppressStateCoverTimer.Interval = TimeSpan.FromMilliseconds(ms);
-        _suppressStateCoverTimer.Start();
-    }
-
-    private void OnSuppressStateCoverDone(object? sender, EventArgs e)
-    {
-        _suppressStateCoverTimer?.Stop();
-        _suppressStateCover = false;
-    }
-
-    /// <summary>
-    /// 上一次看到的窗口尺寸, 用来发现"尺寸变了但没收到 WM_SYSCOMMAND"的那条路
-    /// (例如代码里直接赋 `WindowState`, 或系统动画/贴边布局替我们最大化)。
-    /// 见 <see cref="OnLayoutSizeChanged"/>。
-    /// </summary>
-    private Size _lastMeasuredSize;
-
-    /// <summary>
-    /// 兜底: 客户区尺寸**真的变了**但没压过遮罩时补压一次。
-    ///
-    /// ★ 为什么需要兜底: `WM_SYSCOMMAND` 只覆盖"用户点按钮/双击标题栏/快捷键"那几条路;
-    ///   而**代码里直接赋 `WindowState`**(ScMaximize 那套之外)以及系统的"贴边布局(Aero Snap)"
-    ///   不一定会经过它。2026-10-17 探针实测: 直接 `win.WindowState = Maximized` 就不发
-    ///   WM_SYSCOMMAND, 那条路原本完全没有遮罩。
-    /// ★ 只在"从没压过"时补, 且**不设** `_maximizeCoverArmed`: 这次补压没有对应的
-    ///   WM_SYSCOMMAND, 由计时器兜底撤罩即可(见 ReleaseMaximizeCover 的说明)。
-    /// </summary>
-    protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
-    {
-        base.OnRenderSizeChanged(sizeInfo);
-
-        if (_closing || !IsLoaded) return;
-        if (_isFullscreen || _suppressStateCover) return;
-        if (sizeInfo.PreviousSize.Width < 1 || sizeInfo.PreviousSize.Height < 1) return;
-        _lastMeasuredSize = sizeInfo.NewSize;
-
-        // ★★ 每次尺寸变化都**重新压 + 重新计时**(2026-10-17):
-        //   最大化/还原的过渡动画期间尺寸会连着变好几次, 每次 libvlc 都重协商一轮 vout。
-        //   只压第一次的话, 后面每一轮又露白(实测: 只压第一次 → 还原后边带 242; 每次都压 → 0)。
-        //   ⇒ 只要尺寸还在变, 就一直压着(不管幅度大小); 尺寸停了由 settle 计时器放闸。
-        //   ★ 这里**不能**按"变化幅度"过滤: 还原动画的后半段变化幅度会变小,
-        //     一旦据此放闸, 那一刻遮罩就撤了, 而 vout 还在重协商 ⇒ 白块又回来了(实测 242)。
-        var dw = Math.Abs(sizeInfo.NewSize.Width - sizeInfo.PreviousSize.Width);
-        var dh = Math.Abs(sizeInfo.NewSize.Height - sizeInfo.PreviousSize.Height);
-        if (dw > 0.5 || dh > 0.5) ArmMaximizeCover();
-    }
-
-    /// <summary>最大化/还原的黑罩是否压着(见 <see cref="ArmMaximizeCover"/>)</summary>
-    private bool _maximizeCoverArmed;
-
-    /// <summary>
-    /// 即将执行"最大化/还原/最小化"(WM_SYSCOMMAND) 时压黑视频区。
-    ///
-    /// ★ 为什么必须抢在**尺寸变化之前**: 白块出现在客户区尺寸剧变的那几十毫秒里;
-    ///   等 `OnStateChanged` 送达时窗口已经重绘完, 那块白早就闪过去了。
-    /// ★ 最小化也压上: 它同样会让 vout 重协商, 而恢复时露出来的白更显眼
-    ///   (窗口整个重新可见)。恢复(SC_RESTORE)同理。
-    /// </summary>
-    protected override void OnSystemCommand(int command)
-    {
-        if (_closing) return;
-        // 视频全屏期间那条路由 ApplyFullscreenLayout 自己管(它连着改多次窗口状态,
-        // 这里再压一次会和它的收尾打架)。
-        if (_isFullscreen || _suppressStateCover) return;
-
-        if (command is SC_MAXIMIZE or SC_RESTORE or SC_MINIMIZE)
-        {
-            ArmMaximizeCover();
-        }
-    }
-
-    /// <summary>
-    /// 为真时**不要**为窗口状态变化压黑罩。
-    ///
-    /// ★★★ 为什么必须有它(2026-10-17 加, 修一处自己引入的回归):
-    ///   "全屏"本身就是"最大化 + 收顶栏", 所以进出全屏**也会**触发
-    ///   `WM_SYSCOMMAND`/尺寸剧变 —— 而全屏那条路已经有一套更严格的遮罩时序
-    ///   (见 ApplyFullscreenLayout, 它自己 Arm/Release)。两边都压的后果实测是:
-    ///   退全屏时这边又压了一层、且它要等 `_resizeHold` 的兜底超时才放
-    ///   ⇒ 视频区在退全屏后**黑约 0.9 秒**(探针 bd-probe-fullscreen 立刻抓到)。
-    ///   ⇒ 用这个标志把"全屏切换期间"整段排除掉。
-    ///
-    /// ★ 用**计时器**而不是"方法开头置真/结尾置假": 状态变化与尺寸变化是
-    ///   `ApplyFullscreenLayout` 返回**之后**才由消息循环送达的, 结尾置假根本盖不住。
-    /// </summary>
-    private bool _suppressStateCover;
-
-    private DispatcherTimer? _suppressStateCoverTimer;
+    //
+    // ★★ 2026-11-03: 这里的"最大化/还原期间压黑视频区"整套已删除。
+    //   白块的根因是 LibVLCSharp 的 Static 宿主窗口在尺寸剧变时重绘白底,
+    //   现在由 VideoBackdropInterop.EnsureBlackVideoHost 在原生层治掉
+    //   (WS_CLIPCHILDREN + WM_ERASEBKGND/WM_PAINT 填黑), 不再需要 WPF 黑布。
+    //   ★ 别再复活 ArmMaximizeCover / OnMaximizeSettle / OnSystemCommand 那一套。
 
     /// <summary>收藏状态只有这一个入口 —— 分散着改很容易出现两边显示不一致</summary>
     private void SetFavorited(bool favorited)
@@ -8492,51 +8235,41 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 把 HwndHost 那个原生宿主窗口的**类背景刷**改成黑色 —— 修"视频没填满时是一片白"。
+    /// 把视频区原生宿主窗口处理成"黑底 + 不覆盖子窗口"。
     ///
-    /// ★★★ 真根因(2026-10-17 探针 bd-probe-letterbox 实测钉死, 别再猜):
-    ///   `VideoView` 是 <c>HwndHost</c>, 它下面由 libvlc 建了一串**同进程**的子窗口:
+    /// ★ 根因(2026-10-17 探针 bd-probe-letterbox 钉死; 2026-11-03 去掉黑布后复核):
+    ///   `VideoView` 是 <c>HwndHost</c>, 它下面由 LibVLCSharp/libvlc 建了一串**同进程**子窗口:
     ///   <code>
-    ///     HwndWrapper[...]   ← HwndHost 宿主窗口(我们这侧建的)
-    ///       Static           ← 铺满整个视频区(1000x945)   ★白边的作者
+    ///     HwndWrapper[...]   ← HwndHost 宿主窗口
+    ///       Static           ← LibVLCSharp 建的 VideoHwndHost 窗口   ★白边/白闪的作者
     ///       VLC video main   ← 铺满整个视频区
-    ///       VLC video output ← 只盖住画面那一块(1000x562)
+    ///       VLC video output ← 只盖住画面那一块
     ///   </code>
     ///   视频宽高比与视频区不一致时, `video output` 只占中间一条, 上下(或左右)剩下的区域
     ///   没有任何窗口画东西 ⇒ 露出 `Static` 的**窗口类默认背景(白色)**。
-    ///   逐层隐藏实测: 藏 `Static` → 边带亮度 240→0; 藏另两个 → 不变。**作者就是 Static。**
+    ///   尺寸剧变(vout 重协商)时, `Static` 重绘还会把白底刷到视频子窗口上 ⇒ 整块白闪。
     ///
-    /// ★★ 为什么不能"把手势层涂黑"(2026-10-13 那条记录只说会全黑, 原因在此):
-    ///   `VideoAreaRoot` 在 `VideoView.Content`(浮层窗口)里, **盖在整个视频区之上**。
-    ///   实测: 涂品红 → 边带变品红(确实在最上层); 涂不透明黑 → **画面中心也黑了**。
-    ///   ⇒ 它盖的是整块, 分不出"画面"和"边带", 这条路不可用。
+    /// ★ 处理(见 <see cref="VideoBackdropInterop.EnsureBlackVideoHost"/>):
+    ///   · `WS_CLIPCHILDREN`: 父窗口/Static 重绘时排除子窗口区域, 不把白底刷到画面上;
+    ///   · 子类化 Static 的 `WM_ERASEBKGND` / `WM_PAINT`: 客户区被擦/重绘时直接填黑;
+    ///   · 父窗口 + Static 的类背景刷也设黑: 兜住 libvlc 重新显示 Static 的瞬间。
     ///
-    /// ★ 为什么改**父窗口**的类背景刷有效(而不是 Static 自己的):
-    ///   实测 `Static` 的 `GCLP_HBRBACKGROUND` 本来就是 0(没设), 它的白来自 `Static` 类
-    ///   自身的默认背景; 把**父窗口**设成黑之后, 那块区域由父窗口先擦黑, Static 再叠上去
-    ///   就透不出白 —— 边带 152→0, 画面不受影响, 持续播放 2 秒仍正确(实测)。
-    ///   ★ 关键: 它是**本进程的窗口**, 所以 `SetClassLongPtr` 可用;
-    ///     libvlc 自己的 `VLC video *` 窗口怎么改都无效(探针 E/G/J 段都验证过)。
-    ///
-    /// ★ 起播/换片后必须再调一次(见调用点): libvlc 重建 vout 会重新建 `Static` 子窗口,
-    ///   那时会再露出一次白 —— 这也是为什么"点一下就好"的观感像是"要碰一下才正常"。
-    /// </summary>
-    /// ★ 实测有效的只有一处: 把 `Static` 的**父窗口**(`HwndWrapper`, 也就是 HwndHost 的宿主)
-    ///   的类背景刷设成黑 —— 边带 242→0 且画面正常, 持续播放不回弹。
-    ///   ★ 反过来对 `Static` 自己涂黑**无效**(实测: 边带仍 242) —— 它自己那层不负责擦背景。
-    ///     这条很容易搞反: "白边是 Static 画的" ≠ "改 Static 就能黑", 两个都试过才知道。
+    /// ★ 不隐藏 Static: 真机上 `ShowWindow(SW_HIDE)` 会把**整个画面**一起藏掉
+    ///   (不同 vout/显卡组合拓扑不一样, 不能赌)。
+    /// ★ 起播 / vout 重建 / 换清晰度 / 进出全屏后都要再调一次 —— 见 `Vout`、`Playing`
+    ///   与 <see cref="StartVideoBackdropFix"/> 的调用点。
     /// </summary>
     private void ApplyHwndHostBlackBackground()
     {
         var hwnd = FindVideoStaticWindow();
         if (hwnd == IntPtr.Zero) return;
-        // ★★ 只刷**宿主窗口**的类背景刷, 不隐藏 `Static`(2026-10-17 最终版):
-        //   早两版试过 `ShowWindow(Static, SW_HIDE)`, 在探针里能把边带刷到 0,
-        //   但真机一跑就发现 **整个视频画面也没了** —— 说明这台机器上画面就是 `Static`
-        //   那条链画出来的(与探针顶部的拓扑假设不同, 不同 vout/显卡组合不一样)。
-        //   ⇒ 隐藏它风险太大, 不能作为产品行为的默认值。
-        //   ⇒ 回到"刷父窗口类背景刷"这一条: 探针实测 242→0, 且画面不受影响。
-        VideoBackdropInterop.PaintClassBackgroundBlack(hwnd);
+
+        // ★★ 2026-11-03(去掉 resize/最大化/全屏黑布后的根修):
+        //   不再只刷父窗口类背景刷, 而是把 `Static` 自己治成"黑底 + 不覆盖子窗口":
+        //     · WS_CLIPCHILDREN: 父窗口/Static 重绘时不把白底刷到 `VLC video output` 上;
+        //     · 子类化 WM_ERASEBKGND / WM_PAINT: 客户区被擦/重绘时直接填黑。
+        //   这样尺寸剧变时新暴露的区域是黑的, 而不是 Static 的默认白底。
+        VideoBackdropInterop.EnsureBlackVideoHost(hwnd);
     }
 
     // --- 起播后把视频区原生窗口底色刷黑(见 ApplyHwndHostBlackBackground) ---
@@ -8545,13 +8278,11 @@ public partial class PlayerWindow : FluentWindow
     /// **短时守护**: 每 <see cref="VideoBackdropGuardIntervalMs"/> 检查一次 `Static` 有没有
     /// 又被 libvlc 显示出来, 是就立刻再藏一次。
     ///
-    /// ★★★ 为什么必须有它(2026-10-17 实测, 这是"白块依旧"的最后一层):
-    ///   libvlc 在 **vout 建立 / 重建 / 首帧到达** 时会自己调 `ShowWindow(Static, SW_SHOW)`,
-    ///   而我们的"藏一次"只在那一个瞬间有效 —— 它随后又被显示出来, 白色也跟着回来。
-    ///   探针时间轴抓到的正是这个: 遮罩压着时边带 0, 撤罩后变成 242(白),
-    ///   而那一刻 `Static` 的 `IsWindowVisible` 又是 True。
-    ///   ⇒ 靠"事件触发时藏一次"必然有竞态(事件与 libvlc 的内部调用顺序由它决定);
-    ///     只有**短时间反复确认**才能把这段时间盖死。
+    /// ★★★ 为什么必须有它(2026-10-17 实测, 2026-11-03 去掉黑布后保留):
+    ///   libvlc 在 **vout 建立 / 重建 / 首帧到达** 时会重新显示/重绘 `Static`,
+    ///   白色也可能跟着回来。我们的 `EnsureBlackVideoHost` 在那一刻可能还没拿到句柄
+    ///   (`Playing` 触发时 Static 往往还没建出来), 所以需要短时间反复套用。
+    ///   ⇒ 靠"事件触发时刷一次"必然有竞态; 只有**短时间反复确认**才能把这段时间盖死。
     ///
     /// ★ 为什么是"短时"而不是常驻: 起播/vout 重建之后约 2 秒内它才会折腾,
     ///   之后再频繁去摸原生窗口纯属浪费(而且 `CompositionTarget` 那条零原生调用的规矩
@@ -8567,8 +8298,8 @@ public partial class PlayerWindow : FluentWindow
     private const int VideoBackdropGuardTicks = 25;
 
     /// <summary>
-    /// 启动短时守护(见 <see cref="RunVideoBackdropGuard"/>): 在接下来约 3 秒内反复确认
-    /// `Static` 是隐藏的。尺寸剧变 / vout 重建 / 起播都要调一次。
+    /// 启动短时守护(见 <see cref="RunVideoBackdropGuard"/>): 在接下来约 3 秒内反复套用
+    /// "黑底 + 不覆盖子窗口"的原生修复。尺寸剧变 / vout 重建 / 起播都要调一次。
     /// </summary>
     private void RunVideoBackdropGuard()
     {
@@ -8601,9 +8332,8 @@ public partial class PlayerWindow : FluentWindow
     ///
     /// ★ 为什么是"守护一段时间"而不是"刷几次就停"(2026-10-17 实测):
     ///   `Playing` 触发时 `Static` 往往还没建出来(句柄 0); 建好之后 libvlc 还会在
-    ///   首帧/重建时把它**重新显示**出来。固定 4 拍的预算在这两种情况下都不够用 ——
-    ///   探针时间轴实测: 遮罩压着时边带 0, 撤罩后变 242, 而那一刻 `Static` 又是可见的。
-    ///   ⇒ 改成 3 秒内每 120ms 确认一次(见 <see cref="RunVideoBackdropGuard"/>)。
+    ///   首帧/重建时重新显示/重绘它。固定几拍的预算在这两种情况下都不够用 ——
+    ///   ⇒ 改成 3 秒内每 120ms 套用一次(见 <see cref="RunVideoBackdropGuard"/>)。
     /// </summary>
     private void StartVideoBackdropFix() => RunVideoBackdropGuard();
     /// <summary>
@@ -8615,8 +8345,8 @@ public partial class PlayerWindow : FluentWindow
     ///   ② 该对象的句柄存在基类 `HwndHost._hwnd`, 类型是 **`HandleRef`**(不是 `IntPtr`),
     ///      必须读 `.Handle`。第一版只认 `IntPtr` ⇒ 永远拿到 0 ⇒ 边带一直白着。
     ///   ③ ★ 那个句柄拿到的**正是 `Static` 子窗口本身**(实测类名 `Static`, 父级才是
-    ///      `HwndWrapper`), 所以直接对它涂黑就是对的; 不必再往上找父级
-    ///      (改父级也有效, 但会波及宿主窗口的其它区域, 不如改 Static 精确)。
+    ///      `HwndWrapper`) —— 它由 LibVLCSharp 的 VideoHwndHost 创建, 我们这侧可以安全地
+    ///      改样式/子类化。处理入口见 <see cref="ApplyHwndHostBlackBackground"/>。
     ///   ★ 别用 `PresentationSource.FromVisual(VideoView)`: 那返回的是**外层播放器窗口**
     ///     的 HwndSource, 拿它改类背景刷会把主题底色一起改坏。
     /// </summary>
@@ -8663,6 +8393,10 @@ public partial class PlayerWindow : FluentWindow
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
+        // ★ 必须在最前面: 下面会把全屏态(WindowStyle/WindowState)还原成普通窗口,
+        //   之后再读尺寸就变成了还原后的值, 记忆会失效。
+        SavePlayerWindowSize();
+
         // 为什么要"先隐藏 -> 后台拆解 -> 再真正 Close":
         // LibVLC 的 Stop/Dispose 会阻塞等待解复用/解码线程退出(实测约 1 秒),
         // 原先在 UI 线程同步调用, 表现就是"点了关闭要卡一下窗口才消失"。
@@ -8682,12 +8416,9 @@ public partial class PlayerWindow : FluentWindow
 
             _closing = true;
 
-            // 拖动尺寸监听订阅的是 CompositionTarget.Rendering —— 它是**静态**事件、不随窗口销毁,
-            // 所以必须显式解绑(OnModalResizeRendering 里的 _closing 分支只是兜底:
-            // 窗口真关闭时渲染循环可能已经停摆, 根本走不到那里)。
-            StopModalResizeSizeWatch();
-            // 弹幕逐帧推进器订阅的是**同一个**静态事件, 同理必须解绑, 否则窗口关了
-            // 渲染回调还在, 回调里又摸 DanmakuCanvas —— 轻则空转, 重则已释放对象。
+            // 弹幕逐帧推进器订阅的是 CompositionTarget.Rendering —— 它是**静态**事件、
+            // 不随窗口销毁, 所以必须显式解绑, 否则窗口关了渲染回调还在,
+            // 回调里又摸 DanmakuCanvas —— 轻则空转, 重则已释放对象。
             StopDanmakuClock();
 
             // ★ 立刻停掉声音 —— 这是"窗口关了但声音还响半秒"的修法。

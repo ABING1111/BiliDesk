@@ -262,6 +262,34 @@ public class SettingsStore
     public int PlayerVolume { get; set; } = 80;
 
     /// <summary>
+    /// 是否记住播放器窗口大小(默认开)。
+    ///
+    /// ★ 关掉后: 播放器每次打开都用 XAML 里的默认 1280×760, 也不再写盘 ——
+    ///   给"不想让窗口尺寸被上次操作影响"的用户一个干净入口(多显示器/演示场景常见)。
+    /// ★ 只记**宽高**, 不记位置与最大化/全屏状态: 用户要的是"窗口大小", 位置交给
+    ///   WindowStartupLocation=CenterScreen; 全屏是临时态, 不该带到下一次启动。
+    /// </summary>
+    public bool RememberPlayerWindowSize { get; set; } = true;
+
+    /// <summary>上一次播放器窗口的宽度(DIP; 0 = 还没记过, 用 XAML 默认值)</summary>
+    public int PlayerWindowWidth { get; set; }
+
+    /// <summary>上一次播放器窗口的高度(DIP; 0 = 还没记过, 用 XAML 默认值)</summary>
+    public int PlayerWindowHeight { get; set; }
+
+    /// <summary>播放器窗口记忆尺寸的合法下限(与 PlayerWindow 的 FillWindowMin 一致, 防止存入不可用的小窗)</summary>
+    public const int PlayerWindowMinWidth = 320;
+
+    /// <inheritdoc cref="PlayerWindowMinWidth"/>
+    public const int PlayerWindowMinHeight = 200;
+
+    /// <summary>播放器窗口记忆尺寸的上限: 手改配置可能塞进离谱值, 挡住避免下次开到屏幕外</summary>
+    public const int PlayerWindowMaxWidth = 10000;
+
+    /// <inheritdoc cref="PlayerWindowMaxWidth"/>
+    public const int PlayerWindowMaxHeight = 10000;
+
+    /// <summary>
     /// LibVLC 的网络缓冲(毫秒)。
     ///
     /// ★ 2026-10-30 实测(探针 bd-probe-startcfix, 同一路 DASH):
@@ -332,6 +360,43 @@ public class SettingsStore
         var v = Math.Clamp(volume, 0, 100);
         if (PlayerVolume == v) return;
         PlayerVolume = v;
+        Save();
+    }
+
+    /// <summary>窗口尺寸是否落在可接受的闭区间内(0 表示"尚未记录", 由调用方单独处理)</summary>
+    private static bool IsValidPlayerWindowSize(int value, int min, int max)
+        => value >= min && value <= max;
+
+    /// <summary>
+    /// 改"是否记住播放器窗口大小"并落盘。
+    /// 关掉时保留已记录的值(下次再开还能沿用), 只是不再读取/写入 ——
+    /// 用户重新打开开关不会突然回到默认尺寸。
+    /// </summary>
+    public void SetRememberPlayerWindowSize(bool value)
+    {
+        if (RememberPlayerWindowSize == value) return;
+        RememberPlayerWindowSize = value;
+        Save();
+    }
+
+    /// <summary>
+    /// 记录播放器窗口大小并落盘(只在"记住窗口大小"开着时生效)。
+    /// ★ 调用方传的是 DIP, 这里四舍五入成整数: JSON 里不要出现 1279.999999 这种噪声。
+    /// ★ 越界/异常值直接忽略, 不写盘 —— 宁可沿用上一次的好值, 也不要把坏值存进去。
+    /// </summary>
+    public void SetPlayerWindowSize(double width, double height)
+    {
+        if (!RememberPlayerWindowSize) return;
+        if (!double.IsFinite(width) || !double.IsFinite(height)) return;
+
+        var w = (int)Math.Round(width);
+        var h = (int)Math.Round(height);
+        if (!IsValidPlayerWindowSize(w, PlayerWindowMinWidth, PlayerWindowMaxWidth)) return;
+        if (!IsValidPlayerWindowSize(h, PlayerWindowMinHeight, PlayerWindowMaxHeight)) return;
+        if (PlayerWindowWidth == w && PlayerWindowHeight == h) return;
+
+        PlayerWindowWidth = w;
+        PlayerWindowHeight = h;
         Save();
     }
 
@@ -511,6 +576,16 @@ public class SettingsStore
         // 音量继承: 老配置没这个字段 ⇒ 保持默认 80。越界值夹回 0~100。
         PlayerVolume = Math.Clamp(s.PlayerVolume, 0, 100);
 
+        // 播放器窗口大小记忆(2026-11-03 新增): 老配置没有这三个字段 ⇒
+        // AppSettings 的初始化值就是"开启 + 尚未记过尺寸(0)", 不需要版本兼容。
+        // ★ 宽高必须夹取/丢弃: 手改配置可能塞进负数或离谱值, 直接拿去设 Width 会让窗口
+        //   开到屏幕外或抛异常。非法值统一归 0(= 用 XAML 默认尺寸)。
+        RememberPlayerWindowSize = s.RememberPlayerWindowSize;
+        PlayerWindowWidth = IsValidPlayerWindowSize(s.PlayerWindowWidth, PlayerWindowMinWidth, PlayerWindowMaxWidth)
+            ? s.PlayerWindowWidth : 0;
+        PlayerWindowHeight = IsValidPlayerWindowSize(s.PlayerWindowHeight, PlayerWindowMinHeight, PlayerWindowMaxHeight)
+            ? s.PlayerWindowHeight : 0;
+
         // 网络缓冲: 老配置缺字段 ⇒ AppSettings 的初始化值 1000(与旧版一致)。
         // ★ 这里仍要夹取: 手改配置可能塞进 0(等于关掉缓冲)或十万(白占内存)。
         // ★ 0 不能直接 Math.Clamp 成 300 —— 那会把"坏了的值"悄悄推进最容易卡的那一档。
@@ -578,6 +653,9 @@ public class SettingsStore
         DisclaimerAccepted = DisclaimerAccepted,
         DisclaimerVersion = AcceptedDisclaimerVersion,
         PlayerVolume = PlayerVolume,
+        RememberPlayerWindowSize = RememberPlayerWindowSize,
+        PlayerWindowWidth = PlayerWindowWidth,
+        PlayerWindowHeight = PlayerWindowHeight,
         NetworkCachingMs = NetworkCachingMs,
         AutoBufferPolicy = AutoBufferPolicy,
         LastSearchKind = (int)SearchKind

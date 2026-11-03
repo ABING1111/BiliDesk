@@ -635,6 +635,29 @@ public class SettingsViewModel : ObservableObject
         ? "已登录, 按账号等级取流, 此开关不参与"
         : "未登录也能看 1080P; 关闭后回到 360P/480P";
 
+    // ----------------- 播放器窗口大小记忆 -----------------
+
+    /// <summary>
+    /// 是否记住播放器窗口大小(默认开, 2026-11-03 新增)。
+    /// 只记宽高, 不记位置/最大化状态 —— 全屏是临时态, 不该带到下一次启动。
+    /// </summary>
+    public bool RememberPlayerWindowSize
+    {
+        get => Svc.Settings.RememberPlayerWindowSize;
+        set
+        {
+            if (value == Svc.Settings.RememberPlayerWindowSize) return;
+            Svc.Settings.SetRememberPlayerWindowSize(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(RememberPlayerWindowSizeHint));
+        }
+    }
+
+    /// <summary>副标题: 说明它记什么、什么时候生效, 以及关掉后的行为</summary>
+    public string RememberPlayerWindowSizeHint => Svc.Settings.RememberPlayerWindowSize
+        ? "关闭播放器时记住窗口宽高, 下次打开沿用(只记大小, 不记位置)"
+        : "播放器每次打开都用默认窗口大小";
+
     // ----------------- 默认画质 -----------------
 
     /// <summary>默认画质下拉框的显示项(顺序即 QualityPreference.All 的顺序)</summary>

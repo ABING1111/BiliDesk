@@ -38,6 +38,9 @@ public partial class FollowPage : UserControl
     {
         if (DataContext is FollowViewModel vm)
         {
+            // 看板默认折叠(2026-11-03 用户要求"仅点击后再展开"): 页面实例会被 MainWindow
+            // 缓存、VM 里的展开态会跨次保留, 所以每次进入页面都归位到收起, 不沿用上次的展开态。
+            vm.LiveBoardOpen = false;
             UpdateLayoutChips(vm);
             await vm.InitAsync();
             StartPolling();

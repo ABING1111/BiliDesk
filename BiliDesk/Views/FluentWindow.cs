@@ -415,15 +415,6 @@ public class FluentWindow : Window
     {
         base.OnStateChanged(e);
 
-        // ★★ 播放器: 最大化/还原期间视频区要压黑(2026-10-17)。
-        //   放在 base 之前是**做不到**的 —— 这个回调进来时状态已经改完了, 所以真正的
-        //   "先压黑"发生在 PlayerWindow 自己拦截 WM_SYSCOMMAND 的地方(见 OnMaximizeRequested)。
-        //   这里只负责"状态已落定 → 放闸 + 刷新 vout 原生底色"。
-        //   ★ 最小化不处理: 窗口本来就不可见, 视频区压不压都一样, 而放下遮罩反而可能在
-        //     恢复时多留一帧黑。
-        if (IsLoaded && WindowState != WindowState.Minimized)
-            OnWindowStateSettled();
-
         // 启动阶段(IsLoaded 之前)不处理; 最小化不处理(窗口本来就不可见)
         if (!IsLoaded) return;
         if (WindowState == WindowState.Minimized) return;
@@ -446,17 +437,6 @@ public class FluentWindow : Window
     }
 
     /// <summary>
-    /// 窗口状态(最大化/还原/全屏)已经**落定**时调用, 供子类做收尾。
-    ///
-    /// ★ 播放器用它放掉"最大化期间的黑罩"并重刷 vout 原生底色(见 PlayerWindow.ReleaseMaximizeCover)。
-    ///   做成虚方法而不是在基类里判断类型: 基类不该知道播放器有视频区这回事。
-    ///   默认空实现 —— 其它窗口(主窗口/登录框等)行为完全不变。
-    /// </summary>
-    protected virtual void OnWindowStateSettled()
-    {
-    }
-
-    /// <summary>
     /// 遍历可视树里的卡片墙面板(首页那种零虚拟化墙), 供状态变化做"一次性收敛"协作。
     /// 只有挂了卡片墙的页面有实例 —— 设置页/"我的"页走这里等于空操作。
     /// </summary>
@@ -475,7 +455,6 @@ public class FluentWindow : Window
     // ------------------------------------------------------------ 最大化尺寸修正
 
     private const int WM_GETMINMAXINFO = 0x0024;
-    private const int WM_SYSCOMMAND = 0x0112;
 
     /// <summary>取"离这个窗口最近的显示器"(多显示器时按窗口当前所在的那块算)</summary>
     private const int MonitorDefaultToNearest = 2;
@@ -548,71 +527,8 @@ public class FluentWindow : Window
             // 广播出去是为了让卡片墙把重算**合流**: 拖动期间跟着每一帧重算整墙卡片,
             // 就是用户说的"拖边缘很卡"。
             CardWall.NotifyModalResize(msg == WM_ENTERSIZEMOVE);
-
-            // ★ 2026-10-05: 播放器靠这一对钩子在"拖动改大小"期间**按住**视频区遮罩,
-            //   盖住 LibVLC 反复重协商 vout 露出的白底(拖边缘闪白)。
-            //   ★★ 为什么开始/结束**都要**通知(上一版只发开始, 结果没修好 —— 2026-10-05):
-            //     遮罩若只在开始时压一次、靠"新帧到达"撤掉, 那么第一次重协商一过去就被撤了;
-            //     而拖动期间窗口尺寸每帧都在变, LibVLC 会**反复**重协商 vout
-            //     ⇒ 后面每一轮又露出白底, 于是"闪白依旧"。
-            //     所以遮罩的语义必须是"从 ENTER 一直压到 EXIT", 中途绝不放行。
-            if (msg == WM_ENTERSIZEMOVE) OnModalResizeStarted();
-            else OnModalResizeEnded();
-        }
-        else if (msg == WM_SYSCOMMAND)
-        {
-            // ★★★ 最大化/还原/最小化的**最早**可拦截点(2026-10-17, 修"最大化→还原后视频区白块")。
-            //   为什么要抢在这里: 这三个动作会让客户区尺寸**剧变**, libvlc 随即重协商 vout,
-            //   浅色主题下新尺寸的空窗就是一块白。等 `OnStateChanged` 再处理已经晚了 ——
-            //   那个回调进来时窗口早就重绘完、白块已经闪过去了。
-            //   WM_SYSCOMMAND 是"系统即将执行这个命令", 此刻压黑, 白块根本没有亮相的机会。
-            //   ★ 不设 handled: 命令本身必须照常执行(交给 DefWindowProc/WPF)。
-            var cmd = (int)(wParam.ToInt64() & 0xFFF0);
-            OnSystemCommand(cmd);
         }
         return IntPtr.Zero;
-    }
-
-    /// <summary>SC_MAXIMIZE / SC_RESTORE / SC_MINIMIZE 的 wParam 取值(Win32 常量)</summary>
-    protected const int SC_MAXIMIZE = 0xF030;
-    /// <inheritdoc cref="SC_MAXIMIZE"/>
-    protected const int SC_RESTORE = 0xF120;
-    /// <inheritdoc cref="SC_MAXIMIZE"/>
-    protected const int SC_MINIMIZE = 0xF020;
-
-    /// <summary>
-    /// 即将执行"最大化/还原/最小化"时调用(**尺寸变化之前**), 供子类抢先压住画面。
-    ///
-    /// ★ 播放器用它压黑视频区, 盖住 libvlc 因客户区尺寸剧变而重协商 vout 时露出的白底。
-    ///   为什么不用 `OnModalResizeStarted` 那一对: 那对只覆盖"拖窗口边缘"
-    ///   (WM_ENTERSIZEMOVE), 而最大化/还原走的是 WM_SYSCOMMAND + WM_SIZE, **完全绕开**它。
-    /// ★ 默认空实现 —— 其它窗口行为不变。
-    /// </summary>
-    protected virtual void OnSystemCommand(int command)
-    {
-    }
-
-    /// <summary>
-    /// 用户**开始**"拖着窗口边缘改大小"时调用(仅 <c>WM_ENTERSIZEMOVE</c>), 供子类挂副作用。
-    /// 与 <see cref="OnModalResizeEnded"/> 成对, 语义是"这段模态 resize 的起止"。
-    ///
-    /// ★ 播放器用它压黑视频区手势层, 盖住 LibVLC 在 resize 期间重协商 vout 露出的白底。
-    ///   做成虚方法而不是在基类里判断类型: 基类不该知道播放器有视频区这回事。
-    ///   默认空实现 —— 不重写的窗口(主窗口/登录框等)行为完全不变。
-    /// </summary>
-    protected virtual void OnModalResizeStarted()
-    {
-    }
-
-    /// <summary>
-    /// 用户**结束**"拖着窗口边缘改大小"时调用(仅 <c>WM_EXITSIZEMOVE</c>), 与
-    /// <see cref="OnModalResizeStarted"/> 成对。
-    ///
-    /// ★ 播放器在**这里**才撤掉遮罩, 而不是靠"新帧到达" —— 理由见 WndProc 里那段注释:
-    ///   拖动期间会反复重协商 vout, 中途撤罩等于放行后面每一轮的白闪。
-    /// </summary>
-    protected virtual void OnModalResizeEnded()
-    {
     }
 
     /// <summary>

@@ -81,16 +81,26 @@ public class FollowViewModel : ObservableObject
     /// <summary>正在直播的关注主播(点一条直接进 TA 的直播间)。空 = 没人在播(看板整块收起)。</summary>
     public ObservableCollection<VideoItem> LiveNow { get; } = new();
 
-    private bool _liveBoardOpen = true;
+    private bool _liveBoardOpen;
 
-    /// <summary>看板展开/收起(UI 状态, 不落盘 —— 动态页每次进来默认展开, 想收就收一下)</summary>
+    /// <summary>
+    /// 看板展开/收起(UI 状态, 不落盘)。
+    /// ★ 默认**收起**(2026-11-03 用户要求"关注的直播默认折叠, 仅点击后再展开"):
+    ///   标题行始终显示人数, 用户想看谁在播时再点开 —— 不占动态流的首屏空间。
+    ///   收起时列表与空态提示都必须一起藏掉(见 <see cref="ShowLiveEmptyText"/>),
+    ///   否则会剩一行"暂时都没有在直播"挂在那里, 看着像没收干净。
+    /// </summary>
     public bool LiveBoardOpen
     {
         get => _liveBoardOpen;
-        set => SetProperty(ref _liveBoardOpen, value);
+        set
+        {
+            if (SetProperty(ref _liveBoardOpen, value))
+                OnPropertyChanged(nameof(ShowLiveEmptyText));
+        }
     }
 
-    /// <summary>看板标题: 说明有几人在播, 0 人时整个看板隐藏</summary>
+    /// <summary>看板标题: 说明有几人在播(0 人也保留标题行, 看板本身始终常驻)</summary>
     public string LiveBoardTitle => $"关注直播 · {LiveNow.Count}";
 
     /// <summary>看板加载中(随 RefreshAsync 并行, 不挡动态流)</summary>
@@ -114,10 +124,11 @@ public class FollowViewModel : ObservableObject
 
     /// <summary>
     /// 看板空态说明("关注的主播暂时都没有在直播")的可见性:
-    /// 加载**完成**且没人在播才显示 —— 加载中显示它会把"正在查"误报成"没人在播"。
+    /// 看板展开、加载**完成**且没人在播才显示 —— 加载中显示它会把"正在查"误报成"没人在播",
+    /// 收起时显示它则像没收干净(2026-11-03 默认收起后必须一起判断)。
     /// (Style 触发器压不过属性绑定, 这种复合条件在 VM 里算好最干净。)
     /// </summary>
-    public bool ShowLiveEmptyText => !LiveBoardLoading && !HasLiveNow;
+    public bool ShowLiveEmptyText => LiveBoardOpen && !LiveBoardLoading && !HasLiveNow;
 
     /// <summary>
     /// 拉"关注的主播正在直播"列表。与动态流**并行**加载(不占 RefreshAsync 的关键路径),
