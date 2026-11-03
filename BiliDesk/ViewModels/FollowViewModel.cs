@@ -217,10 +217,18 @@ public class FollowViewModel : ObservableObject
     public async Task InitAsync()
     {
         // ★ 页面实例是长期缓存的(MainWindow._pages): 从别的页面切回来时 Loaded 会再响一次,
-        //   但 Users.Count 不为 0, 以前这里直接返回 —— 看板就永远停在"第一次进动态页"那一刻。
-        //   现在: 已加载过就只刷新看板(一次轻请求), 让"刚刚开播"能立刻出现在看板上。
-        if (Users.Count == 0) await RefreshAsync();
-        else await RefreshLiveBoardAsync(showLoading: LiveNow.Count == 0);
+        //   但 Users.Count 不为 0, 以前这里直接返回 —— 看板/未读角标就永远停在
+        //   "第一次进动态页"那一刻。现在: 已加载过就轻量刷新看板与角标,
+        //   让"刚刚开播"和"刚刚投稿"都能立刻出现在页面上。
+        if (Users.Count == 0)
+        {
+            await RefreshAsync();
+            return;
+        }
+
+        await Task.WhenAll(
+            RefreshLiveBoardAsync(showLoading: LiveNow.Count == 0),
+            RefreshUnreadBadgesAsync());
     }
 
     /// <summary>从列表移除一个 UP 主(取消关注成功后调用)。移除的若是选中项, 回到全部动态</summary>
@@ -314,6 +322,13 @@ public class FollowViewModel : ObservableObject
                     foreach (var u in list)
                         if (u.Mid > 0 && seen.Add(u.Mid)) Users.Add(u);
                     OnPropertyChanged(nameof(Count));
+
+                    // ★ 左栏翻出新 UP 后要立刻按已缓存的动态流补算一次角标。
+                    //   以前只 Add 用户、不跑 UpdateUnreadBadges —— 关注了 30+ 人的账号
+                    //   往下滚出来的 UP 永远 NewCount=0, 明明有新投稿也不显示数字。
+                    //   只在「全部动态」下算: 单 UP 视图的 FeedItems 只有该 UP 的投稿,
+                    //   拿来给别的 UP 判新旧会把基准写错。
+                    if (SelectedUp == null) UpdateUnreadBadges();
                 }
             });
         }
@@ -452,6 +467,40 @@ public class FollowViewModel : ObservableObject
 
     // ------------------------------------------------------------ 左栏未读角标
 
+    /// <summary>角标轻量刷新在途(定时器与页面切回可能同时触发)</summary>
+    private bool _unreadRefreshBusy;
+
+    /// <summary>
+    /// 只刷新左栏未读角标, **不动右栏列表**。
+    ///
+    /// 用于两个场景:
+    ///   · 从别的页面切回动态页(页面实例被缓存, FeedItems 还是上次的);
+    ///   · FollowPage 的定时轮询。
+    ///
+    /// ★ 为什么不直接复用 LoadSelectionAsync: 那会清空 FeedItems 并弹整页 loading,
+    ///   用户只是切回来瞄一眼角标, 不该被强制回到列表顶部; 这里单独拉第一页动态就够了。
+    /// </summary>
+    public async Task RefreshUnreadBadgesAsync()
+    {
+        if (!Svc.Session.HasLogin || _unreadRefreshBusy || Users.Count == 0) return;
+        _unreadRefreshBusy = true;
+        try
+        {
+            var (ok, _, items, _, _) = await Svc.Api.GetDynamicFeedAsync(null);
+            if (!ok || items == null) return;   // 静默: 角标刷新失败不影响页面
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => UpdateUnreadBadges(items));
+        }
+        catch
+        {
+            // 静默(同上)
+        }
+        finally
+        {
+            _unreadRefreshBusy = false;
+        }
+    }
+
     /// <summary>
     /// 「全部动态」加载完 → 按这一页的条目刷新左栏各 UP 的未读角标。
     ///
@@ -463,11 +512,14 @@ public class FollowViewModel : ObservableObject
     /// ★ 本页没有出现的 UP **不动**: 动态接口只给近期条目, 一个 UP 最近没投稿就无从判断,
     ///   这时把角标清零是凭空断言"没更新"。宁可留着旧角标, 也不给错的信息。
     /// </summary>
-    private void UpdateUnreadBadges()
+    private void UpdateUnreadBadges() => UpdateUnreadBadges(FeedItems);
+
+    /// <summary>用指定的动态条目集合刷新角标(定时刷新时传临时列表, 不碰 FeedItems)</summary>
+    private void UpdateUnreadBadges(IReadOnlyList<VideoItem> items)
     {
-        // 每个 UP 在这一页里最新的一条(FeedItems 是按时间倒序拼的, 先遇到的就是最新)
+        // 每个 UP 在这一页里最新的一条(动态流是按时间倒序拼的, 先遇到的就是最新)
         var newest = new Dictionary<long, string>();
-        foreach (var it in FeedItems)
+        foreach (var it in items)
         {
             if (it.OwnerMid <= 0 || string.IsNullOrEmpty(it.Bvid)) continue;
             if (!newest.ContainsKey(it.OwnerMid)) newest[it.OwnerMid] = it.Bvid;
@@ -490,7 +542,7 @@ public class FollowViewModel : ObservableObject
             }
 
             var n = 0;
-            foreach (var it in FeedItems)
+            foreach (var it in items)
             {
                 if (it.OwnerMid != u.Mid) continue;
                 if (it.Bvid == seen) break;   // 追到上次看过的那条为止

@@ -21,7 +21,11 @@ public partial class FollowPage : UserControl
     /// <summary>看板轮询间隔: "关注的主播开播了"要能自己冒出来, 不能靠用户去点刷新。</summary>
     private static readonly TimeSpan LiveBoardPollInterval = TimeSpan.FromSeconds(60);
 
+    /// <summary>未读角标轮询间隔: 比直播状态慢一拍, 避免每分钟多打一次动态接口。</summary>
+    private static readonly TimeSpan UnreadPollInterval = TimeSpan.FromMinutes(2);
+
     private DispatcherTimer? _liveBoardTimer;
+    private DispatcherTimer? _unreadTimer;
 
     public FollowPage()
     {
@@ -36,32 +40,49 @@ public partial class FollowPage : UserControl
         {
             UpdateLayoutChips(vm);
             await vm.InitAsync();
-            StartLiveBoardTimer();
+            StartPolling();
         }
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
         // 页面实例不会跟着导航销毁(MainWindow 缓存), 定时器必须自己停:
-        // 否则用户在别的页面上, 这边还在每分钟打一次直播接口。
+        // 否则用户在别的页面上, 这边还在定时打接口。
         _liveBoardTimer?.Stop();
+        _unreadTimer?.Stop();
     }
 
-    private void StartLiveBoardTimer()
+    private void StartPolling()
     {
         _liveBoardTimer ??= new DispatcherTimer { Interval = LiveBoardPollInterval };
         _liveBoardTimer.Tick -= OnLiveBoardTick;
         _liveBoardTimer.Tick += OnLiveBoardTick;
         _liveBoardTimer.Start();
+
+        _unreadTimer ??= new DispatcherTimer { Interval = UnreadPollInterval };
+        _unreadTimer.Tick -= OnUnreadTick;
+        _unreadTimer.Tick += OnUnreadTick;
+        _unreadTimer.Start();
     }
 
     private void OnLiveBoardTick(object? sender, EventArgs e)
     {
-        // 最小化到托盘 / 被别的窗口完全遮住时不再轮询; 重新可见后下一拍自然恢复。
-        var win = Window.GetWindow(this);
-        if (!IsVisible || win == null || !win.IsVisible ||
-            win.WindowState == WindowState.Minimized) return;
+        if (!IsPageActive()) return;
         if (DataContext is FollowViewModel vm) _ = vm.RefreshLiveBoardAsync(showLoading: false);
+    }
+
+    private void OnUnreadTick(object? sender, EventArgs e)
+    {
+        if (!IsPageActive()) return;
+        if (DataContext is FollowViewModel vm) _ = vm.RefreshUnreadBadgesAsync();
+    }
+
+    /// <summary>最小化到托盘 / 切到别的页面时不再轮询; 重新可见后下一拍自然恢复。</summary>
+    private bool IsPageActive()
+    {
+        var win = Window.GetWindow(this);
+        return IsVisible && win != null && win.IsVisible &&
+               win.WindowState != WindowState.Minimized;
     }
 
     // ------------------------------------------------------------ 右栏排版切换
