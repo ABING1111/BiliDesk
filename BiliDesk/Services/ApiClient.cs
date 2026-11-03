@@ -3758,17 +3758,24 @@ public class ApiClient
     /// <summary>
     /// 取「我关注的主播」里正在直播的列表(动态页右栏"关注直播"看板的数据源, 2026-10-31 新增)。
     ///
-    /// ★★★ 接口选型(2026-10-31 探针 bd-probe-imglive 实测定下, 别换):
-    ///   · 网页版直播页左栏「关注」面板的 xlive/app-interface/v2/second/getList
-    ///     **所有参数组合都 -400**(v1 已 404), 这条路是死的;
-    ///   · 实际可行的是两段式:
-    ///       ① /x/relation/followings?vmid={自己} → data.list[]{mid, uname, face}
-    ///       ② POST /room/v1/Room/get_status_info_by_uids  (body: {"uids":[m1,m2,…]})
-    ///         → data["{mid}"]{room_id, title, uname, live_status, user_cover, online, …}
-    ///     live_status: 0=未开播, 1=直播中, 2=轮播。看板只收 **1**。
-    ///   · ②实测必须发 **application/json**(form 传 uids 报 invalid params), uid 要纯数字串。
+    /// ★★★ 接口(2026-11-03 修): 直接用官方 PC 直播页左栏「关注」面板的接口
+    ///   GET /xlive/web-ucenter/v1/xfetter/GetWebList?hit_ab=true
+    ///     → data.rooms[]{room_id, uid, uname, face, title, live_status, …}
+    ///
+    ///   ★ 之前那套"两段式"(先 /x/relation/followings 再 POST
+    ///     /room/v1/Room/get_status_info_by_uids)有两个致命问题:
+    ///       ① 状态接口**只认 form 编码**, 发 application/json 会返回
+    ///          code=1 "invalid params"; 旧代码偏偏只发 JSON, 于是看板永远是空的;
+    ///       ② 只查关注列表的**第一页 30 个**, 关注数 >30 时后面的人开播永远看不到
+    ///          (实测关注 200+ 人时, 正在播的人里有相当一部分排在第 30 名之后)。
+    ///     现在一次请求就能拿到"全部关注里正在直播的", 与关注总数无关。
+    ///
+    ///   · hit_ab=true 时 data.rooms 是**全部**正在直播的(不是前 10 个);
+    ///     代价是 online/live_time/cover_from_user 被置 0/空。看板只用
+    ///     uname/face/title/room_id, 不受影响(头像用 face, 比房间封面更像"人")。
+    ///   · live_status: 0=未开播, 1=直播中, 2=轮播。看板只收 **1**。
     /// </summary>
-    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetFollowingLiveAsync(int limit = 30)
+    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetFollowingLiveAsync()
     {
         try
         {
@@ -3776,68 +3783,59 @@ public class ApiClient
                 return (false, "请先登录后查看关注直播", null);
             await EnsureBuvidAsync();
 
-            // ① 自己的 mid(relation 接口要求 vmid 是"自己")
-            var (_, _, me) = await GetUserStateAsync();
-            if (me == null || me.Mid <= 0) return (false, "未登录", null);
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.live.bilibili.com/xlive/web-ucenter/v1/xfetter/GetWebList",
+                new Dictionary<string, string> { ["hit_ab"] = "true" },
+                referer: "https://live.bilibili.com/");
+            if (code != 0)
+                return (false, code == -352 ? "B 站风控拦截(请稍后再试)" : (msg ?? $"查询关注直播失败 (code {code})"), null);
+            // code=0 但没有 data: 当作"没人在播"处理成空列表, 不能报失败 ——
+            // 失败分支会保留上一次的列表, 主播下播后看板会一直挂着旧条目。
+            if (data == null) return (true, null, new List<VideoItem>());
 
-            // ② 关注列表(第一页 50 个足够看板用; 状态查询一次最多 100 个 uid)
-            var (fOk, fMsg, fData) = await GetJsonAsync(
-                "https://api.bilibili.com/x/relation/followings",
-                new Dictionary<string, string>
-                {
-                    ["vmid"] = me.Mid.ToString(),
-                    ["ps"] = Math.Min(limit, 50).ToString(),
-                    ["pn"] = "1"
-                },
-                referer: "https://space.bilibili.com/");
-            if (fOk != 0 || fData == null)
-                return (false, fMsg ?? "获取关注列表失败", null);
-            if (!fData.Value.TryGetProperty("list", out var ulist) || ulist.ValueKind != JsonValueKind.Array)
+            // rooms 与 list 内容相同(接口两个字段都给); rooms 缺失时退回 list
+            if (!TryGetLiveArray(data.Value, out var rooms))
                 return (true, null, new List<VideoItem>());
 
-            // relation 接口偶尔混进脏 mid(实测出现 20 位假 mid), 收紧到合理范围
-            var mids = ulist.EnumerateArray()
-                .Select(u => u.TryGetProperty("mid", out var mm) && mm.ValueKind == JsonValueKind.Number ? mm.GetInt64() : 0)
-                .Where(m => m > 0 && m < 4_000_000_000L)
-                .Take(limit).ToList();
-            if (mids.Count == 0) return (true, null, new List<VideoItem>());
-
-            // ③ 批量查开播状态
-            var (code, msg, data) = await PostJsonAsync(
-                "https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids",
-                "{\"uids\":[" + string.Join(",", mids) + "]}",
-                referer: "https://live.bilibili.com/");
-            if (code != 0 || data == null)
-                return (false, code == -352 ? "B 站风控拦截(请稍后再试)" : (msg ?? $"查询直播状态失败 (code {code})"), null);
-
             var items = new List<VideoItem>();
-            foreach (var kv in data.Value.EnumerateObject())
+            var seenRooms = new HashSet<long>();
+            foreach (var e in rooms.EnumerateArray())
             {
-                if (kv.Value.ValueKind != JsonValueKind.Object) continue;
-                var e = kv.Value;
+                if (e.ValueKind != JsonValueKind.Object) continue;
                 // live_status: 0=未开播, 1=直播中, 2=轮播(轮播不算"正在直播")
                 if (GetIntSafe(e, "live_status") != 1) continue;
-                var roomId = GetLongSafe(e, "room_id");
-                if (roomId <= 0) roomId = GetLongSafe(e, "short_id");
-                if (roomId <= 0) continue;
 
-                var cover = GetStr(e, "user_cover");
-                if (cover.Length == 0) cover = GetStr(e, "cover");
+                // room_id 是真实房间号; 老字段 roomid / short_id 只作兜底
+                var roomId = GetLongSafe(e, "room_id");
+                if (roomId <= 0) roomId = GetLongSafe(e, "roomid");
+                if (roomId <= 0) roomId = GetLongSafe(e, "short_id");
+                if (roomId <= 0 || !seenRooms.Add(roomId)) continue;
+
+                // hit_ab=true 时 room_cover/cover_from_user/keyframe 都为空,
+                // 但 face(主播头像)始终有值 —— 看板头像本来就更适合用 face。
+                var cover = GetStr(e, "face");
+                if (cover.Length == 0) cover = GetStr(e, "cover_from_user");
                 if (cover.Length == 0) cover = GetStr(e, "keyframe");
+                if (cover.Length == 0) cover = GetStr(e, "room_cover");
+
+                var author = GetStr(e, "uname");
+                if (author.Length == 0) author = GetStr(e, "nickname");
 
                 items.Add(new VideoItem
                 {
                     RoomId = roomId,
                     Title = GetStr(e, "title").StripHtml(),
-                    Author = GetStr(e, "uname"),
+                    Author = author,
                     OwnerMid = GetLongSafe(e, "uid"),
                     Cover = UrlUtil.Normalize(cover),
                     Duration = "直播中",
                     ViewCount = Math.Max(0, GetLongSafe(e, "online"))
                 });
             }
-            // 按 人气 倒序: 看板是"谁在播"的快照, 热的排前面
-            items.Sort((a, b) => b.ViewCount.CompareTo(a.ViewCount));
+            // 按 人气 倒序: 看板是"谁在播"的快照, 热的排前面。
+            // (hit_ab=true 时 online 恒为 0, 此时保持接口原顺序即可。)
+            if (items.Exists(i => i.ViewCount > 0))
+                items.Sort((a, b) => b.ViewCount.CompareTo(a.ViewCount));
             return (true, null, items);
         }
         catch (Exception ex)
@@ -3847,34 +3845,17 @@ public class ApiClient
         }
     }
 
-    /// <summary>POST JSON 请求(房间状态批量查询要求 application/json, form 会被拒)。</summary>
-    private async Task<(int code, string? msg, JsonElement? data)> PostJsonAsync(
-        string url, string json, string? referer = null)
+    /// <summary>从 GetWebList 的 data 里取直播房间数组(rooms 优先, list 兜底)。</summary>
+    private static bool TryGetLiveArray(JsonElement data, out JsonElement rooms)
     {
-        try
-        {
-            using var req = new HttpRequestMessage(HttpMethod.Post, url)
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json")
-            };
-            var cookie = AppendFingerprint(SessionManager.Instance.BuildCookieHeader());
-            if (cookie.Length > 0) req.Headers.TryAddWithoutValidation("Cookie", cookie);
-            req.Headers.TryAddWithoutValidation("Referer", referer ?? "https://live.bilibili.com/");
-
-            using var resp = await _http.SendAsync(req);
-            var text = await resp.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(text);
-            var root = doc.RootElement;
-            var code = root.TryGetProperty("code", out var c) ? c.GetInt32() : -999;
-            var msg = root.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String
-                ? m.GetString() : null;
-            var data = root.TryGetProperty("data", out var d) && d.ValueKind != JsonValueKind.Null ? d.Clone() : (JsonElement?)null;
-            return (code, msg, data);
-        }
-        catch (Exception ex)
-        {
-            return (-1, ex.Message, null);
-        }
+        if (data.ValueKind == JsonValueKind.Object &&
+            data.TryGetProperty("rooms", out rooms) && rooms.ValueKind == JsonValueKind.Array)
+            return true;
+        if (data.ValueKind == JsonValueKind.Object &&
+            data.TryGetProperty("list", out rooms) && rooms.ValueKind == JsonValueKind.Array)
+            return true;
+        rooms = default;
+        return false;
     }
 
     /// <summary>

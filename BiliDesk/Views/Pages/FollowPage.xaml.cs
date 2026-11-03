@@ -1,6 +1,8 @@
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.ViewModels;
@@ -16,10 +18,16 @@ public partial class FollowPage : UserControl
 {
     private const double AutoLoadThreshold = 240;
 
+    /// <summary>看板轮询间隔: "关注的主播开播了"要能自己冒出来, 不能靠用户去点刷新。</summary>
+    private static readonly TimeSpan LiveBoardPollInterval = TimeSpan.FromSeconds(60);
+
+    private DispatcherTimer? _liveBoardTimer;
+
     public FollowPage()
     {
         InitializeComponent();
         Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -28,7 +36,32 @@ public partial class FollowPage : UserControl
         {
             UpdateLayoutChips(vm);
             await vm.InitAsync();
+            StartLiveBoardTimer();
         }
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        // 页面实例不会跟着导航销毁(MainWindow 缓存), 定时器必须自己停:
+        // 否则用户在别的页面上, 这边还在每分钟打一次直播接口。
+        _liveBoardTimer?.Stop();
+    }
+
+    private void StartLiveBoardTimer()
+    {
+        _liveBoardTimer ??= new DispatcherTimer { Interval = LiveBoardPollInterval };
+        _liveBoardTimer.Tick -= OnLiveBoardTick;
+        _liveBoardTimer.Tick += OnLiveBoardTick;
+        _liveBoardTimer.Start();
+    }
+
+    private void OnLiveBoardTick(object? sender, EventArgs e)
+    {
+        // 最小化到托盘 / 被别的窗口完全遮住时不再轮询; 重新可见后下一拍自然恢复。
+        var win = Window.GetWindow(this);
+        if (!IsVisible || win == null || !win.IsVisible ||
+            win.WindowState == WindowState.Minimized) return;
+        if (DataContext is FollowViewModel vm) _ = vm.RefreshLiveBoardAsync(showLoading: false);
     }
 
     // ------------------------------------------------------------ 右栏排版切换

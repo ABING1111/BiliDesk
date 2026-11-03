@@ -95,6 +95,10 @@ public class FollowViewModel : ObservableObject
 
     /// <summary>看板加载中(随 RefreshAsync 并行, 不挡动态流)</summary>
     private bool _liveBoardLoading;
+
+    /// <summary>看板请求在途(挡住定时刷新与人工刷新撞车; 不参与 UI 绑定)</summary>
+    private bool _liveBoardBusy;
+
     public bool LiveBoardLoading
     {
         get => _liveBoardLoading;
@@ -118,11 +122,19 @@ public class FollowViewModel : ObservableObject
     /// <summary>
     /// 拉"关注的主播正在直播"列表。与动态流**并行**加载(不占 RefreshAsync 的关键路径),
     /// 失败静默 —— 看板是锦上添花, 不该因为它给整页报错。
+    ///
+    /// ★ 进入动态页时总会调用一次(见 InitAsync 与 FollowPage 的定时刷新),
+    ///   所以必须有**并发闸**: 定时器与服务端响应慢时的人工刷新会撞在一起,
+    ///   两路结果先后 Clear+Add 会让列表闪一下、条数也可能对不上。
+    ///
+    /// ★ showLoading: 后台轮询不要点亮标题行那只 LoadingRing ——
+    ///   否则没人在播时, 空态文案每分钟消失半秒, 看着像在抽风。
     /// </summary>
-    private async Task LoadLiveBoardAsync()
+    public async Task RefreshLiveBoardAsync(bool showLoading = true)
     {
-        if (!Svc.Session.HasLogin) return;
-        LiveBoardLoading = true;
+        if (!Svc.Session.HasLogin || _liveBoardBusy) return;
+        _liveBoardBusy = true;
+        if (showLoading) LiveBoardLoading = true;
         try
         {
             var (ok, _, items) = await Svc.Api.GetFollowingLiveAsync();
@@ -142,6 +154,10 @@ public class FollowViewModel : ObservableObject
         {
             LiveBoardLoading = false;
             // 静默(同上)
+        }
+        finally
+        {
+            _liveBoardBusy = false;
         }
     }
 
@@ -200,7 +216,11 @@ public class FollowViewModel : ObservableObject
 
     public async Task InitAsync()
     {
+        // ★ 页面实例是长期缓存的(MainWindow._pages): 从别的页面切回来时 Loaded 会再响一次,
+        //   但 Users.Count 不为 0, 以前这里直接返回 —— 看板就永远停在"第一次进动态页"那一刻。
+        //   现在: 已加载过就只刷新看板(一次轻请求), 让"刚刚开播"能立刻出现在看板上。
         if (Users.Count == 0) await RefreshAsync();
+        else await RefreshLiveBoardAsync(showLoading: LiveNow.Count == 0);
     }
 
     /// <summary>从列表移除一个 UP 主(取消关注成功后调用)。移除的若是选中项, 回到全部动态</summary>
@@ -266,7 +286,7 @@ public class FollowViewModel : ObservableObject
             });
             await LoadSelectionAsync(reset: true);
             // 关注直播看板: 与动态流并行(不 await 到关键路径里), 慢一点没关系
-            _ = LoadLiveBoardAsync();
+            _ = RefreshLiveBoardAsync();
         }
         catch (Exception ex)
         {
