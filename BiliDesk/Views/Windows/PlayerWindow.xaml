@@ -424,10 +424,11 @@
 
                 <!-- ===== 楼中楼预览方框 =====
                      整框可点 → 进"详情"页看这条评论的全部回复(唯一的楼中楼入口)。
-                     框内**列出全部回复**(用户要求"自动展开所有评论", 不再截前 3 条);
-                     每条是"用户名 [UP]：正文"的一行混排(前缀由 CommentText 内联, 见 ReplyPrefix)。
-                     ★ 本轮(保守版)不动这个方框的样式: 描边/底色/回复者名加粗都保持原样,
-                       只靠上面那条 @ 高亮把"提到谁"点出来。 -->
+                     ★ 框内只列**前 3 条预览**(PreviewReplies), 不再直接绑 Replies:
+                       详情页会自动补齐到上百条, 绑同一个集合的话从详情返回后,
+                       这条评论底下会突然挂着一整屏回复、不会自动收起来(2026-11-04 用户报)。
+                       完整内容在详情页看, 方框保持"一眼能扫完"的高度。
+                     ★ 每条是"用户名 [UP]：正文"的一行混排(前缀由 CommentText 内联, 见 ReplyPrefix)。 -->
                 <Border Margin="0,8,0,0" Padding="8,6" CornerRadius="6"
                         Background="{DynamicResource ControlFillDefaultBrush}"
                         BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1"
@@ -436,7 +437,7 @@
                         ToolTip="查看这条评论的全部回复"
                         Visibility="{Binding HasReplies, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
-                        <ItemsControl ItemsSource="{Binding Replies}">
+                        <ItemsControl ItemsSource="{Binding PreviewReplies}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <controls:CommentText Comment="{Binding}"
@@ -2081,7 +2082,10 @@
                                                                                     Visibility="{Binding IsPinned, Converter={StaticResource BoolToVis}}">
                                                                                 <TextBlock Text="置顶" FontSize="9.5" FontWeight="SemiBold" Foreground="White" />
                                                                             </Border>
-                                                                            <TextBlock Text="{Binding UserName}" FontSize="13" FontWeight="SemiBold" />
+                                                                            <!-- 昵称用次要色、正文用主色(2026-11-04): 不写 Foreground 会落回全局主色,
+                                                                                 与 14px 正文同色, 详情页里"名字"和"内容"容易糊成一块。 -->
+                                                                            <TextBlock Text="{Binding UserName}" FontSize="13" FontWeight="SemiBold"
+                                                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
                                                                             <Border Style="{StaticResource LevelBadgeStyle}"
                                                                                     Visibility="{Binding HasLevel, Converter={StaticResource BoolToVis}}">
                                                                                 <TextBlock Text="{Binding LevelText}" FontSize="9.5" Foreground="White" />
@@ -2098,7 +2102,7 @@
                                                                         </StackPanel>
                                                                     </StackPanel>
                                                                 </StackPanel>
-                                                                <controls:CommentText Comment="{Binding}" FontSize="14" Margin="0,8,0,0"
+                                                                <controls:CommentText Comment="{Binding}" FontSize="14" Margin="0,10,0,0"
                                                                                       Foreground="{DynamicResource TextPrimaryBrush}"
                                                                                       MentionForeground="{DynamicResource AccentTextBrush}" />
                                                                 <!-- 评论图片(2026-10-31): 与列表页同一份缩略图模板 -->
@@ -2122,7 +2126,14 @@
                                                 <ItemsControl x:Name="DetailRepliesList" ItemsSource="{Binding Replies}">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
-                                                            <Grid Margin="0,0,0,14">
+                                                            <!-- 回复之间的 1px 分隔线(2026-11-04):
+                                                                 长楼中楼几十条时, 只靠 14px 间距在深色主题下会糊成一片;
+                                                                 一条 DividerBrush 细线能明确切开"这一条"和"下一条"。
+                                                                 最后一条也带线, 正好当"展开更多"之前的分区线。 -->
+                                                            <Border BorderBrush="{DynamicResource DividerBrush}"
+                                                                    BorderThickness="0,0,0,1"
+                                                                    Padding="0,0,0,12" Margin="0,0,0,8">
+                                                            <Grid>
                                                                 <Grid.ColumnDefinitions>
                                                                     <ColumnDefinition Width="Auto" />
                                                                     <ColumnDefinition Width="*" />
@@ -2139,7 +2150,8 @@
                                                                 </Border>
                                                                 <StackPanel Grid.Column="1" Margin="8,0,0,0">
                                                                     <StackPanel Orientation="Horizontal">
-                                                                        <TextBlock Text="{Binding UserName}" FontSize="13" FontWeight="SemiBold" />
+                                                                        <TextBlock Text="{Binding UserName}" FontSize="13" FontWeight="SemiBold"
+                                                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
                                                                         <Border Style="{StaticResource LevelBadgeStyle}"
                                                                                 Visibility="{Binding HasLevel, Converter={StaticResource BoolToVis}}">
                                                                             <TextBlock Text="{Binding LevelText}" FontSize="9" Foreground="White" />
@@ -2157,7 +2169,7 @@
                                                                          ★ 详情页字号同时与列表页对齐(用户报"详情页字体不跟随评论区"):
                                                                            昵称 12→13、正文 12→14, 与 CommentCardTemplate 逐项一致。 -->
                                                                     </StackPanel>
-                                                                    <controls:CommentText Comment="{Binding}" FontSize="14" Margin="0,3,0,0"
+                                                                    <controls:CommentText Comment="{Binding}" FontSize="14" Margin="0,8,0,0"
                                                                                           Foreground="{DynamicResource TextPrimaryBrush}"
                                                                                           MentionForeground="{DynamicResource AccentTextBrush}" />
                                                                     <!-- 评论图片(2026-10-31): 与列表页同一份缩略图模板 -->
@@ -2178,6 +2190,7 @@
                                                                     </StackPanel>
                                                                 </StackPanel>
                                                             </Grid>
+                                                            </Border>
                                                         </DataTemplate>
                                                     </ItemsControl.ItemTemplate>
                                                 </ItemsControl>

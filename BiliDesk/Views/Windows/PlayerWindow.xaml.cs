@@ -1222,6 +1222,8 @@ public partial class PlayerWindow : FluentWindow
         // 评论总数属于"上一条视频" —— 不清的话换了片子那句"共 N 条评论"还挂着旧数字,
         // 而排序入口的可见性正是跟着它走的。排序**方式**(_commentSort)不清: 那是用户习惯。
         _commentTotal = 0;
+        // 本次实际排序回到用户偏好(_commentSort); 新视频重新试热门, 热门空再回退成时间
+        _effectiveCommentSort = _commentSort;
         _commentReturnRpid = 0;
         _videoBackdropGuardTicks = 0;
         // 音频自愈的"上次检查时刻"(_audioHealCheckAt)不清: 它是宽限期计时基准,
@@ -1403,6 +1405,7 @@ public partial class PlayerWindow : FluentWindow
         // 长按快进的目标倍速(2026-11-03): 同属"这一次长按"的瞬时态, 换片必须复位。
         nameof(_fastForwardTarget),
         nameof(_commentTotal),
+        nameof(_effectiveCommentSort),
         nameof(_suppressSingleClick), nameof(_controlsHidden), nameof(_isFullscreen),
         // ---- 2026-10-31 补登记(此前 errors.txt 里一直被自检点名) ----
         nameof(_descExpanded),          // 简介折叠态: UpdateUiFromDetail 每片复位
@@ -6657,6 +6660,15 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private int _commentSort = 3;
 
+    /// <summary>
+    /// **本次实际展示**的评论排序(3 热门 / 2 时间)。平时等于 <see cref="_commentSort"/>,
+    /// 只有"热门接口返回空、本次按时间回退"时会临时变成 2。
+    /// ★ 单独记一份是为了让排序按钮的点击判断跟着**眼前看到的列表**走:
+    ///   热门回退成时间后 _commentSort 仍是 3, 若直接拿它判断, 用户点「热门」会被
+    ///   "已经是热门"短路掉, 按钮看起来是死的。
+    /// </summary>
+    private int _effectiveCommentSort = 3;
+
     /// <summary>当前视频的根评论总数(来自接口 cursor.all_count, 不是本页条数)</summary>
     private long _commentTotal;
 
@@ -6683,15 +6695,39 @@ public partial class PlayerWindow : FluentWindow
         // 重拉期间先把两个词收起来: 否则"正在刷新评论…"右边还挂着可点的排序词, 会出现
         // "点一下又刷新一次"的连点窗口期。
         UpdateCommentSortUi(visible: false);
+        // 本次排序先按用户偏好; 若后面回退成时间, 在回调里改 _effectiveCommentSort
+        _effectiveCommentSort = _commentSort;
         try
         {
             var (cmtOk, cmtErr, list, total) = await Svc.Api.GetCommentsAsync(aidAtStart, 30, _commentSort);
+            // 实际拿到的列表按哪个顺序排(热门的"空列表回退"会把它改成 2)。
+            // ★ 不回写 _commentSort: 那是用户跨视频记住的偏好, 不能因为一个视频热门为空
+            //   就永久改成时间; 排序入口只按本次实际顺序点亮。
+            var displaySort = _commentSort;
+            // ★★ 2026-11-04 修"评论区只显示置顶一条"(BV1Nxxr6oES2 实测):
+            //   该视频 mode=3(热门) 的 data.replies 是**空数组**, 只剩 data.top 里的置顶;
+            //   同一时刻 mode=2(时间) 能正常返回 14 条。接口不给热门列表, 不是我们解析错。
+            //   这里在"热门 + 只剩置顶"时按时间重拉一次, 排序入口切到「时间」——
+            //   否则热门一直亮着、列表却只有置顶, 用户会以为评论区坏了。
+            if (cmtOk && _commentSort == 3 && total > 0 && list.Count <= 1)
+            {
+                var (fbOk, _, fbList, fbTotal) = await Svc.Api.GetCommentsAsync(aidAtStart, 30, 2);
+                if (fbOk && fbList.Count > list.Count && _commentSort == 3)
+                {
+                    list = fbList;
+                    if (fbTotal > 0) total = fbTotal;
+                    cmtOk = true;
+                    cmtErr = null;
+                    displaySort = 2;
+                }
+            }
             await Dispatcher.InvokeAsync(() =>
             {
                 if (_closing || _aid != aidAtStart) return;
                 CommentList.ItemsSource = list;
                 _commentsLoaded = true;
                 _commentTotal = total;
+                _effectiveCommentSort = displaySort;
                 CommentLoadingRing.Visibility = Visibility.Collapsed;
                 // ★ 原来"接口失败"和"这视频真的一条评论都没有"都显示"暂无评论" ——
                 //   网络失败被伪装成了正常状态。现在失败时说清原因。
@@ -6701,7 +6737,8 @@ public partial class PlayerWindow : FluentWindow
                     : list.Count == 0 ? "暂无评论"
                     : $"共 {VideoItem.FormatCount(total > 0 ? total : list.Count)} 条评论";
                 // 只有真的加载成功且有评论, 排序入口才出现
-                UpdateCommentSortUi(visible: cmtOk && list.Count > 0);
+                // ★ 传 displaySort: 热门回退成时间时, 让「时间」亮起来与列表实际顺序一致
+                UpdateCommentSortUi(visible: cmtOk && list.Count > 0, sortOverride: displaySort);
             });
         }
         catch
@@ -6718,19 +6755,22 @@ public partial class PlayerWindow : FluentWindow
     ///
     /// ★ 选中态只在这里写 Tag(与 ContentActionTabStyle 同一套约定: 字符串 "on"/"off")。
     ///   分散着改两个按钮的 Tag 必然出现"两边都亮"或"两边都不亮"。
+    /// ★ sortOverride: 热门接口返回空、本次实际按时间拉了一次时传 2, 让高亮跟着真实顺序走;
+    ///   不传就用用户记住的 _commentSort。
     /// </summary>
-    private void UpdateCommentSortUi(bool visible)
+    private void UpdateCommentSortUi(bool visible, int? sortOverride = null)
     {
+        var sort = sortOverride ?? _commentSort;
         var vis = visible ? Visibility.Visible : Visibility.Collapsed;
         if (BtnCommentSortHot != null)
         {
             BtnCommentSortHot.Visibility = vis;
-            BtnCommentSortHot.Tag = _commentSort == 3 ? "on" : "off";
+            BtnCommentSortHot.Tag = sort == 3 ? "on" : "off";
         }
         if (BtnCommentSortTime != null)
         {
             BtnCommentSortTime.Visibility = vis;
-            BtnCommentSortTime.Tag = _commentSort == 2 ? "on" : "off";
+            BtnCommentSortTime.Tag = sort == 2 ? "on" : "off";
         }
     }
 
@@ -6739,14 +6779,17 @@ public partial class PlayerWindow : FluentWindow
     private void OnCommentSortTimeClick(object sender, RoutedEventArgs e) => SetCommentSort(2);
 
     /// <summary>
-    /// 切换评论排序。已经是当前排序就直接返回 —— 否则点一下会白刷一次接口,
+    /// 切换评论排序。已经**实际展示**的就是这个顺序就直接返回 —— 否则点一下会白刷一次接口,
     /// 而重拉期间入口是收起的, 用户看到的是"点了闪一下什么都没有"。
+    /// ★ 比较的是 <see cref="_effectiveCommentSort"/>, 不是 _commentSort:
+    ///   热门回退成时间后两者不同, 用户点「热门」应该真的重拉一次, 不能被短路。
     /// </summary>
     private void SetCommentSort(int mode)
     {
-        if (_closing || _commentSort == mode) return;
+        if (_closing || _effectiveCommentSort == mode) return;
         _commentSort = mode;
-        UpdateCommentSortUi(visible: true);
+        _effectiveCommentSort = mode;
+        UpdateCommentSortUi(visible: true, sortOverride: mode);
         _ = LoadCommentsAsync(force: true);
     }
 
@@ -6801,19 +6844,25 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 把一条线程的回复**自动补全**(用户要求"楼中楼自动展开所有评论")。
     ///
-    /// 上限 5 页(约 100 条): 爆款楼的回复能上四位数, 无上限地拉会把接口和界面一起拖住;
-    /// 拉完后若还有剩, 详情页底部那个"展开更多"按钮仍在, 用户可以继续点。
+    /// ★ 2026-11-04 上限从 5 页降到 3 页(约 60 条): 每条回复都是一个 RichTextBox,
+    ///   100 条一口气实例化 + 排版实测要 6 秒上下, 用户看到的就是"详情页卡死"。
+    ///   60 条仍在 1 秒级, 剩下的用底部"展开更多"按钮按需拉。
+    /// ★ 每页之间 Dispatcher.Yield 一次, 让窗口有机会处理输入/重绘 —— 否则 3 页连拉
+    ///   仍然是一次长阻塞。
     /// 死循环保护: 服务端若重复返回同一页(去重后一条没新增)立即收手。
     /// </summary>
     private async Task AutoCompleteThreadRepliesAsync(CommentItem root)
     {
         try
         {
+            // ★ 记住发起时的 aid: 自动补全可能跨几秒, 期间用户可能换片。
+            //   不记的话会用**新视频的 aid** 去拉**旧评论的 rpid**, 拿到一堆无关回复。
+            var aidAtStart = _aid;
             var guard = 0;
-            while (!_closing && root.HasMoreReplies && guard++ < 5)
+            while (!_closing && root.HasMoreReplies && guard++ < 3)
             {
-                var (_, _, more) = await Svc.Api.GetReplyRepliesAsync(_aid, root.Rpid, pn: root.RepliesNextPage, ps: 20);
-                if (_closing) return;
+                var (_, _, more) = await Svc.Api.GetReplyRepliesAsync(aidAtStart, root.Rpid, pn: root.RepliesNextPage, ps: 20);
+                if (_closing || _aid != aidAtStart) return;
                 if (more.Count == 0)
                 {
                     // 服务端取不全: 用实际条数收口, 否则按钮会一直挂着
@@ -6826,6 +6875,8 @@ public partial class PlayerWindow : FluentWindow
                 foreach (var r in more)
                     if (r.Rpid > 0 && seen.Add(r.Rpid)) { root.Replies.Add(r); added++; }
                 if (added == 0) break;
+                // 让出一帧: 20 条富文本模板的实例化/排版会占满 UI 线程
+                await Dispatcher.Yield(DispatcherPriority.Background);
             }
             root.NotifyRepliesChanged();
         }
@@ -7355,6 +7406,7 @@ public partial class PlayerWindow : FluentWindow
             root.Replies.Clear();
             foreach (var r in merged) root.Replies.Add(r);
             if (root.ReplyCount < root.Replies.Count) root.ReplyCount = root.Replies.Count;
+            root.SyncPreviewReplies();
             root.NotifyRepliesChanged();
         }
         catch (Exception ex)

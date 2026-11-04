@@ -844,6 +844,16 @@ public class CommentItem : System.ComponentModel.INotifyPropertyChanged
     /// <summary>已取到的回复(内联的前几条 + 后续展开补齐的)</summary>
     public ObservableCollection<CommentItem> Replies { get; } = new();
 
+    /// <summary>
+    /// 列表页「楼中楼方框」里展示的**预览**回复(最多 3 条)。
+    ///
+    /// ★ 2026-11-04: 方框以前直接绑 <see cref="Replies"/>, 详情页自动补全后
+    ///   同一份集合被撑到上百条 —— 从详情页返回列表时, 那条评论底下突然挂着
+    ///   一整屏回复, 不会自己收起来。详情页继续用 <see cref="Replies"/> 看全部,
+    ///   列表只认这份短预览, 返回时自然维持原样。
+    /// </summary>
+    public ObservableCollection<CommentItem> PreviewReplies { get; } = new();
+
     // ------------------------------------------------------------ 楼中楼预览方框
 
     /// <summary>方框底部那行提示文字(点整框进详情页)</summary>
@@ -918,6 +928,17 @@ public class CommentItem : System.ComponentModel.INotifyPropertyChanged
         Raise(nameof(ReplyMoreText));
         // 展开后"共 N 条回复"可能跟着变(用实际条数收口时), 一并通知
         Raise(nameof(ReplyBoxText));
+    }
+
+    /// <summary>
+    /// 把 <see cref="PreviewReplies"/> 同步成 <see cref="Replies"/> 的前几条。
+    /// 列表方框只展示预览, 详情页/自动补全只动 <see cref="Replies"/>;
+    /// 发表回复后重新拉了第一页时, 用这个方法把预览也刷新一下。
+    /// </summary>
+    public void SyncPreviewReplies(int max = 3)
+    {
+        PreviewReplies.Clear();
+        foreach (var r in Replies.Take(max)) PreviewReplies.Add(r);
     }
 }
 

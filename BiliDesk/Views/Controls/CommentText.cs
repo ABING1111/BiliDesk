@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.Globalization;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -144,11 +146,7 @@ public class CommentText : RichTextBox
         // 前缀(用户名那一截)先入流: 它与正文同行混排、一起折行
         var prefix = Prefix ?? "";
         if (prefix.Length > 0)
-        {
-            var run = new Run(prefix) { FontWeight = FontWeights.SemiBold };
-            if (PrefixForeground != null) run.Foreground = PrefixForeground;
-            p.Inlines.Add(run);
-        }
+            AppendText(p, prefix, PrefixForeground, FontWeights.SemiBold);
 
         if (text.Length == 0) return;
 
@@ -162,7 +160,7 @@ public class CommentText : RichTextBox
         // 最常见的情况: 既没有表情也没有 @ ⇒ 整段一次加完
         if (!hasEmotes && !hasMentions)
         {
-            p.Inlines.Add(new Run(text));
+            AppendText(p, text);
             return;
         }
 
@@ -180,13 +178,104 @@ public class CommentText : RichTextBox
             {
                 // 提及段: 整段(含 @)染成强调色。★ 里面**不再**处理表情 ——
                 //   昵称里出现表情短代码的概率极低, 真出现了也只是显示成字面文本, 可接受。
-                var run = new Run(segText) { Foreground = mentionBrush };
-                p.Inlines.Add(run);
+                AppendText(p, segText, mentionBrush);
                 continue;
             }
 
             AppendTextWithEmotes(this, p, segText, emotes, hasEmotes, item);
         }
+    }
+
+    /// <summary>emoji 字形专用字体(见 <see cref="AppendText"/> 里的崩溃说明)。</summary>
+    private static readonly FontFamily EmojiFont = new("Segoe UI Symbol");
+
+    /// <summary>
+    /// 把一段文本拆成"普通文字 / emoji"两类 Run 后加进段落。
+    ///
+    /// ★ 2026-11-04 修"打开评论详情页卡死": WPF 的 FlowDocument 在**走字体回退**渲染
+    ///   某些带变体选择符(U+FE0F)的 emoji 时会 FailFast(WindowsBase!TextParaClient.CreateLineVisual)。
+    ///   实测 "🖐️" 连写 7 个、或 "👍️" 连写 8 个就必崩; 把该 Run 的 FontFamily 显式设成
+    ///   **Segoe UI Symbol** 后同一段文字正常排版(20 个连写也稳)。
+    ///   ★ 不用 Segoe UI Emoji: 它是彩色字体, 这台机器上的 WPF RichTextBox 渲染它时整行空白
+    ///     (探针 bd-probe-emoji-render 实测); Symbol 是单色字形, 显示不如彩色 emoji 好看,
+    ///     但至少能看到、也不会崩。
+    ///   所以这里按 grapheme cluster 切分, 只给 emoji 那一截指定 emoji 字体,
+    ///   普通文字(含数字/中英文)仍走继承来的界面字体, 观感不变。
+    /// </summary>
+    private static void AppendText(Paragraph p, string text,
+        Brush? foreground = null, FontWeight? weight = null)
+    {
+        if (text.Length == 0) return;
+
+        // 快路径: 绝大多数评论没有 unicode emoji, 不切分、不建额外 Run, 保持原来的排版开销。
+        if (!ContainsEmoji(text))
+        {
+            var plain = new Run(text);
+            if (foreground != null) plain.Foreground = foreground;
+            if (weight.HasValue) plain.FontWeight = weight.Value;
+            p.Inlines.Add(plain);
+            return;
+        }
+
+        var normal = new StringBuilder();
+        var emoji = new StringBuilder();
+
+        void Flush(StringBuilder sb, bool isEmoji)
+        {
+            if (sb.Length == 0) return;
+            var run = new Run(sb.ToString());
+            if (isEmoji) run.FontFamily = EmojiFont;
+            if (foreground != null) run.Foreground = foreground;
+            if (weight.HasValue) run.FontWeight = weight.Value;
+            p.Inlines.Add(run);
+            sb.Clear();
+        }
+
+        var e = StringInfo.GetTextElementEnumerator(text);
+        while (e.MoveNext())
+        {
+            var cluster = (string)e.Current;
+            if (IsEmojiCluster(cluster))
+            {
+                Flush(normal, false);
+                emoji.Append(cluster);
+            }
+            else
+            {
+                Flush(emoji, true);
+                normal.Append(cluster);
+            }
+        }
+        Flush(normal, false);
+        Flush(emoji, true);
+    }
+
+    private static bool ContainsEmoji(string text)
+    {
+        foreach (var rune in text.EnumerateRunes())
+            if (IsEmojiRune(rune.Value)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// 这个 grapheme cluster 是不是 emoji(需要用 emoji 字体单独渲染)。
+    /// 判据放宽一点: 增补平面字符 + 变体选择符/ZWJ/键帽组合符都算 ——
+    /// 漏掉一个就可能把上面的 WPF 崩溃重新引回来。
+    /// </summary>
+    private static bool IsEmojiCluster(string cluster)
+    {
+        foreach (var rune in cluster.EnumerateRunes())
+            if (IsEmojiRune(rune.Value)) return true;
+        return false;
+    }
+
+    private static bool IsEmojiRune(int v)
+    {
+        // 增补平面的 emoji 区块(1F000~1FAFF) + 变体选择符 / ZWJ / 键帽组合符.
+        // ★ 不用"v > 0xFFFF"一把抓: 那会把 CJK 扩展 B 区(𠀀 这类)也塞进 emoji 字体,
+        //   虽然通常能回退, 但没必要让生僻汉字走错字体。
+        return (v >= 0x1F000 && v <= 0x1FAFF)
+               || v == 0xFE0F || v == 0xFE0E || v == 0x200D || v == 0x20E3;
     }
 
     /// <summary>
@@ -197,7 +286,7 @@ public class CommentText : RichTextBox
     {
         if (!hasEmotes || emotes.Count == 0)
         {
-            p.Inlines.Add(new Run(text));
+            AppendText(p, text);
             return;
         }
 
@@ -206,7 +295,7 @@ public class CommentText : RichTextBox
         void FlushText()
         {
             if (buffer.Length == 0) return;
-            p.Inlines.Add(new Run(buffer.ToString()));
+            AppendText(p, buffer.ToString());
             buffer.Clear();
         }
 

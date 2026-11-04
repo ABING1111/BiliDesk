@@ -3640,6 +3640,8 @@ public class ApiClient
             }
             // 服务端有时返回的 rcount 比实际内联的还少, 兜一下, 否则"展开"按钮会一直挂着
             if (item.ReplyCount < item.Replies.Count) item.ReplyCount = item.Replies.Count;
+            // 列表页方框只展示短预览; 详情页仍然用 Replies 看全部(见 PreviewReplies 的说明)
+            item.SyncPreviewReplies();
         }
 
         return item;
