@@ -1612,10 +1612,19 @@ public class AppSettings
     public bool NoLogin1080P { get; set; } = true;
 
     /// <summary>
-    /// 视频线路(CDN)选择策略。默认自动测速 —— 实测各家 CDN 同一时刻吞吐能差 4 倍以上,
-    /// 且排名随网络/地区/时段变化, 所以默认让程序自己挑。详见 Services/CdnService.cs。
+    /// 视频线路(CDN)选择策略。默认**跟随服务端**(2026-11-05 改; 旧默认是自动测速) ——
+    /// 自动测速虽然能挑到瞬时吞吐最高的线路, 但换 host 后部分线路的持续吞吐/抖动更差,
+    /// 用户侧表现为播放中卡顿反而更多; 跟随服务端用接口原样返回的线路最稳。
+    /// 设置页仍可切回自动测速 / 手动指定。详见 Services/CdnService.cs。
     /// </summary>
-    public CdnSelectMode CdnMode { get; set; } = CdnSelectMode.Auto;
+    public CdnSelectMode CdnMode { get; set; } = CdnSelectMode.ServerDefault;
+
+    /// <summary>
+    /// "线路默认值迁移"标记(2026-11-05)。旧配置里 CdnMode 都是 Auto(旧默认),
+    /// 升级后只迁移一次到 ServerDefault; 之后用户手动选回 Auto 不会被再次改掉。
+    /// false/缺失 = 尚未迁移。
+    /// </summary>
+    public bool CdnModeMigratedToServer { get; set; }
 
     /// <summary>
     /// 手动模式下选定的 CDN Id(见 Models/CdnOption.All)。

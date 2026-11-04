@@ -250,8 +250,14 @@ public class SettingsStore
     // ----------------- CDN(线路)设置 -----------------
     // 详见 Models/CdnOption.cs 与 Services/CdnService.cs
 
-    /// <summary>线路选择策略(默认自动测速)</summary>
-    public CdnSelectMode CdnMode { get; set; } = CdnSelectMode.Auto;
+    /// <summary>线路选择策略(默认跟随服务端, 2026-11-05 起)</summary>
+    public CdnSelectMode CdnMode { get; set; } = CdnSelectMode.ServerDefault;
+
+    /// <summary>
+    /// 线路默认值的一次性迁移标记: 旧配置(全是 Auto)升级后迁到 ServerDefault;
+    /// 迁移完成即置 true 并落盘, 之后用户手动选 Auto 不会再被改。见 Models.AppSettings。
+    /// </summary>
+    private bool _cdnModeMigratedToServer;
 
     /// <summary>手动模式下选定的 CDN Id(见 CdnOption.All; 空/失效时自动退回测速)</summary>
     public string CdnManualId { get; set; } = "";
@@ -582,11 +588,18 @@ public class SettingsStore
         //   留着它会让"手动模式"指到一条不存在的线路(见 CdnService.SelectUrlAsync)。
         CdnMode = s.CdnMode;
         CdnManualId = CdnOption.ById(s.CdnManualId)?.Id ?? "";
-        // ★ "手动指定"却没选中任何线路(老配置写坏/用户从未选过)必须归一成自动 ——
-        //   否则设置页显示"手动指定", 实际 SelectUrlAsync 因为拿不到目标而静默走了自动测速,
+        // ★★★ 2026-11-05 默认线路迁移: 旧版本的默认值是 Auto, 所有旧配置都带着
+        //   `"CdnMode": "Auto"` —— 只改属性初始化值的话老用户永远享受不到新默认。
+        //   这里做**一次性**迁移: 迁移标记(false/缺失)时把 Auto 改成 ServerDefault,
+        //   并把标记置 true 落盘; 之后再手动选回 Auto 会被正常保留。
+        if (!s.CdnModeMigratedToServer && CdnMode == CdnSelectMode.Auto)
+            CdnMode = CdnSelectMode.ServerDefault;
+        _cdnModeMigratedToServer = true;
+        // ★ "手动指定"却没选中任何线路(老配置写坏/用户从未选过)必须归一成默认策略 ——
+        //   否则设置页显示"手动指定", 实际 SelectUrlAsync 因为拿不到目标而静默走了别的路,
         //   用户会以为手动设置没生效, 排查时也看不出真相(2026-10-30 实测).
         if (CdnMode == CdnSelectMode.Manual && string.IsNullOrEmpty(CdnManualId))
-            CdnMode = CdnSelectMode.Auto;
+            CdnMode = CdnSelectMode.ServerDefault;
         BlockPcdn = s.BlockPcdn;
 
         // 老配置里只有 DisclaimerAccepted(bool)、没有版本号。
@@ -785,6 +798,7 @@ public class SettingsStore
         NoLogin1080P = NoLogin1080P,
         CdnMode = CdnMode,
         CdnManualId = CdnManualId,
+        CdnModeMigratedToServer = _cdnModeMigratedToServer,
         BlockPcdn = BlockPcdn,
         DisclaimerAccepted = DisclaimerAccepted,
         DisclaimerVersion = AcceptedDisclaimerVersion,
@@ -1115,6 +1129,9 @@ public class SettingsStore
         CdnMode = mode;
         CdnManualId = nextId;
         BlockPcdn = blockPcdn;
+        // 用户一旦显式改过线路设置, 就认为"默认值迁移"已完成:
+        // 否则新装用户主动选 Auto 后, 下次启动会被一次性迁移又推回 ServerDefault。
+        _cdnModeMigratedToServer = true;
         Save();
         CdnService.Instance.InvalidateCache();
     }

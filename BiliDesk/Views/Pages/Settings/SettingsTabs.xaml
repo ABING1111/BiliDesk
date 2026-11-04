@@ -407,9 +407,10 @@
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
-                    <!-- CDN 线路: 自动测速挑最快 / 手动指定一家 / 跟随服务端。
-                         实测各家 CDN 同一时刻吞吐能差 4 倍以上, 且排名随网络/地区/时段变化,
-                         所以默认自动。逻辑与实测依据见 Services/CdnService.cs。 -->
+                    <!-- CDN 线路: 跟随服务端(默认) / 自动测速挑最快 / 手动指定一家。
+                         自动测速虽能挑到瞬时最快, 但换 host 后部分线路持续吞吐/抖动更差,
+                         用户反馈卡顿反而更多; 所以 2026-11-05 起默认跟随服务端。
+                         逻辑与实测依据见 Services/CdnService.cs。 -->
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -417,7 +418,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
                             <TextBlock Text="线路选择" Style="{StaticResource SettingsRowTitleStyle}" />
-                            <TextBlock Text="B 站为同一视频提供多家 CDN; 自动测速会实测吞吐挑最快的一条"
+                            <TextBlock Text="B 站为同一视频提供多家 CDN; 跟随服务端使用接口返回的线路, 自动测速会实测吞吐挑最快的一条"
                                        Style="{StaticResource SettingsRowDescStyle}" />
                         </StackPanel>
                         <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"

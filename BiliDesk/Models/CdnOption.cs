@@ -10,7 +10,9 @@ namespace BiliDesk.Models;
 ///   实测 8 个候选 host 全部返回 HTTP 206, 数据正常。
 ///
 ///   不同线路的速度差距很大: 同一时刻实测 2.5MB/s ~ 11MB/s(4 倍以上), 而且
-///   不同网络/地区/时段排名会变 —— 所以"自动测速挑最快"比写死一条更有意义。
+///   不同网络/地区/时段排名会变 —— 自动测速能挑到瞬时最快的一条, 但换 host 后
+///   部分线路的持续吞吐/抖动反而更差(用户实测卡顿更多)。因此 2026-11-05 起
+///   默认改为"跟随服务端", 自动测速仍保留为可选策略。
 ///
 ///   另外 B 站会把一部分流指向 PCDN(点对点分发, 拿其他用户的带宽做节点)。
 ///   它有两个来源要一起防:
@@ -20,13 +22,13 @@ namespace BiliDesk.Models;
 /// </summary>
 public enum CdnSelectMode
 {
-    /// <summary>自动测速: 从候选线路里实测挑吞吐最高的(默认)</summary>
+    /// <summary>自动测速: 从候选线路里实测挑吞吐最高的</summary>
     Auto = 0,
 
     /// <summary>手动指定: 固定用用户选定的那一家 CDN</summary>
     Manual = 1,
 
-    /// <summary>跟随服务端: 不替换 host, 完全用接口返回的线路</summary>
+    /// <summary>跟随服务端: 不替换 host, 完全用接口返回的线路(默认)</summary>
     ServerDefault = 2
 }
 
