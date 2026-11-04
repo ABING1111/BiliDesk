@@ -765,6 +765,13 @@ public class CommentItem : System.ComponentModel.INotifyPropertyChanged
     public string RcTime { get; set; } = "";
 
     /// <summary>
+    /// 评论发布时间的 Unix 秒。界面只用 <see cref="RcTime"/> 显示, 这里留原始值是为了**排序**:
+    /// 详情页里切「时间」时要按真实时间重排楼中楼, 拿格式化过的字符串比虽然也能用,
+    /// 但一旦哪天改了显示格式就会静默排错。
+    /// </summary>
+    public long Ctime { get; set; }
+
+    /// <summary>
     /// 正文里出现的表情: 短代码(`[微笑]`) → 图片地址。
     ///
     /// 为什么不能用 Unicode 直接替: B 站的评论区里绝大多数是**自定义表情**

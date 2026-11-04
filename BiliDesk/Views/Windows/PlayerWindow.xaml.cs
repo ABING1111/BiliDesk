@@ -6682,7 +6682,15 @@ public partial class PlayerWindow : FluentWindow
         // force: 刚发表完评论要重新拉一次(rpid/楼层/审核状态本地编不出来)。
         // 但"看过就不再拉"这个短路必须保留 —— 切 Tab 会反复调到这里, 不短路就是白刷接口。
         // ★ 切换排序必须走 force=true: 它要的就是"同一份数据换个顺序重拉"。
-        if (force) CloseCommentDetail();
+        // ★★ 2026-11-05 修"评论详情页点 热门/时间 被退回评论区":
+        //    这里原来无条件 CloseCommentDetail() —— 用户明明是在详情页里点的排序,
+        //    结果刚点亮按钮就被弹回顶层列表, 看起来像"点一下退出了详情"。
+        //    force 的两个来源要区别对待:
+        //      · 切换排序: 详情页必须留在原地(详情页的 DataContext 是 _detailThreadRoot
+        //        这个**对象**本身, 重拉只替换 CommentList.ItemsSource, 不碰它);
+        //      · 发表评论后刷新: 在详情页里发表走的是"回复"分支(ReloadThreadRepliesAsync),
+        //        走不到这里; 真走到这里时详情页本来就没开, 所以保留现场也不会留旧内容。
+        //    换视频/切 tab/主动返回这些需要关详情的地方, 由各自调用方显式 CloseCommentDetail()。
         if (_commentsLoaded && !force) { CommentHint.Text = "已加载"; return; }
         if (aidAtStart <= 0)
         {
@@ -6728,6 +6736,9 @@ public partial class PlayerWindow : FluentWindow
                 _commentsLoaded = true;
                 _commentTotal = total;
                 _effectiveCommentSort = displaySort;
+                // 热门没数据回退成时间时, 详情页里的楼中楼也要跟着换回"时间"顺序:
+                // 否则按钮亮的是「时间」, 眼前回复还是「热门」序。
+                if (IsCommentDetailOpen) SortDetailReplies();
                 CommentLoadingRing.Visibility = Visibility.Collapsed;
                 // ★ 原来"接口失败"和"这视频真的一条评论都没有"都显示"暂无评论" ——
                 //   网络失败被伪装成了正常状态。现在失败时说清原因。
@@ -6737,8 +6748,10 @@ public partial class PlayerWindow : FluentWindow
                     : list.Count == 0 ? "暂无评论"
                     : $"共 {VideoItem.FormatCount(total > 0 ? total : list.Count)} 条评论";
                 // 只有真的加载成功且有评论, 排序入口才出现
+                // ★ 详情页开着时不受"列表为空/失败"影响: 用户还在详情页里,
+                //   此时把排序入口收起来等于把"切回另一个排序"的退路也一起藏了。
                 // ★ 传 displaySort: 热门回退成时间时, 让「时间」亮起来与列表实际顺序一致
-                UpdateCommentSortUi(visible: cmtOk && list.Count > 0, sortOverride: displaySort);
+                UpdateCommentSortUi(visible: cmtOk && (list.Count > 0 || IsCommentDetailOpen), sortOverride: displaySort);
             });
         }
         catch
@@ -6746,7 +6759,9 @@ public partial class PlayerWindow : FluentWindow
             if (_closing || _aid != aidAtStart) return;
             CommentLoadingRing.Visibility = Visibility.Collapsed;
             CommentHint.Text = "评论加载失败";
-            UpdateCommentSortUi(visible: false);
+            // 详情页里切换排序失败时保留两个排序词: 否则用户被卡在详情页,
+            // 连"再点一次重试/切回原排序"的入口都没有了。
+            UpdateCommentSortUi(visible: IsCommentDetailOpen);
         }
     }
 
@@ -6790,7 +6805,47 @@ public partial class PlayerWindow : FluentWindow
         _commentSort = mode;
         _effectiveCommentSort = mode;
         UpdateCommentSortUi(visible: true, sortOverride: mode);
+        // ★★ 2026-11-05: 详情页开着时先把**眼前的楼中楼**按新顺序排一遍。
+        //   根评论列表在详情页背后, 重拉它用户看不见 —— 不排这边的回复,
+        //   点了「热门 / 时间」就是"按钮亮了, 内容一动不动"。
+        if (IsCommentDetailOpen) SortDetailReplies();
         _ = LoadCommentsAsync(force: true);
+    }
+
+    /// <summary>
+    /// 按当前排序重排详情页里**已加载**的楼中楼回复。
+    ///
+    /// ★ 为什么必须本地排: 根评论列表有接口的 mode(热门=3 / 时间=2),
+    ///   但楼中楼接口 /x/v2/reply/reply **没有排序参数**, 永远按时间正序返回。
+    ///   详情页里点排序时若不重排, 眼前的顺序不会有任何变化。
+    /// ★ 热门 = 点赞数降序(再按时间新→旧); 时间 = 发布时间降序,
+    ///   与接口 mode=2 的"最新在前"保持一致。
+    /// ★ 用 Move 而不是 Clear+Add: 后者会重建所有回复容器, 长楼中楼会闪一下并丢滚动位置。
+    /// </summary>
+    private void SortDetailReplies()
+    {
+        if (_detailThreadRoot != null) SortRepliesInPlace(_detailThreadRoot);
+    }
+
+    private void SortRepliesInPlace(CommentItem root)
+    {
+        if (root == null || root.Replies.Count < 2) return;
+
+        var ordered = _effectiveCommentSort == 2
+            ? root.Replies.OrderByDescending(r => r.Ctime)
+                .ThenByDescending(r => r.Rpid)
+                .ToList()
+            : root.Replies.OrderByDescending(r => r.LikeCount)
+                .ThenByDescending(r => r.Ctime)
+                .ThenByDescending(r => r.Rpid)
+                .ToList();
+
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var idx = root.Replies.IndexOf(ordered[i]);
+            if (idx != i) root.Replies.Move(idx, i);
+        }
+        root.SyncPreviewReplies();
     }
 
     /// <summary>
@@ -6822,6 +6877,9 @@ public partial class PlayerWindow : FluentWindow
         // Host 的 DataContext = 线程根: "相关回复共 N 条"/回复列表/加载更多都从它取
         CommentDetailHost.DataContext = threadRoot;
         CommentDetailCard.Content = focus;
+        // 进详情时按当前排序先排一次: 楼中楼接口固定按时间正序返回,
+        // 而排序入口上亮着的可能是「热门」—— 不排的话两者对不上。
+        SortRepliesInPlace(threadRoot);
         // tab 文案随状态走: 进详情后"评论"变"评论详情", 返回链接就摆在它右边(用户指定)
         TabComments.Content = "评论详情";
         BtnBackToComments.Visibility = Visibility.Visible;
@@ -6878,6 +6936,9 @@ public partial class PlayerWindow : FluentWindow
                 // 让出一帧: 20 条富文本模板的实例化/排版会占满 UI 线程
                 await Dispatcher.Yield(DispatcherPriority.Background);
             }
+            // 自动补全的几页是按时间正序回来的: 补完再按"当前排序"归位,
+            // 否则「热门」模式下新补进来的旧回复会全堆在列表末尾。
+            SortRepliesInPlace(root);
             root.NotifyRepliesChanged();
         }
         catch (Exception ex)
@@ -6888,6 +6949,10 @@ public partial class PlayerWindow : FluentWindow
     }
 
     private void OnCommentDetailBack(object sender, RoutedEventArgs e) => CloseCommentDetail();
+
+    /// <summary>评论详情页当前是否开着(排序刷新失败时据此决定要不要留下排序入口)</summary>
+    private bool IsCommentDetailOpen =>
+        CommentDetailPanel != null && CommentDetailPanel.Visibility == Visibility.Visible;
 
     /// <summary>关掉详情视图(返回列表 / 切 tab / 换视频时都要调, 防止残留旧内容)</summary>
     private void CloseCommentDetail()
@@ -7406,6 +7471,7 @@ public partial class PlayerWindow : FluentWindow
             root.Replies.Clear();
             foreach (var r in merged) root.Replies.Add(r);
             if (root.ReplyCount < root.Replies.Count) root.ReplyCount = root.Replies.Count;
+            SortRepliesInPlace(root);
             root.SyncPreviewReplies();
             root.NotifyRepliesChanged();
         }
@@ -7465,6 +7531,8 @@ public partial class PlayerWindow : FluentWindow
             // 否则按钮会永远停在"展开 N 条回复"上点不动
             if (more.Count == 0 || item.Replies.Count >= item.ReplyCount)
                 item.ReplyCount = item.Replies.Count;
+            // 新补进来的一页按"当前排序"归位(接口固定按时间正序返回)
+            SortRepliesInPlace(item);
             item.NotifyRepliesChanged();
         }
         finally

@@ -3594,8 +3594,10 @@ public class ApiClient
             }
         }
 
-        item.RcTime = e.TryGetProperty("ctime", out var ct) && ct.ValueKind == JsonValueKind.Number
-            ? DateTimeOffset.FromUnixTimeSeconds(GetLongSafe(e, "ctime")).LocalDateTime.ToString("yyyy-MM-dd HH:mm")
+        item.Ctime = e.TryGetProperty("ctime", out var ctRaw) && ctRaw.ValueKind == JsonValueKind.Number
+            ? GetLongSafe(e, "ctime") : 0L;
+        item.RcTime = item.Ctime > 0
+            ? DateTimeOffset.FromUnixTimeSeconds(item.Ctime).LocalDateTime.ToString("yyyy-MM-dd HH:mm")
             : "";
 
         // @提及(2026-10-30 新增): 扫出正文里 @ 到的昵称, 界面据此把它们染成强调色。
