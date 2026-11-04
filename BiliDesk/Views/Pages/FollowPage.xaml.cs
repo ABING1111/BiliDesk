@@ -32,12 +32,18 @@ public partial class FollowPage : UserControl
         InitializeComponent();
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+        // 屏蔽把动态流筛空后补下一页(否则会停在一片空白上)
+        FilterService.Instance.Changed += OnFilterApplied;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         if (DataContext is FollowViewModel vm)
         {
+            // 动态流与"关注的主播正在直播"都纳入全局屏蔽(与首页/收藏/历史同一套条件)
+            FilterService.Instance.Attach(vm.FeedItems);
+            FilterService.Instance.Attach(vm.LiveNow);
+
             // 看板默认折叠(2026-11-03 用户要求"仅点击后再展开"): 页面实例会被 MainWindow
             // 缓存、VM 里的展开态会跨次保留, 所以每次进入页面都归位到收起, 不沿用上次的展开态。
             vm.LiveBoardOpen = false;
@@ -45,6 +51,22 @@ public partial class FollowPage : UserControl
             await vm.InitAsync();
             StartPolling();
         }
+    }
+
+    /// <summary>屏蔽条件落地后, 等布局量完再判断要不要补一页动态</summary>
+    private void OnFilterApplied()
+    {
+        if (!IsLoaded) return;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(async () =>
+        {
+            if (!IsLoaded || DataContext is not FollowViewModel vm) return;
+            var sv = FeedScroll;
+            if (sv == null) return;
+            var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
+            var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;
+            if (distanceToBottom > AutoLoadThreshold && !contentShort) return;
+            await vm.LoadMoreFeedAsync();
+        }));
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)

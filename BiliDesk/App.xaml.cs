@@ -53,6 +53,9 @@ public partial class App : Application
         // 初始化数据目录与各项服务
         AppPaths.Init();
         Svc.Settings.Load();
+        // 列表屏蔽条件存在 settings.json 里, 必须在 Load 之后同步一次。
+        // (FilterService 构造时也读, 这行是兜住"更早被 XAML 的 x:Static 提前实例化"的顺序意外)
+        FilterService.Instance.Reload();
         Svc.Theme.Initialize();
         Svc.Session.Load();
         // 本机观看历史(history.json)已整体移除: 历史统一看 B 站账号的云端记录。

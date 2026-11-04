@@ -285,9 +285,52 @@
                         <TextBlock Text="标题或 UP 主里含这些词的视频将不再显示。多个词用空格或逗号分隔。"
                                    FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"
                                    Foreground="{DynamicResource TextTertiaryBrush}" />
-                        <TextBlock Text="对首页的推荐 / 热门 / 排行榜、收藏页与云端历史同时生效"
+                        <TextBlock Text="也可以直接在卡片上右键「屏蔽此 UP 主 / 屏蔽此标题」，不用手打。"
                                    FontSize="11" Margin="0,3,0,0" TextWrapping="Wrap"
                                    Foreground="{DynamicResource TextTertiaryBrush}" />
+                        <TextBlock Text="对首页 / 搜索 / 分区 / 关注 / 收藏 / 历史 / 稍后再看 / 个人空间同时生效"
+                                   FontSize="11" Margin="0,3,0,0" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+
+                        <!-- 一键屏蔽的规则(卡片右键加的那类)。单条可删 —— 误点一下不至于要翻配置，
+                             也不用为了撤销去猜当时打的是什么词。 -->
+                        <StackPanel Margin="0,12,0,0"
+                                    Visibility="{Binding HasRules, Source={x:Static helpers:FilterService.Instance},
+                                                 Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="已屏蔽的 UP 主 / 标题" FontSize="12" Margin="0,0,0,6" />
+                            <ScrollViewer MaxHeight="132" VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <ItemsControl ItemsSource="{Binding Rules, Source={x:Static helpers:FilterService.Instance}}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{DynamicResource ControlFillDefaultBrush}"
+                                                    CornerRadius="6" Padding="7,3,3,3" Margin="0,0,6,6">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Badge}" FontSize="9"
+                                                               Margin="1,0,5,0" VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                    <TextBlock Text="{Binding Label}" FontSize="11"
+                                                               MaxWidth="150" TextTrimming="CharacterEllipsis"
+                                                               VerticalAlignment="Center"
+                                                               ToolTip="{Binding Label}" />
+                                                    <Button Content="&#xE711;" Tag="{Binding}"
+                                                            Style="{StaticResource BareIconButtonStyle}"
+                                                            Width="18" Height="18" Margin="2,0,0,0"
+                                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                            FontSize="9" ToolTip="撤销这条屏蔽"
+                                                            Click="OnRemoveFilterRuleClick" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </StackPanel>
 
                         <TextBlock Text="屏蔽标题含" FontSize="12" Margin="0,14,0,6" />
                         <TextBox x:Name="FilterTitleBox" Style="{StaticResource FluentTextBoxStyle}"

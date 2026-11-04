@@ -46,8 +46,8 @@ public partial class DynamicCard : UserControl
 
     // ------------------------------------------------------------ 右键菜单
     //
-    // ★ 三个动作与 VideoCard 的**逐字同款**(动态卡是默认排版, 不能少功能)。
-    //   没有把三者抽成公共方法: VideoCard 那三份是 private, 抽出来要动它的公开面;
+    // ★ 这些动作与 VideoCard 的**逐字同款**(动态卡是默认排版, 不能少功能)。
+    //   没有把它们抽成公共方法: VideoCard 那边是 private, 抽出来要动它的公开面;
     //   而这里每个都只有两三行, 重复的代价小于为它新建一个共享类的代价。
     //   (若将来第三处也用同一套, 再抽到 Helpers/MediaActions 旁边。)
 
@@ -71,6 +71,37 @@ public partial class DynamicCard : UserControl
         var v = Current;
         if (v == null || string.IsNullOrEmpty(v.Bvid)) return;
         await VideoDownloader.DownloadAsync(v.Bvid, v.Title, Window.GetWindow(this));
+    }
+
+    /// <summary>一键屏蔽这个 UP 主(精确同名 + UID, 与 VideoCard 同款)</summary>
+    private void OnBlockUp(object sender, RoutedEventArgs e)
+    {
+        var v = Current;
+        if (v == null) return;
+
+        var author = (v.Author ?? "").Trim();
+        if (author.Length == 0 && v.OwnerMid <= 0)
+        {
+            Svc.Toast.Show("这条没有 UP 主信息，屏蔽不了");
+            return;
+        }
+
+        FilterService.Instance.BlockUp(author, v.OwnerMid);
+        var label = author.Length > 0 ? author : $"UID {v.OwnerMid}";
+        Svc.Toast.Show($"已屏蔽 UP 主「{label}」，可在首页「屏蔽」面板撤销");
+    }
+
+    /// <summary>一键屏蔽这个标题(完全相同才隐藏, 与 VideoCard 同款)</summary>
+    private void OnBlockTitle(object sender, RoutedEventArgs e)
+    {
+        var v = Current;
+        if (v == null) return;
+
+        var title = (v.Title ?? "").Trim();
+        if (title.Length == 0) return;
+
+        FilterService.Instance.BlockTitle(title);
+        Svc.Toast.Show("已屏蔽这条视频，可在首页「屏蔽」面板撤销");
     }
 
     /// <summary>

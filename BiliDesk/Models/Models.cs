@@ -1314,6 +1314,16 @@ public class Session
     public string? Blsid { get; set; }
 }
 
+/// <summary>
+/// 一条"一键屏蔽 UP 主"规则(落盘用)。
+/// Name 只用于面板显示/UID 缺失时的兜底匹配; Mid &gt; 0 时优先按 UID 命中, UP 改名也拦得住。
+/// </summary>
+public class BlockedUpEntry
+{
+    public string Name { get; set; } = "";
+    public long Mid { get; set; }
+}
+
 /// <summary>应用设置</summary>
 public class AppSettings
 {
@@ -1478,6 +1488,27 @@ public class AppSettings
 
     /// <summary>弹幕速度档位(0 最慢 ~ 4 最快)。与 SettingsStore 同名属性是读写契约。</summary>
     public int DanmakuSpeedLevel { get; set; } = 2;
+
+    // ------------------------------------------------------------ 列表屏蔽(FilterService)
+
+    /// <summary>
+    /// 按标题屏蔽的关键词(手打, 包含匹配)。多个词用空格 / 逗号分隔。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public string FilterTitleKeyword { get; set; } = "";
+
+    /// <summary>按 UP 主屏蔽的关键词(手打, 包含匹配)。与 SettingsStore 同名属性是读写契约。</summary>
+    public string FilterUpKeyword { get; set; } = "";
+
+    /// <summary>
+    /// 卡片右键"屏蔽此 UP 主"加的一键规则。精确同名 + UID(见 FilterService)。
+    /// 存 Name/Mid 两个字段而不是一个拼接串: UP 改名后 UID 仍然有效,
+    /// 面板里又需要昵称给人看。★ 与 SettingsStore 同名属性是读写契约。
+    /// </summary>
+    public List<BlockedUpEntry> FilterBlockedUps { get; set; } = new();
+
+    /// <summary>卡片右键"屏蔽此标题"加的一键规则(标题完全相同才命中)。</summary>
+    public List<string> FilterBlockedTitles { get; set; } = new();
 
     /// <summary>
     /// 默认画质(qn)。用户在设置页**开始播放前**预先选定的清晰度档位,

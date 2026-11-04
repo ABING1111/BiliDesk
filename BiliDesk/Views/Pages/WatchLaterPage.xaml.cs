@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
+using BiliDesk.Helpers;
 using BiliDesk.ViewModels;
 
 namespace BiliDesk.Views.Pages;
@@ -16,9 +18,16 @@ public partial class WatchLaterPage : UserControl
     public WatchLaterPage()
     {
         InitializeComponent();
+        // 屏蔽筛掉一批后补下一页(否则停在半屏空白上)
+        FilterService.Instance.Changed += OnFilterApplied;
         Loaded += async (_, _) =>
         {
-            if (Vm != null) await Vm.LoadAsync();
+            if (Vm != null)
+            {
+                // 稍后再看也纳入全局屏蔽(以前这里怎么屏蔽都不生效)
+                FilterService.Instance.Attach(Vm.Items);
+                await Vm.LoadAsync();
+            }
         };
     }
 
@@ -33,11 +42,17 @@ public partial class WatchLaterPage : UserControl
 
     private void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        if (sender is ScrollViewer sv) MaybeAutoLoad(sv);
+    }
+
+    /// <summary>内容接近底部 / 不足一屏就补下一页。滚动与"屏蔽后补内容"共用这一份判断。</summary>
+    private void MaybeAutoLoad(ScrollViewer? sv)
+    {
+        if (sv == null) return;
         if (Vm is not { HasMore: true } vm) return;
         if (vm.IsFilling) return;
         if (_autoFillCount > 5) return;   // 防止"补了但布局还没长"造成的死循环
 
-        if (sender is not ScrollViewer sv) return;
         var nearBottom = sv.ScrollableHeight - sv.VerticalOffset < 400;
         var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;
         if (!nearBottom && !contentShort) return;
@@ -45,6 +60,16 @@ public partial class WatchLaterPage : UserControl
         _autoFillCount++;
         try { vm.ShowNextPage(); }
         finally { _autoFillCount--; }
+    }
+
+    /// <summary>屏蔽条件落地后, 等布局量完再补内容</summary>
+    private void OnFilterApplied()
+    {
+        if (!IsLoaded) return;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (IsLoaded) MaybeAutoLoad(ListScroll);
+        }));
     }
 
     /// <summary>返回「我的」页(入口在那里)</summary>

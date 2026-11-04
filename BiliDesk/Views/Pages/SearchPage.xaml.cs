@@ -6,6 +6,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Threading;
+using BiliDesk.Helpers;
 using BiliDesk.Services;
 using BiliDesk.ViewModels;
 
@@ -64,7 +65,14 @@ public partial class SearchPage : UserControl
         Svc.SearchHistory.Items.CollectionChanged += (_, _) => ScheduleHeightSync();
 
         // DataContext 是外面赋进来的, 构造时还拿不到 VM; 换 VM 就当作"换了一次展示", 把卡片收回原位。
-        DataContextChanged += (_, _) => ResetCard();
+        DataContextChanged += (_, e) =>
+        {
+            ResetCard();
+            // 搜索结果也纳入全局屏蔽。以前只挂了首页/收藏/历史, 在搜索页怎么屏蔽都不生效。
+            if (e.NewValue is SearchViewModel vm) FilterService.Instance.Attach(vm.Results);
+        };
+        // 屏蔽筛掉一批结果后, 结果区可能不够一屏: 主动补下一页(滚动事件不会因此触发)
+        FilterService.Instance.Changed += OnFilterApplied;
         // 切到别的页时本页会被摘出可视树: 焦点跟着没了, 卡片也该收回去(不然后面切回来它是开着的)
         Unloaded += (_, _) => ResetCard();
     }
@@ -126,10 +134,16 @@ public partial class SearchPage : UserControl
     /// </summary>
     private async void OnResultScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        if (sender is ScrollViewer sv) await MaybeAutoLoadAsync(sv);
+    }
+
+    /// <summary>内容接近底部 / 不足一屏就补下一页。滚动和"屏蔽后补内容"共用这一份判断。</summary>
+    private async Task MaybeAutoLoadAsync(ScrollViewer? sv)
+    {
+        if (sv == null) return;
         if (Vm is not { HasMore: true } vm) return;
         if (vm.LoadingMore || vm.Searching || vm.Blocked) return;
         if (_autoFillCount > 5) return;
-        if (sender is not ScrollViewer sv) return;
 
         var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
         var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;
@@ -138,6 +152,16 @@ public partial class SearchPage : UserControl
         _autoFillCount++;
         try { await vm.LoadMoreAsync(); }
         finally { _autoFillCount--; }
+    }
+
+    /// <summary>屏蔽条件落地后, 等布局量完再决定要不要补一页(否则会停在半屏空白上)</summary>
+    private void OnFilterApplied()
+    {
+        if (!IsLoaded) return;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(async () =>
+        {
+            if (IsLoaded) await MaybeAutoLoadAsync(ResultScroll);
+        }));
     }
 
     /// <summary>

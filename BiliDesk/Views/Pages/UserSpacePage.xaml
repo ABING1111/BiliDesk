@@ -128,7 +128,7 @@
                         Command="{Binding RefreshCommand}" />
             </StackPanel>
 
-            <ScrollViewer VerticalScrollBarVisibility="Auto"
+            <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto"
                           ScrollChanged="Scroll_OnScrollChanged">
                 <StackPanel Margin="36,16,36,24">
                     <!-- 视频网格 -->

@@ -133,6 +133,28 @@
                                FontSize="13" VerticalAlignment="Center" />
                 </MenuItem.Icon>
             </MenuItem>
+            <Separator />
+            <!-- 一键屏蔽(2026-11-04): 点一下就从**所有**列表里挡掉, 不用再打开首页面板手打。
+                 · "屏蔽此 UP 主" = 精确同名 + UID(不会因为屏蔽"小明"误伤"小明明");
+                 · "屏蔽此标题"   = 标题完全相同才隐藏(只挡这一条, 同 UP 的其它视频还在)。
+                 两个都是全局规则, 可以在首页的「屏蔽」面板里点标签上的 × 撤销。
+                 ★ 不要改回"父级『屏蔽』+ 子菜单"的写法: ContextMenu 的子菜单里绑不到
+                   卡片的 DataContext, 之前用 Visibility 绑定藏空项, 结果两项全被折叠,
+                   子菜单变成空的, 用户点上去就是"没反应"。平铺最稳。 -->
+            <MenuItem Header="屏蔽此 UP 主" Click="OnBlockUp"
+                      ToolTip="所有列表里都不再显示这个 UP 主">
+                <MenuItem.Icon>
+                    <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="13" VerticalAlignment="Center" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="屏蔽此标题" Click="OnBlockTitle"
+                      ToolTip="只隐藏标题完全相同的这一条">
+                <MenuItem.Icon>
+                    <TextBlock Text="&#xE7BA;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="13" VerticalAlignment="Center" />
+                </MenuItem.Icon>
+            </MenuItem>
             <Separator x:Name="ExtraSeparator" Visibility="Collapsed" />
             <!--
                 页面追加的菜单项(2026-09-26 改为 code-behind 动态插入, 见 VideoCard.xaml.cs):

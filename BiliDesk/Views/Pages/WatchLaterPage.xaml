@@ -106,7 +106,7 @@
             </StackPanel>
 
             <!-- 视频网格: 分页展示(见 WatchLaterViewModel), 滚到接近底部由 OnListScrollChanged 补下一页 -->
-            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="36,4,36,24"
+            <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto" Margin="36,4,36,24"
                           ScrollChanged="OnListScrollChanged"
                           Visibility="{Binding Error, Converter={StaticResource InvStrToVis}}">
                 <StackPanel>

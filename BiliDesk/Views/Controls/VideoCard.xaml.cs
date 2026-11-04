@@ -285,6 +285,41 @@ public partial class VideoCard : UserControl
     }
 
     /// <summary>
+    /// 一键屏蔽这个 UP 主(精确同名 + UID)。规则是全局的, 所有已接入屏蔽的列表立刻生效。
+    /// </summary>
+    private void OnBlockUp(object sender, RoutedEventArgs e)
+    {
+        var v = Current;
+        if (v == null) return;
+
+        var author = (v.Author ?? "").Trim();
+        if (author.Length == 0 && v.OwnerMid <= 0)
+        {
+            Svc.Toast.Show("这条没有 UP 主信息，屏蔽不了");
+            return;
+        }
+
+        FilterService.Instance.BlockUp(author, v.OwnerMid);
+        var label = author.Length > 0 ? author : $"UID {v.OwnerMid}";
+        Svc.Toast.Show($"已屏蔽 UP 主「{label}」，可在首页「屏蔽」面板撤销");
+    }
+
+    /// <summary>
+    /// 一键屏蔽这个标题(**完全相同**才隐藏)。只挡这一条, 同 UP 的其它视频不受影响。
+    /// </summary>
+    private void OnBlockTitle(object sender, RoutedEventArgs e)
+    {
+        var v = Current;
+        if (v == null) return;
+
+        var title = (v.Title ?? "").Trim();
+        if (title.Length == 0) return;
+
+        FilterService.Instance.BlockTitle(title);
+        Svc.Toast.Show("已屏蔽这条视频，可在首页「屏蔽」面板撤销");
+    }
+
+    /// <summary>
     /// 把这条视频加进 B 站账号的「稍后再看」。
     ///
     /// 接口只认 avid, 而搜索/推荐这类列表不下发 avid(见 VideoItem.Aid 的说明),

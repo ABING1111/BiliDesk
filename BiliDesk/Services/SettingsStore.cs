@@ -180,6 +180,20 @@ public class SettingsStore
     /// </summary>
     public int DanmakuSpeedLevel { get; set; } = 2;
 
+    // ------------------------------------------------------------ 列表屏蔽(FilterService)
+
+    /// <summary>按标题屏蔽的关键词(包含匹配, 空格/逗号分隔)。与 AppSettings 同名属性是读写契约。</summary>
+    public string FilterTitleKeyword { get; set; } = "";
+
+    /// <summary>按 UP 主屏蔽的关键词(包含匹配)。与 AppSettings 同名属性是读写契约。</summary>
+    public string FilterUpKeyword { get; set; } = "";
+
+    /// <summary>一键屏蔽的 UP 主(精确同名 + UID)。与 AppSettings 同名属性是读写契约。</summary>
+    public List<BlockedUpEntry> FilterBlockedUps { get; set; } = new();
+
+    /// <summary>一键屏蔽的标题(完全相同才命中)。与 AppSettings 同名属性是读写契约。</summary>
+    public List<string> FilterBlockedTitles { get; set; } = new();
+
     /// <summary>
     /// 默认画质(qn)。用户在设置页**开始播放前**预先选定的清晰度,
     /// 之后每次点开视频/换集都用它起播; 该档不可用时自动降级(见 ApiClient.GetPlayUrlAsync)。
@@ -532,6 +546,14 @@ public class SettingsStore
         DanmakuSpeedLevel = Math.Clamp(s.DanmakuSpeedLevel,
             Helpers.DanmakuMotion.MinSpeedLevel, Helpers.DanmakuMotion.MaxSpeedLevel);
 
+        // 列表屏蔽: 老配置没有这些字段 ⇒ 空串 / 空列表 = 不屏蔽, 正是期望的默认。
+        // ★ 仍要清洗: 配置可能被手改坏(空项、重复、超长、负 mid),
+        //   脏数据会让面板里出现一条删不掉的空标签。
+        FilterTitleKeyword = s.FilterTitleKeyword ?? "";
+        FilterUpKeyword = s.FilterUpKeyword ?? "";
+        FilterBlockedUps = SanitizeBlockedUps(s.FilterBlockedUps);
+        FilterBlockedTitles = SanitizeBlockedTitles(s.FilterBlockedTitles);
+
 
         // ★ 默认画质要 Normalize: 手改过的配置可能有 0 / 已下线的档位 / 串到别处
         //   的值, 直接流进取流请求会变成一个谁也不认识的 qn(表现为画质莫名其妙)。
@@ -605,6 +627,116 @@ public class SettingsStore
             : ContentKind.Video;
     }
 
+    // ------------------------------------------------------------ 列表屏蔽的清洗
+
+    /// <summary>每类一键屏蔽规则最多存多少条(面板里也不可能有人翻 500 条)</summary>
+    private const int MaxFilterRules = 500;
+
+    /// <summary>
+    /// 清洗"一键屏蔽 UP"列表: 去空、去重(UID 优先, 其次同名)、限制长度。
+    /// 配置可能被手改坏或来自更早的实验版本, 脏数据会让面板出现删不掉的空标签。
+    /// </summary>
+    private static List<BlockedUpEntry> SanitizeBlockedUps(List<BlockedUpEntry>? raw)
+    {
+        var result = new List<BlockedUpEntry>();
+        if (raw == null) return result;
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var mids = new HashSet<long>();
+        foreach (var e in raw)
+        {
+            if (e == null) continue;
+
+            var name = (e.Name ?? "").Trim();
+            if (name.Length > 100) name = name[..100];
+            var mid = e.Mid > 0 ? e.Mid : 0;
+            if (name.Length == 0 && mid == 0) continue;
+
+            // ★ 先判重再登记: 先 Add 后判重会在"名字重复但 UID 不重复"时把 UID
+            //   提前写进集合, 于是后面真正该保留的那条反而被丢掉。
+            if (mid > 0 && mids.Contains(mid)) continue;
+            if (name.Length > 0 && names.Contains(name)) continue;
+
+            if (mid > 0) mids.Add(mid);
+            if (name.Length > 0) names.Add(name);
+            result.Add(new BlockedUpEntry { Name = name, Mid = mid });
+            if (result.Count >= MaxFilterRules) break;
+        }
+        return result;
+    }
+
+    /// <summary>清洗"一键屏蔽标题"列表: 去空、去重(忽略大小写)、限制长度。</summary>
+    private static List<string> SanitizeBlockedTitles(List<string>? raw)
+    {
+        var result = new List<string>();
+        if (raw == null) return result;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in raw)
+        {
+            var v = (t ?? "").Trim();
+            if (v.Length == 0) continue;
+            if (v.Length > 300) v = v[..300];
+            if (!seen.Add(v)) continue;
+
+            result.Add(v);
+            if (result.Count >= MaxFilterRules) break;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 列表屏蔽条件被修改后调用: 持久化并广播。
+    /// 参数传 null 表示"不改这一项" —— 输入关键词和右键一键屏蔽走的是同一个入口,
+    /// 各自只该动自己那一份状态, 顺手把别的项抄一遍很容易漏掉新加的字段。
+    /// </summary>
+    public void UpdateFilterSettings(
+        string? titleKeyword = null,
+        string? upKeyword = null,
+        IEnumerable<BlockedUpEntry>? blockedUps = null,
+        IEnumerable<string>? blockedTitles = null)
+    {
+        var nextTitle = titleKeyword ?? FilterTitleKeyword;
+        var nextUp = upKeyword ?? FilterUpKeyword;
+        var nextUps = blockedUps != null
+            ? SanitizeBlockedUps(blockedUps.ToList())
+            : FilterBlockedUps;
+        var nextTitles = blockedTitles != null
+            ? SanitizeBlockedTitles(blockedTitles.ToList())
+            : FilterBlockedTitles;
+
+        var changed = !string.Equals(nextTitle, FilterTitleKeyword, StringComparison.Ordinal)
+            || !string.Equals(nextUp, FilterUpKeyword, StringComparison.Ordinal)
+            || !SameUps(nextUps, FilterBlockedUps)
+            || !SameTitles(nextTitles, FilterBlockedTitles);
+
+        FilterTitleKeyword = nextTitle;
+        FilterUpKeyword = nextUp;
+        FilterBlockedUps = nextUps;
+        FilterBlockedTitles = nextTitles;
+
+        if (changed) Save();
+    }
+
+    private static bool SameUps(List<BlockedUpEntry> a, List<BlockedUpEntry> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (var i = 0; i < a.Count; i++)
+        {
+            if (a[i].Mid != b[i].Mid) return false;
+            if (!string.Equals(a[i].Name, b[i].Name, StringComparison.OrdinalIgnoreCase)) return false;
+        }
+        return true;
+    }
+
+    private static bool SameTitles(List<string> a, List<string> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (var i = 0; i < a.Count; i++)
+            if (!string.Equals(a[i], b[i], StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
+    }
+
     /// <summary>
     /// 把当前设置拍成一份待落盘的 <see cref="AppSettings"/> 快照(纯内存操作, 微秒级)。
     ///
@@ -638,6 +770,10 @@ public class SettingsStore
         DanmakuOpacityPercent = DanmakuOpacityPercent,
         DanmakuFontScalePercent = DanmakuFontScalePercent,
         DanmakuSpeedLevel = DanmakuSpeedLevel,
+        FilterTitleKeyword = FilterTitleKeyword,
+        FilterUpKeyword = FilterUpKeyword,
+        FilterBlockedUps = FilterBlockedUps,
+        FilterBlockedTitles = FilterBlockedTitles,
         PreferredQualityQn = PreferredQualityQn,
         RecommendSource = RecommendSource,
         AccentColor = AccentColor,

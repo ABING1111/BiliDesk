@@ -52,6 +52,24 @@
                                FontSize="13" VerticalAlignment="Center" />
                 </MenuItem.Icon>
             </MenuItem>
+            <Separator />
+            <!-- 一键屏蔽(与 VideoCard 逐字同款): 动态流是关注页的默认排版,
+                 少了这一项就等于"默认看到的卡片没法屏蔽", 又得切排版或手动开面板。
+                 ★ 平铺而不是子菜单 —— 原因见 VideoCard.xaml。 -->
+            <MenuItem Header="屏蔽此 UP 主" Click="OnBlockUp"
+                      ToolTip="所有列表里都不再显示这个 UP 主">
+                <MenuItem.Icon>
+                    <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="13" VerticalAlignment="Center" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="屏蔽此标题" Click="OnBlockTitle"
+                      ToolTip="只隐藏标题完全相同的这一条">
+                <MenuItem.Icon>
+                    <TextBlock Text="&#xE7BA;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="13" VerticalAlignment="Center" />
+                </MenuItem.Icon>
+            </MenuItem>
         </ContextMenu>
     </UserControl.ContextMenu>
     <Border Margin="0,0,0,12" CornerRadius="10" Padding="14,12"

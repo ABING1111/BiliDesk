@@ -65,6 +65,8 @@ public partial class HomePage : UserControl
         Svc.Theme.ThemeChanged += RefreshThemeIcon;
         // 筛选条件变化时让筛选按钮自己显示"已启用"状态
         FilterService.Instance.PropertyChanged += OnFilterChanged;
+        // 屏蔽把一屏内容筛空后要补下一页, 否则底部会留一大片空白(刷新不会触发滚动事件)
+        FilterService.Instance.Changed += OnFilterApplied;
         // 窗口缩放时若搜索卡正开着, 要让它重新对中(RenderTransform 是绝对位移, 不跟布局走)
         SizeChanged += (_, _) =>
         {
@@ -176,6 +178,29 @@ public partial class HomePage : UserControl
     {
         FilterService.Instance.Clear();
         RefreshFilterButton();
+    }
+
+    /// <summary>面板里点某条规则的 ×: 只撤销这一条(含它带来的 UID 规则)</summary>
+    private void OnRemoveFilterRuleClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: FilterRule rule })
+            FilterService.Instance.RemoveRule(rule);
+    }
+
+    /// <summary>
+    /// 屏蔽条件刚落到列表上。等这次布局跑完再判断"当前页内容够不够一屏",
+    /// 不够就补下一页 —— 否则一键屏蔽十几个 UP 之后, 页面会停在一大片空白上。
+    /// </summary>
+    private void OnFilterApplied()
+    {
+        if (!IsLoaded) return;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (!IsLoaded || DataContext is not HomeViewModel vm) return;
+            if (CurrentTabFromVm() is not { } tab) return;
+            if (ScrollOf(tab) is not { } sv) return;
+            _ = TriggerAutoLoad(sv, vm);
+        }));
     }
 
     // ------------------------------------------------------------ 其它入口

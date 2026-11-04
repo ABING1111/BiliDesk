@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.ViewModels;
 
@@ -29,7 +30,12 @@ public partial class RegionPage : UserControl
     private DeferredFill? _fill;
     private RegionViewModel? _hookedVm;
 
-    public RegionPage() => InitializeComponent();
+    public RegionPage()
+    {
+        InitializeComponent();
+        // 屏蔽筛掉一批卡片后补下一页(否则分区页会停在半屏空白上)
+        FilterService.Instance.Changed += OnFilterApplied;
+    }
 
     /// <summary>切到某个分区。同一个分区且已加载过 → 不重拉。</summary>
     public async Task OpenAsync(string name, int tid)
@@ -51,6 +57,9 @@ public partial class RegionPage : UserControl
         if (_hookedVm != null) _hookedVm.PropertyChanged -= OnVmPropertyChanged;
         _hookedVm = vm;
         _hookedVm.PropertyChanged += OnVmPropertyChanged;
+
+        // 分区列表纳入全局屏蔽(以前这里怎么屏蔽都不生效)
+        FilterService.Instance.Attach(vm.Items);
     }
 
     private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -91,11 +100,16 @@ public partial class RegionPage : UserControl
     private async void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         UpdateBackToTop(sender as ScrollViewer);
+        if (sender is ScrollViewer sv) await MaybeAutoLoadAsync(sv);
+    }
 
+    /// <summary>内容接近底部 / 不足一屏就补下一页。滚动与"屏蔽后补内容"共用这一份判断。</summary>
+    private async Task MaybeAutoLoadAsync(ScrollViewer? sv)
+    {
+        if (sv == null) return;
         if (DataContext is not RegionViewModel vm) return;
         if (!vm.HasMore || vm.Loading || vm.LoadingMore) return;
         if (_autoFillCount > 5) return;
-        if (sender is not ScrollViewer sv) return;
         // 分帧填充进行中: 每补一批 ScrollableHeight 都在长, 这时判"内容不够一屏"是错的,
         // 会带着空列表去拉下一页; 等填充完(补帧引发的 ScrollChanged 会再来)再判。
         if (_fill is { IsActive: true }) return;
@@ -109,6 +123,16 @@ public partial class RegionPage : UserControl
         _autoFillCount++;
         try { await vm.LoadMoreAsync(); }
         finally { _autoFillCount--; }
+    }
+
+    /// <summary>屏蔽条件落地后, 等布局量完再补内容</summary>
+    private void OnFilterApplied()
+    {
+        if (!IsLoaded) return;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(async () =>
+        {
+            if (IsLoaded) await MaybeAutoLoadAsync(ListScroll);
+        }));
     }
 
     // ------------------------------------------------------------ 右下角工具列
