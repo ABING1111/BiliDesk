@@ -77,6 +77,11 @@
     <SolidColorBrush x:Key="HotBadgeHotBrush" Color="#E5484D" />
     <SolidColorBrush x:Key="HotBadgeExclusiveBrush" Color="#E1519A" />
 
+    <!-- 动态未读红点(动态页左栏 UP 头像左侧)。
+         同样是**语义色**: "这里有新动态"和强调色无关, 用户把主题色改成绿/蓝也应该是红的。
+         两张色板写同一个值, 与 HotBadgeHotBrush 的红保持一套视觉。 -->
+    <SolidColorBrush x:Key="UnreadDotBrush" Color="#E5484D" />
+
     <!-- 浮出层(右键菜单等): 必须接近不透明, 否则菜单叠在视频/图片上会透出底下的内容 -->
     <SolidColorBrush x:Key="FlyoutBackgroundBrush" Color="#FCFFFFFF" />
     <SolidColorBrush x:Key="FlyoutBorderBrush" Color="#1A000000" />

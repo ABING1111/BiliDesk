@@ -578,11 +578,12 @@ public class FollowUser : System.ComponentModel.INotifyPropertyChanged
     private int _newCount;
 
     /// <summary>
-    /// 「未读动态」条数 —— 左栏头像右下角的蓝底数字角标(0 = 不显示)。
+    /// 「未读动态」条数 —— 左栏头像左侧未读红点的判定依据(0 = 不显示红点)。
+    /// 红点本身只表达"有没有新动态", 具体条数放在红点的悬浮提示里。
     ///
     /// ★ 由**本地**判断, 不新增接口(见 DynamicSeenStore): 拿动态流里"该 UP 最新的一条"
     ///   与上次记录的比对, 不一样就是有新动态。
-    /// ★ 必须带通知: 角标是刷新后由 ViewModel 侧统一刷的(见 FollowViewModel.UpdateUnreadBadges),
+    /// ★ 必须带通知: 红点是刷新后由 ViewModel 侧统一刷的(见 FollowViewModel.UpdateUnreadBadges),
     ///   界面要跟着变。
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]

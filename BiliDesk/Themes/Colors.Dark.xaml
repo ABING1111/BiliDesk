@@ -55,6 +55,9 @@
     <SolidColorBrush x:Key="HotBadgeHotBrush" Color="#E5484D" />
     <SolidColorBrush x:Key="HotBadgeExclusiveBrush" Color="#E1519A" />
 
+    <!-- 动态未读红点: 语义色, 两套主题同值(说明见 Colors.Light.xaml)。 -->
+    <SolidColorBrush x:Key="UnreadDotBrush" Color="#E5484D" />
+
     <!-- 浮出层(右键菜单等): 必须接近不透明, 否则菜单叠在视频/图片上会透出底下的内容 -->
     <SolidColorBrush x:Key="FlyoutBackgroundBrush" Color="#F52A2A2A" />
     <SolidColorBrush x:Key="FlyoutBorderBrush" Color="#1FFFFFFF" />

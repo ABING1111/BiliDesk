@@ -113,7 +113,9 @@
                         <!-- 全部动态入口: 选中高亮跟 VM.IsAllSelected 走 -->
                         <!-- 选中/悬停观感与左侧导航栏一致: 悬停灰(NavItemHoverBrush),
                              选中粉底(AccentSoftFillBrush) + 粉字(AccentTextBrush)。 -->
-                        <Border CornerRadius="10" Padding="12,10" Margin="0,4,0,6" Cursor="Hand"
+                        <!-- ★ 左内边距 28 = 6(UP 行左内边距) + 22(红点通道): 这样「全部动态」的
+                             图标与下方各 UP 的头像落在同一条竖线上, 不会因为红点通道而错位。 -->
+                        <Border CornerRadius="10" Padding="28,10,12,10" Margin="0,4,0,6" Cursor="Hand"
                                 MouseLeftButtonUp="OnSelectAll">
                             <Border.Style>
                                 <Style TargetType="Border">
@@ -156,7 +158,7 @@
                         <ItemsControl ItemsSource="{Binding Users}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Border CornerRadius="10" Padding="12,8" Margin="0,0,0,4" Cursor="Hand"
+                                    <Border CornerRadius="10" Padding="6,8,12,8" Margin="0,0,0,4" Cursor="Hand"
                                             MouseLeftButtonUp="OnSelectUp"
                                             ToolTip="只看 TA 的投稿视频">
                                         <Border.Style>
@@ -174,15 +176,28 @@
                                         </Border.Style>
                                         <Grid>
                                             <Grid.ColumnDefinitions>
+                                                <!-- 红点通道: 固定 22px(6px 红点 + 16px 到头像的间距),
+                                                     **始终占位** —— 有没有未读, 头像与名字的位置都不能跳。 -->
+                                                <ColumnDefinition Width="22" />
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
+                                            <!-- 未读红点: 照 B 站客户端, 点在头像左侧、垂直居中(静态, 不做动画)。
+                                                 外层透明 Border 是给鼠标留的悬停热区 —— 6px 的圆点本身几乎
+                                                 悬停不到, 数量信息要能被看到。 -->
+                                            <Border Grid.Column="0" Width="22" Height="28"
+                                                    Background="Transparent" VerticalAlignment="Center"
+                                                    ToolTipService.IsEnabled="{Binding HasNew}"
+                                                    ToolTip="{Binding NewCount, StringFormat='{}{0} 条新动态'}">
+                                                <Border Width="6" Height="6" CornerRadius="3"
+                                                        Background="{DynamicResource UnreadDotBrush}"
+                                                        HorizontalAlignment="Left" VerticalAlignment="Center"
+                                                        Visibility="{Binding HasNew, Converter={StaticResource BoolToVis}}" />
+                                            </Border>
                                             <!-- 头像。右键可看大图 / 保存。
-                                                 ★ 外面套一层同尺寸 Grid 只为一件事: 把未读角标压在头像
-                                                   右下角(2026-10-15, 用户要求"有未读最新消息就在头像
-                                                   右下角标注")。单靠 Border 自己叠不出来 ——
-                                                   它 ClipToBounds=True, 会把越界的子元素裁掉。 -->
-                                            <Grid Grid.Column="0" Width="36" Height="36">
+                                                 ★ 外面套一层同尺寸 Grid: 固定 36×36 的占位, 头像 Border 自己
+                                                   ClipToBounds 裁成圆 —— 红点已经移到左侧独立通道, 不再靠越界叠放。 -->
+                                            <Grid Grid.Column="1" Width="36" Height="36">
                                                 <Border Width="36" Height="36" CornerRadius="18"
                                                         Background="{DynamicResource AccentSoftFillBrush}"
                                                         ClipToBounds="True"
@@ -223,19 +238,8 @@
                                                                HorizontalAlignment="Center"
                                                                VerticalAlignment="Center" />
                                                 </Border>
-                                                <!-- 未读角标: 与消息页会话列表同款(蓝底数字, 贴右下角)。
-                                                     计数来源见 FollowViewModel.UpdateUnreadBadges ——
-                                                     本地比对出来的"该 UP 有新动态", 不额外请求接口。 -->
-                                                <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                                        MinWidth="16" Height="16" CornerRadius="8" Padding="4,0"
-                                                        Background="{DynamicResource AccentBrush}"
-                                                        Visibility="{Binding HasNew, Converter={StaticResource BoolToVis}}">
-                                                    <TextBlock Text="{Binding NewCount}" FontSize="10"
-                                                               Foreground="{DynamicResource TextOnAccentBrush}"
-                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                </Border>
                                             </Grid>
-                                            <TextBlock Grid.Column="1" Text="{Binding Name}"
+                                            <TextBlock Grid.Column="2" Text="{Binding Name}"
                                                        FontSize="13" Margin="10,0,0,0"
                                                        VerticalAlignment="Center"
                                                        TextTrimming="CharacterEllipsis">

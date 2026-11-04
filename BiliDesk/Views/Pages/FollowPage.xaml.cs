@@ -10,7 +10,7 @@ using BiliDesk.ViewModels;
 namespace BiliDesk.Views.Pages;
 
 /// <summary>
-/// 「动态」页: 左栏 = 全部动态 + 关注 UP 列表(可选, 头像带未读角标),
+/// 「动态」页: 左栏 = 全部动态 + 关注 UP 列表(有未读时头像左侧带红点),
 /// 右栏 = 选中对象的内容, 两档排版(单列动态卡 / 多列卡片墙)由右上角的两枚 chip 切换。
 /// 选中态与数据都在 FollowViewModel; 这个 code-behind 只做事件转发、滚动加载与排版 chip 的选中态。
 /// </summary>
@@ -21,7 +21,7 @@ public partial class FollowPage : UserControl
     /// <summary>看板轮询间隔: "关注的主播开播了"要能自己冒出来, 不能靠用户去点刷新。</summary>
     private static readonly TimeSpan LiveBoardPollInterval = TimeSpan.FromSeconds(60);
 
-    /// <summary>未读角标轮询间隔: 比直播状态慢一拍, 避免每分钟多打一次动态接口。</summary>
+    /// <summary>未读红点轮询间隔: 比直播状态慢一拍, 避免每分钟多打一次动态接口。</summary>
     private static readonly TimeSpan UnreadPollInterval = TimeSpan.FromMinutes(2);
 
     private DispatcherTimer? _liveBoardTimer;

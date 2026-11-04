@@ -13,13 +13,13 @@ namespace BiliDesk.ViewModels;
 /// 「动态」页 ViewModel。
 ///
 /// 布局是左右两栏(参考 B 站客户端动态页):
-///   · 左栏 = 「全部动态」入口 + 关注的 UP 主列表(可选, 头像右下角带未读角标);
+///   · 左栏 = 「全部动态」入口 + 关注的 UP 主列表(有未读时头像左侧显示红点);
 ///   · 右栏 = 当前选中对象的内容, 两档排版由 <see cref="UseCardWall"/> 切:
 ///       - 全部动态: 关注的所有 UP 近期的**视频投稿**(动态时间线接口, 游标分页);
 ///       - 具体某 UP: 该 UP 的投稿视频(空间投稿接口, 页码分页)。
 /// 动态里非视频的内容(图文/纯文字/投票)没有可播对象, 不进这个列表。
 ///
-/// 未读角标的判断在 <see cref="UpdateUnreadBadges"/> —— 本地比对, 不额外请求接口。
+/// 未读红点的判断在 <see cref="UpdateUnreadBadges"/> —— 本地比对, 不额外请求接口。
 /// </summary>
 public class FollowViewModel : ObservableObject
 {
@@ -228,8 +228,8 @@ public class FollowViewModel : ObservableObject
     public async Task InitAsync()
     {
         // ★ 页面实例是长期缓存的(MainWindow._pages): 从别的页面切回来时 Loaded 会再响一次,
-        //   但 Users.Count 不为 0, 以前这里直接返回 —— 看板/未读角标就永远停在
-        //   "第一次进动态页"那一刻。现在: 已加载过就轻量刷新看板与角标,
+        //   但 Users.Count 不为 0, 以前这里直接返回 —— 看板/未读红点就永远停在
+        //   "第一次进动态页"那一刻。现在: 已加载过就轻量刷新看板与红点,
         //   让"刚刚开播"和"刚刚投稿"都能立刻出现在页面上。
         if (Users.Count == 0)
         {
@@ -334,9 +334,9 @@ public class FollowViewModel : ObservableObject
                         if (u.Mid > 0 && seen.Add(u.Mid)) Users.Add(u);
                     OnPropertyChanged(nameof(Count));
 
-                    // ★ 左栏翻出新 UP 后要立刻按已缓存的动态流补算一次角标。
+                    // ★ 左栏翻出新 UP 后要立刻按已缓存的动态流补算一次红点。
                     //   以前只 Add 用户、不跑 UpdateUnreadBadges —— 关注了 30+ 人的账号
-                    //   往下滚出来的 UP 永远 NewCount=0, 明明有新投稿也不显示数字。
+                    //   往下滚出来的 UP 永远 NewCount=0, 明明有新投稿也不亮红点。
                     //   只在「全部动态」下算: 单 UP 视图的 FeedItems 只有该 UP 的投稿,
                     //   拿来给别的 UP 判新旧会把基准写错。
                     if (SelectedUp == null) UpdateUnreadBadges();
@@ -438,9 +438,9 @@ public class FollowViewModel : ObservableObject
                 OnPropertyChanged(nameof(ShowFullLoading));
                 if (FeedItems.Count == 0)
                     Error = forUp == null ? "关注的 UP 最近没有视频投稿" : "该 UP 暂时没有投稿视频";
-                // 未读角标: 看"全部动态"时刷新各 UP 的角标; 点开某个 UP 就清掉 TA 的角标。
+                // 未读红点: 看"全部动态"时刷新各 UP 的红点; 点开某个 UP 就清掉 TA 的红点。
                 // ★ 放在这里(而不是刷新入口)是因为**只有拿到这一页条目才能判断**:
-                //   角标靠"该 UP 最新一条"与本地基准比对, 没有列表就无从比。
+                //   红点靠"该 UP 最新一条"与本地基准比对, 没有列表就无从比。
                 if (forUp == null) UpdateUnreadBadges();
                 else ClearUnreadBadge(forUp);
             });
@@ -476,20 +476,20 @@ public class FollowViewModel : ObservableObject
         }
     }
 
-    // ------------------------------------------------------------ 左栏未读角标
+    // ------------------------------------------------------------ 左栏未读红点
 
-    /// <summary>角标轻量刷新在途(定时器与页面切回可能同时触发)</summary>
+    /// <summary>红点轻量刷新在途(定时器与页面切回可能同时触发)</summary>
     private bool _unreadRefreshBusy;
 
     /// <summary>
-    /// 只刷新左栏未读角标, **不动右栏列表**。
+    /// 只刷新左栏未读红点, **不动右栏列表**。
     ///
     /// 用于两个场景:
     ///   · 从别的页面切回动态页(页面实例被缓存, FeedItems 还是上次的);
     ///   · FollowPage 的定时轮询。
     ///
     /// ★ 为什么不直接复用 LoadSelectionAsync: 那会清空 FeedItems 并弹整页 loading,
-    ///   用户只是切回来瞄一眼角标, 不该被强制回到列表顶部; 这里单独拉第一页动态就够了。
+    ///   用户只是切回来瞄一眼红点, 不该被强制回到列表顶部; 这里单独拉第一页动态就够了。
     /// </summary>
     public async Task RefreshUnreadBadgesAsync()
     {
@@ -498,7 +498,7 @@ public class FollowViewModel : ObservableObject
         try
         {
             var (ok, _, items, _, _) = await Svc.Api.GetDynamicFeedAsync(null);
-            if (!ok || items == null) return;   // 静默: 角标刷新失败不影响页面
+            if (!ok || items == null) return;   // 静默: 红点刷新失败不影响页面
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(
                 () => UpdateUnreadBadges(items));
         }
@@ -513,19 +513,20 @@ public class FollowViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 「全部动态」加载完 → 按这一页的条目刷新左栏各 UP 的未读角标。
+    /// 「全部动态」加载完 → 按这一页的条目刷新左栏各 UP 的未读红点。
     ///
     /// 规则(基准存在 <see cref="DynamicSeenStore"/>, 本地判断、不请求接口):
-    ///   · 没有基准的 UP: 只把 TA 当前最新一条记成基准, **不打角标**(见该类的说明);
-    ///   · 基准与最新一条相同: 角标清零;
-    ///   · 不同: 角标数 = 这一页里排在基准那条**之前**的该 UP 投稿数
+    ///   · 没有基准的 UP: 只把 TA 当前最新一条记成基准, **不显示红点**(见该类的说明);
+    ///   · 基准与最新一条相同: 红点消失;
+    ///   · 不同: NewCount = 这一页里排在基准那条**之前**的该 UP 投稿数
     ///     (基准那条已经翻出本页时, 本页所有该 UP 的条目都算新的)。
+    ///     界面只拿它判断红点亮不亮, 具体数字放在红点的悬浮提示里。
     /// ★ 本页没有出现的 UP **不动**: 动态接口只给近期条目, 一个 UP 最近没投稿就无从判断,
-    ///   这时把角标清零是凭空断言"没更新"。宁可留着旧角标, 也不给错的信息。
+    ///   这时把红点清掉是凭空断言"没更新"。宁可留着旧红点, 也不给错的信息。
     /// </summary>
     private void UpdateUnreadBadges() => UpdateUnreadBadges(FeedItems);
 
-    /// <summary>用指定的动态条目集合刷新角标(定时刷新时传临时列表, 不碰 FeedItems)</summary>
+    /// <summary>用指定的动态条目集合刷新红点(定时刷新时传临时列表, 不碰 FeedItems)</summary>
     private void UpdateUnreadBadges(IReadOnlyList<VideoItem> items)
     {
         // 每个 UP 在这一页里最新的一条(动态流是按时间倒序拼的, 先遇到的就是最新)
@@ -564,7 +565,7 @@ public class FollowViewModel : ObservableObject
         DynamicSeenStore.Flush();
     }
 
-    /// <summary>点开某个 UP(右栏只看 TA 的投稿) = 已读: 清角标, 并把基准推到 TA 当前最新一条</summary>
+    /// <summary>点开某个 UP(右栏只看 TA 的投稿) = 已读: 清红点, 并把基准推到 TA 当前最新一条</summary>
     private void ClearUnreadBadge(FollowUser u)
     {
         u.NewCount = 0;
