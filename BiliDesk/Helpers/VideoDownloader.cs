@@ -39,7 +39,8 @@ public static class VideoDownloader
 
     /// <summary>
     /// 下载视频并保存到本地。返回最终文件路径, 失败返回 null。
-    /// 整个过程会通过 Toast 给出进度反馈。
+    /// 下载进度交给 <see cref="DownloadProgressService"/> 合并显示(见 issue #38),
+    /// 完成/失败仍用 Toast 提示。
     /// </summary>
     public static async Task<string?> DownloadAsync(string bvid, string? title, Window? owner = null)
     {
@@ -72,6 +73,12 @@ public static class VideoDownloader
         var path = BuildTargetPath(name);
         var part = path + ".part";
 
+        // ★ 2026-11-04 (issue #38): 进度不再走全局 Toast —— 多个任务同时下载时,
+        //   同一块 Toast 会被互相覆盖(百分比来回跳), 而且每次 Show 都重播淡入(每 1% 闪一下)。
+        //   这里登记到 DownloadProgressService, 由右上角独立进度条合并显示。
+        //   using 保证成功/失败/取消都会注销任务, 不会留下一条永远不动的进度。
+        using var job = Svc.DownloadProgress.Begin(name);
+
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
@@ -79,7 +86,6 @@ public static class VideoDownloader
             req.Headers.TryAddWithoutValidation("Referer", $"https://www.bilibili.com/video/{bvid}");
             req.Headers.TryAddWithoutValidation("Origin", "https://www.bilibili.com");
 
-            Svc.Toast.Show("开始下载…");
             using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
             if (!resp.IsSuccessStatusCode)
             {
@@ -88,6 +94,8 @@ public static class VideoDownloader
             }
 
             var total = resp.Content.Headers.ContentLength ?? 0;
+            // 拿到总长度先报一次: 把"准备下载…"立刻变成"下载中 0%"。
+            job.Report(0, total);
 
             await using (var src = await resp.Content.ReadAsStreamAsync())
             await using (var dst = new FileStream(part, FileMode.Create, FileAccess.Write,
@@ -95,21 +103,14 @@ public static class VideoDownloader
             {
                 var buf = new byte[81920];
                 long done = 0;
-                var lastReport = DateTime.UtcNow;
                 int read;
                 while ((read = await src.ReadAsync(buf)) > 0)
                 {
                     await dst.WriteAsync(buf.AsMemory(0, read));
                     done += read;
 
-                    // 限频提示: 每 1.5 秒最多刷一次, 避免 Toast 被高频更新淹没
-                    if ((DateTime.UtcNow - lastReport).TotalSeconds >= 1.5)
-                    {
-                        lastReport = DateTime.UtcNow;
-                        Svc.Toast.Show(total > 0
-                            ? $"下载中 {done * 100 / total}%"
-                            : $"下载中 {done / 1024 / 1024} MB");
-                    }
+                    // 服务内部按 300ms 节流, 这里每块数据都报即可。
+                    job.Report(done, total);
                 }
             }
 
@@ -117,6 +118,8 @@ public static class VideoDownloader
             if (File.Exists(path)) File.Delete(path);
             File.Move(part, path);
 
+            // 先收掉进度条, 再弹"已保存": 两件事不要抢同一时刻。
+            job.Dispose();
             Svc.Toast.Show("已保存 " + Path.GetFileName(path));
             // ★ 系统通知(2026-10-14 用户要求"下载完成时给个系统通知"):
             //   下载是**后台长任务**(几百兆要好几秒到几分钟), 用户这期间多半切去了别的窗口,

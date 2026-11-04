@@ -2495,6 +2495,12 @@
                     <TextBlock x:Name="LocalToastText" FontSize="12"
                                Foreground="{DynamicResource TextPrimaryBrush}" />
                 </Border>
+
+                <!-- 下载进度(issue #38): 与上面的本地 Toast 分开, 固定在它下方。
+                     ★ 挂在 InfoPanel 内(与 LocalToastBorder 同级): 填充模式收起信息栏时
+                       它会跟着一起隐藏, 不会盖在视频画面上。
+                     ★ MaxWidth 300: 右栏宽度 400, 给长文案留出省略空间而不是把面板撑开。 -->
+                <controls:DownloadProgressBanner Margin="0,52,12,0" />
             </Grid>
         </Grid>
     </Grid>

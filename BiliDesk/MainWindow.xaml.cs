@@ -474,12 +474,28 @@ public partial class MainWindow : FluentWindow
 
     private void ShowToast(string message)
     {
+        // ★ 2026-11-04 (issue #38): 连续/并发的提示不能每次都从透明度 0 重播淡入 ——
+        //   下载进度以前 1~2 秒刷一条, 每次都"透明 → 不透明", 看起来就是每 1% 闪一下。
+        //   已经显示(含正在淡出)时只换文字并保持不透明; 只有从隐藏状态出现才做一次淡入。
+        var appearing = Toast.Visibility != Visibility.Visible;
+        Toast.BeginAnimation(OpacityProperty, null);   // 撤掉可能还没跑完的淡出
         ToastText.Text = message;
         Toast.Visibility = Visibility.Visible;
-        Toast.BeginAnimation(OpacityProperty,
-            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220)));
 
-        // 复用同一个定时器而不是每条提示都 new 一个: 下载进度这类高频提示下,
+        if (appearing)
+        {
+            // 基值 = 终值 + FillBehavior.Stop: 动画结束落回 1, 不会停在动画值上。
+            Toast.Opacity = 1;
+            Toast.BeginAnimation(OpacityProperty,
+                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220))
+                { FillBehavior = FillBehavior.Stop });
+        }
+        else
+        {
+            Toast.Opacity = 1;
+        }
+
+        // 复用同一个定时器而不是每条提示都 new 一个: 短时间连发多条提示时,
         // 每次 new 都会留下一个短命对象和一个挂在它身上的 Tick 委托(得等 GC 才解绑)。
         if (_toastTimer == null)
         {
@@ -493,7 +509,11 @@ public partial class MainWindow : FluentWindow
     private void OnToastTick(object? sender, EventArgs e)
     {
         _toastTimer?.Stop();
-        var a = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(280));
+        // 基值先归 0: 淡出结束(Stop)时直接落到 0, 不会闪回不透明。
+        Toast.BeginAnimation(OpacityProperty, null);
+        Toast.Opacity = 0;
+        var a = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(280))
+        { FillBehavior = FillBehavior.Stop };
         a.Completed += (_, _) => Toast.Visibility = Visibility.Collapsed;
         Toast.BeginAnimation(OpacityProperty, a);
     }
