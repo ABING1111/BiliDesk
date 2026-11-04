@@ -132,13 +132,71 @@ public partial class PlayerWindow : FluentWindow
     private long _seekBounceSeenMs = -1;
 
     /// <summary>
+    /// 本次"落点弹回别处"第一次被观察到的时刻(TickCount64, -1 = 当前没有候选)。
+    ///
+    /// ★★★ 2026-11-05 修"点进度条快进 → 一直闪正在缓冲 → 最后回到开头 8 秒":
+    ///   原来的判据只要求**连续两次心跳**同时远离起点与目标(等待期粒度 100ms ⇒ 200ms),
+    ///   而 libvlc 在 seek 受理后本来就会把 Time 先**冲过目标、再回退 1.5s 左右**逐步爬回。
+    ///   这个正常过渡会被 900ms 的到位窗口排除, 于是 200ms 就被误判成"弹回别处"→ 重建 Media;
+    ///   重建后同样的过渡再来一次, 用户看到的就是**反复缓冲 + 闪屏**, 最后 Input 被折腾到开头。
+    ///   修法: 弹回必须**持续** <see cref="SeekBounceConfirmMs"/> 才算数, 正常的回退过渡
+    ///   会在确认期内走出"远离目标"状态, 自动作废。重建预算仍然只给一次。
+    /// </summary>
+    private long _seekBounceAt = -1;
+
+    /// <summary>最近一次 seek 发出的时刻(TickCount64, -1 = 本片还没发过)。</summary>
+    private long _seekIssuedAt = -1;
+
+    /// <summary>最近一次 seek 的目标(毫秒, -1 = 本片还没发过)。</summary>
+    private long _lastSeekTargetMs = -1;
+
+    /// <summary>
+    /// 本次恢复进度是否由 Media 的 <c>:start-time</c> 完成(重建路径用)。
+    ///
+    /// ★ 为什么要单独记: 起播后 Playing 事件里如果**再**设一次 <see cref="MediaPlayer.Time"/>,
+    ///   等于在解复用器刚打开、还没稳定的窗口里打断它 —— 实测这正是"重建后补跳又落回开头"
+    ///   的来源。走 start-time 时只 MarkSeekIssued 钉 UI / 启动看门狗, 不再二次设 Time。
+    /// </summary>
+    private bool _resumeByStartTime;
+
+    /// <summary>
+    /// "EOF 反而是 seek 没落地"的补救预算(每次用户 seek 只给一次)。
+    /// 见 OnEndReached 里那条"跳转中绝不自救"的说明。
+    /// </summary>
+    private bool _eofSeekRebuildTried;
+
+    /// <summary>进度条开始拖动那一刻的值(用来识别"点击轨道"这种伪拖动, 见 OnProgressDragEnd)。</summary>
+    private double _progressDragStartValue;
+
+    /// <summary>
     /// seek 静音: 跳转后视频画面要等缓冲(几百 ms~几秒), 但音频解复用快, 会**先出声** ——
     /// 用户听到的是"画面还黑着/冻着, 声音已经播到那边去了"。所以 seek 一发出就静音,
     /// 画面确认到位(或放弃/换片/播完)再恢复。-1 = 当前没有处于 seek 静音。
     /// </summary>
     private int _seekMuteSavedVolume = -1;
     private const int SeekRetryMax = 2;
-    private const long SeekConfirmWindowMs = 900;  // Time 距目标多少毫秒内算"到位"
+    private const long SeekConfirmWindowMs = 900;  // "偏早/跑偏"判别的起步窗口(到位容差见 SeekSettledToleranceMs)
+
+    /// <summary>
+    /// "到位"判定的实际容差(毫秒)。比 <see cref="SeekConfirmWindowMs"/> 宽:
+    /// libvlc 受理 seek 后 Time 会先冲过目标再回退 ~1.5s, 900ms 会把这个正常过渡当成"没到位",
+    /// 进而喂给弹回判据。3s 以内且位置在推进, 对用户就是"已经跳过去了"(DASH 分片本身
+    /// 也常有 4~5s 的落点偏早, 见 SeekLandingMinEarlyMs)。
+    /// </summary>
+    private const long SeekSettledToleranceMs = 3_000;
+
+    /// <summary>弹回判据的持续时间: 落点必须连续这么久都同时远离起点与目标, 才认定为整体失效。</summary>
+    private const long SeekBounceConfirmMs = 1_500;
+
+    /// <summary>一次 seek 从发出到"重发/重建"的等待上限。必须大于正常回退过渡(~2.2s)。</summary>
+    private const long SeekConfirmTimeoutMs = 3_500;
+
+    /// <summary>EOF 时把"最近一次 seek 还没落地"视作假 EOF 的时间窗。</summary>
+    private const long SeekEofRecoverWindowMs = 15_000;
+
+    /// <summary>最近一次 seek 的目标与实际位置差多少才算"根本没落地"(毫秒)。</summary>
+    private const long SeekEofRecoverMinMissMs = 60_000;
+
 
     /// <summary>
     /// 判定"位置确实离开了跳转前那一点"的容差(毫秒)。
@@ -641,7 +699,11 @@ public partial class PlayerWindow : FluentWindow
             // 顺序反了会把静音状态顶掉(声音先于画面出来)。
             try { _mp.Volume = _volumeCache; } catch { }
             LogAudioStateOnce();
-            HideLoading();
+            // ★ 2026-11-05: 这次起播后面还要"恢复进度"时不收遮罩 —— 否则遮罩淡出、
+            //   下一秒 seek 等待又淡入, 就是用户看到的"闪一下"。让它一直盖到 seek 到位
+            //   (由 ClearSeekWatchdog 统一收), 期间文案换成"正在缓冲…"。
+            var willResumeSeek = _resumeAfterSwitchMs > 0;
+            if (!willResumeSeek) HideLoading();
             // 把 EOF 时切黑的手势层还原成近透明(见 OnEndReached 里切黑的原因):
             // 新 input 的 vout 已经起来, 后面要能看见画面。
             // ★ 2026-11-03: 只处理 EOF 那一层; 改窗口大小/最大化/全屏不再压黑布。
@@ -670,13 +732,28 @@ public partial class PlayerWindow : FluentWindow
             {
                 var resume = _resumeAfterSwitchMs;
                 _resumeAfterSwitchMs = 0;
-                try { _mp.Time = resume; } catch { }
+                var byStartTime = _resumeByStartTime;
+                _resumeByStartTime = false;
+
+                // ★★★ 2026-11-05: 重建路径用 Media 的 :start-time 定位时, **不要再设一次
+                //   Time** —— 那会在解复用器刚打开的窗口里二次打断 input, 实测正是
+                //   "重建后补跳又落回开头"的来源(用户报的"最后回到开头 8 秒")。
+                //   其余路径(切清晰度/本地文件/聆听退出)保持原样。
+                if (!byStartTime) { try { _mp.Time = resume; } catch { } }
+
+                // 遮罩不在这里收: 换成"正在缓冲…"继续盖着, 由看门狗确认到位后统一收。
+                ShowLoading(BufferingText);
+
                 // 走一次 MarkSeekIssued: 钉住进度条/时间显示, 并启动 seek 看门狗,
                 // 否则恢复进度那一下也可能被回写顶回 0(表现是"切完清晰度从头播")。
                 // ★ 不再叠"补跳"定时器(2026-10-17 手术删): 补跳那一套(反复重设 Time
                 //   + 要求连续 3 次稳住)实测会把位置冲过头, 而且主路已换成 seek 一次
                 //   就准的合流单流。万一这一次没接住, 交给下面的看门狗重建一次即可。
                 MarkSeekIssued(resume);
+            }
+            else
+            {
+                _resumeByStartTime = false;
             }
         }));
         // 暂停/停止时同步按钮图标(否则起播后图标停留在初始状态, 看起来像"反了")
@@ -1256,6 +1333,15 @@ public partial class PlayerWindow : FluentWindow
         // 清掉跳转看门狗与"提前结束自救"的上一片痕迹
         _pendingSeekMs = -1;
         _seekObservedMs = -1;
+        _seekFromMs = -1;
+        _seekElsewhereSeenMs = -1;
+        _seekBounceSeenMs = -1;
+        _seekBounceAt = -1;
+        _seekIssuedAt = -1;
+        _lastSeekTargetMs = -1;
+        _resumeByStartTime = false;
+        _eofSeekRebuildTried = false;
+        _progressDragStartValue = 0;
         // ★ 长按快进也要收: 若停在长按态换片, MediaPlayer 上的速率会**跟着留到新片子**
         //   (速率是 MediaPlayer 的属性, 不随 Media 重置 —— 实测)。所以这里必须先恢复。
         //   顺带把 _longPressFired 清掉 —— 否则新片的第一次 Up 会走进"结束快进"分支。
@@ -1385,7 +1471,10 @@ public partial class PlayerWindow : FluentWindow
         nameof(_pendingSeekMs), nameof(_seekDeadline), nameof(_seekRetries),
         nameof(_seekObservedMs), nameof(_seekElsewhereSeenMs), nameof(_seekFromMs),
         nameof(_seekGraceUntil), nameof(_seekMuteSavedVolume), nameof(_isSeeking),
-        nameof(_seekRebuildTried), nameof(_seekBounceSeenMs), nameof(_audioHealCheckAt),
+        nameof(_seekRebuildTried), nameof(_seekBounceSeenMs), nameof(_seekBounceAt),
+        nameof(_seekIssuedAt), nameof(_lastSeekTargetMs), nameof(_resumeByStartTime),
+        nameof(_eofSeekRebuildTried), nameof(_progressDragStartValue),
+        nameof(_audioHealCheckAt),
         nameof(_volumeRestoreDeadline), nameof(_volumeRestoreTries),
         nameof(_lastLoadingRevealMs),
         // 卡顿检测
@@ -1886,7 +1975,7 @@ public partial class PlayerWindow : FluentWindow
     ///
     /// 本地路径必须走 FromPath: `new Uri("C:\...\x.mp4")` 会把盘符当成协议名, 抛 UriFormatException。
     /// </summary>
-    private Media BuildMedia(string url, string? audioUrl)
+    private Media BuildMedia(string url, string? audioUrl, long startMs = 0)
     {
         // B站 CDN 校验 Referer 和 User-Agent
         var options = new List<string>
@@ -1894,6 +1983,14 @@ public partial class PlayerWindow : FluentWindow
             ":http-referrer=https://www.bilibili.com/",
             ":http-user-agent=" + PlayerUserAgent
         };
+
+        // ★★ 2026-11-05: 重建 Media 追 seek 目标时, 用 **:start-time** 让解复用器
+        //   在 open 阶段直接定位。相比"起播后再设一次 Time", 它不会撞上 "input 还没稳定
+        //   就二次 seek" 的窗口 —— 实测(探针 bd-probe-seekmode)起播即落在目标附近且继续推进。
+        //   只对网络流加; 本地文件的重建走原来的 Playing 后设 Time。
+        if (startMs > 0 && url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            options.Add(":start-time=" +
+                        (startMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture));
 
         // ★★★ 2026-10-17 播放器手术第 3 步: 分流设置 demuxer。
         //
@@ -2501,32 +2598,43 @@ public partial class PlayerWindow : FluentWindow
                                   _seekElsewhereSeenMs >= 0 && time != _seekElsewhereSeenMs;
             _seekElsewhereSeenMs = farFromBoth ? time : -1;
 
-            // ★★★ "落点弹回起点"的提前重建(2026-10-31 修"长视频快进回到起点后无限缓冲"):
+            // ★★★ "落点弹回起点"的提前重建(2026-10-31 引入, 2026-11-05 修误判):
             //   DASH 双流上远跳偶尔整体失效, 落点直接弹回片子开头(或某个离目标极远的分片)。
             //   这种落点距目标分钟级, settled/landedElsewhere 都判不上, 只能干等
-            //   2.5s×3 轮重发 + 一次重建 —— 期间进度条钉在目标、画面停在开头,
-            //   重建后 MarkSeekIssued 清零 _seekRetries 再来一整轮, 表现为无限缓冲。
-            //   修法: 落点**连续两次心跳**同时远离起点与目标 ⇒ 判定这条 input 的解复用器
-            //   又"认死"了, 不再走重发, 立刻走重建(它只给一次预算, 不会循环)。
-            //   与 landedElsewhere 的区别: 那个判"偏早幅度合理"(分片边界的正常偏早),
-            //   要认账并恢复播放; 这里判"偏到天边去了"(整体失效), 要当机立断换 input。
+            //   3.5s×3 轮重发 + 一次重建 —— 期间进度条钉在目标、画面停在开头。
+            //   ⇒ 判定"弹到天边去了"后直接重建, 不再走无意义的重发。
+            //
+            //   ★★ 但"弹回"必须**持续** <see cref="SeekBounceConfirmMs"/> 才作数:
+            //   原来用"连续两次心跳(≈200ms)采样值不同"当判据, 会把 libvlc 受理 seek 后
+            //   "先冲过目标、再回退 1.5s 慢慢爬回"的正常过渡误判成弹回 —— 重建 Media 又打断
+            //   正在恢复的 input, 表现为用户报的"一直闪正在缓冲, 最后回到开头"。
             if (!settled && !landedElsewhere && farFromBoth && !_seekRebuildTried)
             {
-                if (_seekBounceSeenMs >= 0 && time != _seekBounceSeenMs)
+                if (_seekBounceSeenMs < 0)
+                {
+                    _seekBounceSeenMs = time;
+                    _seekBounceAt = now;
+                }
+                else if (now - _seekBounceAt >= SeekBounceConfirmMs)
                 {
                     _seekRebuildTried = true;
                     var bounceTarget = _pendingSeekMs;
-                    ClearSeekWatchdog();
+                    var bounceFrom = _seekFromMs;
+                    // ★ 先换文案再清看门狗: ClearSeekWatchdog 默认会淡出遮罩, 紧跟着
+                    //   RebuildMediaAndSeek 又淡入 —— 中间那 170ms 就是用户看到的"闪屏"。
+                    //   保持遮罩可见、只换文案, 整个重建过程一张遮罩盖到底。
+                    ShowLoading("正在跳转…");
+                    ClearSeekWatchdog(hideBuffering: false);
                     WriteLibVLCDebug(
-                        $"[Seek] 落点弹回别处(time={time}ms target={bounceTarget}ms from={_seekFromMs}ms) → 重建 Media\n");
+                        $"[Seek] 落点弹回别处(time={time}ms target={bounceTarget}ms from={bounceFrom}ms) → 重建 Media\n");
                     RebuildMediaAndSeek(bounceTarget);
                     return;
                 }
-                if (_seekBounceSeenMs < 0) _seekBounceSeenMs = time;
             }
-            else if (!farFromBoth)
+            else
             {
                 _seekBounceSeenMs = -1;
+                _seekBounceAt = -1;
             }
 
             _seekObservedMs = time;
@@ -2541,8 +2649,11 @@ public partial class PlayerWindow : FluentWindow
                 {
                     // seek 指令被 LibVLC 丢了: 重发一次(重发后位置会被重新 ack, 观察值也要清)
                     _seekRetries++;
-                    _seekDeadline = now + 2500;
+                    _seekDeadline = now + SeekConfirmTimeoutMs;
+                    _seekIssuedAt = now;
                     _seekObservedMs = -1;
+                    _seekBounceSeenMs = -1;
+                    _seekBounceAt = -1;
                     try { _mp.Time = _pendingSeekMs; } catch { }
                 }
                 else if (!_seekRebuildTried && !_isReliableSeekSource &&
@@ -2559,7 +2670,8 @@ public partial class PlayerWindow : FluentWindow
                     //   说明是网络卡顿, 重建只会白白打断播放。
                     _seekRebuildTried = true;
                     var target = _pendingSeekMs;
-                    ClearSeekWatchdog();
+                    ShowLoading("正在跳转…");
+                    ClearSeekWatchdog(hideBuffering: false);
                     RebuildMediaAndSeek(target);
                 }
                 else
@@ -2567,7 +2679,7 @@ public partial class PlayerWindow : FluentWindow
                     ClearSeekWatchdog();
                 }
             }
-            else if (now - (_seekDeadline - 2500) > SeekBufferingDelayMs &&
+            else if (now - _seekIssuedAt > SeekBufferingDelayMs &&
                      LoadingOverlay != null && LoadingText != null &&
                      LoadingOverlay.Visibility == Visibility.Collapsed &&
                      !_isLive && !_isLocalPlayback)
@@ -2702,22 +2814,33 @@ public partial class PlayerWindow : FluentWindow
     /// <param name="paused">播放器当前是否处于暂停/停止态</param>
     private static bool IsSeekSettled(long timeMs, long targetMs, long observedMs, bool paused)
     {
-        if (Math.Abs(timeMs - targetMs) > SeekConfirmWindowMs) return false;
+        // ★ 2026-11-05: 容差从 900ms 放宽到 3s。libvlc 受理 seek 后 Time 会先冲过目标、
+        //   再回退 ~1.5s 逐步爬回; 900ms 会把这个正常过渡误判成"没到位", 进而触发弹回重建。
+        if (Math.Abs(timeMs - targetMs) > SeekSettledToleranceMs) return false;
         if (paused) return true;
         return observedMs >= 0 && timeMs != observedMs;
     }
 
     /// <summary>跳转确认到位(或放弃重试)后收尾: 关掉"正在缓冲"提示, 清掉待确认目标</summary>
-    private void ClearSeekWatchdog()
+    /// <param name="hideBuffering">
+    /// 是否顺手收起"正在缓冲…"遮罩。重建 Media 前要传 false —— 由调用方先换成
+    /// "正在跳转…"并让同一张遮罩盖到新 input 起播, 避免淡出/淡入造成的闪屏。
+    /// </param>
+    private void ClearSeekWatchdog(bool hideBuffering = true)
     {
         _pendingSeekMs = -1;
         _seekObservedMs = -1;
         _seekFromMs = -1;
         _seekElsewhereSeenMs = -1;
         _seekBounceSeenMs = -1;
+        _seekBounceAt = -1;
         if (_progressTimer != null) _progressTimer.Interval = ProgressTickIdle;
+        // 卡顿检测的基线也归零: 上一个心跳的参照是"seek 之前的位置", 留着会让落地后的
+        // 第一跳被误算成"推进了一大步"(或反过来), 与随后的 2s 冷却一起避免提示闪跳。
+        _stallLastMs = -1;
+        _stallTicks = 0;
         RestoreVolumeAfterSeek();
-        HideBufferingIfShown();
+        if (hideBuffering) HideBufferingIfShown();
         // ★ 2026-10-31: 到位这一刻正是"音轨偶发没跟上"的暴露点, 顺手做一次自愈检查
         //   (见 HealAudioIfDead —— 命中才动作, 不命中零开销)。
         HealAudioIfDead("seek-settled");
@@ -2950,6 +3073,17 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
 
+        // ★ 2026-11-05: 刚发过 seek 的 2 秒内不参与"中途卡顿"判定。
+        //   seek 落地后解码器/音频输出都要重启, 这段短暂停顿属于"跳转尾巴";
+        //   它已经由 seek 看门狗统一负责提示, 两套逻辑抢同一张遮罩就是用户看到的闪烁。
+        if (_seekIssuedAt >= 0 &&
+            Environment.TickCount64 - _seekIssuedAt < 2_000)
+        {
+            _stallTicks = 0;
+            _stallLastMs = -1;
+            return;
+        }
+
         // ★ 结尾豁免(2026-10-01, 用户实测"长视频最后五秒弹'正在缓冲'"): 剩余不足
         // TailQuietZoneMs 时不再报缓冲。DASH 音视频是两路独立流, 长度略有差异,
         // 短的那路数据先耗尽时 Time 会停几秒等另一路 —— 这是"快播完了"的正常形态,
@@ -2989,20 +3123,24 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>把一次跳转记下来: 打上宽限期, 并立刻把进度条/时间钉到目标位置</summary>
     private void MarkSeekIssued(long targetMs)
     {
-        _seekGraceUntil = Environment.TickCount64 + SeekGraceMs;
+        var now = Environment.TickCount64;
+        _seekGraceUntil = now + SeekGraceMs;
+        _seekIssuedAt = now;
+        _lastSeekTargetMs = targetMs;
         MuteForSeek();
-        // 启动/重置跳转看门狗: 2.5 秒内位置还没回到目标附近就重发 seek
+        // 启动/重置跳转看门狗: 超过 SeekConfirmTimeoutMs 还没回到目标附近就重发 seek
         _pendingSeekMs = targetMs;
         // 记下"跳转前的位置"给看门狗判"是不是真的丢了"(见 _seekFromMs 的说明)。
         // ★ 必须在这里取: 调用方通常已经先设过 `_mp.Time = target`, 那个属性读回来的是受理回执
         //   (= 目标值), 拿它当起点会让"落地偏早"永远判不出来。
         _seekFromMs = _lastKnownMs > 0 ? _lastKnownMs : -1;
         _seekRetries = 0;
-        _seekDeadline = Environment.TickCount64 + 2500;
+        _seekDeadline = now + SeekConfirmTimeoutMs;
         // 观察值清空: 第一个心跳拿到的会是"目标值本身"(那是 LibVLC 的 ack, 不是画面), 不能当作推进
         _seekObservedMs = -1;
         _seekElsewhereSeenMs = -1;
         _seekBounceSeenMs = -1;
+        _seekBounceAt = -1;
         _ended = false;
         // 进度外推的锚点与显示钳制基线作废: 不作废的话, 跳转落地后可能外推出凭空进度,
         // 往回拖进度条也无法倒着显示
@@ -3044,9 +3182,21 @@ public partial class PlayerWindow : FluentWindow
         var cur = _lastKnownMs > 0 ? _lastKnownMs : 0;
         var delta = targetMs - cur;
 
+        // ★★ 2026-11-05: 同一次点击会被**两条路**各发一次 ——
+        //   ValueChanged(点击轨道时 WPF 先把值挪到点击点) + Thumb.DragCompleted
+        //   (WPF 把点击轨道也当成一次拖动)。第二条到达时第一条的 seek 还在飞,
+        //   再设一次 Time 会把 libvlc 的解复用器打断, 正是"点一下进度条却无限缓冲"的放大器。
+        //   目标相同(±到位窗口)且上一次还没收尾 ⇒ 直接忽略。
+        if (_pendingSeekMs >= 0 &&
+            Math.Abs(_pendingSeekMs - targetMs) <= SeekConfirmWindowMs) return;
+
+        // 已经在目标上(或只差 250ms): 没必要为一次"点在滑块上"启动整轮 seek。
+        if (_pendingSeekMs < 0 && Math.Abs(cur - targetMs) < 250) return;
+
         // ★ 用户**主动**发起了一次新跳转 ⇒ 重建预算复位(新的一次该再给一次机会)。
         //   只在这里复位, 不在 MarkSeekIssued 里 —— 见 _seekRebuildTried 的说明。
         _seekRebuildTried = false;
+        _eofSeekRebuildTried = false;
 
         // ★★★ 2026-10-17 播放器手术第 2 步: 两条路, 由**片源类型**决定, 不由距离决定。
         //
@@ -3125,9 +3275,13 @@ public partial class PlayerWindow : FluentWindow
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
             ShowLoading("正在跳转…");
             _resumeAfterSwitchMs = targetMs;
+            _resumeByStartTime = false;   // 本地文件走原来的"起播后设 Time"
             try { _mp.Stop(); } catch { }   // 同上: 不 Stop 则 play() 被忽略
             if (!PlayMedia(new Media(_libVLC, path, FromType.FromPath)))
+            {
+                _resumeAfterSwitchMs = 0;
                 WriteLibVLCDebug("[Seek] 重建后 play() 未被接受(本地文件)\n");
+            }
             return;
         }
 
@@ -3137,16 +3291,27 @@ public partial class PlayerWindow : FluentWindow
         // ★ 重建前把"最后已知位置"清掉: 它记的是**旧 input** 的位置(比如 72 万 ms),
         //   留着的话补跳会拿它当"当前位置"算出荒谬的下一段(2026-10-17 实测踩到)。
         _lastKnownMs = 0;
-        // 起播后由 Playing 事件读到这个值并跳到目标(见 _resumeAfterSwitchMs 那套机制)
+        // 起播后由 Playing 事件读到这个值并**只打看门狗、不再二次设 Time**
+        // (原因见 _resumeByStartTime 的说明)。
         _resumeAfterSwitchMs = targetMs;
+        _resumeByStartTime = true;
+        WriteLibVLCDebug($"[Seek] 重建 Media 追目标 start-time={targetMs}ms\n");
         // ★★ 必须先 Stop: LibVLC 3 里已有 input 在播时 play() 会被**直接忽略**
         //    —— 漏掉这一步就是"黑屏 + 恢复进度丢失"(见方法说明)。
         try { _mp.Stop(); } catch { }
+        // ★ 2026-11-05: 重建时把目标交给 **Media 的 :start-time** —— 让解复用器在 open
+        //   阶段直接定位, 而不是"从 0 起播后再设一次 Time"。实测(探针 bd-probe-seekmode):
+        //   起播即落在目标附近(偏差 ~1.8s)且位置持续推进, 比"Playing 里的二次 seek"稳,
+        //   后者在 input 尚未稳定的窗口里设 Time 会再次落回开头 —— 正是用户报的"回到 8 秒"。
         // ★ 2026-11-01: 聆听态下重建必须继续播**音轨单流**(audioUrl 传 null) ——
         //   与 EnterListenMode/重播/切清晰度那几条路的既有约定一致; 传 _lastAudioUrl
         //   会把"视频+音轨"的组合塞回聆听态, 画面直接复活。
-        if (!PlayMedia(BuildMedia(url, _isListenMode ? null : _lastAudioUrl)))
+        if (!PlayMedia(BuildMedia(url, _isListenMode ? null : _lastAudioUrl, targetMs)))
+        {
+            _resumeAfterSwitchMs = 0;
+            _resumeByStartTime = false;
             WriteLibVLCDebug("[Seek] 重建后 play() 未被接受(远端流)\n");
+        }
     }
 
     /// <summary>进度条值变化: 点击轨道任意位置直接跳转(IsMoveToPointEnabled + 本处理器)。
@@ -3159,7 +3324,10 @@ public partial class PlayerWindow : FluentWindow
         // 用 Time(毫秒) 而不是 Position(0~1 的浮点): 位置量本身就是毫秒,
         // 少一层换算, 短视频(6 秒时 0.001 只代表 6ms)上也不会被"变化太小"的过滤挡掉。
         var targetMs = (long)Math.Round(e.NewValue / 1000.0 * _mp.Length);
-        if (Math.Abs(_mp.Time - targetMs) < 250) return; // 已经在目标附近, 不必发跳转
+        // ★ 这里读 _lastKnownMs 而不是 _mp.Time: seek 受理后 _mp.Time 已经是**目标值**,
+        //   用它判"已在附近"等于永远成立, 同一次点击的第二条 seek 就挡不住。
+        var currentMs = _lastKnownMs > 0 ? _lastKnownMs : _mp.Time;
+        if (Math.Abs(currentMs - targetMs) < 250) return; // 已经在目标附近, 不必发跳转
         SeekTo(targetMs);
     }
 
@@ -3284,8 +3452,21 @@ public partial class PlayerWindow : FluentWindow
         //      而此刻 _lastKnownMs 已经掉回片头(用户报的就是 ~9s), 用它当断点续播
         //      等于"从坏位置再播一次", 正是"快进 → 缓冲几次 → 回到 9s"的最后一环。
         //      看门狗自己会重建到目标(_pendingSeekMs 还挂着), 这里必须让路。
+        //
+        //   ★★★ 4(2026-11-05 修「点进度条快进后回到开头 8 秒」): 光判 pending 还不够 ——
+        //      看门狗可能刚刚**放弃**(pending 被清成 -1), 紧接着音轨 EOF 才到, 于是
+        //      这条自救拿掉回开头的 _lastKnownMs 当断点。现在再判一次"最近一次 seek
+        //      的目标与当前位置差得远", 差得远就绝不按当前位置续播, 而是用 start-time
+        //      重建到目标(只给一次预算, 防循环)。
         var effectiveTotalMs = _mp.Length > 0 ? _mp.Length : _totalMs;
+        var seekAgeMs = _seekIssuedAt >= 0
+            ? Environment.TickCount64 - _seekIssuedAt
+            : long.MaxValue;
+        var seekLooksUnlanded = _lastSeekTargetMs >= 0 &&
+                                seekAgeMs <= SeekEofRecoverWindowMs &&
+                                Math.Abs(_lastKnownMs - _lastSeekTargetMs) > SeekEofRecoverMinMissMs;
         if (!_isLive && !_isLocalPlayback && !_ended && _pendingSeekMs < 0 &&
+            !seekLooksUnlanded &&
             effectiveTotalMs > 0 &&
             !string.IsNullOrEmpty(_lastAudioUrl) &&
             // 尾部静默区见 TailQuietZoneMs 的说明: 音轨缺口之内自救救不回任何数据,
@@ -3301,6 +3482,7 @@ public partial class PlayerWindow : FluentWindow
             ShowLoading("正在继续播放…");
             // 起播后由 Playing 事件恢复到断点(见 _resumeAfterSwitchMs 那套机制)
             _resumeAfterSwitchMs = resume;
+            _resumeByStartTime = false;
             try { PlayMedia(BuildMedia(_lastPlayUrl, _lastAudioUrl)); } catch { }
             return;
         }
@@ -3319,14 +3501,21 @@ public partial class PlayerWindow : FluentWindow
         //     在飞, 那多半是远跳甩到流尾的假 EOF(音轨 seek 失败被当成播完) ——
         //     上面那条"跳转中不自救"的闸会放它落到这里。此刻不能宣告播完:
         //     把 _ended 压回去、给目标重新打上 MarkSeekIssued 走看门狗重建, 唯独不进重播态。
-        if (_pendingSeekMs >= 0 && !_isLive && !_isLocalPlayback &&
-            !string.IsNullOrEmpty(_lastPlayUrl))
+        //   ★ 2026-11-05: 看门狗刚放弃(pending=-1)但落点离 seek 目标还很远时同样处理,
+        //     且只给一次预算(_eofSeekRebuildTried) —— 防"重建→假EOF→再重建"死循环。
+        if (!_isLive && !_isLocalPlayback && !_eofSeekRebuildTried &&
+            !string.IsNullOrEmpty(_lastPlayUrl) &&
+            (_pendingSeekMs >= 0 || seekLooksUnlanded))
         {
-            var target = _pendingSeekMs;
+            var target = _pendingSeekMs >= 0 ? _pendingSeekMs : _lastSeekTargetMs;
             _ended = false;
+            _eofSeekRebuildTried = true;
             WriteLibVLCDebug(
-                $"[EndReached] 疑似远跳假EOF(target={target}ms time={_lastKnownMs}ms) → 重建 Media 续跳\n");
-            ClearSeekWatchdog();
+                $"[EndReached] 疑似远跳假EOF(target={target}ms time={_lastKnownMs}ms " +
+                $"pending={_pendingSeekMs}) → 重建 Media 续跳\n");
+            // ★ 先换文案再清看门狗并保持遮罩可见: 避免淡出/淡入造成闪屏。
+            ShowLoading("正在跳转…");
+            ClearSeekWatchdog(hideBuffering: false);
             RebuildMediaAndSeek(target);
             return;
         }
@@ -3351,16 +3540,27 @@ public partial class PlayerWindow : FluentWindow
             _ = Svc.HistorySync.ReportNowAsync(_aid, _currentCid, _lastKnownMs / 1000);
     }));
 
-    private void OnProgressDragStart(object sender, DragStartedEventArgs e) => _isSeeking = true;
+    private void OnProgressDragStart(object sender, DragStartedEventArgs e)
+    {
+        // ★ 记下起点值: WPF 的 IsMoveToPointEnabled 在**点击轨道**时会先改 Value
+        //   (ValueChanged 已经把 seek 发出去了), 再把这次点击当成一次 Thumb 拖动。
+        //   松手时若值没变, 就只是"点了一下", 不能再发第二条 seek。
+        _progressDragStartValue = ProgressSlider.Value;
+        _isSeeking = true;
+    }
 
     private void OnProgressDragEnd(object sender, DragCompletedEventArgs e)
     {
         _isSeeking = false;
-        if (_mp.Length > 0)
+        // 点击轨道 / 点在滑块上但没拖动 ⇒ ValueChanged 已经处理过(或本来就不需要跳),
+        // 这里不再重复 seek。重复 seek 会打断正在飞的解复用器, 表现为无限缓冲。
+        // 阈值取 0.01(0~1000 量程): 1px 的拖动在常见轨道宽度下约等于 1, 不会被误吞;
+        // 而轨道点击本身不会产生 DragDelta, 值严格不变。
+        var moved = Math.Abs(ProgressSlider.Value - _progressDragStartValue) > 0.01;
+        if (moved && _mp.Length > 0)
         {
             var targetMs = (long)Math.Round(ProgressSlider.Value / 1000.0 * _mp.Length);
-            // ★ 走统一入口: 它会按距离决定"一步到位 / 分段跳 / 重建后跳"
-            //   (libvlc 对 frag-MP4 的单次 seek 有距离上限, 见 SeekTo 的说明)
+            // ★ 走统一入口: 由它按片源类型决定"一步到位 / 看门狗重建"。
             SeekTo(targetMs);
         }
         // 拖动结束后立刻补报一次: 用户主动跳转是"我在看这个位置"的强信号,
@@ -3913,6 +4113,7 @@ public partial class PlayerWindow : FluentWindow
 
             // 起播后(Playing 事件)自动恢复到切换前进度
             _resumeAfterSwitchMs = resumeMs > 2000 ? resumeMs : 0;
+            _resumeByStartTime = false;   // 换清晰度走"起播后设 Time", 不是 start-time
             // 新流重新计时"提前结束自救"
             _eofResumeCount = 0;
             _lastEofResumeMs = 0;
@@ -6242,6 +6443,7 @@ public partial class PlayerWindow : FluentWindow
         // 音轨是单流: audioUrl 传 null, 否则等于给音频文件再挂一条音频
         ShowLoading("正在切换到听视频…");
         _resumeAfterSwitchMs = _listenResumeMs;
+        _resumeByStartTime = false;
         try { _mp.Stop(); } catch { /* 已停/未起播 */ }
         PlayMedia(BuildMedia(_listenAudioUrl!, null));
     }
@@ -6274,6 +6476,7 @@ public partial class PlayerWindow : FluentWindow
         }
         ShowLoading("正在恢复视频…");
         _resumeAfterSwitchMs = _listenResumeMs;
+        _resumeByStartTime = false;
         try { _mp.Stop(); } catch { /* 已停 */ }
         // 本地文件是单文件源, 不能带 input-slave
         PlayMedia(BuildMedia(url, _isLocalPlayback ? null : _lastAudioUrl));
@@ -8048,6 +8251,7 @@ public partial class PlayerWindow : FluentWindow
 
         _sponsorHandled.Add(coverStart.Uuid);
         _resumeAfterSwitchMs = coverStart.EndMs;
+        _resumeByStartTime = false;
         // 空降也要说一声: 不给提示的话用户只会觉得"这视频怎么从第 14 秒开始",
         // 根本想不到是被跳了、更想不到还能撤回。_lastSkipSeg 一并记上, 撤回逻辑就能复用。
         _lastSkipSeg = coverStart;
