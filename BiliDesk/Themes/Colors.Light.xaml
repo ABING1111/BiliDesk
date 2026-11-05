@@ -59,6 +59,18 @@
         ★ 取值与 FloatingFillBrush 的常态色一致, 纯色模式下两者看不出差别;
           亚克力模式下这个键仍是不透明, 合集面板不会跟着工具列一起变透。 -->
     <SolidColorBrush x:Key="OverlaySurfaceBrush" Color="#E8EAED" />
+    <!--
+        OverlaySurfaceBrush 的**悬停 / 按下**两档(2026-11-05 新增)。
+        ★ 为什么不用现成的 FloatingFillHover/PressedBrush:
+          那三个键在 ThemeService.ApplyAcrylicSurfaces 的覆盖清单里 —— 亚克力开启时
+          会被改成 70% 半透明。返回评论列表按钮悬在**评论列表文字**上方,
+          半透明底会把底下的字透上来糊成一片(与合集面板踩过的坑同款),
+          而且"悬停"反而更透明, 交互反馈方向都是反的。
+        ★ 取值与 FloatingFillHover/PressedBrush 一致(常态色往深一档),
+          两组在同一屏上并排时看不出差别, 但这一组恒为不透明。
+        ★ 刻意**不进**亚克力覆盖清单。 -->
+    <SolidColorBrush x:Key="OverlaySurfaceHoverBrush" Color="#DDE0E4" />
+    <SolidColorBrush x:Key="OverlaySurfacePressedBrush" Color="#CFD3D8" />
 
     <!-- 输入框 -->
     <SolidColorBrush x:Key="InputBackgroundBrush" Color="#B3FFFFFF" />

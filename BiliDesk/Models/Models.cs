@@ -1532,10 +1532,19 @@ public class AppSettings
     public bool DanmakuColorful { get; set; } = true;
 
     /// <summary>
-    /// 弹幕关键词屏蔽规则。多个词用换行或逗号分隔;
-    /// 以 "re:" 开头的行按正则处理(用于 "只要包含日期就屏蔽" 这类模式匹配)。
+    /// 弹幕关键词屏蔽规则 —— **2026-11-05 已删除**。
+    /// ★ 老配置里还留着这条字段, 反序列化会直接忽略(未知成员不报错), 不需要迁移代码。
     /// </summary>
-    public string DanmakuBlockKeywords { get; set; } = "";
+
+    /// <summary>
+    /// 弹幕是否带**半透明圆角胶囊底衬**(2026-11-05 新增)。
+    ///
+    /// ★ 背景: 2026-10-07 用户要求去掉弹幕的长方形底衬(纯文字更清爽), 底衬被整个删掉,
+    ///   但纯白字压在明亮画面上会看不清 —— 这次把底衬作为**可选项**加回来, 默认开。
+    /// ★ 与 <see cref="AppSettings.DanmakuPillBackground"/> 的**读写契约**, 两处必须一致。
+    /// ★ 老配置缺这个字段 ⇒ 反序列化保持属性初始化值(自动落到默认(开)), 不需要版本兼容。
+    /// </summary>
+    public bool DanmakuPillBackground { get; set; } = true;
 
     /// <summary>
     /// 弹幕类型过滤(只显示勾选的类型)。四个独立开关而不是位标志: 界面上就是四个胶囊按钮,

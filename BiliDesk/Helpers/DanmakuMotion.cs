@@ -102,6 +102,36 @@ public static class DanmakuMotion
     /// <summary>夹取到 [min, max]。比 Math.Clamp 多一层: 纯函数好测, 且不给 Math 换个壳。</summary>
     private static int Clamp(int v, int min, int max) => v < min ? min : (v > max ? max : v);
 
+    // ------------------------------------------------------------ 泳道高(2026-11-05 胶囊底衬)
+
+    /// <summary>
+    /// 泳道高系数(纯文字, 无底衬): 字号 × 1.5。
+    ///
+    /// ★ 这是 2026-10-12 起的**原行为**, 数值不能动 —— 改了关闭胶囊时的观感就变了。
+    /// </summary>
+    public const double LaneRatio = 1.5;
+
+    /// <summary>
+    /// 泳道高系数(带胶囊底衬): 字号 × 1.9。
+    ///
+    /// ★ 为什么开底衬必须调高: 胶囊比纯文字**上下各多出内边距**(见 PlayerWindow 里的
+    ///   DanmakuPillPadding), 文字高度 + 上下内边距已经超过 字号×1.5,
+    ///   泳道不跟着长高的话相邻胶囊就会上下压在一起(文字互相盖住)。
+    ///   1.9 是"胶囊高 + 一行左右的呼吸空隙", 保证密集时也不粘。
+    /// </summary>
+    public const double PillLaneRatio = 1.9;
+
+    /// <summary>
+    /// 单条泳道的高度(像素)。
+    ///
+    /// <paramref name="fontSize"/> 实际字号; <paramref name="pill"/> 是否带胶囊底衬。
+    ///
+    /// ★ 抽成纯函数是为了探针能验"改字号/开关底衬时泳道是否还容得下这条弹幕" ——
+    ///   这正是历史上"弹幕上下叠在一起"的根因(字号改了泳道没跟着改)。
+    /// </summary>
+    public static double LaneHeight(double fontSize, bool pill)
+        => fontSize * (pill ? PillLaneRatio : LaneRatio);
+
     // ------------------------------------------------------------ 弹幕时钟外推(2026-10-12)
 
     /// <summary>

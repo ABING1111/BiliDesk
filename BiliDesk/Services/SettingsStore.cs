@@ -138,8 +138,13 @@ public class SettingsStore
     /// <summary>彩色弹幕(关掉则统一白色)</summary>
     public bool DanmakuColorful { get; set; } = true;
 
-    /// <summary>弹幕关键词屏蔽(换行/逗号分隔, "re:" 前缀表示正则)</summary>
-    public string DanmakuBlockKeywords { get; set; } = "";
+    /// <summary>
+    /// 弹幕关键词屏蔽 —— **2026-11-05 已删除**。
+    ///
+    /// ★ 字段本身**保留在存储层**(不再读取/写入)是为了老配置不报错: settings.json 里
+    ///   还留着这条, 反序列化时多一个字段不会出错, 直接忽略即可。
+    ///   真正删掉的是"生效链路"(设置项 + 播放器过滤分支 + 解析器)。
+    /// </summary>
 
     /// <summary>
     /// 弹幕类型过滤: 只显示勾选的类型(滚动/固定/彩色/高级)。
@@ -179,6 +184,16 @@ public class SettingsStore
     /// 升序: 档位越大越快。
     /// </summary>
     public int DanmakuSpeedLevel { get; set; } = 2;
+
+    /// <summary>
+    /// 弹幕是否带**半透明圆角胶囊底衬**(2026-11-05 新增)。
+    ///
+    /// ★ 背景: 2026-10-07 用户要求去掉弹幕的长方形底衬(纯文字更清爽), 底衬被整个删掉。
+    ///   但纯白字压在明亮画面上会看不清 —— 这次把它作为**可选项**加回来, 默认开。
+    /// ★ 与 AppSettings.DanmakuPillBackground 是**读写契约**, 两处必须一致。
+    /// ★ 老配置缺这个字段 → 反序列化保持属性初始化值 → 自动落到默认(开), 不需要版本兼容。
+    /// </summary>
+    public bool DanmakuPillBackground { get; set; } = true;
 
     // ------------------------------------------------------------ 列表屏蔽(FilterService)
 
@@ -538,7 +553,6 @@ public class SettingsStore
         DanmakuAreaPercent = Math.Clamp(s.DanmakuAreaPercent, 25, 100);
         DanmakuSmartFilter = s.DanmakuSmartFilter;
         DanmakuColorful = s.DanmakuColorful;
-        DanmakuBlockKeywords = s.DanmakuBlockKeywords ?? "";
         DanmakuFilterScroll = s.DanmakuFilterScroll;
         DanmakuFilterFixed = s.DanmakuFilterFixed;
         DanmakuFilterColorful = s.DanmakuFilterColorful;
@@ -551,6 +565,8 @@ public class SettingsStore
         DanmakuFontScalePercent = Math.Clamp(s.DanmakuFontScalePercent, 50, 300);
         DanmakuSpeedLevel = Math.Clamp(s.DanmakuSpeedLevel,
             Helpers.DanmakuMotion.MinSpeedLevel, Helpers.DanmakuMotion.MaxSpeedLevel);
+        // 胶囊底衬(2026-11-05): 纯 bool, 只需防止配置被手改成非布尔 —— 那一律当"开"。
+        DanmakuPillBackground = s.DanmakuPillBackground;
 
         // 列表屏蔽: 老配置没有这些字段 ⇒ 空串 / 空列表 = 不屏蔽, 正是期望的默认。
         // ★ 仍要清洗: 配置可能被手改坏(空项、重复、超长、负 mid),
@@ -775,7 +791,6 @@ public class SettingsStore
         DanmakuAreaPercent = DanmakuAreaPercent,
         DanmakuSmartFilter = DanmakuSmartFilter,
         DanmakuColorful = DanmakuColorful,
-        DanmakuBlockKeywords = DanmakuBlockKeywords,
         DanmakuFilterScroll = DanmakuFilterScroll,
         DanmakuFilterFixed = DanmakuFilterFixed,
         DanmakuFilterColorful = DanmakuFilterColorful,
@@ -783,6 +798,7 @@ public class SettingsStore
         DanmakuOpacityPercent = DanmakuOpacityPercent,
         DanmakuFontScalePercent = DanmakuFontScalePercent,
         DanmakuSpeedLevel = DanmakuSpeedLevel,
+        DanmakuPillBackground = DanmakuPillBackground,
         FilterTitleKeyword = FilterTitleKeyword,
         FilterUpKeyword = FilterUpKeyword,
         FilterBlockedUps = FilterBlockedUps,
@@ -1152,12 +1168,12 @@ public class SettingsStore
     /// (表现就是"改 A 顺手把 B 重置回默认")。
     /// </summary>
     public void UpdateDanmakuSettings(bool enabled, int areaPercent, bool smartFilter,
-        string? blockKeywords = null, bool? colorful = null,
+        bool? colorful = null,
         bool? filterScroll = null, bool? filterFixed = null,
         bool? filterColorful = null, bool? filterAdvanced = null,
-        int? opacityPercent = null, int? fontScalePercent = null, int? speedLevel = null)
+        int? opacityPercent = null, int? fontScalePercent = null, int? speedLevel = null,
+        bool? pillBackground = null)
     {
-        var nextKeywords = blockKeywords ?? DanmakuBlockKeywords;
         var nextColorful = colorful ?? DanmakuColorful;
         var nextFScroll = filterScroll ?? DanmakuFilterScroll;
         var nextFFixed = filterFixed ?? DanmakuFilterFixed;
@@ -1169,6 +1185,8 @@ public class SettingsStore
         var nextFont = Math.Clamp(fontScalePercent ?? DanmakuFontScalePercent, 50, 300);
         var nextSpeed = Math.Clamp(speedLevel ?? DanmakuSpeedLevel,
             Helpers.DanmakuMotion.MinSpeedLevel, Helpers.DanmakuMotion.MaxSpeedLevel);
+        // 胶囊底衬(2026-11-05): 同样走"传 null 表示不改"。
+        var nextPill = pillBackground ?? DanmakuPillBackground;
         var changed = enabled != DanmakuEnabled
             || areaPercent != DanmakuAreaPercent
             || smartFilter != DanmakuSmartFilter
@@ -1180,7 +1198,7 @@ public class SettingsStore
             || nextOpacity != DanmakuOpacityPercent
             || nextFont != DanmakuFontScalePercent
             || nextSpeed != DanmakuSpeedLevel
-            || !string.Equals(nextKeywords, DanmakuBlockKeywords, StringComparison.Ordinal);
+            || nextPill != DanmakuPillBackground;
         DanmakuEnabled = enabled;
         DanmakuAreaPercent = Math.Clamp(areaPercent, 25, 100);
         DanmakuSmartFilter = smartFilter;
@@ -1192,7 +1210,7 @@ public class SettingsStore
         DanmakuOpacityPercent = nextOpacity;
         DanmakuFontScalePercent = nextFont;
         DanmakuSpeedLevel = nextSpeed;
-        DanmakuBlockKeywords = nextKeywords;
+        DanmakuPillBackground = nextPill;
         Save();
         if (changed) DanmakuSettingsChanged?.Invoke();
     }

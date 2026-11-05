@@ -13,9 +13,18 @@
 
         与旧版(单页长列表)的对应关系:
           通用:   颜色模式 / 主题色 / 关闭时最小化到托盘 / 立即收进托盘
-          播放:   首页推荐算法 / 弹幕四项(显示/区域/智能屏蔽/彩色/关键词) / 赞助片段
+          播放:   跳过赞助片段 / 画质 / 缓冲 / 网络线路 / 弹幕(显示与过滤 / 外观)
           数据管理: 账户 / 封面图片缓存 / 短视频下载缓存
           关于:   软件信息 / 作者 / 声明 / 自动检查更新 / 检查更新 / 版本号
+
+        ★ 2026-11-05 排版重整(播放页):
+          · 「跳过赞助片段」从**最下面提到最上面** —— 它是整个播放页唯一一个用户会主动
+            去开的功能, 且默认关; 放在最底下等于要一路滚到底才看得见, 常常就此错过。
+          · 区块顺序改为: 跳过赞助片段 → 播放 → 弹幕。
+          · 卡片内按"组"分组, 组间用 SettingsGroupHeaderStyle 的小标题隔开
+            (播放页: 画质 / 缓冲 / 网络线路; 弹幕页: 显示与过滤 / 外观)。
+            原来十几行同权重地堆在一张卡里, 用户分不清哪几行是一回事。
+          · 删掉了「按类型过滤」后面那条**重复的分隔线**(原来连着两条)。
     -->
 
     <!-- 区块标题: 竖条 + 加粗文字。四个模板都用 -->
@@ -300,15 +309,96 @@
                  平均播放量 66~103 万; 网页 rcmd 只有 17 万且明显更贴口味)。留着只会误导,
                  所以连"算法"这个概念一起撤掉, 首页推荐固定走网页版。详见 ApiClient.GetRecommendAsync。 -->
 
+            <!-- ★★★ 2026-11-05 排版重整: 「跳过赞助片段」提到**最上面**。
+                 理由: 它是整个播放页里唯一一个**用户会主动去开的功能**(其余都是"调参数")，
+                 而且默认关 —— 放在最下面意味着用户要一路滚到底才看得见它, 常常就此错过。
+                 区块顺序改为: 跳过赞助片段 → 播放 → 弹幕。
+                 同一次重整还做了:
+                   · 「播放」区按"画质 / 缓冲 / 网络线路"三组分组, 每组加小标题,
+                     不再是十来个同权重行堆在一张卡里;
+                   · 「弹幕」区的"智能屏蔽"提到"显示弹幕"旁边(都是开关, 归在一起),
+                     外观三项与过滤项分开;
+                   · 删掉了一行重复的分隔线(原来"按类型过滤"后面连着两条)。 -->
+
+            <!-- ============ 跳过赞助片段(置顶) ============ -->
+            <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
+                            Content="跳过赞助片段" />
+
+            <!-- 数据来自 B 站社区众筹标注(SponsorBlock)。默认关: 开启后每条视频的 BV 号
+                 都会发到第三方服务器, 必须由用户自己选 —— 隐私告知就写在同一张卡里。 -->
+            <Border Style="{StaticResource SettingsCardStyle}">
+                <StackPanel>
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="自动跳过赞助片段" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="播到被社区标注的片段时自动跳到片段末尾, 右上角可随时撤回"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding SponsorBlockEnabled, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 类别多选。总开关关掉时整块置灰(可见但不可点) -->
+                    <StackPanel Style="{StaticResource SettingsRowStyle}" IsEnabled="{Binding SponsorBlockEnabled}">
+                        <TextBlock Text="跳过的类别" Style="{StaticResource SettingsRowTitleStyle}" />
+                        <TextBlock Text="数据来自网友标注的众筹数据库, 没人标注过的视频不会被跳过"
+                                   Style="{StaticResource SettingsRowDescStyle}" />
+                        <ItemsControl ItemsSource="{Binding SponsorCategoryOptions}" Margin="0,10,0,0">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <CheckBox Content="{Binding Label}" Style="{StaticResource LabeledCheckBoxStyle}"
+                                              Margin="0,0,18,8" Cursor="Hand"
+                                              IsChecked="{Binding IsChecked, Mode=TwoWay}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{Binding SponsorBlockSummary}"
+                                   Style="{StaticResource SettingsRowDescStyle}" Margin="0,2,0,0" />
+                    </StackPanel>
+
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <StackPanel Style="{StaticResource SettingsRowStyle}">
+                        <TextBlock Text="开启后, 每条播放的视频会把它的 BV 号与分 P 编号发送到第三方标注服务 (bsbsb.top) 用于查询片段; 该请求不含你的账号或登录信息。"
+                                   Style="{StaticResource SettingsRowDescStyle}"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                        <TextBlock Text="片段由网友标注, 可能标错; 跳过时会提示, 可以随时点「撤回」回到片段开头。"
+                                   Style="{StaticResource SettingsRowDescStyle}" Margin="0,4,0,0"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- ============ 播放 ============ -->
             <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
                             Content="播放" />
 
             <!-- 默认画质(2026-10-04 新增): 开始播放**之前**先选定本次要用的清晰度,
                  之后每条视频都用它起播; 该档不存在/没有权限时自动降到可用的下一档
                  (降级规则见 ApiClient.GetPlayUrlAsync 的选流分支)。
-                 默认档是 1080P —— 与播放器改动前写死的 qn=80 一致, 老用户升级后画质不变。 -->
+                 默认档是 1080P —— 与播放器改动前写死的 qn=80 一致, 老用户升级后画质不变。
+
+                 ★ 2026-11-05 排版重整: 原来这十几行同权重地堆在一张卡里, 用户分不清
+                   哪几行是一回事。现在按"画质 / 缓冲 / 网络线路"分三组, 组间用小标题
+                   (SettingsGroupHeaderStyle)隔开。 -->
             <Border Style="{StaticResource SettingsCardStyle}">
                 <StackPanel>
+                    <!-- ★ 组一: 画质 -->
+                    <TextBlock Text="画质" Style="{StaticResource SettingsGroupHeaderStyle}"
+                               Margin="0,10,0,0" />
+
                     <!-- 播放器窗口大小记忆(2026-11-03 新增): 只记宽高, 不记位置/最大化状态。
                          关闭后播放器每次都回到 XAML 的默认 1280×760, 也不再写盘。 -->
                     <Grid Style="{StaticResource SettingsRowStyle}">
@@ -343,6 +433,27 @@
                                   SelectedItem="{Binding QualitySelected, Mode=TwoWay}" />
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 免登录 1080P: 未登录时给取流请求补 try_look + dm_img_* 四件套,
+                         把匿名可见清晰度从 360P/480P 提到 720P/1080P(依据见 ApiClient.ApplyTryLook)。
+                         这是设备指纹启发式放权, B 站改判据就会失效, 所以给用户一个关掉的入口。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="免登录 1080P" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding NoLogin1080PHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding NoLogin1080P, Mode=TwoWay}" />
+                    </Grid>
+
+                    <!-- ★ 组二: 缓冲 -->
+                    <TextBlock Text="缓冲" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
                     <!-- 缓冲策略(2026-11-01 新增): 自动按带宽/码率挑预读深度, 还是手动固定值。
                          ★ 默认自动: 依据见 Services/BufferPolicy.cs —— 缓冲值对起播几乎无影响,
@@ -386,26 +497,9 @@
                                   ItemsSource="{Binding NetworkCachingOptions}"
                                   SelectedItem="{Binding NetworkCachingSelected, Mode=TwoWay}" />
                     </Grid>
-                    <Border Style="{StaticResource SettingsRowDivider}" />
 
-                    <!-- 免登录 1080P: 未登录时给取流请求补 try_look + dm_img_* 四件套,
-                         把匿名可见清晰度从 360P/480P 提到 720P/1080P(依据见 ApiClient.ApplyTryLook)。
-                         这是设备指纹启发式放权, B 站改判据就会失效, 所以给用户一个关掉的入口。 -->
-                    <Grid Style="{StaticResource SettingsRowStyle}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                            <TextBlock Text="免登录 1080P" Style="{StaticResource SettingsRowTitleStyle}" />
-                            <TextBlock Text="{Binding NoLogin1080PHint}"
-                                       Style="{StaticResource SettingsRowDescStyle}" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
-                                  VerticalAlignment="Center"
-                                  IsChecked="{Binding NoLogin1080P, Mode=TwoWay}" />
-                    </Grid>
-                    <Border Style="{StaticResource SettingsRowDivider}" />
+                    <!-- ★ 组三: 网络线路 -->
+                    <TextBlock Text="网络线路" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
                     <!-- CDN 线路: 跟随服务端(默认) / 自动测速挑最快 / 手动指定一家。
                          自动测速虽能挑到瞬时最快, 但换 host 后部分线路持续吞吐/抖动更差,
@@ -488,8 +582,15 @@
             <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
                             Content="弹幕" />
 
+            <!-- ★ 2026-11-05 排版重整: 原来「显示弹幕」「智能屏蔽」两个开关被隔在
+                 卡片两端(中间夹着滑杆与芯片), 用户找不到。改成两个小分组:
+                 "显示与过滤"(开关 + 滑杆 + 类型胶囊)与"外观"(不透明度/字号/速度)。 -->
             <Border Style="{StaticResource SettingsCardStyle}">
                 <StackPanel>
+                    <!-- ★ 组一: 显示与过滤 -->
+                    <TextBlock Text="显示与过滤" Style="{StaticResource SettingsGroupHeaderStyle}"
+                               Margin="0,10,0,0" />
+
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -505,6 +606,25 @@
                                   IsChecked="{Binding DanmakuEnabled, Mode=TwoWay}" />
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 智能屏蔽: 与「显示弹幕」同为开关, 紧挨着放(原来隔了好几行,
+                         几乎没人发现它)。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="智能屏蔽" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="过滤超长弹幕与刷屏弹幕, 减少加载量与卡顿"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding DanmakuSmartFilter, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -521,6 +641,7 @@
                                 Value="{Binding DanmakuAreaPercent, Mode=TwoWay}" />
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
+
                     <!-- 按类型过滤(2026-10-05 新增): 四个并列可叠加的胶囊, 关掉哪一类就把它从画面去掉。
                          ★ 为什么不做成"每组单选": 这四个是**并列的过滤维度**而不是互斥的类别 ——
                            一条弹幕可能同时是"滚动 + 彩色", 用户要能同时关掉/保留任意组合。
@@ -544,9 +665,10 @@
                                           IsChecked="{Binding DanmakuFilterAdvanced, Mode=TwoWay}" />
                         </WrapPanel>
                     </StackPanel>
-                    <Border Style="{StaticResource SettingsRowDivider}" />
 
-                    <Border Style="{StaticResource SettingsRowDivider}" />
+                    <!-- ★ 组二: 外观 -->
+                    <TextBlock Text="外观" Style="{StaticResource SettingsGroupHeaderStyle}" />
+
                     <!-- ===== 外观三项(2026-10-12 新增): 不透明度 / 字号 / 速度 =====
                          ★ 为什么单独一块而不是塞进「显示弹幕」那一行:
                            三项都是**滑杆+数值**, 与上面那行"标题+开关"的形状不同,
@@ -557,6 +679,30 @@
                         <TextBlock Text="弹幕外观" Style="{StaticResource SettingsRowTitleStyle}" />
                         <TextBlock Text="即时生效, 播放中的弹幕会立刻跟着变"
                                    Style="{StaticResource SettingsRowDescStyle}" />
+
+                        <!-- ===== 胶囊底衬(2026-11-05 新增) =====
+                             ★ 为什么放在「外观」组的最上面: 它是**呈现方式**的总开关
+                               (有底衬 / 纯文字), 而下面三条是这个呈现方式下的细调
+                               (不透明度/字号/速度) —— 顺序上"先选样式再调细节"更顺。
+                             ★ 为什么是开关而不是滑杆: 只有开/关两态, 滑杆停在哪都说不清;
+                               而且"要不要底衬"是二元的, 用开关一眼能看出当前状态。
+                             ★ 历史: 2026-10-07 用户要求去掉弹幕的长方形底衬, 那时是**直接删掉**;
+                               现在改成可选项 —— 纯白字压在明亮画面上会看不清, 底衬正是为了
+                               解决这个, 但清爽也要留着, 所以让用户自己选(默认开)。 -->
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                                <TextBlock Text="胶囊底衬" Style="{StaticResource SettingsRowTitleStyle}" />
+                                <TextBlock Text="半透明圆角底衬, 压在亮画面上也能看清; 关掉恢复纯文字"
+                                           Style="{StaticResource SettingsRowDescStyle}" />
+                            </StackPanel>
+                            <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                      VerticalAlignment="Center"
+                                      IsChecked="{Binding DanmakuPillBackground, Mode=TwoWay}" />
+                        </Grid>
 
                         <!-- 不透明度 -->
                         <Grid Margin="0,14,0,0">
@@ -632,96 +778,6 @@
                                              IsChecked="{Binding DanmakuSpeedIs4, Mode=TwoWay}" />
                             </WrapPanel>
                         </StackPanel>
-                    </StackPanel>
-                    <Border Style="{StaticResource SettingsRowDivider}" />
-
-                    <Grid Style="{StaticResource SettingsRowStyle}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                            <TextBlock Text="智能屏蔽" Style="{StaticResource SettingsRowTitleStyle}" />
-                            <TextBlock Text="过滤超长弹幕与刷屏弹幕, 减少加载量与卡顿"
-                                       Style="{StaticResource SettingsRowDescStyle}" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
-                                  VerticalAlignment="Center"
-                                  IsChecked="{Binding DanmakuSmartFilter, Mode=TwoWay}" />
-                    </Grid>
-                    <Border Style="{StaticResource SettingsRowDivider}" />
-                    <StackPanel Style="{StaticResource SettingsRowStyle}">
-                        <TextBlock Text="关键词屏蔽" Style="{StaticResource SettingsRowTitleStyle}" />
-                        <TextBlock Text="每行一条, 也可用逗号分隔。以 re: 开头按正则匹配, 例如 re:^\d{4}/\d{1,2}/\d{1,2}$ 可屏蔽日期打卡"
-                                   Style="{StaticResource SettingsRowDescStyle}" />
-                        <TextBox Margin="0,10,0,0" MinHeight="72" MaxHeight="140"
-                                 AcceptsReturn="True" TextWrapping="Wrap"
-                                 VerticalScrollBarVisibility="Auto"
-                                 VerticalContentAlignment="Top"
-                                 Style="{StaticResource FluentTextBoxStyle}"
-                                 Text="{Binding DanmakuBlockKeywords, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Text="{Binding DanmakuRuleCountText}"
-                                   Style="{StaticResource SettingsRowDescStyle}" Margin="0,6,0,0" />
-                    </StackPanel>
-                </StackPanel>
-            </Border>
-
-            <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
-                            Content="跳过赞助片段" />
-
-            <!-- 数据来自 B 站社区众筹标注(SponsorBlock)。默认关: 开启后每条视频的 BV 号
-                 都会发到第三方服务器, 必须由用户自己选 —— 隐私告知就写在同一张卡里。 -->
-            <Border Style="{StaticResource SettingsCardStyle}">
-                <StackPanel>
-                    <Grid Style="{StaticResource SettingsRowStyle}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                            <TextBlock Text="自动跳过赞助片段" Style="{StaticResource SettingsRowTitleStyle}" />
-                            <TextBlock Text="播到被社区标注的片段时自动跳到片段末尾, 右上角可随时撤回"
-                                       Style="{StaticResource SettingsRowDescStyle}" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
-                                  VerticalAlignment="Center"
-                                  IsChecked="{Binding SponsorBlockEnabled, Mode=TwoWay}" />
-                    </Grid>
-
-                    <Border Style="{StaticResource SettingsRowDivider}" />
-
-                    <!-- 类别多选。总开关关掉时整块置灰(可见但不可点) -->
-                    <StackPanel Style="{StaticResource SettingsRowStyle}" IsEnabled="{Binding SponsorBlockEnabled}">
-                        <TextBlock Text="跳过的类别" Style="{StaticResource SettingsRowTitleStyle}" />
-                        <TextBlock Text="数据来自网友标注的众筹数据库, 没人标注过的视频不会被跳过"
-                                   Style="{StaticResource SettingsRowDescStyle}" />
-                        <ItemsControl ItemsSource="{Binding SponsorCategoryOptions}" Margin="0,10,0,0">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <WrapPanel Orientation="Horizontal" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <CheckBox Content="{Binding Label}" Style="{StaticResource LabeledCheckBoxStyle}"
-                                              Margin="0,0,18,8" Cursor="Hand"
-                                              IsChecked="{Binding IsChecked, Mode=TwoWay}" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <TextBlock Text="{Binding SponsorBlockSummary}"
-                                   Style="{StaticResource SettingsRowDescStyle}" Margin="0,2,0,0" />
-                    </StackPanel>
-
-                    <Border Style="{StaticResource SettingsRowDivider}" />
-
-                    <StackPanel Style="{StaticResource SettingsRowStyle}">
-                        <TextBlock Text="开启后, 每条播放的视频会把它的 BV 号与分 P 编号发送到第三方标注服务 (bsbsb.top) 用于查询片段; 该请求不含你的账号或登录信息。"
-                                   Style="{StaticResource SettingsRowDescStyle}"
-                                   Foreground="{DynamicResource TextTertiaryBrush}" />
-                        <TextBlock Text="片段由网友标注, 可能标错; 跳过时会提示, 可以随时点「撤回」回到片段开头。"
-                                   Style="{StaticResource SettingsRowDescStyle}" Margin="0,4,0,0"
-                                   Foreground="{DynamicResource TextTertiaryBrush}" />
                     </StackPanel>
                 </StackPanel>
             </Border>

@@ -1083,6 +1083,26 @@ public class SettingsViewModel : ObservableObject
 
     public string DanmakuSpeedText => BiliDesk.Helpers.DanmakuMotion.SpeedLabel(DanmakuSpeedLevel);
 
+    /// <summary>
+    /// 弹幕是否带半透明圆角胶囊底衬(2026-11-05 新增)。
+    ///
+    /// ★ 默认开: 纯白字压在明亮画面上会看不清, 底衬正是为了解决这个问题。
+    ///   关掉就回到 2026-10-07 之后的纯文字观感(那时用户明确要求去掉长方形底衬)。
+    /// ★ 走"只把自己这一项作为可选覆盖传下去"的写法, 与上面三个外观项完全一致。
+    /// </summary>
+    public bool DanmakuPillBackground
+    {
+        get => Svc.Settings.DanmakuPillBackground;
+        set
+        {
+            if (value == Svc.Settings.DanmakuPillBackground) return;
+            Svc.Settings.UpdateDanmakuSettings(
+                Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent, Svc.Settings.DanmakuSmartFilter,
+                pillBackground: value);
+            OnPropertyChanged();
+        }
+    }
+
     /// <summary>速度可选值的文案列表(给播放器里的说明文案复用)</summary>
     public string[] DanmakuSpeedOptions => BiliDesk.Helpers.DanmakuMotion.SpeedLevelLabels;
 
@@ -1134,35 +1154,14 @@ public class SettingsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 弹幕关键词屏蔽(用户手写黑名单)。
-    /// 用 TextChanged 慢一点也关系不大: 每敲一个字就重算规则并让播放器重新过滤,
-    /// 体感上是"边打边生效"。实时过滤只作用于已加载的弹幕列表, 不发新请求。
+    /// 弹幕关键词屏蔽(用户手写黑名单)—— **2026-11-05 已删除这个功能**。
+    ///
+    /// ★ 为什么删: 关键词黑名单要用户自己手写词表, 命中率低、维护成本高, 而"智能屏蔽"
+    ///   (超长弹幕 + 刷屏弹幕)已经覆盖了绝大多数真实场景。列表侧的"标题/UP 屏蔽"
+    ///   仍在首页那套面板里(那是另一套东西, 见 Helpers/FilterService)。
+    /// ★ 删的时候是**整条链路**一起删的: 设置项 + 存储字段 + 解析器 + 播放器过滤分支,
+    ///   只删界面会让"老配置里的关键词"变成看不见却仍生效的幽灵设置。
     /// </summary>
-    public string DanmakuBlockKeywords
-    {
-        get => Svc.Settings.DanmakuBlockKeywords;
-        set
-        {
-            if (value == Svc.Settings.DanmakuBlockKeywords) return;
-            Svc.Settings.UpdateDanmakuSettings(
-                Svc.Settings.DanmakuEnabled,
-                Svc.Settings.DanmakuAreaPercent,
-                Svc.Settings.DanmakuSmartFilter,
-                value);
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(DanmakuRuleCountText));
-        }
-    }
-
-    /// <summary>当前生效的屏蔽规则条数(让用户确认自己的输入被解析成了几条规则)</summary>
-    public string DanmakuRuleCountText
-    {
-        get
-        {
-            var n = BiliDesk.Helpers.DanmakuKeywordFilter.Build(Svc.Settings.DanmakuBlockKeywords)?.Count ?? 0;
-            return n == 0 ? "尚未设置屏蔽规则" : $"已启用 {n} 条屏蔽规则";
-        }
-    }
 
     // ---- 弹幕类型过滤(滚动/固定/彩色/高级) ----
     // 四个属性写法完全一致, 只是把"自己这一项"作为可选覆盖传给存储层 ——

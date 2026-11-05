@@ -316,6 +316,54 @@
         </Setter>
     </Style>
 
+    <!-- 评论区的**次要**悬浮按钮(返回评论列表, 2026-11-05)。
+         ★ 为什么单独写一份而不 BasedOn CommentFabStyle:
+           模板里的悬停/按下触发器是**写死** AccentHover/AccentPressed 的
+           —— 模板触发器的优先级高于 Style setter, BasedOn 只改得动常态底色,
+           一悬停又会被换回强调色(与 FloatingIconButtonStyle 那段说明同款坑)。
+         ★ 尺寸/圆角/阴影**与 CommentFabStyle 完全一致**(46×46 / 圆角 14 / 同样的影子层),
+           两个按钮并排时是一套; 只靠底色区分主次: 强调色 = 主动作(写评论),
+           中性灰 = 次动作(返回)。
+         ★ 底色用 OverlaySurfaceBrush 这一组: 它恒为**不透明**(不进亚克力覆盖清单),
+           按钮悬在评论列表文字上方时不会把底下的字透上来糊掉。
+           悬停/按下用配套的 OverlaySurfaceHover/PressedBrush, 同为不透明。 -->
+    <Style x:Key="CommentFabNeutralStyle" TargetType="Button">
+        <Setter Property="Background" Value="{DynamicResource OverlaySurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid>
+                        <!-- 阴影层: 与 CommentFabStyle 同一套写法(独立一层, 不把 Effect 挂按钮自身) -->
+                        <Ellipse Fill="{TemplateBinding Background}" Margin="0,3,0,0" Opacity="0.35">
+                            <Ellipse.Effect>
+                                <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="1" Color="#000000" />
+                            </Ellipse.Effect>
+                        </Ellipse>
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="14">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource OverlaySurfaceHoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource OverlaySurfacePressedBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- 强调色按钮(主按钮) -->
     <Style x:Key="AccentButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
@@ -705,7 +753,7 @@
 
     <!-- 卡片内一行设置项。左侧标题+描述, 右侧控件由各行的使用处自己放(列 2)。
          TargetType 用 **Panel**: 行大多是 Grid(标题列+控件列), 但少数"竖排"行
-         (主题色/关键词屏蔽这类内容放不进一行两列的)是 StackPanel —— 两者的公共基类
+         (主题色/弹幕外观三项这类内容放不进一行两列的)是 StackPanel —— 两者的公共基类
          就是 Panel, 写成它两种都能套(样式本身只设 Margin, 不依赖具体类型)。 -->
     <Style x:Key="SettingsRowStyle" TargetType="Panel">
         <Setter Property="Margin" Value="0,14" />
@@ -716,6 +764,19 @@
         <Setter Property="Height" Value="1" />
         <Setter Property="Background" Value="{DynamicResource DividerBrush}" />
         <Setter Property="Opacity" Value="0.7" />
+    </Style>
+
+    <!-- 卡片内的**分组小标题**(2026-11-05 新增)。
+         ★ 为什么需要它: 一张卡片里塞十几行同权重的行时, 用户看不出哪几行是一回事。
+           "画质 / 缓冲 / 网络线路"三组各配一个浅色小标题, 扫一眼就知道该往哪看。
+         ★ 与页级区块标题(SettingsSectionHeaderStyle, 带强调色竖条)的区别:
+           那个是**大分组**(整张卡片), 这个是**卡片内的小分组**(只有一行字, 没有竖条),
+           靠字号与颜色的层级差区分, 不抢卡片标题的视觉重心。 -->
+    <Style x:Key="SettingsGroupHeaderStyle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="Margin" Value="0,20,0,0" />
     </Style>
 
     <!-- 行标题(粗体 14)与行描述(12 次级色) -->
