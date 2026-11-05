@@ -195,6 +195,49 @@ public class SettingsStore
     /// </summary>
     public bool DanmakuPillBackground { get; set; } = true;
 
+    // ------------------------------------------------------------ 字幕(播放器)
+
+    /// <summary>
+    /// 字幕字号(缩放百分比, 50~300, 默认 200)。作用于播放器字幕层。
+    /// ★ 默认从 100 上调到 200: 基准字号 SubtitleBaseFontSize 只有 20,
+    ///   在 1080P / 全屏下 100% 的字幕比 B 站网页端明显小一圈, 200% 才是网页端的观感。
+    /// </summary>
+    public int SubtitleFontScalePercent { get; set; } = 200;
+
+    /// <summary>
+    /// 默认显示字幕。关掉后播放器取到人工字幕轨也不自动开(按钮仍是可点的入口), 适合不需要字幕的人。
+    /// ★ 「默认显示字幕」开关的持久化字段。
+    /// ★ 只作用于**作者自制的外挂字幕**(SubtitleTrack.IsAi == false)。AI 字幕不走这个开关 ——
+    ///   AI 字幕默认不自动打开, 由用户自己在字幕弹层里选(见 LoadSubtitleAsync)。
+    /// ★ 产品决策(2026-11-08 确认): 默认值保持 true —— 与 B 站 web 端一致, web 端取到字幕
+    ///   且存在主轨时本来就自动开(无主轨才关), 这里对齐同一行为, 不做成默认关。
+    /// </summary>
+    public bool SubtitleEnabled { get; set; } = true;
+
+    /// <summary>字幕底衬不透明度(0~100, 默认 45)。0 = 完全透明(只剩字 + 描边)。</summary>
+    public int SubtitleBackgroundOpacityPercent { get; set; } = 45;
+
+    /// <summary>
+    /// 字幕距离画面底部的距离(px, 0~300, 默认 70)。
+    /// ★ 原默认 24 会让字幕正好落在控制栏底下, 先后调到 92 再回到 70:
+    ///   70 仍在安全区内, 控制栏展开时字幕基本压在它上方, 收起时又不会飘得太高。
+    /// ★ 与 PlayerWindow.xaml 里 SubtitleBox 的 Margin 初值必须一致(同样是 70),
+    ///   否则「设置里是默认值」和「刚从 XAML 建出来的样子」会跳一下。
+    /// </summary>
+    public int SubtitleBottomMargin { get; set; } = 70;
+
+    /// <summary>
+    /// 字幕默认值的一次性迁移标记: 旧配置(字号 100 / 底距 24)升级后迁到新默认(200 / 70)。
+    /// 迁移完成即置 true 并落盘, 之后用户手动改回旧值不会被再改。见 Load()。
+    /// </summary>
+    private bool _subtitleDefaultsMigrated;
+
+    /// <summary>旧版字幕字号默认值(迁移判据: 只搬"仍等于旧默认"的配置)</summary>
+    private const int LegacySubtitleFontScalePercent = 100;
+
+    /// <summary>旧版字幕底距默认值(px)</summary>
+    private const int LegacySubtitleBottomMargin = 24;
+
     // ------------------------------------------------------------ 列表屏蔽(FilterService)
 
     /// <summary>按标题屏蔽的关键词(包含匹配, 空格/逗号分隔)。与 AppSettings 同名属性是读写契约。</summary>
@@ -367,7 +410,7 @@ public class SettingsStore
     }
 
     /// <summary>
-    /// 上次用的搜索类别(见 <see cref="Models.ContentKind"/>: 0=视频 1=直播间 2=番剧 3=UP主)。
+    /// 上次用的搜索类别(见 <see cref="Models.ContentKind"/>: 0=视频 1=直播间 2=番剧)。
     ///
     /// ★ 为什么要记住它(2026-11-12 用户报"番剧依然无法被搜索"):
     ///   从首页搜索框发起搜索时, 搜索页用的是**默认类别(视频)** —— 于是搜"咒术回战"
@@ -458,6 +501,13 @@ public class SettingsStore
 
     /// <summary>设置变更通知(播放器等运行中的界面据此同步)</summary>
     public event Action? DanmakuSettingsChanged;
+
+    /// <summary>
+    /// 字幕设置变更通知: 设置页改字号/底衬/底距时, 正放着片的播放器要立刻跟上。
+    /// ★ 必须单独发一个事件: 暂停时 TimeChanged 不跑, 没有广播就要等下一次播放才生效。
+    /// ★ 与 DanmakuSettingsChanged 并列而不是合并: 弹幕一变要重建泳道+重筛, 字幕只需重落一次外观。
+    /// </summary>
+    public event Action? SubtitleSettingsChanged;
 
     /// <summary>全局亚克力开关变化。所有已打开的窗口据此重设背景(见 FluentWindow.ApplyChrome)</summary>
     public event Action? AcrylicChanged;
@@ -567,6 +617,27 @@ public class SettingsStore
             Helpers.DanmakuMotion.MinSpeedLevel, Helpers.DanmakuMotion.MaxSpeedLevel);
         // 胶囊底衬(2026-11-05): 纯 bool, 只需防止配置被手改成非布尔 —— 那一律当"开"。
         DanmakuPillBackground = s.DanmakuPillBackground;
+
+        // 字幕字号夹取范围与字幕弹层里的滑杆一致(50~300)
+        SubtitleFontScalePercent = Math.Clamp(s.SubtitleFontScalePercent, 50, 300);
+        // 字幕外观三项: 老配置没有这些字段 → 拿到属性初始化值(开/45/70), 正好是默认
+        SubtitleEnabled = s.SubtitleEnabled;
+        SubtitleBackgroundOpacityPercent = Math.Clamp(s.SubtitleBackgroundOpacityPercent, 0, 100);
+        SubtitleBottomMargin = Math.Clamp(s.SubtitleBottomMargin, 0, 300);
+
+        // ★★★ 2026-11-07 字幕默认值迁移: 旧版本的默认字号是 100、底距是 24, 凡是用过旧版
+        //   的用户配置里都实打实写着这两个数 —— 只改属性的初始化值, 老用户永远享受不到新默认。
+        //   这里做**一次性**迁移: 迁移标记(false/缺失)时把"仍等于旧默认"的两项提到新默认,
+        //   并把标记置 true 落盘; 之后用户手动改回 100 / 24 会被正常保留。
+        //   ★ 只认"等于旧默认"的值: 用户自己拖过的值(比如 150 / 40)必须原样不动。
+        if (!s.SubtitleDefaultsMigrated)
+        {
+            if (SubtitleFontScalePercent == LegacySubtitleFontScalePercent)
+                SubtitleFontScalePercent = 200;
+            if (SubtitleBottomMargin == LegacySubtitleBottomMargin)
+                SubtitleBottomMargin = 70;
+        }
+        _subtitleDefaultsMigrated = true;
 
         // 列表屏蔽: 老配置没有这些字段 ⇒ 空串 / 空列表 = 不屏蔽, 正是期望的默认。
         // ★ 仍要清洗: 配置可能被手改坏(空项、重复、超长、负 mid),
@@ -799,6 +870,11 @@ public class SettingsStore
         DanmakuFontScalePercent = DanmakuFontScalePercent,
         DanmakuSpeedLevel = DanmakuSpeedLevel,
         DanmakuPillBackground = DanmakuPillBackground,
+        SubtitleFontScalePercent = SubtitleFontScalePercent,
+        SubtitleEnabled = SubtitleEnabled,
+        SubtitleBackgroundOpacityPercent = SubtitleBackgroundOpacityPercent,
+        SubtitleBottomMargin = SubtitleBottomMargin,
+        SubtitleDefaultsMigrated = _subtitleDefaultsMigrated,
         FilterTitleKeyword = FilterTitleKeyword,
         FilterUpKeyword = FilterUpKeyword,
         FilterBlockedUps = FilterBlockedUps,
@@ -1013,6 +1089,51 @@ public class SettingsStore
         if (PreferredQualityQn == next) return;
         PreferredQualityQn = next;
         Save();
+    }
+
+    /// <summary>
+    /// 字幕字号百分比(50~300)并落盘。
+    ///
+    /// ★ 播放器里拖滑杆时**每一格都会调到这里**, 所以必须"没变就直接 return" ——
+    ///   Save() 内部虽有节流, 但白跑一次序列化没有意义(与 SetPreferredQuality 同款)。
+    /// ★ 夹取范围与 ApplySanitized 保持一致: 两处不同步的话, 拖到端点后重启会跳回另一个值。
+    /// </summary>
+    public void SetSubtitleFontScalePercent(int percent)
+    {
+        var next = Math.Clamp(percent, 50, 300);
+        if (SubtitleFontScalePercent == next) return;
+        SubtitleFontScalePercent = next;
+        Save();
+        SubtitleSettingsChanged?.Invoke();
+    }
+
+    /// <summary>默认显示字幕开关并落盘(播放器在取到轨时读它决定是否自动打开)。</summary>
+    public void SetSubtitleEnabled(bool enabled)
+    {
+        if (SubtitleEnabled == enabled) return;
+        SubtitleEnabled = enabled;
+        Save();
+        SubtitleSettingsChanged?.Invoke();
+    }
+
+    /// <summary>字幕底衬不透明度(0~100)并落盘。夹取范围与设置页滑杆一致。</summary>
+    public void SetSubtitleBackgroundOpacityPercent(int percent)
+    {
+        var next = Math.Clamp(percent, 0, 100);
+        if (SubtitleBackgroundOpacityPercent == next) return;
+        SubtitleBackgroundOpacityPercent = next;
+        Save();
+        SubtitleSettingsChanged?.Invoke();
+    }
+
+    /// <summary>字幕距画面底部距离(px, 0~300)并落盘。</summary>
+    public void SetSubtitleBottomMargin(int px)
+    {
+        var next = Math.Clamp(px, 0, 300);
+        if (SubtitleBottomMargin == next) return;
+        SubtitleBottomMargin = next;
+        Save();
+        SubtitleSettingsChanged?.Invoke();
     }
 
     /// <summary>

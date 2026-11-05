@@ -930,6 +930,22 @@
                             <Canvas x:Name="DanmakuCanvas" Background="Transparent" IsHitTestVisible="False"
                                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
 
+                            <!-- 字幕层(外挂字幕 / AI 字幕, 2026-11-04 新增)。
+                                 ★ 层级: 放在弹幕层之后 —— 字幕压在弹幕之上更清晰;
+                                   在 ListenOverlay 之前 —— 听视频时聆听画面盖住字幕, 不串味。
+                                 ★ IsHitTestVisible=False: 手势(单击暂停/双击全屏/长按快进)
+                                   照常落到 VideoAreaRoot; 这层只是"看"的。 -->
+                            <Border x:Name="SubtitleBox" Visibility="Collapsed"
+                                    IsHitTestVisible="False"
+                                    HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                    Margin="0,0,0,70" MaxWidth="900" Padding="12,6"
+                                    CornerRadius="6" Background="#B3000000">
+                                <TextBlock x:Name="SubtitleText" Foreground="White"
+                                           FontSize="20" TextWrapping="Wrap"
+                                           TextAlignment="Center" LineHeight="30"
+                                           Text="" />
+                            </Border>
+
                             <!-- ===== 「听视频」聆听态画面(2026-10-06 新增) =====
                                  ★ 为什么必须是**一层盖住视频的浮层**而不是"隐藏 VideoView":
                                    视频区被两层原生 HWND 占着(见 VideoAreaRoot 的说明), 把
@@ -1142,6 +1158,10 @@
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <!-- ★ 第 11 列(索引 10)专供全屏按钮。少这一个定义时, Grid.Column="10" 会被
+                                                 夹回最后一列(索引 9), 于是字幕按钮(9)与全屏按钮(10)叠在同一格里
+                                                 —— 用户截图里"字幕/全屏压在一起"就是这么来的。 -->
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
 
@@ -1446,8 +1466,91 @@
                                             </Border>
                                         </Popup>
 
+                                        <!-- 字幕(外挂 / AI, 2026-11-04 新增)。
+                                             只读文案展示当前选中轨; 直播/本地文件无字幕, 按钮置灰
+                                             (见 UpdateSubtitleButton)。弹层里第一项是"关闭字幕"。 -->
+                                        <Button Grid.Column="9" x:Name="BtnSubtitle" Style="{StaticResource PlayerTextBtn}"
+                                                Margin="4,0,0,0" Click="OnSubtitleClick" ToolTip="字幕">
+                                            <TextBlock x:Name="SubtitleBtnText" Text="字幕" Foreground="#F2FFFFFF" />
+                                        </Button>
+                                        <Popup x:Name="SubtitlePopup"
+                                               Placement="Top" StaysOpen="False" AllowsTransparency="True"
+                                               PopupAnimation="Fade">
+                                            <Border Background="#F0202226" CornerRadius="8" Padding="12,10"
+                                                    BorderBrush="#33FFFFFF" BorderThickness="1" Width="240">
+                                                <StackPanel>
+                                                    <TextBlock Text="字幕" Foreground="#E6FFFFFF" FontSize="12" />
+                                                    <ListBox x:Name="SubtitleList" Background="Transparent"
+                                                             BorderThickness="0" Foreground="White" Margin="0,6,0,0"
+                                                             MaxHeight="220"
+                                                             SelectionChanged="OnSubtitleSelected">
+                                                        <ListBox.ItemContainerStyle>
+                                                            <Style TargetType="ListBoxItem">
+                                                                <!-- 绝不能设 Focusable=False: ListBoxItem 鼠标按下时
+                                                                     Focus() 失败会短路选中逻辑, SelectionChanged 永不触发
+                                                                     (与清晰度列表同一个坑, 见 QualityList)。 -->
+                                                                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                                                <Setter Property="Padding" Value="10,6" />
+                                                                <Setter Property="Cursor" Value="Hand" />
+                                                                <Setter Property="ContentTemplate">
+                                                                    <Setter.Value>
+                                                                        <DataTemplate>
+                                                                            <!-- 单行 + 字符级省略号: 弹层宽 240, 轨名(lan_doc)可能长到
+                                                                                 "简体中文(自动生成) · AI", 不裁会把右边撑破。
+                                                                                 MaxWidth = 240 - 弹层 padding(12×2) - ListBoxItem padding(10×2)。 -->
+                                                                            <TextBlock Text="{Binding}" Foreground="#F2FFFFFF"
+                                                                                       TextWrapping="NoWrap"
+                                                                                       TextTrimming="CharacterEllipsis"
+                                                                                       MaxWidth="196" />
+                                                                        </DataTemplate>
+                                                                    </Setter.Value>
+                                                                </Setter>
+                                                                <Setter Property="Template">
+                                                                    <Setter.Value>
+                                                                        <ControlTemplate TargetType="ListBoxItem">
+                                                                            <Border x:Name="Bd" Background="Transparent"
+                                                                                    CornerRadius="5" Padding="{TemplateBinding Padding}">
+                                                                                <ContentPresenter VerticalAlignment="Center" />
+                                                                            </Border>
+                                                                            <ControlTemplate.Triggers>
+                                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                                    <Setter TargetName="Bd" Property="Background" Value="#26FFFFFF" />
+                                                                                </Trigger>
+                                                                                <Trigger Property="IsSelected" Value="True">
+                                                                                    <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF" />
+                                                                                </Trigger>
+                                                                            </ControlTemplate.Triggers>
+                                                                        </ControlTemplate>
+                                                                    </Setter.Value>
+                                                                </Setter>
+                                                            </Style>
+                                                        </ListBox.ItemContainerStyle>
+                                                    </ListBox>
+
+                                                    <Border Height="1" Margin="0,12,0,12" Background="#26FFFFFF" />
+
+                                                    <!-- 字号(与弹幕外观三行同款排版): 标签 | 滑杆 | 数值 -->
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="70" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="50" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="字号" Style="{StaticResource DanmakuRowLabelStyle}" />
+                                                        <Slider Grid.Column="1" x:Name="SubtitleFontSlider"
+                                                                Style="{StaticResource PlayerSlider}"
+                                                                Minimum="50" Maximum="300" Value="200"
+                                                                Margin="8,0,8,0" IsSnapToTickEnabled="True"
+                                                                TickFrequency="25" ValueChanged="OnSubtitleFontChanged" />
+                                                        <TextBlock Grid.Column="2" x:Name="SubtitleFontValue" Text="200%"
+                                                                   Style="{StaticResource DanmakuRowValueStyle}" />
+                                                    </Grid>
+                                                </StackPanel>
+                                            </Border>
+                                        </Popup>
+
                                         <!-- 全屏(离线缓存已挪到右侧信息面板的操作栏, 2026-09-26) -->
-                                        <Button Grid.Column="9" x:Name="BtnFullscreen2" Style="{StaticResource PlayerRoundBtn}"
+                                        <Button Grid.Column="10" x:Name="BtnFullscreen2" Style="{StaticResource PlayerRoundBtn}"
                                                 Width="36" Height="36" Click="OnFullscreenClick" ToolTip="全屏 (F)">
                                             <TextBlock Text="&#xE92D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                        FontSize="14" Foreground="White" />
