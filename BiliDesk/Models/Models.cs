@@ -578,12 +578,14 @@ public class FollowUser : System.ComponentModel.INotifyPropertyChanged
     private int _newCount;
 
     /// <summary>
-    /// 「未读动态」条数 —— 左栏头像左侧未读红点的判定依据(0 = 不显示红点)。
-    /// 红点本身只表达"有没有新动态", 具体条数放在红点的悬浮提示里。
+    /// 「未读动态」条数 —— 左栏未读提示的判定依据(0 = 没有新动态)。
+    /// ★ 界面上有**两处**用它: 头像左侧的**红点**(只表达"有没有")与头像右下角的
+    ///   **数字角标**(直接显示条数)。2026-11-05 把数字角标改了回来 —— 之前数字只放在
+    ///   红点的悬浮提示里, "有 12 条"这件事鼠标不悬停就看不见。
     ///
     /// ★ 由**本地**判断, 不新增接口(见 DynamicSeenStore): 拿动态流里"该 UP 最新的一条"
     ///   与上次记录的比对, 不一样就是有新动态。
-    /// ★ 必须带通知: 红点是刷新后由 ViewModel 侧统一刷的(见 FollowViewModel.UpdateUnreadBadges),
+    /// ★ 必须带通知: 未读提示是刷新后由 ViewModel 侧统一刷的(见 FollowViewModel.UpdateUnreadBadges),
     ///   界面要跟着变。
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
@@ -602,6 +604,52 @@ public class FollowUser : System.ComponentModel.INotifyPropertyChanged
     }
 
     public bool HasNew => NewCount > 0;
+
+    private long _latestPubdate;
+
+    /// <summary>
+    /// 该 UP 最近一条动态的发布时间(Unix 秒)。**0 = 还没拿到**。
+    ///
+    /// ★ 用途: 动态页左栏按"最近有更新的 UP 排前面"排序(见 FollowViewModel.ReorderUsersByActivity)。
+    ///   关注列表接口本身**不给**这个时间(只给 mid/名字/头像/签名), 所以只能从动态流里
+    ///   反推 —— 动态流按时间倒序, 某个 UP 最先出现的那条就是 TA 最新的。
+    /// ★ 精度: 动态接口的扁平路径只给 "2小时前" 这种文本, 时间戳是**反推**出来的
+    ///   (见 VideoItem.PubDateApprox), 误差在"分钟~小时"量级 —— 对"谁更新得勤"这个
+    ///   排序需求来说完全够用(同一天内的先后差别不影响观感)。
+    /// ★ 0 的含义是"**还没观察到**这个 UP 有更新"(动态流里还没出现过它)。
+    ///   此时它会被排在有更新时间的那些**之后**, 但它**彼此之间**保持原相对顺序 ——
+    ///   详见 <see cref="BiliDesk.ViewModels.FollowViewModel"/> 里的排序说明。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public long LatestPubdate
+    {
+        get => _latestPubdate;
+        set
+        {
+            if (_latestPubdate == value) return;
+            _latestPubdate = value;
+            PropertyChanged?.Invoke(this,
+                new System.ComponentModel.PropertyChangedEventArgs(nameof(LatestPubdate)));
+            PropertyChanged?.Invoke(this,
+                new System.ComponentModel.PropertyChangedEventArgs(nameof(HasActivity)));
+            PropertyChanged?.Invoke(this,
+                new System.ComponentModel.PropertyChangedEventArgs(nameof(ActivityLabel)));
+        }
+    }
+
+    /// <summary>这个 UP 有没有被观察到"最近有更新"(= 动态流里出现过且拿到了时间)</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasActivity => LatestPubdate > 0;
+
+    /// <summary>
+    /// 左栏行尾显示的"最近更新"文字(没有则空串)。
+    ///
+    /// ★ 用接口原文那套措辞("2小时前" / "昨天 18:45"), 与动态卡片上的发布时间同一套语言 ——
+    ///   同一页里出现两种写法("3小时前" vs "10-14 18:45")会很别扭。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string ActivityLabel
+        => LatestPubdate > 0 ? VideoItem.FormatPubRelative(LatestPubdate) : "";
 }
 
 /// <summary>

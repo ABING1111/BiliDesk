@@ -181,14 +181,18 @@
                                                 <ColumnDefinition Width="22" />
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
+                                                <!-- 最近更新时间(2026-11-05): 自适应宽度, 右对齐。
+                                                     独占一列而不是叠在名字上 —— 名字要能省略号截断,
+                                                     两者抢同一格会把名字压没。 -->
+                                                <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                             <!-- 未读红点: 照 B 站客户端, 点在头像左侧、垂直居中(静态, 不做动画)。
-                                                 外层透明 Border 是给鼠标留的悬停热区 —— 6px 的圆点本身几乎
-                                                 悬停不到, 数量信息要能被看到。 -->
+                                                 ★ 它只表达"有没有新动态"; **具体条数由头像右下角的
+                                                   数字角标显示**(见下面头像那一格) —— 数字直接
+                                                   看得见, 不必靠悬停才知道有几条。
+                                                 ★ 外层透明 Border 是给鼠标留的悬停热区。 -->
                                             <Border Grid.Column="0" Width="22" Height="28"
-                                                    Background="Transparent" VerticalAlignment="Center"
-                                                    ToolTipService.IsEnabled="{Binding HasNew}"
-                                                    ToolTip="{Binding NewCount, StringFormat='{}{0} 条新动态'}">
+                                                    Background="Transparent" VerticalAlignment="Center">
                                                 <Border Width="6" Height="6" CornerRadius="3"
                                                         Background="{DynamicResource UnreadDotBrush}"
                                                         HorizontalAlignment="Left" VerticalAlignment="Center"
@@ -196,7 +200,9 @@
                                             </Border>
                                             <!-- 头像。右键可看大图 / 保存。
                                                  ★ 外面套一层同尺寸 Grid: 固定 36×36 的占位, 头像 Border 自己
-                                                   ClipToBounds 裁成圆 —— 红点已经移到左侧独立通道, 不再靠越界叠放。 -->
+                                                   ClipToBounds 裁成圆 —— 数字角标是这张 Grid 的**兄弟节点**
+                                                   (不是头像的子节点), 所以它能越出圆形头像、贴在右下角。
+                                                   (头像那个 Border 设了 ClipToBounds=True, 越界的子元素会被裁掉。) -->
                                             <Grid Grid.Column="1" Width="36" Height="36">
                                                 <Border Width="36" Height="36" CornerRadius="18"
                                                         Background="{DynamicResource AccentSoftFillBrush}"
@@ -238,9 +244,26 @@
                                                                HorizontalAlignment="Center"
                                                                VerticalAlignment="Center" />
                                                 </Border>
+                                                <!-- 未读数字角标: 与消息页会话列表同款(强调色底 + 数字, 贴右下角)。
+                                                     ★ 2026-11-05 改回这个形态: 之前(2026-11-04)把数字收进了
+                                                       红点的悬浮提示里, 结果"有 12 条新动态"这件事**看不见** ——
+                                                       只有把鼠标精确移到那个 6px 红点上才知道有多少。
+                                                       数字角标直接把条数摆在脸上, 红点继续负责"有更新"这个提示。
+                                                     计数来源见 FollowViewModel.UpdateUnreadBadges ——
+                                                     本地比对出来"这个 UP 有新动态", 不额外请求接口。 -->
+                                                <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                        MinWidth="16" Height="16" CornerRadius="8" Padding="4,0"
+                                                        Background="{DynamicResource AccentBrush}"
+                                                        ToolTipService.IsEnabled="{Binding HasNew}"
+                                                        ToolTip="{Binding NewCount, StringFormat='{}{0} 条新动态'}"
+                                                        Visibility="{Binding HasNew, Converter={StaticResource BoolToVis}}">
+                                                    <TextBlock Text="{Binding NewCount}" FontSize="10"
+                                                               Foreground="{DynamicResource TextOnAccentBrush}"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
                                             </Grid>
                                             <TextBlock Grid.Column="2" Text="{Binding Name}"
-                                                       FontSize="13" Margin="10,0,0,0"
+                                                       FontSize="13" Margin="10,0,8,0"
                                                        VerticalAlignment="Center"
                                                        TextTrimming="CharacterEllipsis">
                                                 <TextBlock.Style>
@@ -254,6 +277,17 @@
                                                     </Style>
                                                 </TextBlock.Style>
                                             </TextBlock>
+                                            <!-- 最近更新(2026-11-05): 左栏按"最近有更新"排序,
+                                                 这里把时间摆出来, 用户不用点进去就知道排序依据。
+                                                 ★ 措辞与动态卡片上的发布时间同一套(同一个格式化函数)。
+                                                 ★ 独占一列(不是叠在名字上): 名字要能省略号截断,
+                                                   两者抢同一格会把名字压没。 -->
+                                            <TextBlock Grid.Column="3" Text="{Binding ActivityLabel}"
+                                                       FontSize="11" VerticalAlignment="Center"
+                                                       HorizontalAlignment="Right"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                                       Visibility="{Binding HasActivity, Converter={StaticResource BoolToVis}}" />
                                         </Grid>
                                     </Border>
                                 </DataTemplate>
