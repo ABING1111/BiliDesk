@@ -1580,6 +1580,9 @@ public partial class PlayerWindow : FluentWindow
         //   与 _danmakuAreaRatio 同一类, 三项+泳道高都是设置驱动的派生量。
         nameof(_danmakuFontSize), nameof(_danmakuOpacity), nameof(_danmakuSpeedLevel),
         nameof(_danmakuScrollSeconds), nameof(_danmakuFixedSeconds),
+        // 胶囊底衬开关(2026-11-05)同理是**用户偏好**: 换片必须保持,
+        // 清了就等于"换个视频弹幕又变回纯文字" —— 那是用户马上会报上来的 bug。
+        nameof(_danmakuPill),
         nameof(_teardownDone),       // 拆解只做一次
         nameof(_playerRegistered),   // 注册计数, 生命周期是窗口而非片源
         // 倍速弹层/窗口尺寸记忆(2026-11-03 未提交改动)的窗口级状态
@@ -4362,11 +4365,42 @@ public partial class PlayerWindow : FluentWindow
             if (DanmakuSpeedSlider != null) DanmakuSpeedSlider.Value = s.DanmakuSpeedLevel;
             if (DanmakuSpeedValue != null)
                 DanmakuSpeedValue.Text = Helpers.DanmakuMotion.SpeedLabel(s.DanmakuSpeedLevel);
+
+            // 胶囊底衬开关(2026-11-05): 按钮上的文字要跟着设置走。
+            // 设置页改了它, 播放器这边也要立刻反映(否则两边说法不一致)。
+            if (DanmakuPillButtonText != null)
+                DanmakuPillButtonText.Text = s.DanmakuPillBackground ? "开" : "关";
         }
         finally
         {
             _syncingDanmakuLook = prev;
         }
+    }
+
+    /// <summary>
+    /// 切换「胶囊底衬」(2026-11-05)。
+    ///
+    /// ★ 落库后由 SettingsStore 广播 DanmakuSettingsChanged → OnDanmakuSettingsChanged
+    ///   → ApplyDanmakuLook 统一重算(泳道高 + 清屏重建), 所以这里**只管改设置**,
+    ///   不自己写渲染逻辑 —— 免得两处各改一半(历史上"字号变了泳道没跟着变"就是这么漏的)。
+    ///
+    /// ★★★ 这两处都不是随手写的, 是实测出来的:
+    ///   ① 触发源是 **Border, 不是 Button** —— 这个弹层是 StaysOpen=False, WPF 会替它
+    ///      CaptureMouse(PopupRoot); 而 ButtonBase 在按下时 CaptureMouse() 抢走捕获,
+    ///      结果是点击永远"完不成"(Click 不触发), 且捕获一直挂在按钮上 ——
+    ///      **整个应用的点击从此全被它吃掉**(用户报的"点完之后光标变了、哪里都点不动")。
+    ///   ② 事件是 **PreviewMouseLeftButtonDown, 不是 MouseLeftButtonUp** ——
+    ///      同一个捕获机制下, 鼠标**抬起根本没被送进弹层的可视树**
+    ///      (实测: Border 的 PreviewDown=1 / PreviewUp=0), 等 Up 等于永远等不到。
+    /// </summary>
+    private void OnDanmakuPillClick(object sender, MouseButtonEventArgs e)
+    {
+        var next = !Svc.Settings.DanmakuPillBackground;
+        Svc.Settings.UpdateDanmakuSettings(
+            Svc.Settings.DanmakuEnabled, Svc.Settings.DanmakuAreaPercent, Svc.Settings.DanmakuSmartFilter,
+            pillBackground: next);
+        // 广播没有触发(值没变)时也要把按钮文字刷一次, 否则点了没反应。
+        UpdateDanmakuLookTexts();
     }
 
     // ------------------------------------------------------------ 视频区边缘缩放
@@ -4860,6 +4894,16 @@ public partial class PlayerWindow : FluentWindow
     private double _danmakuFixedSeconds = Helpers.DanmakuMotion.FixedSeconds(2);    // 固定停留时长
 
     /// <summary>
+    /// 是否给弹幕加**半透明圆角胶囊底衬**(2026-11-05 新增)。
+    ///
+    /// ★ 默认开 —— 纯白字压在明亮画面上会看不清, 这正是底衬要解决的问题。
+    ///   关掉就回到 2026-10-07 之后的纯文字观感(那时用户明确要求去掉长方形底衬)。
+    /// ★ 它是**用户偏好** ⇒ 必须登记在 PersistentFields 里(换片保持),
+    ///   否则启动自检会点名, 且换片后设置会被重置。
+    /// </summary>
+    private bool _danmakuPill = true;
+
+    /// <summary>
     /// 同步弹幕外观滑杆时的回灌保护。
     /// 见 <see cref="UpdateDanmakuLookTexts"/>: 赋 Value 会触发 ValueChanged。
     ///
@@ -4876,9 +4920,15 @@ public partial class PlayerWindow : FluentWindow
 
     private static double DefaultFontSize() => DanmakuBaseFontSize;
 
-    /// <summary>默认泳道高(字号 × 系数)。字段初始化器要用到, 所以给个静态入口。</summary>
+    /// <summary>
+    /// 默认泳道高(字号 × 系数)。字段初始化器要用到, 所以给个静态入口。
+    ///
+    /// ★ 按"**开胶囊**"算(2026-11-05): 胶囊是默认状态, 而这个值只是给
+    ///   "设置还没读进来之前"的极短窗口用的 —— 真正生效的泳道高由 ApplyDanmakuLook
+    ///   无条件同步(它必须无条件, 否则设置等于默认值时会早退, 泳道高就停在旧值上)。
+    /// </summary>
     private static double DefaultLaneHeight()
-        => DanmakuBaseFontSize * DanmakuLaneRatio;
+        => Helpers.DanmakuMotion.LaneHeight(DanmakuBaseFontSize, pill: true);
 
 
     // ★★★ 滚动/固定弹幕的时长不再是常量(2026-10-12 加了「弹幕速度」设置),
@@ -4892,16 +4942,17 @@ public partial class PlayerWindow : FluentWindow
     /// <remarks>
     /// 原来这个值直接写在 AddDanmaku 里, 而泳道高 _laneHeight 又另写了一个 28 ——
     /// 两个数没有任何关联, 调字号必得漏掉泳道, 于是弹幕上下压在一起。现在两者都由
-    /// <see cref="DanmakuLaneRatio"/> 推出来, 改字号只需要改这一处。
+    /// <see cref="Helpers.DanmakuMotion.LaneHeight"/> 推出来, 改字号只需要改这一处。
     /// ★ 2026-10-12 起它不再是"写死的值", 而是 100% 档位的基准, 实际字号
     ///   = 本值 × (用户的字号百分比 / 100), 见 <see cref="_danmakuFontSize"/>。
     /// ★ 2026-10-13 删掉了这里的别名常量 `DanmakuFontSize`(它只是 = DanmakuBaseFontSize,
     ///   全项目无引用): 两个名字指同一个值, 改字号时"该改哪一个"会让人停一下。
     ///   真正的定义在文件上方(见 DanmakuBaseFontSize)。
     /// </remarks>
-
-    /// <summary>泳道高 = 字号 × 该系数(留出上下各约四分之一行距, 密集时才不会糊成一片)</summary>
-    private const double DanmakuLaneRatio = 1.5;
+    //
+    // ★ 泳道高系数本身搬到了 Helpers/DanmakuMotion.cs(LaneRatio / PillLaneRatio):
+    //   2026-11-05 加"胶囊底衬"后, 泳道高要看**有没有底衬**取两个不同的系数,
+    //   而这个值必须能被探针单独验(见 .probes/bd-probe-danmaku), 放在窗口里就没法测。
 
     // ---- 在飞的弹幕(位移由**视频时钟**驱动, 不再用 WPF 动画) ----
     //
@@ -5376,8 +5427,9 @@ public partial class PlayerWindow : FluentWindow
     ///
     /// 性能上两条铁律(违反任何一条, 高弹幕量视频就会掉帧):
     ///   1. **不挂 Effect**: 每个带 DropShadowEffect 的元素都要独立做一次位图合成,
-    ///      几十条弹幕同屏就是几十次全像素处理。★ 曾经靠"半透明黑底衬"给描边感,
-    ///      现已按用户要求去掉(见下面那段的说明) —— 但**仍然不许挂 Effect**;
+    ///      几十条弹幕同屏就是几十次全像素处理。
+    ///      ★ 2026-11-05: 底衬(半透明黑胶囊)作为**可选项**加回来了, 但它只是一次
+    ///        矩形填充, 成本远低于阴影 —— **仍然不许挂 Effect**;
     ///   2. **动画只动 RenderTransform**: 动 Canvas.Left 每帧都要走一遍 Canvas 布局,
     ///      动 TranslateTransform 只发生在合成线程的变换矩阵上, 完全不碰布局。
     /// </summary>
@@ -5394,22 +5446,23 @@ public partial class PlayerWindow : FluentWindow
         var currentSeconds = DanmakuClock();
         if (currentSeconds <= 0) currentSeconds = time;   // 还没起播(极少见): 退回这条弹幕自带的时间
 
-        // ★★★ 只留文字, 不要长方形底衬(2026-10-07 用户要求"弹幕文字有长方形背景阴影, 移除它")。
-        //   原先这里给了 Background = 60% 黑 + CornerRadius=3, 屏幕上每条弹幕都压着一块
-        //   深色小方块 —— 用户看到的就是"文字后面有个长方形阴影"。
-        //   ⇒ Background 留 null(完全不画底), CornerRadius 随之无意义、一并去掉。
+        // ★★★ 底衬(2026-11-05): 曾经整块删掉(2026-10-07 用户要求"弹幕文字有长方形背景阴影, 移除它"),
+        //   现在作为**可选项**加回来, 默认开 —— 纯白字压在明亮画面上会看不清。
+        //   关闭时走的是**原路径**: Background=null、CornerRadius 不设、内边距也回到旧的
+        //   (6,1,6,1), 观感与 2026-10-07 之后**逐像素一致**, 不会"关掉还留个淡淡的框"。
         //
-        //   ★ Padding **保留**: 它不是装饰, 而是参与 width 计算(见下面的 Measure),
+        //   ★ Padding **保留**(两种模式都保留): 它不是装饰, 而是参与 width 计算(见下面的 Measure),
         //     泳道分配与"追尾校验"都拿这个宽度当"这条弹幕要占多宽"。
         //     去掉它会让相邻弹幕的横向间距归零, 密集时文字首尾相接糊成一片。
-        //   ★ 不要为了"看不清"改回加底衬或挂 DropShadowEffect: 前者就是用户要去掉的东西,
-        //     后者违反上面第 1 条铁律(几十条同屏 = 几十次全像素合成)。
+        //   ★ 绝不给它挂 DropShadowEffect: 违反上面第 1 条铁律(几十条同屏 = 几十次全像素合成)。
         var border = new Border
         {
-            Padding = new Thickness(6, 1, 6, 1),
+            Padding = _danmakuPill ? DanmakuPillPadding : DanmakuPlainPadding,
             // ★ 基线不透明度: 压在亮画面上的白字太实反而晃眼, 这里给用户一个可调的档。
             //   滚动弹幕此后不会再被改 Opacity, 所以这里设一次就够;
             //   固定弹幕的淡出是"在这个基线上再乘一个系数"(见 OnDanmakuRendering)。
+            //   ★ 底衬画在**同一个 Border** 上 ⇒ 它的透明度跟着这个 Opacity 一起走,
+            //     固定弹幕淡出时是"文字与胶囊一起淡", 不会出现"字淡了黑块还杵在那"。
             Opacity = _danmakuOpacity,
             // RenderTransform 在这里预置好, 滚动弹幕直接拿它做位移动画
             RenderTransform = new TranslateTransform(0, 0),
@@ -5421,9 +5474,25 @@ public partial class PlayerWindow : FluentWindow
             }
         };
 
+        if (_danmakuPill)
+        {
+            // 胶囊底衬: 半透明黑 + 全圆角。
+            // ★ 笔刷**只建一次**(静态冻结): 几千条弹幕各 new 一个笔刷就是几千个对象,
+            //   还得各自走一遍 Freeze —— 与 DanmakuBrush 那套缓存是同一个道理。
+            border.Background = DanmakuPillBrush;
+        }
+
         DanmakuCanvas.Children.Add(border);
         border.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         var width = Math.Max(1, border.DesiredSize.Width);
+
+        if (_danmakuPill)
+        {
+            // ★ 真正的"胶囊": 圆角半径 = 高度的一半 ⇒ 左右两端正好是半圆。
+            //   必须**测量之后**才能算 —— 高度取决于字号与内边距, 构造时还不知道。
+            //   (CornerRadius 超过高度一半时 WPF 会自动按比例缩, 但先量后算更直白。)
+            border.CornerRadius = new CornerRadius(border.DesiredSize.Height / 2.0);
+        }
 
         if (mode == 5 || mode == 4)
         {
@@ -5434,6 +5503,28 @@ public partial class PlayerWindow : FluentWindow
             RenderRolling(border, width, currentSeconds);
         }
     }
+
+    // ---- 胶囊底衬的常量(2026-11-05) ----
+
+    /// <summary>
+    /// 纯文字模式的内边距(与 2026-10-07 之后的行为**完全一致**, 一个数都没动)。
+    /// </summary>
+    private static readonly Thickness DanmakuPlainPadding = new(6, 1, 6, 1);
+
+    /// <summary>
+    /// 胶囊模式的内边距: 左右比纯文字宽(底衬要包住文字, 留出呼吸位), 上下留出高度。
+    ///
+    /// ★ 上下内边距是**必须的**, 不是装饰: 胶囊要比纯文字高, 而泳道高要跟着长
+    ///   (见 DanmakuMotion.LaneHeight), 否则相邻胶囊会上下压在一起。
+    /// </summary>
+    private static readonly Thickness DanmakuPillPadding = new(12, 3, 12, 3);
+
+    /// <summary>
+    /// 胶囊底衬的笔刷: 55% 黑(与 2026-10-07 之前那条"长方形底衬"的 60% 接近, 但更轻)。
+    ///
+    /// ★ 冻结 + 复用: 同 <see cref="DanmakuWhiteBrush"/> 的理由(几千条弹幕不该各 new 一个笔刷)。
+    /// </summary>
+    private static readonly Brush DanmakuPillBrush = MakeFrozen(Color.FromArgb(0x8C, 0, 0, 0));
 
     // ------------------------------------------------------------ 彩色弹幕
 
@@ -5702,15 +5793,17 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 把「不透明度 / 字号 / 速度」三项设置落到运行时, 并只做**必要**的重算。
+    /// 把「不透明度 / 字号 / 速度 / 胶囊底衬」四项设置落到运行时, 并只做**必要**的重算。
     ///
     /// ★ 为什么不一律"改了就清屏重建":
     ///   · 不透明度: 就地改每个在飞弹幕的 Opacity 即可。不清屏 ——
     ///     用户是**拖着滑杆**在调的, 每动一格就闪一次是不能接受的。
-    ///   · 字号/速度: 会让泳道表与追尾校验失效, 必须重建并清掉旧弹幕,
+    ///   · 字号/速度/胶囊底衬: 会让泳道表与追尾校验失效, 必须重建并清掉旧弹幕,
     ///     否则要么弹幕叠在一起, 要么新弹幕被旧判定整批丢弃(看起来就是"弹幕没了")。
+    ///     ★ 胶囊底衬也在这一档: 它的**内边距/宽度/圆角**都变了, 在飞的那些按旧尺寸
+    ///       继续飞会与新弹幕重叠(底衬还比原来宽, 追尾校验的宽度也不准了)。
     ///
-    /// 三项都没变时直接返回 —— 设置页里改"关键词屏蔽"也会走到这里, 不该白清一次屏。
+    /// 四项都没变时直接返回 —— 设置页里改"关键词屏蔽"也会走到这里, 不该白清一次屏。
     /// </summary>
     private void ApplyDanmakuLook()
     {
@@ -5719,26 +5812,32 @@ public partial class PlayerWindow : FluentWindow
         var nextFont = Helpers.DanmakuMotion.FontSizeFromPercent(s.DanmakuFontScalePercent, DanmakuBaseFontSize);
         var nextLevel = Math.Clamp(s.DanmakuSpeedLevel,
             Helpers.DanmakuMotion.MinSpeedLevel, Helpers.DanmakuMotion.MaxSpeedLevel);
+        var nextPill = s.DanmakuPillBackground;
 
         var opacityChanged = Math.Abs(nextOpacity - _danmakuOpacity) > 0.001;
         var fontChanged = Math.Abs(nextFont - _danmakuFontSize) > 0.01;
         var speedChanged = nextLevel != _danmakuSpeedLevel;
+        var pillChanged = nextPill != _danmakuPill;
 
-        if (!opacityChanged && !fontChanged && !speedChanged) return;
+        // ★★★ 泳道高是"字号 × 胶囊开关"的**派生量**, 所以这里**无条件**同步 ——
+        //   放在早退之前是关键: 否则"设置恰好等于默认值"时会早退, 泳道高就停在字段
+        //   初始值上(那个初始值按"无胶囊"算的), 于是默认配置(胶囊开)下相邻胶囊
+        //   会上下压在一起 —— 正是"字号改了泳道没跟着改"那类历史 bug 的同一形状。
+        _laneHeight = Helpers.DanmakuMotion.LaneHeight(nextFont, nextPill);
+
+        if (!opacityChanged && !fontChanged && !speedChanged && !pillChanged) return;
 
         _danmakuOpacity = nextOpacity;
         _danmakuFontSize = nextFont;
         _danmakuSpeedLevel = nextLevel;
         _danmakuScrollSeconds = Helpers.DanmakuMotion.ScrollSeconds(nextLevel);
         _danmakuFixedSeconds = Helpers.DanmakuMotion.FixedSeconds(nextLevel);
-
-        // 字号变了必须同步泳道高 —— 这是历史 bug 的根(DanmakuLaneRatio 那条注释)
-        _laneHeight = _danmakuFontSize * DanmakuLaneRatio;
+        _danmakuPill = nextPill;
 
         // 不透明度不需要清屏: 基线字段改完, 在飞的弹幕在下一帧自然按新基线渲染
         // (固定弹幕的 Opacity 每帧被"基线 × 淡出系数"覆写, 所以只改基线就够)。
 
-        if (fontChanged || speedChanged)
+        if (fontChanged || speedChanged || pillChanged)
         {
             // 布局变了, 在飞的那些按旧尺寸/旧速度继续飞会突然错位, 一并清掉
             ResetLanes();

@@ -129,6 +129,31 @@
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
 
+        <!-- 弹幕弹层里的「胶囊底衬」开关(2026-11-05)。
+             ★★★ 为什么是一个 **Border 而不是 Button** —— 这不是审美选择, 是修 bug:
+               弹层是 `StaysOpen="False"`, WPF 会替它 CaptureMouse(PopupRoot)。
+               而 ButtonBase 在**按下**时会 CaptureMouse() 抢走捕获, 于是两者互相卡住:
+                 · 这一次点击永远"完不成"(Click 不触发) ⇒ 开关不翻转;
+                 · 捕获又一直挂在那个 Button 上 ⇒ **整个应用的鼠标点击全被它吃掉,
+                   光标锁成按钮的手型** —— 用户看到的就是"点完之后整个界面都没反应"。
+               实测证据: 点完之后 `Mouse.Captured == Button` 且再没释放。
+               Border 不捕获鼠标 ⇒ 弹层自己的捕获交接不再被打断, 点击正常、别处也正常。
+             ★ 观感照抄 PlayerTextBtn(半透明黑底 + 细白边 + 圆角), 因为它俩挨着放,
+               长得不一样会像是两种东西。 -->
+        <Style x:Key="DanmakuPillToggleStyle" TargetType="Border">
+            <Setter Property="Background" Value="#40000000" />
+            <Setter Property="BorderBrush" Value="#22FFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="5" />
+            <Setter Property="Padding" Value="10,4" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#5C000000" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- 播放器圆形图标按钮 -->
         <Style x:Key="PlayerRoundBtn" TargetType="Button">
             <Setter Property="Focusable" Value="False" />
@@ -1373,6 +1398,50 @@
                                                         <TextBlock Grid.Column="2" x:Name="DanmakuSpeedValue" Text="适中"
                                                                    Style="{StaticResource DanmakuRowValueStyle}" />
                                                     </Grid>
+
+                                                    <!-- ============ 胶囊底衬开关(2026-11-05 新增) ============
+                                                         ★ 不是一个滑杆而是**开关**: 它只有开/关两态,
+                                                           滑杆停在哪都说不清 —— 直接写"开/关"最省事。
+                                                         ★ 单独隔一条线: 上面三条是"连续调外观",
+                                                           这一条是"要不要底衬"(换了一种呈现方式),
+                                                           混在一起会让人以为它也是滑杆。
+                                                         ★ 文案与设置页一致(「胶囊底衬」), 两处说法统一。
+                                                         ★ 底色/圆角照 PlayerTextBtn(半透明黑 + 细白边),
+                                                           与这个弹层"浮在画面上、与主题无关"的规矩一致。
+                                                         ★★ 它不能是 Button(见下面 DanmakuPillToggleStyle 的说明)。 -->
+                                                    <Border Height="1" Margin="0,14,0,10"
+                                                            Background="#26FFFFFF" />
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="70" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="50" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="胶囊底衬" Style="{StaticResource DanmakuRowLabelStyle}" />
+                                                        <!-- ★ 用 Border 而不是 Button, 原因见上面 DanmakuPillToggleStyle 的说明:
+                                                             Button 会在按下时抢鼠标捕获, 把这个 StaysOpen=False 的弹层卡死,
+                                                             点完之后整个应用都点不动。Border 不捕获鼠标。 -->
+                                                        <!-- ★ 用 PreviewMouseLeftButtonDown 而不是 MouseLeftButtonUp:
+                                                             这个弹层是 StaysOpen=False, WPF 替它握着鼠标捕获,
+                                                             **鼠标抬起(Up)根本不会送进弹层的可视树**
+                                                             (实测: PreviewDown=1 / PreviewUp=0)。
+                                                             所以点击只能在**按下**这一下完成 —— 抬起事件收不到,
+                                                             等它等于永远等不到。 -->
+                                                        <Border Grid.Column="1" x:Name="DanmakuPillButton"
+                                                                Style="{StaticResource DanmakuPillToggleStyle}"
+                                                                HorizontalAlignment="Left" Margin="8,0,8,0"
+                                                                PreviewMouseLeftButtonDown="OnDanmakuPillClick"
+                                                                ToolTip="半透明圆角底衬, 压在亮画面上也能看清; 关掉恢复纯文字">
+                                                            <!-- ★ 必须显式写 Foreground: 全局隐式 TextBlock 样式带 Foreground setter,
+                                                                 优先级高于从父级继承下来的值 —— 省略就等于什么都没写
+                                                                 (本项目的老坑, 浅色主题下这里会变成深色字压在亮画面上)。 -->
+                                                            <TextBlock x:Name="DanmakuPillButtonText" Text="开"
+                                                                       Foreground="#F2FFFFFF" FontSize="12" />
+                                                        </Border>
+                                                        <!-- ★ 第三格刻意留空: 上面三行是「标签 | 滑杆 | 数值」,
+                                                             这一行是「标签 | 开关」—— 按钮上已经写着"开/关",
+                                                             再在右边重复一遍就是两份同义信息, 反而看不清状态。 -->
+                                                    </Grid>
                                                 </StackPanel>
                                             </Border>
                                         </Popup>
@@ -1670,9 +1739,10 @@
                                              分P 与合集会同时存在(一个分P 稿件被收进合集), 所以各占一列,
                                              不挤成同一个入口 —— 用户分不清"点这条是换稿件还是换段落"。 -->
                                         <ColumnDefinition Width="Auto" />
-                                        <!-- 第 5 列 `*`: "返回评论列表"仍占这一格靠左。它默认 Collapsed,
-                                             与两个选集入口分开占列后, 三者同时出现时不会再叠在一起。 -->
-                                        <ColumnDefinition Width="*" />
+                                        <!-- ★ 2026-11-05: 原来这里还有第 5 列 `*` 给「返回评论列表」,
+                                             那个按钮已搬到**右下角悬浮工具列**(见文件末尾 CommentFabBar),
+                                             所以这一列连同它的占位一起删掉 —— tab 行现在只有四个
+                                             动作/tab 入口, 全部靠左排, 不再有一个"撑满剩余宽度"的空列。 -->
                                     </Grid.ColumnDefinitions>
                                     <RadioButton x:Name="TabIntro" Grid.Column="0" GroupName="ContentTab"
                                                  Style="{StaticResource ContentTabStyle}" Content="简介"
@@ -1715,15 +1785,13 @@
                                         <TextBlock x:Name="BtnPagesText" Text="分P" FontSize="15"
                                                    Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                                     </Button>
-                                    <!-- 返回评论列表: 进了"评论详情"才出现, 就摆在"评论详情"右边(用户指定)。
-                                         用按钮而不是文字链接 —— 这里是个"动作", 有底的按钮更好认、也更好点。 -->
-                                    <Button x:Name="BtnBackToComments" Grid.Column="4" Visibility="Collapsed"
-                                            Style="{StaticResource SubtleButtonStyle}"
-                                            Content="返回评论列表" FontSize="12"
-                                            Margin="10,0,0,0" Padding="10,4"
-                                            HorizontalAlignment="Left" VerticalAlignment="Center"
-                                            Click="OnCommentDetailBack"
-                                            ToolTip="回到评论列表" />
+                                    <!-- ★ 2026-11-05 「返回评论列表」从这里搬走了:
+                                         原来它贴在「评论详情」tab 右边, 结果**压在「热门 / 时间」排序按钮上**
+                                         (用户截图: 按钮和它的 tooltip 把排序入口整个盖住, 排序点不到)。
+                                         现在搬到右下角悬浮工具列(见文件末尾 CommentFabBar),
+                                         做成 38×38 的返回箭头图标按钮 —— 既不遮排序, 也和首页/分区页
+                                         的右下角工具列是同一套观感。
+                                         ★ 事件处理器 OnCommentDetailBack 没变, 只是位置换了。 -->
                                 </Grid>
                             </Border>
 
@@ -2052,8 +2120,9 @@
                                          头像只在详情页展示。数据直接用评论自身的 Replies
                                          (含"展开更多", 与列表共用同一条加载逻辑), 不放大。 -->
                                     <Grid x:Name="CommentDetailPanel" Visibility="Collapsed">
-                                        <!-- 标题与"返回评论列表"都挪到上方 tab 行了:
-                                             进入详情后那个 tab 显示"评论详情", 返回链接就在它右边(用户指定)。 -->
+                                        <!-- 标题在 tab 行(进入详情后那个 tab 显示"评论详情"),
+                                             「返回评论列表」在**右下角悬浮工具列**(2026-11-05 从 tab 行搬走:
+                                             它压在「热门 / 时间」排序按钮上, 排序点不到)。 -->
                                         <!-- 直接放进外层右面板的滚动流里:
                                              内层再套 ScrollViewer 在 StackPanel 里拿不到高度
                                              约束(内容多高就多高), 表现为滚轮滚不动。 -->
@@ -2401,28 +2470,75 @@
                         </StackPanel>
                     </Border>
                 </Grid>
-                <!-- ============ 评论输入(FAB + 展开面板, 2026-11-01) ============
-                     ★ 结构: 右下角一颗悬浮圆角按钮(强调色底 + 笔形图标, 颜色跟主题走),
-                       点击后从底部优雅展开输入面板(输入框 + 发送按钮), 再点收起。
+                <!-- ============ 右下角悬浮工具列(写评论 FAB + 返回评论列表, 2026-11-05) ============
+                     ★ 结构: 信息栏右下角一组悬浮按钮, 两个**同尺寸同圆角**(46×46 / 圆角 14):
+                        · 上: 「返回评论列表」(中性灰, 只在评论详情页出现)
+                        · 下: 「写评论」(强调色粉, 点开底部输入面板)
+                        只靠底色区分主次 —— 形状完全一样, 并排看是一套。
+                     ★ 为什么用 Grid 而不是竖排 StackPanel:
+                        StackPanel 里两个按钮一前一后, 返回按钮一显示, 下面的 FAB 就被**顶上去 46px**
+                        (用户正要点"写评论"时按钮跑了)。HomePage 的浮动工具列也踩过同样的坑,
+                        那里写明「回到顶部」**始终占位、只切透明度与命中测试**, 免得下面几个按钮上下跳。
+                        这里用 Grid + 两个按钮各自 Bottom 对齐: FAB 的位置**永远不变**,
+                        返回按钮靠 Margin(0,0,0,54) 固定悬在它上方(46 + 8 间距), 两者不会互相挤。
+                        ★ 固定 54 这个数字 = 按钮高 46 + 间距 8。改按钮尺寸时这两个数要一起改。
+                     ★ 为什么「返回评论列表」要从 tab 行搬过来(用户截图报的问题):
+                        它原来贴在「评论详情」tab 右边, 宽度一大就**压在「热门 / 时间」排序按钮上**,
+                        排序入口整个点不到。搬到右下角后, tab 行只剩四个入口(简介/评论/合集/分P),
+                        排序按钮右边干干净净。
                      ★ 挂在 InfoPanel 这一层(与 SeasonPanel/LocalToastBorder 同级)而不是
                        CommentsPanel 里: 浮层要悬浮在列表**之上**, 且滚动列表时它不跟着走;
                        不用 Popup(独立 HWND 会盖过 airspace, 与合集面板同款理由用 Grid)。
-                     ★ 显隐规则(代码 UpdateCommentComposerVisibility):
-                       · 只在「评论」tab 且非直播/本地文件时出现;
-                       · 面板展开时 FAB 变成"收起"图标, 面板收起时是"笔"图标;
-                       · 未登录/直播/本地文件点 FAB → Toast 说明原因, 不展开。 -->
-                <Button x:Name="CommentFab" Grid.Row="0" Visibility="Collapsed"
-                        Panel.ZIndex="2"
-                        HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                        Margin="0,0,16,16" Width="46" Height="46"
-                        Style="{StaticResource CommentFabStyle}"
-                        Click="OnCommentFabClick"
-                        ToolTip="写评论">
-                    <TextBlock x:Name="CommentFabIcon" Text="&#xE70F;"
-                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                               FontSize="18"
-                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
-                </Button>
+                     ★ 显隐规则:
+                        · 两个按钮**各自**控制显隐(容器不 Collapsed —— 父级不可见时子级不渲染);
+                        · 写评论 FAB: 只在「评论」tab 且非直播/本地文件时出现(代码 UpdateCommentFabVisibility);
+                        · 返回按钮: 只在进了「评论详情」时出现(代码 ShowCommentDetail / CloseCommentDetail);
+                        · 面板展开时 FAB 变成"收起"图标, 面板收起时是"笔"图标;
+                        · 未登录/直播/本地文件点 FAB → Toast 说明原因, 不展开。 -->
+                <Grid x:Name="CommentFabBar" Grid.Row="0"
+                      Panel.ZIndex="2"
+                      HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                      Margin="0,0,16,16">
+                    <!-- 返回评论列表(2026-11-05 从 tab 行搬来):
+                         ★ 尺寸/圆角/阴影与下面的 FAB **完全一致**(46×46 / 圆角 14),
+                           两个按钮并排是一套 —— 只靠底色分主次:
+                           强调色 = 主动作(写评论), 中性灰 = 次动作(返回)。
+                           之前它用的是 FloatingIconButtonStyle(38×38 / 圆角 8 / 浅灰),
+                           与 46px 的粉 FAB 放在一起大小、圆角、颜色三处都不一样, 很割裂。
+                         ★ 底色用 OverlaySurfaceBrush 这一组(恒为不透明):
+                           按钮悬在评论列表**文字**上方, 若用亚克力下会被改成半透明的
+                           FloatingFillBrush, 底下的字会透上来糊成一片。
+                         ★ 图标 E72B = Back(向左箭头), 与 MainWindow / 收藏页的"返回"图标一致。
+                         ★ Bottom 对齐 + Margin 下 54 = 悬在 FAB(46px)正上方 8px 处:
+                           不与 FAB 抢位置, FAB 也因此纹丝不动。
+                         ★ 事件仍是 OnCommentDetailBack —— 与搬走之前完全一致, 只是位置换了。 -->
+                    <Button x:Name="BtnBackToComments" Visibility="Collapsed"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                            Margin="0,0,0,54"
+                            Width="46" Height="46"
+                            Style="{StaticResource CommentFabNeutralStyle}"
+                            Click="OnCommentDetailBack"
+                            ToolTip="返回评论列表">
+                        <TextBlock Text="&#xE72B;"
+                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="18"
+                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </Button>
+
+                    <!-- 写评论 FAB: 强调色圆角按钮, 点了从底部展开输入面板。
+                         ★ Bottom 对齐 = 永远贴着信息栏右下角(与搬走之前完全一致的位置)。 -->
+                    <Button x:Name="CommentFab" Visibility="Collapsed"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                            Width="46" Height="46"
+                            Style="{StaticResource CommentFabStyle}"
+                            Click="OnCommentFabClick"
+                            ToolTip="写评论">
+                        <TextBlock x:Name="CommentFabIcon" Text="&#xE70F;"
+                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="18"
+                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </Button>
+                </Grid>
 
                 <!-- 展开的输入面板: 底部对齐, 从下往上滑出(展开动画在代码里)。
                      ★ 内部就是原来那套输入控件(CommentDraft/PostCommentButton/回复提示条),
