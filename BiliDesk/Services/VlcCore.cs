@@ -73,14 +73,14 @@ public static class VlcCore
             //   一样该吃到"按带宽挑预读"的收益; 手动档等价于直接用设置值。
             // ★ 实测它对**起播速度**几乎没影响(缓存按网速灌), 影响的是播放中的抗抖动余量。
             //
-            // ★★★ 别加 `--demux=avformat`(2026-10-17 试过, 有致命副作用, 已撤回):
+            // ★★★ 别加**全局** `--demux=avformat`(2026-10-17 试过, 有致命副作用, 已撤回):
             //   它确实能修好 seek —— 实测 25%/70% 落点偏差都是 0ms(基线是 -32万ms)。
-            //   **但它和 DASH 的 `input-slave` 音轨组合会让播放器在 seek 后直接进 Ended**:
-            //   实测 state 从 Playing 变 Ended、位置冻在目标点不动、解码停止。
-            //   而本项目的 DASH 一律是 input-slave 挂音轨 ⇒ 一换就"画面卡死"。
-            //   (裸 libvlc 不带 slave 时是好的, 所以只测裸 libvlc 会得出错误结论 ——
-            //    必须用 bd-probe-seekstick 走**产品自己的路径**验。)
-            //   ⇒ seek 的问题改为在播放器层处理(见 PlayerWindow.RecoverFromFailedSeek)。
+            //   **但它会把所有输入(包括 DASH 的 input-slave 音轨)都强制成 avformat**,
+            //   且在旧版 3.0.20 + 同进程连开多个 LibVLC 时会让 seek 后直接进 Ended。
+            //   ★ 2026-11-05: 现在改在 **Media 级**只给需要的那条流加 `:demux=avformat`
+            //     (见 PlayerWindow.BuildMedia), 3.0.24 实测双流 + 远跳/HEVC 均正常;
+            //     更重要的是它修掉了 mp4 demux 读不出 fMP4 最后分片、导致片尾静音的 bug。
+            //   ⇒ 保持这里不传全局选项, 各片源在 BuildMedia 里自行决定。
             var caching = BufferPolicy.Resolve(BufferMediaKind.VodSingle, null, shortVideo: false,
                 SettingsStore.Instance.NetworkCachingMs, SettingsStore.Instance.AutoBufferPolicy);
             _instance = new LibVLC(
