@@ -84,6 +84,42 @@ public partial class PlayerWindow : FluentWindow
     private bool _ended;
 
     /// <summary>
+    /// "播完后的跳转"已经发起过 —— 用来**挡住同一次点击的第二条路**。
+    ///
+    /// ★★★ 2026-11-05 修「播完显示重播页 → 点进度条跳转 → 画面全黑、重播按钮消失、
+    ///   但没有画面」的根因。
+    ///
+    ///   机理(探针 bd-probe-eofseek 实锤):
+    ///     ① EOF 时 <see cref="OnEndReached"/> **刻意不调 `_mp.Stop()`**, 那条 input 就停在
+    ///        ENDED 状态(实测 `state=Ended` / `vout=0`), vout 已被拆掉 —— 这正是"重播页"
+    ///        需要一层不透明黑遮罩盖住白底的原因(见 RestoreVideoAreaBackground)。
+    ///     ② 对一条 **ENDED 的 input** 发 seek, libvlc 只是把 `Time` 改成目标值当回执,
+    ///        **不会重建任何东西**: 探针实测 `state` 一直是 Ended、`vout=0`、位置纹丝不动。
+    ///     ③ 而 `MarkSeekIssued` 里那句 `EndOverlay.Visibility = Collapsed` 已经把"重播页"
+    ///        收起来了 —— 于是"重播按钮消失"、遮罩没了、vout 又不在 ⇒ **屏幕上只剩一片黑**。
+    ///        (底层那层 EOF 黑手势层还压着, 所以是纯黑而不是白。)
+    ///
+    ///   ⇒ 结论: **在已结束的 input 上, seek 是无效操作**。要让画面回来只能起一条
+    ///     **全新的 input**(与"点重播"走同一条路)。这条判断由 <see cref="_ended"/> 负责。
+    ///
+    /// ★ 本字段负责的是**另一件事**: 同一次点进度条会被 WPF 走**两条路**
+    ///   (ValueChanged + Thumb.DragCompleted, 见 OnProgressDragEnd 的说明)。
+    ///   第一条走重建路径时已经把 `_ended` 清掉了, 第二条若按普通 seek 处理,
+    ///   就会对**刚起播的新 input** 再发一次 seek —— 正好把它的解复用器打断,
+    ///   于是"画面卡住/又要缓冲一次"; 更糟的是它可能落在新 input 还没稳定的窗口里,
+    ///   把 :start-time 定位好的落点又冲掉(就是"回到开头 8 秒"那类问题)。
+    ///
+    /// ★ 它在**三个点**被清掉, 缺一不可:
+    ///   ① <see cref="MarkSeekIssued"/> —— 新 input 已起播并打上跳转看门狗, 从此
+    ///      重复触发由那个看门狗自带的"同目标忽略"规则接手(见 SeekTo 开头的判定);
+    ///   ② <see cref="RestoreEndedOverlay"/> —— 重建失败退回"已播完"态, 此时用户
+    ///      还要能再点进度条, 不能被这个闸一直拦着;
+    ///   ③ <see cref="ResetForNewMedia"/> / <see cref="EnterReplayState"/> —— 换片与
+    ///      重播之后它描述的是上一条视频的旧事, 必须清。
+    /// </summary>
+    private bool _seekAfterEndedGuard;
+
+    /// <summary>
     /// 跳转后的宽限期时长: 这段时间内不把上报的位置回写到进度条。
     ///
     /// 原设计前提是"跳转刚发出时 Position 还是旧值, 回写会把用户刚点的位置顶掉"。
@@ -273,23 +309,24 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private const string BufferingText = "正在缓冲…";
 
-    // --- 提前结束的自救(DASH 音轨先 EOF) ---
-    // DASH 的音轨是 input-slave 挂载的独立流, 它先于视频到 EOF 时, LibVLC 3 会结束
-    // 整个 input —— 表现为"最后几秒没声音、画面冻住、进度条提前满格"。这不是真的播完:
-    // 记下最后位置, 重建 Media 从断点续播。次数 + 推进距离双保险, 防"音频确实比视频短"
-    // 的片源陷入无限续播循环。
+    // --- 提前结束的自救(片源在离结尾不远处 EOF) ---
+    // 历史上这条逻辑是为"DASH 音轨(input-slave)先于视频 EOF"写的。2026-11-05 查明:
+    // 真凶其实是 libvlc 的 mp4 demux **读不出 B 站 fMP4 的最后一个分片**(见 BuildMedia
+    // 里 `:demux=avformat` 的说明) —— 画面和声音会一起在离结尾 1.5~2.4s 处结束。
+    // 换 avformat 后这个 EOF 已经消失, 但这里仍保留"从断点续播"的兜底:
+    // 远端流因网络/服务端截断而提前 EOF 时, 它还能把剩下的几秒接上。
+    // 次数 + 推进距离双保险, 防"片源确实更短"时陷入无限续播循环。
     //
     // ★ 尾部截断(2026-10-01, 用户报"结尾不断缓冲 + 进度条回退重播几秒前内容"的修复):
     //   离结尾太近时**绝不自救**。原因链: ① 续播要重建 input, 必然重新预缓冲(黑屏);
     //   ② 续播的 seek 在远端 DASH 双流上落点固定偏早 4.5~5s(见 notes-player-internals.md),
-    //     所以每次自救都是"回退 5 秒重播已看过的内容"; ③ 播完回退的那几秒音轨又 EOF,
+    //     所以每次自救都是"回退 5 秒重播已看过的内容"; ③ 播完回退的那几秒又 EOF,
     //     再触发一次自救 —— 推进距离检查被"回退"本身满足, 于是缓冲+回退反复最多 3 次。
     //   ★★ 阈值取 10s(2026-10-01 第二次校准): 第一版 6.5s 实测不够 —— 用户实测一条
-    //     08:39 的视频, 音轨 EOF 点在剩 7s 处(512s < 519-6.5=512.5s, 差 0.5s 自救照常
-    //     触发), 表现 = 黑屏缓冲几秒 → 重建后续播点音轨已物理缺失 → 立刻再 EOF → 直接
-    //     重播遮罩, 纯白等一趟。B 站 DASH 的音轨缺口(音频分片对齐导致)常见 0~10s,
-    //     阈值必须盖过缺口的**上限**而不是"落点偏早量" —— 反正缺口之内自救也救不回
-    //     任何东西(音轨在那里本来就没有数据), 直接按播完处理。
+    //     08:39 的视频, EOF 点在剩 7s 处, 表现 = 黑屏缓冲几秒 → 重建后续播点若音轨
+    //     已物理缺失 → 立刻再 EOF → 重播遮罩, 纯白等一趟。
+    //   ★ 2026-11-05 之后这 10s 不再是为"B 站音轨缺口"留的(缺口是 demux bug, 已修);
+    //     它现在的意义是"最后 10s 内任何提前 EOF 都不值得重建"(重建的黑屏比少几秒更糟)。
     private long _lastKnownMs;            // TimeChanged 报告的最后位置(EOF 后 _mp.Time 会归零, 不能用)
     private int _eofResumeCount;
     private long _lastEofResumeMs;
@@ -297,10 +334,11 @@ public partial class PlayerWindow : FluentWindow
     private const long EofResumeMinAdvanceMs = 2000;
     /// <summary>
     /// 尾部静默区宽度(毫秒)。距结尾不足这个距离时, 三件事都不做:
-    ///   ① EOF 不自救(重建 input 只会黑屏缓冲一趟, 音轨缺口内没有可救的数据);
-    ///   ② 卡顿检测不报"正在缓冲"(两路流长度差导致的 Time 停滞是收尾常态);
+    ///   ① EOF 不自救(重建 input 只会黑屏缓冲一趟);
+    ///   ② 卡顿检测不报"正在缓冲"(收尾阶段的短暂停滞是常态);
     ///   ③ 进度显示改用"卡住起点 + 墙钟×倍速"外推(让进度条平滑走完最后一程)。
-    /// 取值必须 ≥ B 站 DASH 音轨缺口的实际上限(实测 ~7s, 常见 0~10s)。
+    /// ★ 2026-11-05: 造成"最后几秒没声音"的 fMP4 最后分片 bug 已由 avformat 修掉,
+    ///   这个常量不再需要覆盖"音轨缺口上限"; 保留 10s 只是给残余的远端截断留缓冲。
     /// </summary>
     private const long TailQuietZoneMs = 10000;
 
@@ -361,8 +399,9 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 未经过滤的原始弹幕(按时间有序)。
-    /// 保留它是为了让"设置页改了屏蔽词/智能屏蔽"能在不重新请求接口的前提下立刻重算 _danmaku ——
-    /// 否则用户想试一个屏蔽词就得重新拉一遍弹幕, 体验很差(而且长视频要连拉几十个分段)。
+    /// 保留它是为了让"设置页改了智能屏蔽/类型过滤"能在不重新请求接口的前提下立刻重算
+    /// _danmaku —— 否则用户想试一种过滤就得重新拉一遍弹幕, 体验很差
+    /// (而且长视频要连拉几十个分段)。
     /// </summary>
     private readonly List<RawDanmaku> _danmakuRaw = new();
     private int _indexInLib;
@@ -1328,6 +1367,8 @@ public partial class PlayerWindow : FluentWindow
         // 新片子当然还没播完: 清掉结尾状态与"重播"遮罩, 否则切下一条视频时会挂着上一段的遮罩
         _ended = false;
         _eofBlackActive = false;
+        // "播完后的跳转"那个闸同样要清: 它描述的是**上一条**视频末尾那次操作。
+        _seekAfterEndedGuard = false;
         if (VideoAreaRoot != null) VideoAreaRoot.Background = VideoAreaBackBrush;
         _seekGraceUntil = 0;
         // 清掉跳转看门狗与"提前结束自救"的上一片痕迹
@@ -1467,6 +1508,8 @@ public partial class PlayerWindow : FluentWindow
         nameof(_totalMs), nameof(_lastKnownMs), nameof(_eofResumeCount), nameof(_lastEofResumeMs),
         nameof(_resumeAfterSwitchMs), nameof(_ended), nameof(_eofBlackActive), nameof(_anchorMs), nameof(_anchorWall),
         nameof(_displayedMs),
+        // "播完后的跳转"那两个闸(见 SeekTo 里 _ended 的分支): 描述的是本片末尾那次操作
+        nameof(_seekAfterEndedGuard),
         // 跳转看门狗
         nameof(_pendingSeekMs), nameof(_seekDeadline), nameof(_seekRetries),
         nameof(_seekObservedMs), nameof(_seekElsewhereSeenMs), nameof(_seekFromMs),
@@ -1969,7 +2012,7 @@ public partial class PlayerWindow : FluentWindow
     /// DASH 流音视频分离, 用 input-slave 挂音轨; 单文件源(durl 合流 / 本地文件)传 null。
     ///
     /// ★★ 这里顺带决定两件事(2026-10-17 播放器手术):
-    ///   ① demuxer —— 单文件源加 `:demux=avformat`, 带音轨的那条**绝不能**加(会 Ended 卡死);
+    ///   ① demuxer —— **走 BuildMedia 的源统一用 avformat**(见下方 2026-11-05 的尾部修复);
     ///   ② <see cref="_isReliableSeekSource"/> —— 有没有挂 input-slave 就是判据。
     /// 两条都只在这里设置一次, 别处不要再改(漏一处就会让看门狗按错的类型兜底)。
     ///
@@ -1992,37 +2035,42 @@ public partial class PlayerWindow : FluentWindow
             options.Add(":start-time=" +
                         (startMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture));
 
-        // ★★★ 2026-10-17 播放器手术第 3 步: 分流设置 demuxer。
+        // ★★★ 2026-10-17 播放器手术第 3 步: 统一 demuxer(2026-11-05 起所有源都用 avformat)。
         //
         //   【无音轨 ⇒ 单文件源】: 加 :demux=avformat。
         //     实测(探针 bd-probe-muxed2): 合流单流配 avformat, 来回 7 跳全部准确
         //     (偏差 0.9~2.2s)且画面持续推进; 不加则落点准但**跳完冻住**(推进 0ms)。
-        //     ★★ 千万别给"带 input-slave"的那条路也加 —— 实测那样 seek 落点准但
-        //        state 直接变 **Ended**(画面永久卡死), 见 bd-probe-muxed5 的候选组。
-        //        这也是当年 avformat 被否掉的真正原因: 问题是"组合", 不是 demuxer 本身。
         //
-        //   ★★ 2026-11-01 修「听视频模式快进直接提示已播完」: 「听视频」播的 DASH 音轨
-        //      也是**远端分片 fMP4**, 不是普通 MP4 —— avformat 对它的远跳会把落点甩到
-        //      流尾直接 EOF。所以它必须与 DASH 双流走同一条"不可靠"路(看门狗 + 重建),
-        //      既不加 avformat 也不标可靠。判据: 聆听态且 url 就是聆听音轨那条地址。
-        //      (durl 合流单流是普通 MP4, 不受影响; 本地文件同理。)
+        //   【DASH 双流 / 聆听音轨】: ★★★ 2026-11-05 起**也加** `:demux=avformat`。
+        //     这是"播到片尾最后几秒没声音"的真正修复:
+        //       · libvlc 自带的 mp4 demux 对 B 站这种 fMP4 有 bug —— **最后一整个分片
+        //         (sidx 的最后一段, 约 1.5~2.4s)根本读不出来**, 到分片边界就 EndReached。
+        //         实测 42s 的短片在 39.6s 结束、22 分钟的长片在 1315.5s 结束, 结尾
+        //         恰好是最后一段的长度; 而且 seek 进最后一段也一样结束(不是网络问题)。
+        //       · 换 avformat 后同一片源播到 1317.2s/1317.4s(只差 0.2s 的解码尾),
+        //         音轨与画面对齐, 片尾不再静音、进度条也能正常走满。
+        //     历史注释里"带 input-slave 加 avformat 会 seek 后 Ended"是 3.0.20 + 同进程
+        //     连开多个 LibVLC 的污染结论(bd-probe-muxed5 已平反)。当前 3.0.24 实测:
+        //     双流 + avformat 连续 6 次远跳(90/10/55/5/80/30%)全部存活、落点 1~2s,
+        //     43s/22min 的 H.264 与 HEVC 都验过。故不再区分, 统一走 avformat。
+        //
+        //   ★ 判据 `isListenAudio` 仍保留: 它只用于决定"这条 url 是音轨单流",
+        //     不参与 demuxer 选择; 保留它可读性更好, 也方便以后单独调聆听态。
         var isListenAudio = _isListenMode &&
                             string.Equals(url, _listenAudioUrl, StringComparison.Ordinal);
+        options.Add(":demux=avformat");
         if (string.IsNullOrEmpty(audioUrl) && !isListenAudio)
         {
-            options.Add(":demux=avformat");
+            // 单文件源: 没有 slave, seek 一发即准
             _isReliableSeekSource = true;
-        }
-        else if (!string.IsNullOrEmpty(audioUrl))
-        {
-            // DASH 双流: 远距离 seek 实测会被 libvlc 丢掉(位置掉回开头), 保留旧路兜底
-            _isReliableSeekSource = false;
-            options.Add(":input-slave=" + audioUrl);
         }
         else
         {
-            // 听视频音轨单流: demux 用默认(fMP4 与 input-slave 那条同款), seek 走不可靠路
+            // DASH 双流 / 聆听音轨单流: 远端分片 fMP4, 仍按"不可靠"处理
+            // (保留看门狗 + 重建兜底; avformat 只是把落点从"掉回开头"改善到 1~2s)
             _isReliableSeekSource = false;
+            if (!string.IsNullOrEmpty(audioUrl))
+                options.Add(":input-slave=" + audioUrl);
         }
 
         if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
@@ -2493,6 +2541,9 @@ public partial class PlayerWindow : FluentWindow
         // 重播是同一片源的全新 input: 自救计数清零, 之后遇到提前 EOF 仍能续播
         _eofResumeCount = 0;
         _lastEofResumeMs = 0;
+        // "播完后的跳转"那个闸一并清掉: 重播之后用户又能正常拖进度条了。
+        // (不清的话, 上一次"播完后点进度条"留下的闸会挡住之后的正常跳转。)
+        _seekAfterEndedGuard = false;
         // 揭掉 EOF 那层黑(见上面说明: 重播期间不需要它, 遮罩由 LoadingOverlay 负责)
         if (_eofBlackActive)
         {
@@ -3142,6 +3193,10 @@ public partial class PlayerWindow : FluentWindow
         _seekBounceSeenMs = -1;
         _seekBounceAt = -1;
         _ended = false;
+        // ★ "播完后的跳转"那个闸在这里清掉: 它只用来挡**同一次点击**的第二条路
+        //   (ValueChanged + Thumb.DragCompleted)。新 input 已经起播, 后续的拖动是
+        //   正常的 seek, 不该再被这个闸拦住。
+        _seekAfterEndedGuard = false;
         // 进度外推的锚点与显示钳制基线作废: 不作废的话, 跳转落地后可能外推出凭空进度,
         // 往回拖进度条也无法倒着显示
         _anchorMs = -1;
@@ -3197,6 +3252,30 @@ public partial class PlayerWindow : FluentWindow
         //   只在这里复位, 不在 MarkSeekIssued 里 —— 见 _seekRebuildTried 的说明。
         _seekRebuildTried = false;
         _eofSeekRebuildTried = false;
+
+        // ★★★ 2026-11-05 修「播完 → 点进度条 → 画面全黑、重播按钮消失、没有画面」。
+        //   已结束的 input 上发 seek 是**无效操作**: libvlc 只把 Time 改成目标值当回执,
+        //   不重建 input、不重建 vout(探针 bd-probe-eofseek 实测 state 恒为 Ended、
+        //   vout=0、位置不动)。而 MarkSeekIssued 会顺手把"重播页"收起来 ⇒ 屏幕上只剩黑。
+        //   ⇒ 这条路必须**重建 Media**, 与"点重播"同一条路。
+        //   判据用 `_ended`(我们自己的播完标记), 不用 `_mp.State`: 直播/本地文件也可能
+        //   停在别的状态, 但它们根本不会走到这里(进度条对直播是禁用的)。
+        //
+        // ★ `_seekAfterEndedGuard` 挡住**同一次点击的第二条路**(ValueChanged +
+        //   Thumb.DragCompleted): 第一条已经重建过了, 第二条若再对刚起播的新 input
+        //   发一次 seek, 就会把它的解复用器打断(表现: 又要缓冲一次)。
+        if (_seekAfterEndedGuard)
+        {
+            WriteLibVLCDebug("[Seek] 播完后的跳转已处理过, 忽略重复触发的那条\n");
+            return;
+        }
+        if (_ended)
+        {
+            _seekAfterEndedGuard = true;
+            WriteLibVLCDebug($"[Seek] 已播完, 进度条跳转 → 重建 Media(目标 {targetMs}ms)\n");
+            RebuildMediaAndSeek(targetMs);
+            return;
+        }
 
         // ★★★ 2026-10-17 播放器手术第 2 步: 两条路, 由**片源类型**决定, 不由距离决定。
         //
@@ -3269,10 +3348,25 @@ public partial class PlayerWindow : FluentWindow
     private void RebuildMediaAndSeek(long targetMs)
     {
         if (_closing) return;
+
+        // ★ 2026-11-05: 这条重建可能是因为"在已结束的 input 上点了进度条"
+        //   (见 SeekTo 里 _ended 的分支)。那种情况下必须先收掉"已播完"这套状态:
+        //   否则 EndOverlay(重播页)还挂着, 用户看到的是"遮罩上盖着遮罩"。
+        //   _ended 由 Playing 事件起播后自然清掉(见 MarkSeekIssued), 这里先清一次,
+        //   保证"重播按钮消失"与"画面回来"是同步的。
+        _ended = false;
+        if (EndOverlay != null) EndOverlay.Visibility = Visibility.Collapsed;
+
         if (_isLocalPlayback)
         {
             var path = _lastPlayUrl;
-            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                // 地址没了(文件被删): 什么都做不了, 但**别把重播入口也弄丢** ——
+                // 让用户还能看到"已播完"并点重播重试。
+                RestoreEndedOverlay();
+                return;
+            }
             ShowLoading("正在跳转…");
             _resumeAfterSwitchMs = targetMs;
             _resumeByStartTime = false;   // 本地文件走原来的"起播后设 Time"
@@ -3281,12 +3375,18 @@ public partial class PlayerWindow : FluentWindow
             {
                 _resumeAfterSwitchMs = 0;
                 WriteLibVLCDebug("[Seek] 重建后 play() 未被接受(本地文件)\n");
+                RestoreEndedOverlay();
             }
             return;
         }
 
         var url = _lastPlayUrl;
-        if (string.IsNullOrEmpty(url)) return;
+        if (string.IsNullOrEmpty(url))
+        {
+            // 地址没了(直播失效/切走了): 同样别把重播入口弄丢
+            RestoreEndedOverlay();
+            return;
+        }
         ShowLoading("正在跳转…");
         // ★ 重建前把"最后已知位置"清掉: 它记的是**旧 input** 的位置(比如 72 万 ms),
         //   留着的话补跳会拿它当"当前位置"算出荒谬的下一段(2026-10-17 实测踩到)。
@@ -3298,6 +3398,10 @@ public partial class PlayerWindow : FluentWindow
         WriteLibVLCDebug($"[Seek] 重建 Media 追目标 start-time={targetMs}ms\n");
         // ★★ 必须先 Stop: LibVLC 3 里已有 input 在播时 play() 会被**直接忽略**
         //    —— 漏掉这一步就是"黑屏 + 恢复进度丢失"(见方法说明)。
+        // ★ 2026-11-05: 播完之后那条 input 已经停在 ENDED(EOF 时刻意不 Stop),
+        //   `play()` 同样会被忽略 —— 探针 bd-probe-eofseek 实测: 不 Stop 时新 Media
+        //   根本起不来(state 恒为 Ended、vout=0), 于是"画面全黑、没有画面"。
+        //   ⇒ 播完后的跳转必须 Stop 掉那条死 input, 与上面那条路完全一致。
         try { _mp.Stop(); } catch { }
         // ★ 2026-11-05: 重建时把目标交给 **Media 的 :start-time** —— 让解复用器在 open
         //   阶段直接定位, 而不是"从 0 起播后再设一次 Time"。实测(探针 bd-probe-seekmode):
@@ -3311,7 +3415,31 @@ public partial class PlayerWindow : FluentWindow
             _resumeAfterSwitchMs = 0;
             _resumeByStartTime = false;
             WriteLibVLCDebug("[Seek] 重建后 play() 未被接受(远端流)\n");
+            // 起播没被接受 ⇒ 屏幕上不会有画面。此时必须把"重播"入口还回去,
+            // 否则用户面对的是"遮罩收掉了但什么都没有"(这正是本次要修的那个症状)。
+            RestoreEndedOverlay();
         }
+    }
+
+    /// <summary>
+    /// 重建失败时把"已播完"那套界面状态还回去 —— 让用户还能看到重播按钮并重试。
+    ///
+    /// ★ 2026-11-05: 这是"播完点进度条"那条路的**兜底**。正常情况下重建成功,
+    ///   画面回来、重播页收起; 但若地址失效/播放没被接受, 就会出现
+    ///   "遮罩没了、按钮也没了、什么都没有" —— 与用户报的症状一模一样。
+    ///   ⇒ 失败时宁可退回"已播完"态(有按钮可点), 也不要留一个死界面。
+    /// </summary>
+    private void RestoreEndedOverlay()
+    {
+        if (_closing) return;
+        _ended = true;
+        // 重播页的遮罩是半透明的, 底下是 EOF 黑层 —— 那层黑此刻正好盖住被拆掉的
+        // vout 露出的白底, 所以不用额外处理。
+        if (EndOverlay != null) EndOverlay.Visibility = Visibility.Visible;
+        // ★ 闸要放开: 退回"已播完"态是让用户**再试一次**, 不能把他锁在"点进度条没反应"里。
+        _seekAfterEndedGuard = false;
+        HideBufferingIfShown();
+        WriteLibVLCDebug("[Seek] 重建失败 → 退回「已播完」态(保留重播入口)\n");
     }
 
     /// <summary>进度条值变化: 点击轨道任意位置直接跳转(IsMoveToPointEnabled + 本处理器)。
@@ -3433,18 +3561,20 @@ public partial class PlayerWindow : FluentWindow
         if (_closing) return;
 
         // ---- 提前结束的自救 ----
-        // DASH 音轨(input-slave)先于视频到 EOF 时, LibVLC 会结束整个 input:
-        // 表现就是"最后几秒没声音 + 进度条提前满格"。这不是真的播完 ——
-        // 从最后已知位置重建 Media 续播(次数与推进距离双保险, 防止音频本来就短的
-        // 片源无限循环续播)。
+        // 远端流在离结尾还很远时 EOF(网络截断/服务端只给到某一段), 从最后已知位置
+        // 重建 Media 续播(次数与推进距离双保险, 防止片源本来就短时无限循环续播)。
+        //
+        // 历史上的触发原因是"DASH 音轨(input-slave)先于视频 EOF", 2026-11-05 已查明
+        // 那是 libvlc mp4 demux 读不出 fMP4 最后分片的 bug, 现由 `:demux=avformat` 修复
+        // (见 BuildMedia)。这里保留自救作为远端截断的兜底。
         //
         // 两个收紧(短视频"播完又跳回几秒重播"的根因都在这):
         //   1. 长度基准用 **_mp.Length**(LibVLC 实际解封装出的时长), 而不是接口的
         //      timelength —— B 站接口给的 timelength 经常比流的真实时长长几秒,
         //      按 _totalMs 判断会把"正常播完"误判成"提前结束", 于是重建 Media
         //      从"几秒前"续播 —— 用户看到的就是"明明结束了又自己倒回去放"。
-        //   2. 单文件源(_lastAudioUrl == null, durl/合流)没有 input-slave,
-        //      根本不存在"音轨先 EOF"这个问题, 直接跳过自救 —— 否则任何风吹草动的
+        //   2. 单文件源(_lastAudioUrl == null, durl/合流)没有独立音轨,
+        //      不存在"音轨先 EOF"这个问题, 直接跳过自救 —— 否则任何风吹草动的
         //      提前 EOF 都会在单文件源上触发一次无谓的回跳续播。
         //
         //   ★★★ 3(2026-11-01 修「4h 视频快进回到 9s 处」): **跳转进行中绝不自救**。
@@ -3469,8 +3599,8 @@ public partial class PlayerWindow : FluentWindow
             !seekLooksUnlanded &&
             effectiveTotalMs > 0 &&
             !string.IsNullOrEmpty(_lastAudioUrl) &&
-            // 尾部静默区见 TailQuietZoneMs 的说明: 音轨缺口之内自救救不回任何数据,
-            // 只会"黑屏缓冲一趟 → 立刻再 EOF → 重播遮罩"(2026-10-01 用户两轮实测)
+            // 尾部静默区见 TailQuietZoneMs 的说明: 距结尾 10s 内重建只会黑屏缓冲一趟,
+            // 即使接上也只剩几秒, 不值得(2026-10-01 用户两轮实测)
             _lastKnownMs > 0 && _lastKnownMs < effectiveTotalMs - TailQuietZoneMs &&
             _eofResumeCount < EofResumeMax &&
             _lastKnownMs - _lastEofResumeMs >= EofResumeMinAdvanceMs &&
@@ -4950,7 +5080,7 @@ public partial class PlayerWindow : FluentWindow
             await Dispatcher.InvokeAsync(() =>
             {
                 if (_closing) return;
-                // 原始列表按时间排好序存下来, 供后续"改屏蔽词立即重算"使用
+                // 原始列表按时间排好序存下来, 供后续"改过滤设置立即重算"使用
                 _danmakuRaw.Clear();
                 _danmakuRaw.AddRange(list.OrderBy(d => d.Time));
 
@@ -4988,14 +5118,13 @@ public partial class PlayerWindow : FluentWindow
     /// 弹幕过滤。
     /// 智能屏蔽开启时: 过滤超长弹幕 + 相同文本的刷屏(只留前 N 条) + 纯符号/空白;
     /// 关闭时只做最基本的安全过滤(去空白), 其余全部保留。
-    /// 关键词屏蔽**独立生效**: 无论智能屏蔽是否开启, 用户手写的黑名单都会被应用
-    /// (用户明确写了"不想看到"的词, 优先级高于"要不要自动净化"这个总开关)。
+    /// ★ 关键词屏蔽已于 2026-11-05 整条链路删除(设置项 + 存储字段 + 解析器),
+    ///   所以这里只剩"智能屏蔽"与"类型过滤"两件事。
     /// </summary>
     private static IEnumerable<RawDanmaku> ApplyDanmakuFilter(IEnumerable<RawDanmaku> list)
     {
         var s = Svc.Settings;
         var smart = s.DanmakuSmartFilter;
-        var rules = DanmakuKeywordFilter.Build(s.DanmakuBlockKeywords);
 
         // 类型过滤(滚动/固定/彩色/高级): 四项全开 = 不过滤。
         // ★ 用"是否全开"而不是"是否有任一项关闭"来判断能不能跳过 —— 后者写反过一次,
@@ -5003,16 +5132,15 @@ public partial class PlayerWindow : FluentWindow
         var typeFilter = !(s.DanmakuFilterScroll && s.DanmakuFilterFixed
                            && s.DanmakuFilterColorful && s.DanmakuFilterAdvanced);
 
-        // 三件事都没开就原样返回, 省掉一次完整遍历
-        if (!smart && rules == null && !typeFilter) return list;
-        return FilterCore(list, smart, rules, typeFilter,
+        // 两件事都没开就原样返回, 省掉一次完整遍历
+        if (!smart && !typeFilter) return list;
+        return FilterCore(list, smart, typeFilter,
             s.DanmakuFilterScroll, s.DanmakuFilterFixed,
             s.DanmakuFilterColorful, s.DanmakuFilterAdvanced);
 
         static IEnumerable<RawDanmaku> FilterCore(
             IEnumerable<RawDanmaku> src,
             bool smart,
-            DanmakuKeywordFilter? rules,
             bool typeFilter,
             bool allowScroll,
             bool allowFixed,
@@ -5024,12 +5152,9 @@ public partial class PlayerWindow : FluentWindow
             {
                 if (string.IsNullOrWhiteSpace(d.Text)) continue;
 
-                // 类型过滤: 用户没勾的类型直接丢弃(与智能屏蔽/关键词都解耦)
+                // 类型过滤: 用户没勾的类型直接丢弃(与智能屏蔽解耦)
                 if (typeFilter && !IsTypeAllowed(d, allowScroll, allowFixed, allowColorful, allowAdvanced))
                     continue;
-
-                // 关键词/正则黑名单: 命中即丢弃(与智能屏蔽解耦)
-                if (rules != null && rules.IsBlocked(d.Text)) continue;
 
                 if (smart)
                 {
@@ -5571,8 +5696,8 @@ public partial class PlayerWindow : FluentWindow
             DanmakuCanvas.Children.Clear();
             return;
         }
-        // 智能屏蔽 / 关键词屏蔽都可能刚被改过: 用新规则重算一遍已加载的弹幕,
-        // 让用户在设置页边打字边看到播放器里的即时效果。
+        // 智能屏蔽 / 类型过滤都可能刚被改过: 用新规则重算一遍已加载的弹幕,
+        // 让用户在设置页改开关时看到播放器里的即时效果。
         RefilterDanmaku();
     }
 
@@ -7083,7 +7208,9 @@ public partial class PlayerWindow : FluentWindow
         // 进详情时按当前排序先排一次: 楼中楼接口固定按时间正序返回,
         // 而排序入口上亮着的可能是「热门」—— 不排的话两者对不上。
         SortRepliesInPlace(threadRoot);
-        // tab 文案随状态走: 进详情后"评论"变"评论详情", 返回链接就摆在它右边(用户指定)
+        // tab 文案随状态走: 进详情后"评论"变"评论详情";
+        // 「返回评论列表」在**右下角悬浮工具列**(2026-11-05 从 tab 行搬走:
+        // 它压在「热门 / 时间」排序按钮上, 排序点不到), 这里把它亮出来。
         TabComments.Content = "评论详情";
         BtnBackToComments.Visibility = Visibility.Visible;
         // 评论区只有一个输入框(悬浮面板), 进详情页它自动切成"回复 @这层楼"
@@ -7169,7 +7296,7 @@ public partial class PlayerWindow : FluentWindow
         CommentDetailHost.DataContext = null;
         _detailThreadRoot = _detailFocus = null;
         ClearReplyTarget();
-        // tab 文案与返回链接一起还原
+        // tab 文案与右下角悬浮工具列里的返回按钮一起还原
         TabComments.Content = "评论";
         BtnBackToComments.Visibility = Visibility.Collapsed;
         CommentList.Visibility = Visibility.Visible;
