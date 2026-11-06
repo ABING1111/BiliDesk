@@ -154,7 +154,7 @@
                                        VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
                         </StackPanel>
                         <TextBlock Text="已经到底啦" Style="{StaticResource MetaTextStyle}"
-                                   Visibility="{Binding HasMore, Converter={StaticResource InvBoolToVis}}" />
+                                   Visibility="{Binding ShowEndOfList, Converter={StaticResource BoolToVis}}" />
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>

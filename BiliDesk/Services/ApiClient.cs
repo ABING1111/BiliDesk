@@ -2564,9 +2564,20 @@ public class ApiClient
         }
     }
 
-    /// <summary>获取 UP 主空间视频列表。
-    /// 优先 arc/search(WBI 签名); 被风控(-403/-352)时降级到公开的 recArchivesByKeywords</summary>
-    public async Task<(bool ok, string? err, List<VideoItem>? items)>
+    /// <summary>
+    /// 获取 UP 主空间视频列表。
+    /// 优先 arc/search(WBI 签名); 被风控(-403/-352)时降级到公开的 recArchivesByKeywords。
+    ///
+    /// ★★ 2026-11-06 新增返回 **total**(权威总条数):
+    ///   调用方原来用 "本页返回条数 &lt; 30 ⇒ 到底了" 判断, 而这个判据**不成立** ——
+    ///   ① 降级接口 recArchivesByKeywords 自己按 17/22 这种零头分页(实测 952 投稿的
+    ///      UP 在 pn=31 只给 17 条、pn=32 给 22 条), 于是第 31 页就被误判成到底;
+    ///   ② 主路径 arc/search 也有坑: vlist 里偶尔有 ParseVideoItem 解析不了的条目,
+    ///      被丢掉后本页条数不足 30, 同样误判。
+    ///   ⇒ 用接口给的 page.count(总投稿数)当权威值, 调用方按 "已加载数 &lt; total" 判断到底。
+    ///   total 取不到时(降级路径)返回 0, 调用方退回原来的启发式。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<VideoItem>? items, int total)>
         GetSpaceVideosAsync(long mid, int pn = 1, int ps = 30)
     {
         try
@@ -2587,7 +2598,8 @@ public class ApiClient
             if (code != 0 || data == null)
             {
                 // 风控降级: 公开的合集推荐接口, 不需要签名, 返回完整 archive 对象
-                return await GetSpaceVideosFallbackAsync(mid, pn, ps);
+                var fb = await GetSpaceVideosFallbackAsync(mid, pn, ps);
+                return (fb.ok, fb.err, fb.items, 0);
             }
 
             var items = new List<VideoItem>();
@@ -2600,10 +2612,19 @@ public class ApiClient
                     if (item != null) items.Add(item);
                 }
             }
-            if (items.Count == 0) return await GetSpaceVideosFallbackAsync(mid, pn, ps);
-            return (true, null, items);
+            if (items.Count == 0)
+            {
+                var fb = await GetSpaceVideosFallbackAsync(mid, pn, ps);
+                return (fb.ok, fb.err, fb.items, 0);
+            }
+
+            // page.count = 该 UP 的总投稿数(权威的"到底"判据)
+            var total = 0;
+            if (data.Value.TryGetProperty("page", out var page) && page.ValueKind == JsonValueKind.Object)
+                total = GetInt(page, "count");
+            return (true, null, items, total);
         }
-        catch (Exception ex) { return (false, ex.Message, null); }
+        catch (Exception ex) { return (false, ex.Message, null, 0); }
     }
 
     /// <summary>空间视频列表降级接口(series/recArchivesByKeywords, 公开无签名)。

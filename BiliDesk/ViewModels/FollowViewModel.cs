@@ -672,7 +672,16 @@ public class FollowViewModel : ObservableObject
                 if (reset) _upVideoPage = 1;
                 var r = await Svc.Api.GetSpaceVideosAsync(forUp.Mid, _upVideoPage, 30);
                 ok = r.Item1; err = r.Item2; items = r.Item3;
-                hasMore = items != null && items.Count >= 30;
+                // ★★ 2026-11-06: "到底"改用接口给的**总条数**判断, 不再用"本页 &lt; 30"。
+                //   旧判据不成立(实测): 降级接口 recArchivesByKeywords 自己按 17/22 这种
+                //   零头分页, 952 投稿的 UP 在第 31 页只给 17 条 —— 于是第 31 页就被
+                //   误判成到底, 用户滚了半天还没看完就冒出「已经到底啦」。
+                //   total 是权威的总投稿数(来自 arc/search 的 page.count);
+                //   ★ 降级路径(被风控时)拿不到 total ⇒ 改用"空页才到底": 本页非空就继续翻,
+                //     翻到接口真的返回 0 条才是底 —— 这比"条数不足 30"准得多。
+                var loaded = FeedItems.Count + (items?.Count ?? 0);
+                hasMore = ok && items != null && items.Count > 0 &&
+                          (r.Item4 > 0 ? loaded < r.Item4 : true);
                 if (ok) _upVideoPage++;
 
                 // ★ 单 UP 视图的**头像与名字要在这里盖章**(2026-10-15 用户截图: 卡片上一个头像
