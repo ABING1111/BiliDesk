@@ -1143,6 +1143,7 @@
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
 
                                         <!-- 播放/暂停 -->
@@ -1297,16 +1298,78 @@
                                             </Border>
                                         </Popup>
 
-                                        <!-- 弹幕开关。以前只能按快捷键 D, 界面上没有入口 ——
-                                             看视频时想随手关掉刷屏弹幕是很常见的操作, 这里必须有个按钮。
-                                             文案用"弹幕开/关"而不是图标: 开关状态一眼可读, 不用猜图标含义。 -->
-                                        <Button Grid.Column="7" x:Name="BtnDanmaku" Style="{StaticResource PlayerTextBtn}"
+                                        <!-- 音质(2026-11-06): 与清晰度并列的第二枚胶囊。
+                                             点开弹层选音轨档位 —— 只换 DASH 的音轨, 不动画面清晰度。
+                                             ★ 文案用**短标签**(自动 / 无损 / 杜比 / 192K…): 控制栏是
+                                               一整行, 长文案会把后面的弹幕按钮挤出去。 -->
+                                        <Button Grid.Column="7" x:Name="BtnAudio" Style="{StaticResource PlayerTextBtn}"
+                                                Margin="4,0,0,0" Click="OnAudioClick" ToolTip="切换音质">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                           FontSize="11" VerticalAlignment="Center" Foreground="#F2FFFFFF" />
+                                                <TextBlock x:Name="AudioText" Text="自动" Margin="5,0,0,0"
+                                                           Foreground="#F2FFFFFF" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Popup x:Name="AudioPopup"
+                                               Placement="Top" StaysOpen="False" AllowsTransparency="True"
+                                               PopupAnimation="Fade">
+                                            <Border Background="#F0202226" CornerRadius="8" Padding="6"
+                                                    BorderBrush="#33FFFFFF" BorderThickness="1" MinWidth="160">
+                                                <StackPanel>
+                                                    <ListBox x:Name="AudioList" Background="Transparent"
+                                                             BorderThickness="0" Foreground="White"
+                                                             SelectionChanged="OnAudioSelected">
+                                                        <ListBox.ItemContainerStyle>
+                                                            <Style TargetType="ListBoxItem">
+                                                                <!-- 与清晰度弹层同款: 不能设 Focusable=False,
+                                                                     否则 SelectionChanged 永不触发 -->
+                                                                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                                                <Setter Property="Padding" Value="10,6" />
+                                                                <Setter Property="Cursor" Value="Hand" />
+                                                                <Setter Property="ContentTemplate">
+                                                                    <Setter.Value>
+                                                                        <DataTemplate>
+                                                                            <TextBlock Text="{Binding}" Foreground="#F2FFFFFF" />
+                                                                        </DataTemplate>
+                                                                    </Setter.Value>
+                                                                </Setter>
+                                                                <Setter Property="Template">
+                                                                    <Setter.Value>
+                                                                        <ControlTemplate TargetType="ListBoxItem">
+                                                                            <Border x:Name="Bd" Background="Transparent"
+                                                                                    CornerRadius="5" Padding="{TemplateBinding Padding}">
+                                                                                <ContentPresenter VerticalAlignment="Center" />
+                                                                            </Border>
+                                                                            <ControlTemplate.Triggers>
+                                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                                    <Setter TargetName="Bd" Property="Background" Value="#26FFFFFF" />
+                                                                                </Trigger>
+                                                                                <Trigger Property="IsSelected" Value="True">
+                                                                                    <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF" />
+                                                                                </Trigger>
+                                                                            </ControlTemplate.Triggers>
+                                                                        </ControlTemplate>
+                                                                    </Setter.Value>
+                                                                </Setter>
+                                                            </Style>
+                                                        </ListBox.ItemContainerStyle>
+                                                    </ListBox>
+                                                    <TextBlock x:Name="AudioHintText" Text=""
+                                                               Foreground="#99FFFFFF" FontSize="10.5"
+                                                               Margin="8,4,8,2" TextWrapping="Wrap"
+                                                               MaxWidth="220" />
+                                                </StackPanel>
+                                            </Border>
+                                        </Popup>
+
+                                        <Button Grid.Column="8" x:Name="BtnDanmaku" Style="{StaticResource PlayerTextBtn}"
                                                 Margin="4,0,0,0" Click="OnDanmakuToggleClick" ToolTip="开关弹幕 (D)">
                                             <TextBlock x:Name="DanmakuBtnText" Text="弹幕开" Foreground="#F2FFFFFF" />
                                         </Button>
 
                                         <!-- 弹幕区域占比 -->
-                                        <Button Grid.Column="8" x:Name="BtnDanmakuArea" Style="{StaticResource PlayerTextBtn}"
+                                        <Button Grid.Column="9" x:Name="BtnDanmakuArea" Style="{StaticResource PlayerTextBtn}"
                                                 Margin="4,0,0,0" Click="OnDanmakuAreaClick" ToolTip="弹幕显示区域占比">
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="&#xE734;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -1447,7 +1510,7 @@
                                         </Popup>
 
                                         <!-- 全屏(离线缓存已挪到右侧信息面板的操作栏, 2026-09-26) -->
-                                        <Button Grid.Column="9" x:Name="BtnFullscreen2" Style="{StaticResource PlayerRoundBtn}"
+                                        <Button Grid.Column="10" x:Name="BtnFullscreen2" Style="{StaticResource PlayerRoundBtn}"
                                                 Width="36" Height="36" Click="OnFullscreenClick" ToolTip="全屏 (F)">
                                             <TextBlock Text="&#xE92D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                        FontSize="14" Foreground="White" />

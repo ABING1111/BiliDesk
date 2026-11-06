@@ -452,7 +452,47 @@
                                   IsChecked="{Binding NoLogin1080P, Mode=TwoWay}" />
                     </Grid>
 
-                    <!-- ★ 组二: 缓冲 -->
+                    <!-- ★ 组二: 音质(2026-11-06) -->
+                    <TextBlock Text="音质" Style="{StaticResource SettingsGroupHeaderStyle}" />
+
+                    <!-- 音质档位: 与播放器控制栏那枚音质按钮读写同一个配置。
+                         ★ 只影响音轨, 不改画面清晰度。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="音质档位" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding AudioTierHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
+                                  Width="170" VerticalAlignment="Center"
+                                  ItemsSource="{Binding AudioTierOptions}"
+                                  SelectedItem="{Binding AudioTierSelected, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 高音质音轨优先: 有 Hi-Res 无损 / 杜比音轨时优先使用。
+                         ★ 只影响音频选轨, 不改画面清晰度; 普通视频仍回落到 192K AAC。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="优先高音质音轨" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding PreferHighQualityAudioHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding PreferHighQualityAudio, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- ★ 组三: 缓冲 -->
                     <TextBlock Text="缓冲" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
                     <!-- 缓冲策略(2026-11-01 新增): 自动按带宽/码率挑预读深度, 还是手动固定值。

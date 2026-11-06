@@ -1479,6 +1479,20 @@ public class AppSettings
     public int PlayerVolume { get; set; } = 80;
 
     /// <summary>
+    /// 优先高音质音轨(默认开)。开启时取流请求会带上 fnval=4048,
+    /// 并在有 Hi-Res 无损(30251)/杜比(30250)音轨时优先使用; 普通视频仍是 192K AAC。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool PreferHighQualityAudio { get; set; } = true;
+
+    /// <summary>
+    /// 播放器音质档位(2026-11-06 新增, 控制栏音质按钮)。
+    /// Auto = 沿用"无损 &gt; 杜比 &gt; 192K &gt; 132K &gt; 64K"自动排序;
+    /// 指定档位时只取那一档, 不可用则降级。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public AudioTier PreferredAudioTier { get; set; } = AudioTier.Auto;
+    /// <summary>
     /// 是否记住播放器窗口大小(默认开)。关闭后播放器每次都用 XAML 默认尺寸.
     /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
     /// </summary>

@@ -297,6 +297,18 @@ public class SettingsStore
     public int PlayerVolume { get; set; } = 80;
 
     /// <summary>
+    /// 优先高音质音轨(默认开)。开启后取流请求带 fnval=4048,
+    /// 有 Hi-Res 无损 / 杜比音轨时优先选它们; 普通视频仍回落到 192K AAC。
+    /// 与 <see cref="Models.AppSettings.PreferHighQualityAudio"/> 是读写契约。
+    /// </summary>
+    public bool PreferHighQualityAudio { get; set; } = true;
+
+    /// <summary>
+    /// 播放器音质档位(2026-11-06, 控制栏音质按钮)。
+    /// 与 <see cref="Models.AppSettings.PreferredAudioTier"/> 是读写契约。
+    /// </summary>
+    public AudioTier PreferredAudioTier { get; set; } = AudioTier.Auto;
+    /// <summary>
     /// 是否记住播放器窗口大小(默认开)。
     ///
     /// ★ 关掉后: 播放器每次打开都用 XAML 里的默认 1280×760, 也不再写盘 ——
@@ -627,6 +639,12 @@ public class SettingsStore
         // 音量继承: 老配置没这个字段 ⇒ 保持默认 80。越界值夹回 0~100。
         PlayerVolume = Math.Clamp(s.PlayerVolume, 0, 100);
 
+        // 高音质音轨 / 自动续播: 老配置缺字段 ⇒ AppSettings 的初始化值 true(与设计默认一致)。
+        PreferHighQualityAudio = s.PreferHighQualityAudio;
+
+        // 音质档位: 手改配置可能塞进 30251 之外的数字 ⇒ 一律落回「自动」。
+        PreferredAudioTier = AudioPreference.Normalize(s.PreferredAudioTier);
+
         // 播放器窗口大小记忆(2026-11-03 新增): 老配置没有这三个字段 ⇒
         // AppSettings 的初始化值就是"开启 + 尚未记过尺寸(0)", 不需要版本兼容。
         // ★ 宽高必须夹取/丢弃: 手改配置可能塞进负数或离谱值, 直接拿去设 Width 会让窗口
@@ -819,6 +837,8 @@ public class SettingsStore
         DisclaimerAccepted = DisclaimerAccepted,
         DisclaimerVersion = AcceptedDisclaimerVersion,
         PlayerVolume = PlayerVolume,
+        PreferHighQualityAudio = PreferHighQualityAudio,
+        PreferredAudioTier = PreferredAudioTier,
         RememberPlayerWindowSize = RememberPlayerWindowSize,
         PlayerWindowWidth = PlayerWindowWidth,
         PlayerWindowHeight = PlayerWindowHeight,

@@ -694,6 +694,60 @@ public class SettingsViewModel : ObservableObject
             : $"每次起播都请求 {QualityPreference.LabelOf(Svc.Settings.PreferredQualityQn)}; " +
               "该清晰度不存在或没有权限时自动降到可用的下一档";
 
+    // ----------------- 音质(2026-11-06) -----------------
+
+    /// <summary>音质下拉框的显示项(顺序即 AudioPreference.All 的顺序)</summary>
+    public string[] AudioTierOptions { get; } =
+        AudioPreference.All.Select(AudioPreference.LabelOf).ToArray();
+
+    /// <summary>
+    /// 当前音质档位(字符串投影, 理由同 QualitySelected)。
+    /// 与播放器控制栏那枚音质按钮读写同一个配置, 两处随时一致。
+    /// </summary>
+    public string AudioTierSelected
+    {
+        get => AudioPreference.LabelOf(Svc.Settings.PreferredAudioTier);
+        set
+        {
+            var tier = AudioPreference.Normalize(
+                AudioPreference.All.FirstOrDefault(t => AudioPreference.LabelOf(t) == value));
+            if (tier == Svc.Settings.PreferredAudioTier) return;
+            Svc.Settings.PreferredAudioTier = tier;
+            Svc.Settings.Save();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(AudioTierHint));
+        }
+    }
+
+    /// <summary>副标题: 说明"只换音轨不换画质"与降级规则</summary>
+    public string AudioTierHint =>
+        Svc.Settings.PreferredAudioTier == AudioTier.Auto
+            ? "有 Hi-Res 无损 / 杜比音轨时优先使用, 否则用可用的最高音质; 普通视频仍是 192K AAC"
+            : $"播放器优先使用 {AudioPreference.LabelOf(Svc.Settings.PreferredAudioTier)}; " +
+              "该视频没有这一档时自动降到可用音质, 不影响画面清晰度";
+
+    // ----------------- 高音质音轨(2026-11-06) -----------------
+
+    /// <summary>
+    /// 优先 Hi-Res 无损 / 杜比音轨。开启后取流请求带 fnval=4048,
+    /// 有 30251(FLAC) / 30250(杜比) 时优先使用; 普通视频仍回落到 192K AAC。
+    /// </summary>
+    public bool PreferHighQualityAudio
+    {
+        get => Svc.Settings.PreferHighQualityAudio;
+        set
+        {
+            if (value == Svc.Settings.PreferHighQualityAudio) return;
+            Svc.Settings.PreferHighQualityAudio = value;
+            Svc.Settings.Save();
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>副标题: 说清楚"需要大会员且视频本身提供", 避免普通视频没变化被当成开关坏了</summary>
+    public string PreferHighQualityAudioHint =>
+        "有 Hi-Res 无损 / 杜比音轨时优先使用; 需要大会员且视频本身提供, 普通视频仍是 192K AAC";
+
     // ----------------- 起播缓冲(网络缓存) -----------------
 
     /// <summary>
