@@ -748,6 +748,25 @@ public class SettingsViewModel : ObservableObject
     public string PreferHighQualityAudioHint =>
         "有 Hi-Res 无损 / 杜比音轨时优先使用; 需要大会员且视频本身提供, 普通视频仍是 192K AAC";
 
+    // ----------------- 自动续播(2026-11-06) -----------------
+
+    /// <summary>打开视频时自动跳到此前的本机 / B 站云端进度</summary>
+    public bool AutoResume
+    {
+        get => Svc.Settings.AutoResume;
+        set
+        {
+            if (value == Svc.Settings.AutoResume) return;
+            Svc.Settings.AutoResume = value;
+            Svc.Settings.Save();
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>副标题: 说明关闭后仍然记录, 只是不自动跳</summary>
+    public string AutoResumeHint =>
+        "打开视频时自动跳到此前的观看进度(本机记录 + B 站云端); 关闭后仍会记录, 只是从头播放";
+
     // ----------------- 起播缓冲(网络缓存) -----------------
 
     /// <summary>

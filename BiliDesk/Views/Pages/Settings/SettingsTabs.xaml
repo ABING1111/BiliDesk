@@ -492,7 +492,27 @@
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
-                    <!-- ★ 组三: 缓冲 -->
+                    <!-- ★ 组三: 播放进度(2026-11-06) -->
+                    <TextBlock Text="播放进度" Style="{StaticResource SettingsGroupHeaderStyle}" />
+
+                    <!-- 自动续播: 打开视频时跳到此前的本机 / B 站云端进度。
+                         ★ 关闭后仍然记录, 只是不自动跳转。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="自动续播" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding AutoResumeHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding AutoResume, Mode=TwoWay}" />
+                    </Grid>
+
+                    <!-- ★ 组四: 缓冲 -->
                     <TextBlock Text="缓冲" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
                     <!-- 缓冲策略(2026-11-01 新增): 自动按带宽/码率挑预读深度, 还是手动固定值。

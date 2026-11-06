@@ -1706,7 +1706,7 @@ public class ApiClient
     /// </param>
     public async Task<(bool ok, string? err, string? url, List<string> backups, long durationMs,
         List<(int qn, string label)> qualities, int actualQn, string? audioUrl, DashStreams? remux,
-        List<int> audioIds, int actualAudioId)>
+        long lastPlayMs, long lastPlayCid, List<int> audioIds, int actualAudioId)>
         GetPlayUrlAsync(string bvid, long cid, int qn = 80, AudioTier? audioTier = null)
     {
         var qualities = new List<(int qn, string label)>();
@@ -1737,12 +1737,13 @@ public class ApiClient
             var isAuto = qn == QualityPreference.AutoQn;
             if (!isAuto && qn <= 64)
             {
-                var (mUrl, mBackups, mQn, mQualities, durMux) = await FetchMuxedAsync(bvid, cid, qn);
+                var (mUrl, mBackups, mQn, mQualities, durMux, lastPlayMsMux, lastPlayCidMux) =
+                    await FetchMuxedAsync(bvid, cid, qn);
                 if (!string.IsNullOrEmpty(mUrl))
                 {
                     if (mQualities.Count > 0) qualities = mQualities;
                     return (true, null, mUrl, mBackups, durMux, qualities, mQn, null, null,
-                        new List<int>(), 0);
+                        lastPlayMsMux, lastPlayCidMux, new List<int>(), 0);
                 }
                 // durl 取不到(多段切片/大会员/该档无源) → 落到下面的 DASH, 行为与手术前一致
             }
@@ -1771,6 +1772,16 @@ public class ApiClient
             {
                 long dur = data.Value.TryGetProperty("timelength", out var tl) && tl.ValueKind == JsonValueKind.Number
                     ? tl.GetInt64() : 0;
+
+                // 上次播放进度(毫秒)与上次播放的分 P cid。B 站网页版就是靠这两个字段做续播的;
+                // 拿流时顺手带回, 不需要再发一次历史接口。
+                long lastPlayMs = 0, lastPlayCid = 0;
+                if (data.Value.TryGetProperty("last_play_time", out var lpt) &&
+                    lpt.ValueKind == JsonValueKind.Number)
+                    lastPlayMs = lpt.GetInt64();
+                if (data.Value.TryGetProperty("last_play_cid", out var lpc) &&
+                    lpc.ValueKind == JsonValueKind.Number)
+                    lastPlayCid = lpc.GetInt64();
 
                 string? videoUrl = null, audioUrl = null;
                 var backups = new List<string>();
@@ -1966,27 +1977,28 @@ public class ApiClient
                         };
                     }
                     return (true, null, videoUrl, backups, dur, qualities, chosenQn, audioUrl, remux,
-                        audioIds, actualAudioId);
+                        lastPlayMs, lastPlayCid, audioIds, actualAudioId);
                 }
             }
 
             // ---- 2. 回退 durl 单流 ----
             // 手术前 durl 只在这条"兜底"路径上被用到; 现在它同时也是 ≤720P 的**主路**。
             // 这里仍然保留兜底: DASH 取不到(付费/大会员/该档无源)时, 单流往往还能救回来。
-            var (mUrl2, mBackups2, mQn2, mQualities2, dur2) = await FetchMuxedAsync(bvid, cid, qn);
+            var (mUrl2, mBackups2, mQn2, mQualities2, dur2, lastPlayMs2, lastPlayCid2) =
+                await FetchMuxedAsync(bvid, cid, qn);
             if (mUrl2 == null)
                 return (false, "DASH 与 durl 都没能取到可播放的地址(可能是大会员/付费专属, 或该清晰度无源)",
-                    null, new List<string>(), 0, qualities, 0, null, null,
+                    null, new List<string>(), 0, qualities, 0, null, null, 0, 0,
                     new List<int>(), 0);
             if (mQualities2.Count > 0) qualities = mQualities2;
             return (true, null, mUrl2, mBackups2, dur2, qualities, mQn2, null, null,
-                new List<int>(), 0);
+                lastPlayMs2, lastPlayCid2, new List<int>(), 0);
         }
         catch (Exception ex)
         {
             App.ReportError(ex);
             return (false, "获取播放地址失败: " + ex.Message,
-                null, new List<string>(), 0, qualities, 0, null, null,
+                null, new List<string>(), 0, qualities, 0, null, null, 0, 0,
                 new List<int>(), 0);
         }
     }
@@ -2002,7 +2014,8 @@ public class ApiClient
     ///      一条"播到一半就没了"的地址。
     /// </summary>
     private async Task<(string? url, List<string> backups, int qn,
-        List<(int qn, string label)> qualities, long durationMs)>
+        List<(int qn, string label)> qualities, long durationMs,
+        long lastPlayMs, long lastPlayCid)>
         FetchMuxedAsync(string bvid, long cid, int qn)
     {
         var qualities = new List<(int qn, string label)>();
@@ -2020,10 +2033,17 @@ public class ApiClient
             };
             var (code, _, data) = await GetJsonAsync(
                 "https://api.bilibili.com/x/player/wbi/playurl", ps, sign: true);
-            if (code != 0 || data == null) return (null, backups, 0, qualities, 0);
+            if (code != 0 || data == null) return (null, backups, 0, qualities, 0, 0, 0);
 
             long dur = data.Value.TryGetProperty("timelength", out var tl) && tl.ValueKind == JsonValueKind.Number
                 ? tl.GetInt64() : 0;
+            long lastPlayMs = 0, lastPlayCid = 0;
+            if (data.Value.TryGetProperty("last_play_time", out var lpt) &&
+                lpt.ValueKind == JsonValueKind.Number)
+                lastPlayMs = lpt.GetInt64();
+            if (data.Value.TryGetProperty("last_play_cid", out var lpc) &&
+                lpc.ValueKind == JsonValueKind.Number)
+                lastPlayCid = lpc.GetInt64();
 
             var segs = new List<string>();
             if (data.Value.TryGetProperty("durl", out var durl) && durl.ValueKind == JsonValueKind.Array)
@@ -2035,7 +2055,7 @@ public class ApiClient
                 }
             }
             // 多段没法播(播放器不会自动续下一段), 当作拿不到
-            if (segs.Count != 1) return (null, backups, 0, qualities, dur);
+            if (segs.Count != 1) return (null, backups, 0, qualities, dur, lastPlayMs, lastPlayCid);
 
             var actualQn = GetInt(data.Value, "quality");
             if (data.Value.TryGetProperty("accept_quality", out var aq) && aq.ValueKind == JsonValueKind.Array)
@@ -2048,13 +2068,13 @@ public class ApiClient
                 qualities.Add((actualQn, QnToLabel(actualQn)));
             qualities.Sort((a, b) => b.qn.CompareTo(a.qn));
 
-            return (segs[0], backups, actualQn, qualities, dur);
+            return (segs[0], backups, actualQn, qualities, dur, lastPlayMs, lastPlayCid);
         }
         catch
         {
             // 解析失败按"没有可用地址"处理, 交给调用方走降级(报错/回落 durl) ——
             // 这里刻意不 ReportError: 拿到了 200 但结构不认识属于内容问题, 不该弹窗打扰用户。
-            return (null, backups, 0, qualities, 0);
+            return (null, backups, 0, qualities, 0, 0, 0);
         }
     }
 

@@ -1492,6 +1492,13 @@ public class AppSettings
     /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
     /// </summary>
     public AudioTier PreferredAudioTier { get; set; } = AudioTier.Auto;
+
+    /// <summary>
+    /// 下次打开视频时自动跳到此前的观看进度(默认开)。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool AutoResume { get; set; } = true;
+
     /// <summary>
     /// 是否记住播放器窗口大小(默认开)。关闭后播放器每次都用 XAML 默认尺寸.
     /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。

@@ -308,6 +308,13 @@ public class SettingsStore
     /// 与 <see cref="Models.AppSettings.PreferredAudioTier"/> 是读写契约。
     /// </summary>
     public AudioTier PreferredAudioTier { get; set; } = AudioTier.Auto;
+
+    /// <summary>
+    /// 下次打开视频时自动跳到此前的观看进度(默认开)。
+    /// 关闭后仍然记录进度, 只是不自动跳转 —— 给"想从头再看一遍"的用户留一个入口。
+    /// </summary>
+    public bool AutoResume { get; set; } = true;
+
     /// <summary>
     /// 是否记住播放器窗口大小(默认开)。
     ///
@@ -641,6 +648,7 @@ public class SettingsStore
 
         // 高音质音轨 / 自动续播: 老配置缺字段 ⇒ AppSettings 的初始化值 true(与设计默认一致)。
         PreferHighQualityAudio = s.PreferHighQualityAudio;
+        AutoResume = s.AutoResume;
 
         // 音质档位: 手改配置可能塞进 30251 之外的数字 ⇒ 一律落回「自动」。
         PreferredAudioTier = AudioPreference.Normalize(s.PreferredAudioTier);
@@ -839,6 +847,7 @@ public class SettingsStore
         PlayerVolume = PlayerVolume,
         PreferHighQualityAudio = PreferHighQualityAudio,
         PreferredAudioTier = PreferredAudioTier,
+        AutoResume = AutoResume,
         RememberPlayerWindowSize = RememberPlayerWindowSize,
         PlayerWindowWidth = PlayerWindowWidth,
         PlayerWindowHeight = PlayerWindowHeight,

@@ -1888,7 +1888,7 @@ public partial class PlayerWindow : FluentWindow
             SetLoadingText("正在获取播放地址…");
             // 默认请求 1080P(qn=80), B 站会按登录态/大会员返回实际可用的清晰度
             var (playOk, playErr, main, backups, durMs, qualities, actualQn, audioUrl, remux,
-                 audioIds, actualAudioId) =
+                 lastPlayMs, lastPlayCid, audioIds, actualAudioId) =
                 await Svc.Api.GetPlayUrlAsync(_currentBvid, _currentCid, _currentQn,
                     Svc.Settings.PreferredAudioTier);
             tPlayUrl = sw.ElapsedMilliseconds;
@@ -1912,6 +1912,12 @@ public partial class PlayerWindow : FluentWindow
             _currentAudioId = actualAudioId;
             FillAudioMenu(actualAudioId);
 
+            // ---- 续播: 本机记录优先, 没有本机记录时用 playurl 返回的 B 站云端进度 ----
+            // ★ 进度选择放在"取流成功"之后、起播之前: 这时 durMs 已知道, 可以过滤掉
+            //   "太靠前"和"已经播到片尾"的无效进度。
+            var resumePlan = Svc.PlaybackProgress.ChooseResume(
+                _currentBvid, _currentCid, durMs, lastPlayMs, lastPlayCid, Svc.Settings.AutoResume);
+            var resumeMs = resumePlan?.PosMs ?? 0;
 
             // ---- 极短片(≤60s / ≤8MB): 先合流成本地文件再播; 其余一律远端双流直接起播 ----
             // 顺序: 已缓存 -> 直接播本地; 没缓存 -> 2.5 秒内下完就播本地; 下不动 -> 回落远端 DASH。
@@ -1985,11 +1991,17 @@ public partial class PlayerWindow : FluentWindow
             // DASH 流音视频分离, 用 input-slave 把音轨挂到视频流上一起播放。
             // ★ 「听视频」开着时(user 开着聆听态点了下一条视频)要直接起播**音轨单流** ——
             //   否则会先起视频流再被 EnterListenMode 切一次, 白拉一段视频数据、还多闪一次画面。
+            //
+            // ★★ 续播**不用** `:start-time`: 那个选项只作用于主视频流, 用 input-slave 挂进来的
+            //   音轨仍然从 0 开始 ⇒ 音画不同步。改走项目里已经验证过的
+            //   `_resumeAfterSwitchMs`(Playing 事件里统一 seek + 看门狗), 远端/本地两条路都适用。
+            if (resumeMs > 0) _resumeAfterSwitchMs = resumeMs;
+            var started = false;
             if (_isListenMode && !string.IsNullOrEmpty(_listenAudioUrl))
             {
                 _listenResumeMs = 0;
                 ShowLoading("正在切换到听视频…");
-                PlayMedia(BuildMedia(_listenAudioUrl!, null));
+                started = PlayMedia(BuildMedia(_listenAudioUrl!, null));
             }
             else
             {
@@ -2000,7 +2012,12 @@ public partial class PlayerWindow : FluentWindow
                     _isListenMode = false;
                     ApplyListenMode(false);
                 }
-                PlayMedia(BuildMedia(url, playAudio));
+                started = PlayMedia(BuildMedia(url, playAudio));
+            }
+            if (started && resumePlan != null)
+            {
+                var prefix = resumePlan.Source == ResumeSource.Cloud ? "已从 B 站进度 " : "已从上次进度 ";
+                Svc.Toast.Show(prefix + FormatClock(TimeSpan.FromMilliseconds(resumeMs)) + " 继续播放");
             }
             UpdateListenButtonState();
             // 加载弹幕 + 查询点赞/关注/收藏状态(用于按钮状态切换)
@@ -2513,6 +2530,9 @@ public partial class PlayerWindow : FluentWindow
     private void RestartFromBeginning()
     {
         if (_closing || _mp == null) return;
+        // 用户明确要从头重播: 删除本机进度, 否则下次打开又跳回旧位置。
+        if (!_isLive && !_isLocalPlayback)
+            Svc.PlaybackProgress.MarkCompleted(_currentBvid, _currentCid);
         try
         {
             // ★ 先把"能不能重播"验完, 再动界面状态(2026-10-17 修"点重播黑屏"):
@@ -2610,7 +2630,11 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing || _mp == null) return;
         if (_aid <= 0 || _currentCid <= 0) return;
-        var progressSec = _mp.Time / 1000;
+        var progressMs = _mp.Time;
+        var progressSec = progressMs / 1000;
+        // 暂停/拖动是"自然的段落结束", 本机记录也立即落盘。
+        Svc.PlaybackProgress.SaveNow(_currentBvid, _currentCid, progressMs, _mp.Length,
+            _isLive, _isLocalPlayback);
         _ = Svc.HistorySync.ReportNowAsync(_aid, _currentCid, progressSec);
     }
 
@@ -3582,6 +3606,10 @@ public partial class PlayerWindow : FluentWindow
         if (_aid <= 0 || _currentCid <= 0) return;
 
         var progressSec = _mp.Time / 1000;
+        // 本机进度: 比云端 15 秒上报更细, 关闭/崩溃后也能续播。
+        Svc.PlaybackProgress.MaybeSave(_currentBvid, _currentCid, _mp.Time, _mp.Length,
+            _isLive, _isLocalPlayback);
+
         // ShouldReport 内部已含"未登录不上报"的语义(ReportHistoryAsync 会静默跳过),
         // 这里先做一次本地判断, 避免无意义地起 Task。
         if (!Svc.HistorySync.ShouldReport(_aid, _currentCid, progressSec)) return;
@@ -3718,6 +3746,8 @@ public partial class PlayerWindow : FluentWindow
         // 播到结尾也算一次"自然的段落结束", 把进度补报到云端(下次能从结尾续上)。
         // 注意不能用 _mp.Time —— EOF 之后它已经归零, 会把云端进度错误地报成 0;
         // 用 TimeChanged 留底的 _lastKnownMs 才是真实看完的位置。
+        // ★ 本机记录在看完时删除: 下次打开这条视频应该从头开始, 而不是一进去就播完。
+        Svc.PlaybackProgress.MarkCompleted(_currentBvid, _currentCid);
         if (_aid > 0 && _currentCid > 0)
             _ = Svc.HistorySync.ReportNowAsync(_aid, _currentCid, _lastKnownMs / 1000);
     }));
@@ -4382,7 +4412,7 @@ public partial class PlayerWindow : FluentWindow
             CancelRemuxPrefetch();
 
             var (playOk, playErr, main, backups, _, _, actualQn, audioUrl, remux,
-                 audioIds, actualAudioId) =
+                 _, _, audioIds, actualAudioId) =
                 await Svc.Api.GetPlayUrlAsync(_currentBvid, _currentCid, _currentQn, tier);
             if (_closing) return;
             if (!playOk && string.IsNullOrEmpty(main))
@@ -4457,7 +4487,7 @@ public partial class PlayerWindow : FluentWindow
             CancelRemuxPrefetch();
 
             var (_, playErr, main, backups, _, qualities, actualQn, audioUrl, remux,
-                 audioIds, actualAudioId) =
+                 _, _, audioIds, actualAudioId) =
                 await Svc.Api.GetPlayUrlAsync(_currentBvid, _currentCid, qn,
                     Svc.Settings.PreferredAudioTier);
             if (_closing) return;
@@ -9202,10 +9232,26 @@ public partial class PlayerWindow : FluentWindow
             // 再取就只能拿到 0, 云端历史会丢位置。这里同步取好数值交给 fire-and-forget 任务。
             var finalAid = _aid;
             var finalCid = _currentCid;
-            var finalProgress = 0L;
-            try { if (_mp != null && _mp.Length > 0) finalProgress = _mp.Time / 1000; } catch { /* 播放器已失效 */ }
+            var finalBvid = _currentBvid;
+            var finalProgressMs = 0L;
+            var finalLength = 0L;
+            try
+            {
+                if (_mp != null)
+                {
+                    finalLength = _mp.Length;
+                    var t = _mp.Time;
+                    if (t > 0) finalProgressMs = t;
+                }
+            }
+            catch { /* 播放器已失效 */ }
+            var finalProgress = finalProgressMs / 1000;
             if (finalAid > 0 && finalCid > 0)
                 _ = Svc.HistorySync.ReportNowAsync(finalAid, finalCid, finalProgress);
+            // 本机进度也在 Stop() 之前抓取并落盘 —— 关窗后云端可能还要等一会儿,
+            // 本机记录是"下次打开立刻续上"的兜底。
+            Svc.PlaybackProgress.SaveNow(finalBvid, finalCid, finalProgressMs, finalLength,
+                _isLive, _isLocalPlayback);
 
             _closing = true;
 
