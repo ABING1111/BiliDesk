@@ -1117,6 +1117,7 @@
                                         <Slider x:Name="ProgressSlider" Style="{StaticResource PlayerSlider}"
                                                 Minimum="0" Maximum="1000" Value="0"
                                                 Thumb.DragStarted="OnProgressDragStart"
+                                                Thumb.DragDelta="OnProgressDragDelta"
                                                 Thumb.DragCompleted="OnProgressDragEnd"
                                                 ValueChanged="OnProgressValueChanged" />
                                         <!-- 被标注的片段(sponsor 等)在这里画成色块。
@@ -1129,6 +1130,30 @@
                                                那条不透明的白轨道挡掉中间 3px, 只剩两道细边, 反而看不出是色块。 -->
                                         <Canvas x:Name="SponsorMarks" IsHitTestVisible="False"
                                                 ClipToBounds="True" />
+                                        <!-- 拖动进度条时浮出的「目标时间气泡」(2026-11-07 新增)。
+                                             ★ 为什么需要: 拖动时画面还停在原地, 用户只能从轨道上大致猜位置;
+                                               给一个精确的目标时间, 才知道自己正要跳到哪(长视频尤其重要:
+                                               1 小时 23 分的视频, 轨道上 1% 就是 50 秒)。
+                                             ★ 为什么放在**进度条这个 Grid 里**(而不是视频区浮层):
+                                               Canvas 不参与布局(不撑高度), 气泡用负的 Canvas.Top 浮到轨道上方,
+                                               控制栏的排版一点不受影响; 而放进视频区浮层就得自己算轨道坐标,
+                                               还得跟着控制栏的排版变(窄窗/全屏/铺满窗口三套布局)。
+                                             ★ 声明在 Slider 与 SponsorMarks **之后**: 气泡要盖在滑块和片段色块上面。
+                                             ★ IsHitTestVisible=False: 气泡正好压在滑块上方, 绝对不能吃掉拖动手势。
+                                             ★ ClipToBounds=False: 气泡要能浮出这个 Canvas 的边界(画布只有轨道那么高)。
+                                             ★ 文字写死白色 + 深底: 这块永远浮在视频画面上, 跟主题走的话浅色主题下
+                                               会变成深色字压在亮画面上, 直接看不见(同音量/倍速提示的老坑)。
+                                             ★ 不用 DropShadowEffect: 拖动时气泡每帧都动, 阴影特效会明显掉帧。 -->
+                                        <Canvas x:Name="ProgressHintLayer" IsHitTestVisible="False"
+                                                ClipToBounds="False">
+                                            <Border x:Name="ProgressHint" Visibility="Collapsed"
+                                                    Background="#E6000000" BorderBrush="#33FFFFFF"
+                                                    BorderThickness="1" CornerRadius="7" Padding="10,3">
+                                                <TextBlock x:Name="ProgressHintText" Text="00:00"
+                                                           Foreground="White" FontSize="12"
+                                                           HorizontalAlignment="Center" />
+                                            </Border>
+                                        </Canvas>
                                     </Grid>
                                     <!-- 操作行 -->
                                     <Grid Margin="0,2,0,0">

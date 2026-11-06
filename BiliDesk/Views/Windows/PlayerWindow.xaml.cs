@@ -205,6 +205,15 @@ public partial class PlayerWindow : FluentWindow
     private double _progressDragStartValue;
 
     /// <summary>
+    /// 用户**真的拖动**过进度条(与"点击轨道"区分开, 见 OnProgressDragDelta)。
+    ///
+    /// ★ 为什么单独记: WPF 的 <c>IsMoveToPointEnabled</c> 让"点击轨道"也走完整的拖动流程,
+    ///   光看 <c>_isSeeking</c> 分不清"点了轨道"和"拖着走"。而"点一下轨道就闪出个时间气泡"
+    ///   是纯噪音, 只有真拖动才该提示。
+    /// </summary>
+    private bool _progressDragMoved;
+
+    /// <summary>
     /// seek 静音: 跳转后视频画面要等缓冲(几百 ms~几秒), 但音频解复用快, 会**先出声** ——
     /// 用户听到的是"画面还黑着/冻着, 声音已经播到那边去了"。所以 seek 一发出就静音,
     /// 画面确认到位(或放弃/换片/播完)再恢复。-1 = 当前没有处于 seek 静音。
@@ -1411,6 +1420,9 @@ public partial class PlayerWindow : FluentWindow
         _resumeByStartTime = false;
         _eofSeekRebuildTried = false;
         _progressDragStartValue = 0;
+        // 拖动气泡也要收: 换片时若正好在拖进度条, 气泡会带着上一条视频的时间留在屏幕上。
+        _progressDragMoved = false;
+        HideProgressDragHint();
         // ★ 长按快进也要收: 若停在长按态换片, MediaPlayer 上的速率会**跟着留到新片子**
         //   (速率是 MediaPlayer 的属性, 不随 Media 重置 —— 实测)。所以这里必须先恢复。
         //   顺带把 _longPressFired 清掉 —— 否则新片的第一次 Up 会走进"结束快进"分支。
@@ -1545,6 +1557,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_seekRebuildTried), nameof(_seekBounceSeenMs), nameof(_seekBounceAt),
         nameof(_seekIssuedAt), nameof(_lastSeekTargetMs), nameof(_resumeByStartTime),
         nameof(_eofSeekRebuildTried), nameof(_progressDragStartValue),
+        nameof(_progressDragMoved),
         nameof(_audioHealCheckAt),
         nameof(_volumeRestoreDeadline), nameof(_volumeRestoreTries),
         nameof(_lastLoadingRevealMs),
@@ -3522,7 +3535,21 @@ public partial class PlayerWindow : FluentWindow
     /// 拖动过程由 _isSeeking 屏蔽, 松手才生效</summary>
     private void OnProgressValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_closing || _mp == null || _isSeeking || _updatingSlider) return;
+        if (_closing || _mp == null || _updatingSlider) return;
+
+        // ★ 拖动中: 只更新气泡, **一个 seek 都不发**。
+        //   发 seek 会打断正在飞的解复用器(表现: 无限缓冲), 所以拖动期间只提示目标时间,
+        //   真正的跳转等松手(见 OnProgressDragEnd)。
+        //   ★ _isSeeking 必须是**单独**一条分支: 它原先和别的条件合在一起提前 return,
+        //     那样气泡就永远等不到"拖动中"这个信号。
+        //   ★ 还要看 _progressDragMoved: "点击轨道"也会走这条路(见 OnProgressDragDelta),
+        //     那种情况下不该冒气泡。
+        if (_isSeeking)
+        {
+            if (_progressDragMoved) UpdateProgressDragHint(e.NewValue);
+            return;
+        }
+
         if (_mp.Length <= 0) return;
 
         // 用 Time(毫秒) 而不是 Position(0~1 的浮点): 位置量本身就是毫秒,
@@ -3759,11 +3786,35 @@ public partial class PlayerWindow : FluentWindow
         //   松手时若值没变, 就只是"点了一下", 不能再发第二条 seek。
         _progressDragStartValue = ProgressSlider.Value;
         _isSeeking = true;
+        // ★ 气泡**先不亮**: WPF 把"点一下轨道"也当成一次拖动(DragStarted 照样来),
+        //   此时亮气泡会闪一下又消失 —— 用户看到的是"莫名其妙弹了个 12:34"。
+        //   真正的"拖动"由 DragDelta 判定(见 OnProgressDragDelta): 只有鼠标真的移动了才算。
+        _progressDragMoved = false;
+    }
+
+    /// <summary>
+    /// 拖动过程中的鼠标移动 —— 判定"用户真的在拖"而不是"点了一下轨道"。
+    ///
+    /// ★ 为什么需要它: WPF 的 <c>IsMoveToPointEnabled</c> 让"点击轨道"也走完整的拖动流程
+    ///   (ValueChanged → DragStarted → DragCompleted)。如果气泡跟着 DragStarted 就亮,
+    ///   点一下轨道会"闪出一个时间气泡再消失" —— 纯噪音。
+    ///   而 <c>DragDelta</c> 只在鼠标**真的移动**时才来(轨道点击不产生它),
+    ///   所以它是"真拖动"的准确信号。
+    /// </summary>
+    private void OnProgressDragDelta(object sender, DragDeltaEventArgs e)
+    {
+        if (_closing || !_isSeeking) return;
+        _progressDragMoved = true;
+        // 这里的 Value 可能比鼠标位置**落后一拍**(WPF 是先发 DragDelta 再回写 Slider.Value),
+        // 下一条 ValueChanged 会立刻用新值纠正 —— 只是首帧可能差一点点, 无所谓。
+        UpdateProgressDragHint(ProgressSlider.Value);
     }
 
     private void OnProgressDragEnd(object sender, DragCompletedEventArgs e)
     {
         _isSeeking = false;
+        // 气泡立刻收: 松手后画面会跳到新位置, 气泡留着是多余的。
+        HideProgressDragHint();
         // 点击轨道 / 点在滑块上但没拖动 ⇒ ValueChanged 已经处理过(或本来就不需要跳),
         // 这里不再重复 seek。重复 seek 会打断正在飞的解复用器, 表现为无限缓冲。
         // 阈值取 0.01(0~1000 量程): 1px 的拖动在常见轨道宽度下约等于 1, 不会被误吞;
@@ -3778,6 +3829,65 @@ public partial class PlayerWindow : FluentWindow
         // 拖动结束后立刻补报一次: 用户主动跳转是"我在看这个位置"的强信号,
         // 如果只等 15 秒周期上报, 此时关掉窗口会把位置记在拖动前的老地方。
         SyncProgressNow();
+    }
+
+    /// <summary>
+    /// 更新"拖动进度条时浮出的目标时间气泡"。
+    ///
+    /// ★ 目的: 拖动时画面还停在原地, 用户只能从轨道上大致猜位置; 给一个精确的目标时间,
+    ///   才知道自己正要跳到哪(长视频里尤其重要 —— 1 小时 23 分的视频, 轨道上 1% 就是 50 秒)。
+    /// ★ 只在**真拖动**时显示: 点击轨道不算(那是"直接跳转", 不是"拖动预览"),
+    ///   见 OnProgressDragDelta 的说明。
+    /// ★ 拖动期间**不发 seek**: 发 seek 会打断正在飞的解复用器(表现: 无限缓冲),
+    ///   真正的跳转等松手(见 OnProgressDragEnd)。
+    /// </summary>
+    /// <param name="sliderValue">进度条当前值(0~1000 量程)</param>
+    private void UpdateProgressDragHint(double sliderValue)
+    {
+        if (_closing || ProgressHint == null || ProgressHintLayer == null) return;
+        if (_mp == null || _mp.Length <= 0) return;   // 直播/本地文件没有总时长, 没什么可提示
+
+        // 目标时间与真正 seek 的换算**必须一致** —— 否则气泡显示的时间和实际落点对不上,
+        // 用户会以为跳错了。公式见 SeekTo / OnProgressDragEnd。
+        var targetMs = (long)Math.Round(sliderValue / 1000.0 * _mp.Length);
+        targetMs = Math.Clamp(targetMs, 0, _mp.Length);
+
+        ProgressHintText.Text = FormatClock(TimeSpan.FromMilliseconds(targetMs));
+
+        // 量一次气泡的尺寸才能把它摆准(居中于滑块、且不超出轨道两端)。
+        ProgressHint.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var w = ProgressHint.DesiredSize.Width;
+        var h = ProgressHint.DesiredSize.Height;
+
+        // ★ 水平位置**用滑块的真实行程**而不是直接按控件宽度反推: Thumb 在模板里是个 11px 的圆点,
+        //   Value 0 对应的中心在 x=半宽 处(见 TrackMetrics)。按控件宽度反推会让气泡与滑块差半个圆点。
+        var (offset, usable) = TrackMetrics();
+        var ratio = Math.Clamp(sliderValue / 1000.0, 0, 1);
+        var centerX = offset + usable * ratio;
+
+        // 夹在轨道范围内: 拖到最左/最右时气泡不能飘出视频区。
+        var layerWidth = ProgressHintLayer.ActualWidth;
+        var x = centerX - w / 2;
+        if (layerWidth > 0) x = Math.Clamp(x, 0, Math.Max(0, layerWidth - w));
+        x = Math.Max(0, x);
+
+        // 垂直方向: 浮在轨道**上方**。Canvas.Top 取负值即可浮出这个 Canvas(它只有轨道那么高)。
+        var y = -h - 6;
+        if (ProgressHintLayer.ActualHeight > 0)
+            y = Math.Min(y, ProgressHintLayer.ActualHeight - h);
+
+        Canvas.SetLeft(ProgressHint, x);
+        Canvas.SetTop(ProgressHint, y);
+
+        // 不做淡入: 拖动时气泡每帧都在动, 动画只会让位置与透明度不同步, 反而晃眼。
+        ProgressHint.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>隐藏"拖动进度条"气泡(松手 / 换片 / 关闭时调用)。</summary>
+    private void HideProgressDragHint()
+    {
+        if (_closing || ProgressHint == null) return;
+        ProgressHint.Visibility = Visibility.Collapsed;
     }
 
     private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -9288,6 +9398,8 @@ public partial class PlayerWindow : FluentWindow
             _controlsHideTimer?.Stop();
             StopVolumeOsd();
             StopSpeedOsd();
+            // 拖动气泡: 关闭时若还挂着, 会跟着浮层窗口一起残留在屏幕上。
+            HideProgressDragHint();
 
             // 先把覆盖层摘掉再隐藏窗口, 否则底部控制栏会以残影形式留在屏幕上
             DetachVideoOverlay();
@@ -9371,6 +9483,7 @@ public partial class PlayerWindow : FluentWindow
         StopAllTimers();
         StopVolumeOsd();
         StopSpeedOsd();
+        HideProgressDragHint();
         // 正常路径下 _mp / VideoView 已在 TeardownAndCloseAsync 里释放过了,
         // 这里只兜底那些没走完正常关闭流程的情况(例如构造中途抛异常),
         // 避免对同一个 MediaPlayer 重复 Dispose。
