@@ -229,6 +229,8 @@
                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Grid>
                         </StackPanel>
+                        <!-- 2026-11-06 用户要求去掉侧边栏「动态」入口的未读红点:
+                             入口自己不需要报未读, 红点只在动态页左栏每一行上给。 -->
                     </RadioButton>
 
                     <RadioButton x:Name="NavMine" GroupName="NavGroup" Style="{StaticResource NavRadioStyle}"

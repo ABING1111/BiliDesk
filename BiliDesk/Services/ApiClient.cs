@@ -1344,6 +1344,119 @@ public class ApiClient
     }
 
     /// <summary>
+    /// 动态导航接口的**增量**查询(2026-11-06 新动态红点用)。
+    ///
+    /// 与 <see cref="GetDynamicFeedAsync"/> 打同一个端点, 但:
+    ///   · 可以带 `update_baseline` —— 接口会按这个基线返回 `update_num`(基线以上的新动态数),
+    ///     这是 B 站自己统计的"有多少条新动态", 比本地拿 bvid 逐个比对可靠;
+    ///   · 解析的是轻量的 <see cref="DynamicNavEntry"/>(id/mid/时间), 不需要视频卡片字段。
+    ///
+    /// 返回: 条目、下一页 offset、has_more、本次响应里的 update_baseline、update_num。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<DynamicNavEntry>? entries,
+        string? nextOffset, bool hasMore, string? updateBaseline, int updateNum)>
+        GetDynamicNavAsync(string? offset = null, string? updateBaseline = null)
+    {
+        var entries = new List<DynamicNavEntry>();
+        try
+        {
+            await EnsureBuvidAsync();
+            var ps = new Dictionary<string, string>();
+            if (!string.IsNullOrEmpty(offset)) ps["offset"] = offset;
+            if (!string.IsNullOrEmpty(updateBaseline)) ps["update_baseline"] = updateBaseline;
+
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/nav", ps,
+                sign: true, referer: "https://t.bilibili.com/");
+            if (code != 0 || data == null)
+                return (false, code == -101 ? "请先登录后查看动态" : (msg ?? "动态加载失败"),
+                    null, null, false, null, 0);
+
+            var d = data.Value;
+            var hasMore = d.TryGetProperty("has_more", out var hm) &&
+                          (hm.ValueKind == JsonValueKind.True ||
+                           (hm.ValueKind == JsonValueKind.Number && hm.GetInt32() == 1));
+            var next = d.TryGetProperty("offset", out var off) && off.ValueKind == JsonValueKind.String
+                ? off.GetString() : null;
+            var baseline = d.TryGetProperty("update_baseline", out var ub) &&
+                           ub.ValueKind == JsonValueKind.String
+                ? ub.GetString() : null;
+            var updateNum = d.TryGetProperty("update_num", out var un) &&
+                            un.ValueKind == JsonValueKind.Number
+                ? un.GetInt32() : 0;
+
+            if (d.TryGetProperty("items", out var list) && list.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in list.EnumerateArray())
+                {
+                    var entry = ParseDynamicNavEntry(e);
+                    if (entry != null) entries.Add(entry);
+                }
+            }
+            return (true, null, entries, next, hasMore, baseline, updateNum);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, ex.Message, null, null, false, null, 0);
+        }
+    }
+
+    /// <summary>把一条动态解析成红点判断用的轻量元数据。</summary>
+    private static DynamicNavEntry? ParseDynamicNavEntry(JsonElement e)
+    {
+        try
+        {
+            var id = GetStr(e, "id_str");
+            if (id.Length == 0)
+            {
+                // 旧形态偶尔把 id 放在 rid; 用数字转字符串兜底。
+                var rid = GetLong(e, "rid");
+                if (rid > 0) id = rid.ToString();
+            }
+            if (id.Length == 0) return null;
+
+            var mid = 0L;
+            if (e.TryGetProperty("author", out var au) && au.ValueKind == JsonValueKind.Object)
+                mid = GetLongLoose(au, "mid");
+            if (mid <= 0) mid = GetLongLoose(e, "uid");
+            if (mid <= 0) return null;
+
+            var authorName = "";
+            if (e.TryGetProperty("author", out var auName) && auName.ValueKind == JsonValueKind.Object)
+                authorName = GetStr(auName, "name");
+            if (authorName.Length == 0) authorName = GetStr(e, "uname");
+
+            var flatType = 0;
+            var typeText = GetStr(e, "type");
+            if (typeText.Length > 0) int.TryParse(typeText, out flatType);
+            else if (e.TryGetProperty("type", out var tv) && tv.ValueKind == JsonValueKind.Number)
+                flatType = tv.GetInt32();
+
+            var bvid = flatType == 8 ? ExtractBvidFromJumpUrl(GetStr(e, "jump_url")) : "";
+            if (bvid.Length == 0) bvid = GetStr(e, "bvid");
+
+            // 复用视频那边的 pub_time 解析(相对时间反推 + 原文), 返回的 Pubdate 是近似秒。
+            var tmp = new VideoItem();
+            ReadDynamicPubTime(e, tmp);
+
+            return new DynamicNavEntry
+            {
+                Id = id,
+                Mid = mid,
+                AuthorName = authorName,
+                Pubdate = tmp.Pubdate,
+                Bvid = bvid,
+                Type = flatType,
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// 把一条动态卡映射成 VideoItem(只取"能播的视频"), 不是视频动态就返回 null。
     ///
     /// **实测的返回是扁平结构**(2026-09-25, 带 WBI + 登录态):
@@ -1684,6 +1797,55 @@ public class ApiClient
             Json = node,
             Urls = urls,
         });
+    }
+
+    /// <summary>
+    /// 「最近更新的关注 UP」列表(2026-11-06 新动态红点用)。
+    ///
+    /// 接口: GET /x/polymer/web-dynamic/v1/portal
+    ///   data.up_list = [{ mid, uname, face, has_update }] —— B 站自己统计的
+    ///   "这个 UP 最近有没有更新", 服务端判定, 不依赖本地基准。
+    ///
+    /// ★ 为什么需要它(而不是只靠 feed/nav):
+    ///   feed/nav 只返回**近期**动态(通常几天内)。关注 2790 人时, 一个 UP 前天发了视频、
+    ///   用户一直没点开, 它早就被挤出动态流, 红点也就永远亮不起来 —— 这正是
+    ///   "经常收不到 UP 更新的红点提示"的根因之一。
+    ///   portal 的 up_list 覆盖面更广, 用它给"有没有新动态"打底; feed/nav 的 id 用来算条数。
+    /// ★ face 字段要留着: 左栏的未读占位行(还没被分页加载出来的 UP)只能从这里拿头像,
+    ///   缺了它那一格会显示别人的头像(虚拟化回收时旧图没清掉)。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<(long mid, string name, string face, bool hasUpdate)>? ups)>
+        GetRecentUpdatedUpsAsync()
+    {
+        try
+        {
+            await EnsureBuvidAsync();
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/polymer/web-dynamic/v1/portal",
+                new Dictionary<string, string>(),
+                referer: "https://t.bilibili.com/");
+            if (code != 0 || data == null)
+                return (false, code == -101 ? "请先登录" : (msg ?? "请求失败"), null);
+
+            var ups = new List<(long, string, string, bool)>();
+            if (data.Value.TryGetProperty("up_list", out var list) && list.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in list.EnumerateArray())
+                {
+                    var mid = GetLongLoose(e, "mid");
+                    if (mid <= 0) continue;
+                    var hasUpdate = e.TryGetProperty("has_update", out var hu) &&
+                                    (hu.ValueKind == JsonValueKind.True ||
+                                     (hu.ValueKind == JsonValueKind.Number && hu.GetInt32() == 1));
+                    ups.Add((mid, GetStr(e, "uname"), UrlUtil.Normalize(GetStr(e, "face")), hasUpdate));
+                }
+            }
+            return (true, null, ups);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null);
+        }
     }
 
     /// <summary>获取视频播放地址。

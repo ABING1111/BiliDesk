@@ -585,6 +585,33 @@ public sealed class SearchUserItem
 }
 
 /// <summary>
+/// 动态导航接口(feed/nav)里的一条动态的**轻量元数据**。
+///
+/// 与 <see cref="VideoItem"/> 分开: 未读红点只需要"谁在什么时候发了哪条动态",
+/// 不需要封面/标题/播放量; 单独解析可以复用同一个接口而不用把整套视频卡片数据搬一遍。
+/// </summary>
+public sealed class DynamicNavEntry
+{
+    /// <summary>动态 id(id_str)。用于判断新旧, 比 bvid 更可靠(转发/非视频动态也有 id)。</summary>
+    public string Id { get; set; } = "";
+
+    /// <summary>发布者 mid(动态的 author, 转发动态是转发者本人)。</summary>
+    public long Mid { get; set; }
+
+    /// <summary>发布者昵称(动态流 author.name / portal uname)。未读置顶分组要显示名字。</summary>
+    public string AuthorName { get; set; } = "";
+
+    /// <summary>发布时间(Unix 秒; 接口只给 "2小时前" 时是近似值)。</summary>
+    public long Pubdate { get; set; }
+
+    /// <summary>视频 bvid(仅视频动态; 非视频为空)。</summary>
+    public string Bvid { get; set; } = "";
+
+    /// <summary>动态类型(8=视频; 转发=1, 等)。</summary>
+    public int Type { get; set; }
+}
+
+/// <summary>
 /// 热搜榜的一条(首页右上角搜索卡展开后的「热搜」区块)。
 ///
 /// 接口的 key 与展示是两回事, 所以这里把两者都留着:
@@ -622,6 +649,17 @@ public class FollowUser : System.ComponentModel.INotifyPropertyChanged
     public string Sign { get; set; } = "";
     public int VerifyType { get; set; } = -1;
     public string VerifyDesc { get; set; } = "";
+
+    /// <summary>
+    /// 这一行是"有未读、但还没被分页加载出来"的**占位行**(2026-11-06)。
+    ///
+    /// ★ 用途: 关注 2790 人时, 一个刚更新的 UP 可能还在第 2 页之后。左栏只做一个面板,
+    ///   所以这类 UP 作为占位行插进 Users 最前面, 等分页真的取到这个人时用真实数据补全
+    ///   (见 FollowViewModel.MergeLoadedUser), 避免同一行出现两次。
+    /// ★ 占位行不参与"关注总数"统计, 否则「已加载 N / 2790」里的 N 会虚高。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsPlaceholder { get; set; }
 
     private bool _isSelected;
 

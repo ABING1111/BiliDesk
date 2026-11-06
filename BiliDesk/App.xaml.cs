@@ -130,6 +130,10 @@ public partial class App : Application
         // 系统托盘: 双击回主界面, 右键可退出(失败只记日志, 不影响启动)
         TrayService.Instance.Initialize();
 
+        // UP 主动态新消息: 应用级轮询, 不依赖动态页是否打开。
+        // 启动后立刻拉一次, 之后每 60 秒一次; 导航栏红点与动态页左栏共用这份状态。
+        DynamicNotifyService.Instance.Start();
+
         // ★ 补齐写操作风控 Cookie(2026-11-12 修"换了扫码登录之后点赞报风控"):
         //   用户的 session.json 是上一版登录流程写的, 里面没有 b_nut/sid 这几项,
         //   而它们在 WebView2 的 Profile 里本来就躺着。启动后读一次即可, 用户无感 ——
@@ -259,6 +263,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         IsExiting = true;
+        DynamicNotifyService.Instance.Stop();
         // 播放进度: 退出前把内存里的最后一次位置落盘(播放器关窗时通常已经写过, 这里是兜底)。
         Svc.PlaybackProgress.Flush();
         // 设置是"异步合并写"的(见 SettingsStore.Save), 退出前把还在队列里的最后一次写入落盘,

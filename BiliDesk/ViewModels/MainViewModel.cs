@@ -61,6 +61,8 @@ public class MainViewModel : ObservableObject
         NavigateCommand = new RelayCommand(
             p => { if (p is PageKey k) Navigate(k); });
         SessionManager.Instance.Changed += OnSessionChanged;
+        // ★ 2026-11-06 用户要求去掉侧边栏「动态」入口的红点提示 ——
+        //   这里不再订阅 DynamicNotifyService(服务本身继续跑, 动态页左栏仍在用它)。
         _ = RefreshUserAsync();
     }
 

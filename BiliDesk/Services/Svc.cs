@@ -26,5 +26,6 @@ public static class Svc
     /// <summary>本机播放进度记录与自动续播</summary>
     public static PlaybackProgressService PlaybackProgress => PlaybackProgressService.Instance;
     /// <summary>应用级 UP 主动态新消息检测(导航栏红点 / 动态页排序)</summary>
+    public static DynamicNotifyService DynamicNotify => DynamicNotifyService.Instance;
     public static NavigationDispatcher? Navigate { get; set; }
 }

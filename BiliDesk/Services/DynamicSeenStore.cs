@@ -6,7 +6,11 @@ using System.Text.Json;
 namespace BiliDesk.Services;
 
 /// <summary>
-/// 动态页左栏「未读红点」的**本地基准**: 每个 UP 主上次看到的最新一条动态的 bvid。
+/// 动态页左栏「未读红点」的**本地基准**: 每个 UP 主上次看到的最新一条动态的 id。
+///
+/// ★ 2026-11-06 起存的是动态 id(id_str, 雪花 id); 旧版存的是 bvid。
+///   读取时两种都兼容: 数字 id 按大小比较, BV 开头的按 bvid 在动态流里的位置换算。
+///   (服务见 <see cref="DynamicNotifyService"/>。)
 ///
 /// ★ 为什么是本地判断而不是问接口(2026-10-15 用户选定):
 ///   B 站官方的"新动态"是服务端基线(请求带 update_baseline, 返回 update_num),
@@ -36,6 +40,9 @@ public static class DynamicSeenStore
     private static bool _dirty;
 
     private static Dictionary<long, string> Map => _map ??= Load();
+
+    /// <summary>当前记了多少个 UP 的基准。首次运行判断用它(0 = 还没建过基准)。</summary>
+    public static int Count => Map.Count;
 
     private static Dictionary<long, string> Load()
     {
@@ -69,6 +76,13 @@ public static class DynamicSeenStore
         if (Map.TryGetValue(mid, out var old) && old == bvid) return;
         Map[mid] = bvid;
         _dirty = true;
+    }
+
+    /// <summary>取消关注时忘掉这个 UP 的基准(重新关注后从当前最新一条重新开始)。</summary>
+    public static void Remove(long mid)
+    {
+        if (mid <= 0) return;
+        if (Map.Remove(mid)) _dirty = true;
     }
 
     /// <summary>

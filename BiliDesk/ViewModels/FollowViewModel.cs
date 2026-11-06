@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using BiliDesk.Helpers;
@@ -20,7 +21,8 @@ namespace BiliDesk.ViewModels;
 ///       - 具体某 UP: 该 UP 的投稿视频(空间投稿接口, 页码分页)。
 /// 动态里非视频的内容(图文/纯文字/投票)没有可播对象, 不进这个列表。
 ///
-/// 未读红点的判断在 <see cref="UpdateUnreadBadges"/> —— 本地比对, 不额外请求接口。
+/// 未读红点由应用级 <see cref="DynamicNotifyService"/> 维护, 这个 VM 只负责把状态
+/// 应用到左栏并排序。
 /// </summary>
 public class FollowViewModel : ObservableObject
 {
@@ -76,6 +78,10 @@ public class FollowViewModel : ObservableObject
     public string Error { get => _error; private set => SetProperty(ref _error, value); }
     public int Count => Users.Count;
     public bool NotLoggedIn => !Svc.Session.HasLogin;
+
+
+    /// <summary>动态页头部「全部已读」按钮的可见性。</summary>
+    public bool HasAnyUnread => Svc.DynamicNotify.HasUnread;
 
     // ------------------------------------------------------------ 关注直播看板(2026-10-31)
 
@@ -184,6 +190,7 @@ public class FollowViewModel : ObservableObject
     public ICommand LoadMoreCommand { get; }
     public ICommand LoginCommand { get; }
     public ICommand OpenUpCommand { get; }
+    public ICommand MarkAllReadCommand { get; }
 
     // 分页游标(两种来源各自一套)。
     // "快速连点导致结果串台"用 LoadSelectionAsync 里的 forUp 快照 + SelectedUp 比对兜住。
@@ -201,6 +208,12 @@ public class FollowViewModel : ObservableObject
     {
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
         LoadMoreCommand = new AsyncRelayCommand(LoadMoreAsync);
+        MarkAllReadCommand = new RelayCommand(() =>
+        {
+            Svc.DynamicNotify.MarkAllRead();
+            ApplyNotifyStates();
+            OnPropertyChanged(nameof(HasAnyUnread));
+        });
         LoginCommand = new RelayCommand(() =>
         {
             var win = new Views.LoginWindow
@@ -218,11 +231,31 @@ public class FollowViewModel : ObservableObject
             }
         });
         Svc.Session.Changed += OnSessionChanged;
+        Svc.DynamicNotify.Updated += OnNotifyUpdated;
+    }
+
+    private void OnNotifyUpdated()
+    {
+        // ★ 2026-11-06 用户要求"点带红点的 UP 以后不要瞬间跳位置":
+        //   服务的 Updated 事件每 60 秒也会因轮询触发一次, 以前这里顺手重排了整条列表,
+        //   于是"点开一个红点 UP"= 它的红点清零 = 当场从顶部掉到已读区。
+        //   现在这里**只就地更新红点数字**, 位置一律不动; 要重排就退出动态页再进来,
+        //   或点右下角刷新(见 ReshapeUserList 的调用点)。
+        ApplyNotifyStates();
     }
 
     private void OnSessionChanged()
     {
         OnPropertyChanged(nameof(NotLoggedIn));
+        if (!Svc.Session.HasLogin)
+        {
+            // 退出登录: 不要让上一个账号的关注列表/未读状态留在界面上。
+            Users.Clear();
+            FeedItems.Clear();
+            SelectedUp = null;
+            OnPropertyChanged(nameof(Count));
+            OnPropertyChanged(nameof(HasAnyUnread));
+        }
         _ = RefreshAsync();
     }
 
@@ -247,7 +280,9 @@ public class FollowViewModel : ObservableObject
     public void RemoveUser(FollowUser u)
     {
         Users.Remove(u);
+        Svc.DynamicNotify.Forget(u.Mid);
         OnPropertyChanged(nameof(Count));
+        OnPropertyChanged(nameof(HasAnyUnread));
         if (SelectedUp?.Mid == u.Mid) SelectedUp = null;
     }
 
@@ -263,6 +298,9 @@ public class FollowViewModel : ObservableObject
     {
         if (u == null || u.Mid <= 0) return Task.CompletedTask;
         SelectedUp = u;
+        // 点开 TA = 已读: 清掉这个 UP 的红点, 基准推进到最新一条。
+        Svc.DynamicNotify.MarkRead(u.Mid);
+        ApplyNotifyStates();
         return LoadSelectionAsync(reset: true);
     }
 
@@ -297,6 +335,10 @@ public class FollowViewModel : ObservableObject
                     foreach (var u in list) Users.Add(u);
                     _followingPage = 1;
                     OnPropertyChanged(nameof(Count));
+                    // 进入页面/刷新是**唯一**重排左栏的时机(2026-11-06 用户要求:
+                    // 点带红点的 UP 不要当场跳位置, 位置只在重新进入动态页后刷新)。
+                    ApplyNotifyStates();
+                    RefreshUserPositions();
                 }
                 else if (Users.Count == 0)
                 {
@@ -307,6 +349,8 @@ public class FollowViewModel : ObservableObject
             await LoadSelectionAsync(reset: true);
             // 关注直播看板: 与动态流并行(不 await 到关键路径里), 慢一点没关系
             _ = RefreshLiveBoardAsync();
+            // 刷新未读红点: 服务内部有 25 秒新鲜窗口, 刚轮询过就不重复请求。
+            _ = RefreshUnreadBadgesAsync();
         }
         catch (Exception ex)
         {
@@ -346,8 +390,6 @@ public class FollowViewModel : ObservableObject
                     //   否则它们会一直挂在列表末尾, 与排序规则矛盾。
                     if (SelectedUp == null)
                     {
-                        UpdateUnreadBadges();
-                        ReorderUsersByActivity();
                     }
                 }
             });
@@ -447,18 +489,11 @@ public class FollowViewModel : ObservableObject
                 OnPropertyChanged(nameof(ShowFullLoading));
                 if (FeedItems.Count == 0)
                     Error = forUp == null ? "关注的 UP 最近没有视频投稿" : "该 UP 暂时没有投稿视频";
-                // 未读红点: 看"全部动态"时刷新各 UP 的红点; 点开某个 UP 就清掉 TA 的红点。
-                // ★ 放在这里(而不是刷新入口)是因为**只有拿到这一页条目才能判断**:
-                //   红点靠"该 UP 最新一条"与本地基准比对, 没有列表就无从比。
-                if (forUp == null)
-                {
-                    UpdateUnreadBadges();
-                    // ★ 2026-11-05: 左栏按"最近有更新"排序。放在红点刷新**之后** ——
-                    //   两者读的是同一批数据(动态流), 顺序无所谓, 但红点先算完可以让
-                    //   "有没有更新"与"排在多前"看到的是同一份事实。
-                    ReorderUsersByActivity();
-                }
-                else ClearUnreadBadge(forUp);
+
+
+                // 左栏未读状态由应用级服务维护; 这里只把最新状态应用上(**不重排**,
+                // 位置只在进入动态页/点刷新时刷新, 见 RefreshUserPositions)。
+                ApplyNotifyStates();
             });
         }
         catch (Exception ex)
@@ -492,178 +527,170 @@ public class FollowViewModel : ObservableObject
         }
     }
 
-    // ------------------------------------------------------------ 左栏未读红点
 
-    /// <summary>红点轻量刷新在途(定时器与页面切回可能同时触发)</summary>
-    private bool _unreadRefreshBusy;
+
+    // ------------------------------------------------------------ 未读红点(应用级服务)
 
     /// <summary>
-    /// 只刷新左栏未读红点, **不动右栏列表**。
+    /// 刷新未读红点。真正的轮询在 <see cref="DynamicNotifyService"/> 里(应用级、每 60 秒),
+    /// 这里只请求它"现在刷一次"并把状态应用到左栏, 不碰右栏列表。
     ///
-    /// 用于两个场景:
-    ///   · 从别的页面切回动态页(页面实例被缓存, FeedItems 还是上次的);
-    ///   · FollowPage 的定时轮询。
-    ///
-    /// ★ 为什么不直接复用 LoadSelectionAsync: 那会清空 FeedItems 并弹整页 loading,
-    ///   用户只是切回来瞄一眼红点, 不该被强制回到列表顶部; 这里单独拉第一页动态就够了。
+    /// ★ 调用时机 = **进入动态页 / 点刷新**。这也是重排左栏的时机(见 RefreshUserPositions):
+    ///   60 秒轮询(OnNotifyUpdated)只更新红点数字, 不动行位置 —— 否则用户刚点开一个
+    ///   带红点的 UP, 它当场就从顶部掉下去。
     /// </summary>
-    public async Task RefreshUnreadBadgesAsync()
+    public async Task RefreshUnreadBadgesAsync(bool force = false)
     {
-        if (!Svc.Session.HasLogin || _unreadRefreshBusy || Users.Count == 0) return;
-        _unreadRefreshBusy = true;
-        try
-        {
-            var (ok, _, items, _, _) = await Svc.Api.GetDynamicFeedAsync(null);
-            if (!ok || items == null) return;   // 静默: 红点刷新失败不影响页面
-            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
-            {
-                UpdateUnreadBadges(items);
-                // ★ 2026-11-05: 轮询也顺手按"最近更新"重排左栏 —— 用户等着看的就是
-                //   "谁刚更了", 排序不动的话红点亮了但列表还是老顺序, 等于没提示。
-                //   这里传临时 items 而不是 FeedItems: 轮询刻意不碰右栏内容(见方法说明),
-                //   但左栏的排序依据同样来自这批动态条目。
-                if (SelectedUp == null) ReorderUsersByActivity(items);
-            });
-        }
-        catch
-        {
-            // 静默(同上)
-        }
-        finally
-        {
-            _unreadRefreshBusy = false;
-        }
+        if (!Svc.Session.HasLogin || Users.Count == 0) return;
+        await Svc.DynamicNotify.RefreshAsync(force);
+        ApplyNotifyStates();
+        RefreshUserPositions();
+    }
+
+    /// <summary>把服务里的未读状态应用到已加载的 UP 和搜索结果上。</summary>
+    private void ApplyNotifyStates()
+    {
+        foreach (var u in Users) ApplyNotifyState(u);
+        OnPropertyChanged(nameof(HasAnyUnread));
     }
 
     /// <summary>
-    /// 「全部动态」加载完 → 按这一页的条目刷新左栏各 UP 的未读红点。
+    /// 重排左栏 + 补齐未读占位行 —— **只在进入动态页 / 点刷新时调用**(2026-11-06 用户要求)。
     ///
-    /// 规则(基准存在 <see cref="DynamicSeenStore"/>, 本地判断、不请求接口):
-    ///   · 没有基准的 UP: 只把 TA 当前最新一条记成基准, **不显示红点**(见该类的说明);
-    ///   · 基准与最新一条相同: 红点消失;
-    ///   · 不同: NewCount = 这一页里排在基准那条**之前**的该 UP 投稿数
-    ///     (基准那条已经翻出本页时, 本页所有该 UP 的条目都算新的)。
-    ///     界面用它同时驱动两处: 头像左侧的红点(亮不亮)与右下角的数字角标(几条)。
-    /// ★ 本页没有出现的 UP **不动**: 动态接口只给近期条目, 一个 UP 最近没投稿就无从判断,
-    ///   这时把红点清掉是凭空断言"没更新"。宁可留着旧红点, 也不给错的信息。
+    /// ★ 为什么不能每次轮询都排: 用户报"点一个带红点的 UP, 它当场就跳走了"——
+    ///   MarkRead 会触发服务的 Updated 事件, 而那里原本也调重排, 于是刚点的那一行
+    ///   立刻从顶部掉到"已读"区。现在事件里只更新红点数字, 位置保持不变,
+    ///   要看到新顺序就退出动态页再进来(或点右下角刷新)。
     /// </summary>
-    private void UpdateUnreadBadges() => UpdateUnreadBadges(FeedItems);
-
-    /// <summary>用指定的动态条目集合刷新红点(定时刷新时传临时列表, 不碰 FeedItems)</summary>
-    private void UpdateUnreadBadges(IReadOnlyList<VideoItem> items)
+    private void RefreshUserPositions()
     {
-        // 每个 UP 在这一页里最新的一条(动态流是按时间倒序拼的, 先遇到的就是最新)
-        var newest = new Dictionary<long, string>();
-        foreach (var it in items)
-        {
-            if (it.OwnerMid <= 0 || string.IsNullOrEmpty(it.Bvid)) continue;
-            if (!newest.ContainsKey(it.OwnerMid)) newest[it.OwnerMid] = it.Bvid;
-        }
-
-        foreach (var u in Users)
-        {
-            if (!newest.TryGetValue(u.Mid, out var top)) continue;
-
-            if (!DynamicSeenStore.TryGet(u.Mid, out var seen))
-            {
-                DynamicSeenStore.Set(u.Mid, top);
-                u.NewCount = 0;
-                continue;
-            }
-            if (seen == top)
-            {
-                u.NewCount = 0;
-                continue;
-            }
-
-            var n = 0;
-            foreach (var it in items)
-            {
-                if (it.OwnerMid != u.Mid) continue;
-                if (it.Bvid == seen) break;   // 追到上次看过的那条为止
-                n++;
-            }
-            u.NewCount = n;
-        }
-        DynamicSeenStore.Flush();
+        SyncUnreadPlaceholders();
+        ReorderUsersByActivity(FeedItems);
     }
 
-    // ------------------------------------------------------------ 左栏按最近更新排序
-
     /// <summary>
-    /// 左栏「关注的 UP」按**最近有更新**排序: 更新得越勤的排得越靠前。
+    /// 把"有未读红点、但还没被分页加载出来"的 UP 直接插进**同一个** Users 列表(2026-11-06)。
     ///
-    /// ★ 为什么需要(2026-11-05 用户要求):
-    ///   关注列表接口(<c>/x/relation/followings</c>)只按**关注时间**排, 跟"最近有没有
-    ///   更新"毫无关系 —— 于是左栏是一个跟内容活跃度无关的固定列表, 关注的 UP 有几十个时,
-    ///   想找"最近在更的那个"只能一个个点过去看。
-    ///
-    ///   ★ 数据从哪来: **动态流**里已经有了。动态流按时间倒序, 某个 UP 最先出现的那条
-    ///   就是 TA 最新的动态, 拿它的发布时间当"最近更新时间"即可 ——
-    ///   **不用新增任何接口请求**。
-    ///
-    /// ★ 排序规则(要稳定, 不能同一天内的两条互相换位导致列表抖动):
-    ///   ① 有更新时间的按时间**从新到旧**;
-    ///   ② 时间**相同**的按名字排(稳定, 不随刷新跳动);
-    ///   ③ **没有**更新时间的(动态流里还没出现过)排在有更新时间的那些**之后**,
-    ///      且它们**彼此之间**保持原相对顺序 —— "最近没更新"不等于"不该被看见",
-    ///      但确实该让位给正在更新的。
-    ///
-    /// ★ 什么时候排:
-    ///   · 「全部动态」加载完(LoadSelectionAsync) —— 主路径;
-    ///   · 左栏翻出更多关注(LoadMoreAsync) —— 新翻出来的 UP 也要参与排序;
-    ///   · 定时轮询(RefreshUnreadBadgesAsync) —— 红点亮了但列表还是老顺序等于没提示。
-    ///
-    /// ★ 为什么只在「全部动态」下排: 单 UP 视图的动态流只有那一个 UP 的投稿,
-    ///   拿它去给**别的** UP 排序会把基准写错(见 UpdateUnreadBadges 的同款说明)。
-    ///
-    /// ★ 为什么用"重排集合"而不是"给 ItemsControl 换 ItemsSource":
-    ///   ObservableCollection 没有现成的排序方法, 换 ItemsSource 会让左栏整个重建
-    ///   (选中高亮、滚动位置、悬停态全丢)。这里**就地 Move** —— 每移动一项都发一次
-    ///   CollectionChanged, 但只动真正换了位的那些, 视觉上是平滑的。
+    /// ★ 为什么不再单独做一个「有新视频」面板(用户 2026-11-06 要求"左栏只做一个面板"):
+    ///   关注 2790 人时, 一个刚更新的 UP 很可能还在第 2 页之后, 单独开一个面板会让左栏
+    ///   变成"两个列表", 视觉上很乱。现在把这类 UP 作为**占位行**插到 Users 最前面,
+    ///   与正常行同一个列表、同一套模板 —— 点进去就是正常的"只看 TA 的投稿"。
+    /// ★ 占位行带 Mid/Name/头像/未读数; 等分页真的加载到这个人时, 用真实数据**就地补全**
+    ///   (见 LoadMoreAsync 里的 MergeLoadedUser), 不会出现两行同一个人。
+    /// ★ 头像(Face)必须有(2026-11-06 用户报"更新的 UP 头像不显示/显示别人的"):
+    ///   占位行不来自关注列表接口, 只能从 portal 的 up_list 拿; 拿不到的话那一格
+    ///   在虚拟化回收后会残留**上一个 UP 的头像** —— 这就是"错显示其他 UP 头像"的来源。
     /// </summary>
-    private void ReorderUsersByActivity() => ReorderUsersByActivity(FeedItems);
+    private void SyncUnreadPlaceholders()
+    {
+        var snapshot = Svc.DynamicNotify.GetUnreadSnapshot();
+        var loadedMids = new HashSet<long>(Users.Where(u => !u.IsPlaceholder).Select(u => u.Mid));
+
+        var want = new List<(long Mid, string Name, string Face, int NewCount, long Pub)>();
+        foreach (var s in snapshot)
+        {
+            if (loadedMids.Contains(s.Mid) || s.NewCount <= 0) continue;
+            want.Add(s);
+        }
+
+        // 先删掉不再需要的占位行(已读 / 已被真实数据取代)
+        // ★ 正在选中的那一行不删: 用户点开一个"未读占位行"的瞬间它就已经已读了,
+        //   立刻删掉会让左栏选中高亮凭空消失, 右栏却还在显示 TA 的视频 —— 像点错了。
+        //   它会在用户切到别的 UP / 下一次轮询时自然消失。
+        for (var i = Users.Count - 1; i >= 0; i--)
+        {
+            if (!Users[i].IsPlaceholder) continue;
+            if (Users[i] == SelectedUp) continue;
+            var keep = false;
+            foreach (var w in want)
+                if (Users[i].Mid == w.Mid) { keep = true; break; }
+            if (!keep) Users.RemoveAt(i);
+        }
+
+        // 再按快照顺序补/更新(占位行一律在最前面)
+        for (var target = 0; target < want.Count; target++)
+        {
+            var w = want[target];
+            var existing = Users.FirstOrDefault(x => x.Mid == w.Mid);
+            if (existing == null)
+            {
+                existing = new FollowUser
+                {
+                    Mid = w.Mid,
+                    Name = w.Name,
+                    Face = w.Face,
+                    IsPlaceholder = true,
+                    NewCount = w.NewCount,
+                    LatestPubdate = w.Pub,
+                };
+                Users.Insert(Math.Min(target, Users.Count), existing);
+            }
+            else if (existing.IsPlaceholder)
+            {
+                if (existing.Name != w.Name && w.Name.Length > 0) existing.Name = w.Name;
+                if (w.Pub > existing.LatestPubdate) existing.LatestPubdate = w.Pub;
+                if (existing.NewCount != w.NewCount) existing.NewCount = w.NewCount;
+                var cur = Users.IndexOf(existing);
+                if (cur != target) Users.Move(cur, target);
+            }
+        }
+
+        OnPropertyChanged(nameof(Count));
+    }
+
+    private static void ApplyNotifyState(FollowUser u)
+    {
+        if (u == null || u.Mid <= 0) return;
+        if (!Svc.DynamicNotify.TryGetState(u.Mid, out var count, out var latestPub)) return;
+        u.NewCount = count;
+        // 服务里的时间比动态流里的近似时间更可靠; 只取更大值, 避免旧数据把排序顶回去。
+        if (latestPub > u.LatestPubdate) u.LatestPubdate = latestPub;
+    }
+
+    // ------------------------------------------------------------ 左栏排序
 
     /// <summary>
-    /// 按最近更新重排左栏(指定用哪批动态条目算"最近更新")。
+    /// 左栏「关注的 UP」排序规则(2026-11-06 重做):
+    ///   ① **有未读红点的全部在最前面** —— 这是用户最想先看到的;
+    ///   ② 未读/已读各自内部按最近发布时间从新到旧;
+    ///   ③ 时间相同按名字、再按原顺序, 保证刷新不抖动。
     ///
-    /// ★ 为什么要给一个参数版本: 定时轮询(RefreshUnreadBadgesAsync)拿的是**临时列表**,
-    ///   刻意不碰 FeedItems(那是右栏的内容, 轮询不该动它) —— 但左栏的排序依据同样
-    ///   来自那批动态条目, 所以这里要能传进来。
+    /// ★ 旧版只按时间排, 会出现"明明有红点却排在没更新的 UP 后面" —— 这次修掉。
+    /// ★ 用就地 Move 而不是换 ItemsSource: 保留选中态与滚动位置。
     /// </summary>
     private void ReorderUsersByActivity(IReadOnlyList<VideoItem> items)
     {
-        // 先把每个 UP 的"最近更新时间"记下来(动态流里最先出现的那条就是最新的)
         var newestPub = new Dictionary<long, long>();
         foreach (var it in items)
         {
             if (it.OwnerMid <= 0) continue;
-            // 动态流是时间倒序, 先遇到的就是最新 —— 但仍要取 max 兜底:
-            // 列表是**跨页拼接**的, 后续页理论上可能夹着更早的条目, 不取 max 就会
-            // 被后面那条更旧的覆盖掉。
             if (!newestPub.TryGetValue(it.OwnerMid, out var cur) || it.Pubdate > cur)
                 newestPub[it.OwnerMid] = it.Pubdate;
         }
 
         foreach (var u in Users)
         {
-            // ★ 这一轮动态流里没出现过的 UP: **不动**它的 LatestPubdate。
-            //   保留上一轮的已知值(它依然有效), 也避免"没出现"被当成"最近才更新"。
-            if (newestPub.TryGetValue(u.Mid, out var ts) && ts > 0)
+            // 动态流里没出现的 UP 保留上一轮已知时间; 出现了就取 max(跨页拼接可能夹更早条目)。
+            if (newestPub.TryGetValue(u.Mid, out var ts) && ts > u.LatestPubdate)
                 u.LatestPubdate = ts;
         }
 
-        // 排出目标顺序: 有时间的在前(新→旧), 没时间的在后(保持原相对顺序)
         var indexed = Users.Select((u, i) => (u, i)).ToList();
         var ordered = indexed
-            .OrderByDescending(x => x.u.HasActivity)
+            .OrderByDescending(x => x.u.HasNew)
             .ThenByDescending(x => x.u.LatestPubdate)
             .ThenBy(x => x.u.Name, StringComparer.Ordinal)
-            .ThenBy(x => x.i)          // 同名时按原顺序, 保证稳定
+            .ThenBy(x => x.i)
             .Select(x => x.u)
             .ToList();
 
-        // 就地 Move: 只移动真正换了位的项
+        // ★ 顺序没变就直接返回: 关注 2790 人时, 每次轮询都重排会触发几千次 Move,
+        //   而绝大多数轮询里顺序根本没变 —— 那是纯浪费, 也是"列表卡一下"的来源。
+        var same = true;
+        for (var i = 0; i < ordered.Count; i++)
+            if (!ReferenceEquals(Users[i], ordered[i])) { same = false; break; }
+        if (same) return;
+
         for (var target = 0; target < ordered.Count; target++)
         {
             var want = ordered[target];
@@ -673,18 +700,6 @@ public class FollowViewModel : ObservableObject
         }
     }
 
-    /// <summary>点开某个 UP(右栏只看 TA 的投稿) = 已读: 清红点, 并把基准推到 TA 当前最新一条</summary>
-    private void ClearUnreadBadge(FollowUser u)
-    {
-        u.NewCount = 0;
-        foreach (var it in FeedItems)
-        {
-            if (it.OwnerMid != u.Mid || string.IsNullOrEmpty(it.Bvid)) continue;
-            DynamicSeenStore.Set(u.Mid, it.Bvid);
-            break;   // FeedItems 是时间倒序, 第一条就是最新
-        }
-        DynamicSeenStore.Flush();
-    }
 
     /// <summary>右栏滚动到底: 追加下一页</summary>
     public async Task LoadMoreFeedAsync()
