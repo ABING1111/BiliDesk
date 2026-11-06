@@ -313,22 +313,21 @@
                                    Margin="10,0,0,0" HorizontalAlignment="Left"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
                                    IsHitTestVisible="False" />
-                        <!-- ★ 占位符显隐绑 <c>HasUserSearch</c>(bool) 而不是 UserSearchText(string)+InvStrToVis
-                             (2026-11-07 修"搜索时占位文字不隐藏, 与输入内容重叠"):
-                             · 旧的绑法在源码上是对的(VM 有通知、转换器是对的), 但实测出现过
-                               "输入了文字占位符仍在" —— string 属性通知这条路少一环确认, 出问题
-                               无声无息(绑定失败只写 Output 窗口)。
-                             · HasUserSearch 是 VM 显式 OnPropertyChanged 的 bool, 走项目里
-                               到处都在用的 bool→Visibility 转换器(未读红点/刷新按钮同款),
-                               同一个通知顺带把 ✕ 清除按钮一起驱动 —— 两者的显隐**必然一致**。
-                             · 另一个附带修正: 判空从 IsNullOrEmpty 升级为 IsNullOrWhiteSpace 的语义
-                               (HasUserSearch 本来就是 IsNullOrWhiteSpace) —— 输入纯空格时占位符
-                               也不再显示。 -->
-                        <TextBlock Text="搜索已关注的 UP" FontSize="12.5"
+                        <!-- ★ 占位符显隐由 code-behind 的 TextChanged 直接控制(2026-11-07)。
+                              ★★ 为什么不再用绑定: 先后试过 UserSearchText(string)+InvStrToVis 与
+                                HasUserSearch(bool)+InverseBool 两条绑定路线, 源码与 BAML 都正确,
+                                用户实测仍复现"输入文字后占位符不消失"。绑定这条路失败时是**静默**的
+                                (只写 Output 窗口), 与其继续猜, 不如换零依赖的确定性方案。
+                              ★ 与首页搜索框同款(见 HomePage.RefreshSearchPlaceholder): TextChanged
+                                直接置 Visibility —— 不经 VM、不经转换器、不经 DataContext,
+                                输入/删除/粘贴/清空必然触发(TextChanged 连 IME 组合都覆盖),
+                                不可能不生效。 -->
+                        <TextBlock x:Name="UserSearchPlaceholder" Text="搜索已关注的 UP" FontSize="12.5"
                                    VerticalAlignment="Center" Margin="30,0,30,0"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
-                                   IsHitTestVisible="False"
-                                   Visibility="{Binding HasUserSearch, Converter={StaticResource InvBoolToVis}}" />
+                                   IsHitTestVisible="False" />
+                        <!-- ✕ 清除按钮: 显隐同样绑 HasUserSearch(与搜索逻辑用同一个判据),
+                             点击走 OnClearUserSearch → VM.ClearUserSearchCommand。 -->
                         <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                 FontSize="10" Width="24" Height="24" Padding="0"
                                 HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0"

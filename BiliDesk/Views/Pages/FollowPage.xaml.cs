@@ -48,6 +48,28 @@ public partial class FollowPage : UserControl
         Unloaded += OnUnloaded;
         // 屏蔽把动态流筛空后补下一页(否则会停在一片空白上)
         FilterService.Instance.Changed += OnFilterApplied;
+
+        // 搜索框占位符显隐(2026-11-07): 由 TextChanged **直接**控制, 不走绑定。
+        // ★ 为什么不用绑定: 先后试过 UserSearchText(string)+InvStrToVis 与
+        //   HasUserSearch(bool)+InverseBool 两条路线, 源码与 BAML 均正确, 用户实测仍复现
+        //   "输入文字后占位符不消失"。绑定失败是静默的(只写 Output 窗口), 与其继续猜,
+        //   不如换成与首页搜索框同款(RefreshSearchPlaceholder)的确定性方案:
+        //   TextChanged 是输入/删除/粘贴/清空/代码赋值**必然**会走的事件, 零依赖。
+        // ★ 判据用 IsNullOrWhiteSpace: 纯空格不算"有内容"(与 VM.HasUserSearch 同语义)。
+        UserSearchBox.TextChanged += (_, _) => RefreshUserSearchPlaceholder();
+        RefreshUserSearchPlaceholder();   // 初始状态(页面被缓存复用时输入框可能已有文字)
+    }
+
+    /// <summary>
+    /// 同步左栏搜索框占位符的显隐: 有非空白内容就藏, 否则显示。
+    /// 与首页 <c>RefreshSearchPlaceholder</c> 同一套思路 —— 只是这里不需要淡入淡出,
+    /// 小输入框里瞬间切换更干脆。
+    /// </summary>
+    private void RefreshUserSearchPlaceholder()
+    {
+        if (UserSearchPlaceholder == null) return;
+        var empty = string.IsNullOrWhiteSpace(UserSearchBox.Text);
+        UserSearchPlaceholder.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -62,6 +84,9 @@ public partial class FollowPage : UserControl
             // 看板默认折叠: 页面实例会被 MainWindow 缓存, 每次进入都归位到收起。
             vm.LiveBoardOpen = false;
             UpdateLayoutChips(vm);
+            // 占位符显隐再同步一次: 页面被缓存复用, VM 侧可能在页面不可见时清过搜索词
+            // (ClearUserSearch), 回来时输入框文字已变但 TextChanged 未必触发过。
+            RefreshUserSearchPlaceholder();
             // 「全部动态」底衬要与 UP 行对齐: 在列表布局完成后量一次
             UsersList.SizeChanged += (_, _) => SyncAllDynamicEntry();
             await vm.InitAsync();
