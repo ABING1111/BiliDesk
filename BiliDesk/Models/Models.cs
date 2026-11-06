@@ -479,6 +479,7 @@ public class SpaceInfo
 ///
 /// 视频与直播间走的是**完全不同的接口和字段**, 但界面上是同一套卡片墙 ——
 /// 所以用同一个枚举把"当前这一类"在页面/VM/接口之间传下去, 而不是各传一个 bool。
+/// ★ <see cref="User"/> 只有搜索页会用到; 历史页永远只可能是 Video / Live。
 /// </summary>
 public enum ContentKind
 {
@@ -496,6 +497,15 @@ public enum ContentKind
     ///   所以搜索结果单独走 <see cref="SearchData.BangumiItems"/>, 页面用海报卡渲染。
     /// </summary>
     Bangumi,
+
+    /// <summary>
+    /// 用户 / UP 主(搜索 search_type=bili_user, 2026-11-06 新增, issue #47)。
+    ///
+    /// ★ 只用于**搜索页**: 历史页只有视频/直播两种记录, 永远不会出现这个值。
+    /// ★ 必须追加在枚举**末尾**: 用户配置里的 LastSearchKind 存的是 int,
+    ///   插到 Bangumi 前面会把老配置的 2(番剧)读成 User。
+    /// </summary>
+    User,
 }
 
 /// <summary>搜索 API 返回结构</summary>
@@ -513,8 +523,65 @@ public class SearchData
     /// </summary>
     public System.Collections.Generic.List<BangumiItem> BangumiItems { get; set; } = new();
 
+    /// <summary>
+    /// 用户 / UP 主结果(2026-11-06 新增, issue #47)。
+    /// 与 <see cref="Items"/> / <see cref="BangumiItems"/> 互斥: 只有搜「UP主」分类时才有内容。
+    /// </summary>
+    public System.Collections.Generic.List<SearchUserItem> UserItems { get; set; } = new();
+
     public bool HasMore { get; set; }
     public int TotalPages { get; set; }
+}
+
+/// <summary>
+/// 搜索接口(search_type=bili_user)返回的一条用户 / UP 主。
+///
+/// ★ 字段按实测响应取(2026-11-06, 关键词「极客湾」):
+///   mid / uname / upic / usign / fans / videos / level / is_upuser / official_verify。
+/// ★ upic 可能以 `//` 开头, 展示前必须过 UrlUtil.Normalize(与直播封面同款)。
+/// ★ 与关注列表的 FollowUser 分开: 那个模型带动态页的选中/未读状态, 搜索行不需要,
+///   而且这里多了粉丝数/投稿数; 硬复用会把两边的字段越绑越乱。
+/// </summary>
+public sealed class SearchUserItem
+{
+    public long Mid { get; set; }
+    public string Name { get; set; } = "";
+    public string Face { get; set; } = "";
+    public string Sign { get; set; } = "";
+    public long Fans { get; set; }
+    public long Videos { get; set; }
+    public int Level { get; set; }
+
+    /// <summary>
+    /// -1 = 未认证(统一值); 0 = 个人认证; 1 = 机构认证。
+    /// ★ 接口对"没认证"的用户返回的 official_verify.type 是 **127**, 不是 -1;
+    ///   解析时统一归一成 -1, 界面只认 0/1, 否则每个普通用户名字旁边都会多一个认证勾。
+    /// </summary>
+    public int VerifyType { get; set; } = -1;
+    public string VerifyDesc { get; set; } = "";
+
+    public bool HasVerify => VerifyType is 0 or 1;
+    public string FansText => VideoItem.FormatCount(Fans) + " 粉丝";
+    public string VideosText => VideoItem.FormatCount(Videos) + " 投稿";
+    public string LevelText => Level > 0 ? $"Lv{Level}" : "";
+    public bool HasSign => !string.IsNullOrWhiteSpace(Sign);
+
+    /// <summary>
+    /// 第二行的统计串("567万 粉丝 · 643 投稿 · Lv6")。
+    /// ★ 在模型里拼而不是在 XAML 里摆三个 TextBlock + 三个分隔点:
+    ///   粉丝/投稿为 0 时那一段要整段省略, 分开摆一定会留下"· ·"这种悬空分隔。
+    /// </summary>
+    public string MetaText
+    {
+        get
+        {
+            var parts = new System.Collections.Generic.List<string>(3);
+            if (Fans > 0) parts.Add(FansText);
+            if (Videos > 0) parts.Add(VideosText);
+            if (Level > 0) parts.Add(LevelText);
+            return string.Join(" · ", parts);
+        }
+    }
 }
 
 /// <summary>
@@ -1440,7 +1507,7 @@ public class AppSettings
     public bool? AutoBufferPolicy { get; set; }
 
     /// <summary>
-    /// 上次用的搜索类别(见 <see cref="ContentKind"/>: 0=视频 1=直播间 2=番剧)。
+    /// 上次用的搜索类别(见 <see cref="ContentKind"/>: 0=视频 1=直播间 2=番剧 3=UP主)。
     /// 存 int 而不是枚举本身: JSON 里枚举按数字走, 老配置没有这个字段时默认 0(视频),
     /// 与搜索页的初始类别一致。★ 取值范围由 SettingsStore.SearchKind 夹取。
     /// </summary>

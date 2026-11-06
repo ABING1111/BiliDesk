@@ -2517,11 +2517,13 @@ public class ApiClient
     /// <summary>
     /// 搜索(带风控 voucher 降级)。
     ///
-    /// ★ 2026-10-03 起支持两类内容: <paramref name="kind"/> 决定 `search_type` 与解析方式。
+    /// ★ <paramref name="kind"/> 决定 `search_type` 与解析方式:
     ///   · <see cref="ContentKind.Video"/>    → `search_type=video`, 走 <see cref="ParseSearchItem"/>
     ///   · <see cref="ContentKind.Live"/>     → `search_type=live_room`, 走 <see cref="ParseLiveSearchItem"/>
-    ///   两者的**分页字段都是同一套**(numResults / pagesize=40), 但直播每页给 40 条而视频给 20 条,
-    ///   所以"还有没有下一页"的页大小必须跟着 kind 走(见下面 SearchPageSize)。
+    ///   · <see cref="ContentKind.Bangumi"/>  → `media_bangumi` + `media_ft`, 走 <see cref="ParseBangumiItem"/>
+    ///   · <see cref="ContentKind.User"/>     → `search_type=bili_user`, 走 <see cref="ParseUserSearchItem"/>
+    ///   四类的**分页字段都是同一套**(numResults / pagesize), 但直播每页给 40 条、
+    ///   其余三类给 20 条, 所以"还有没有下一页"的页大小必须跟着 kind 走(见下面 pageSize)。
     /// </summary>
     public async Task<SearchData> SearchAsync(string keyword, int page, ContentKind kind = ContentKind.Video)
     {
@@ -2546,9 +2548,10 @@ public class ApiClient
         {
             ContentKind.Live => "live_room",
             ContentKind.Bangumi => "media_bangumi",
+            ContentKind.User => "bili_user",   // issue #47: 用户 / UP 主
             _ => "video"
         };
-        // 视频每页 20 条、直播每页 40 条(实测)。番剧实测每页 20 条(2026-11)。
+        // 视频/番剧/用户每页 20 条、直播每页 40 条(实测; 用户搜索 2026-11-06 实测 pagesize=20)。
         // 这个数只用来推"下一页还有没有", 不参与请求参数。
         var pageSize = kind == ContentKind.Live ? 40 : 20;
         try
@@ -2595,26 +2598,19 @@ public class ApiClient
                     //   所以这一段必须摆在**所有** code==0 的出口之前, 而不是只塞在某个分支里。
                     if (isBangumi) await MergeFtResultsAsync(result, ps);
 
-                    // ★ 番剧结果不在 Items 里, 所以"本页取到几条"必须按 kind 分流,
-                    //   否则番剧永远是 0 ⇒ HasMore 恒 false ⇒ 只给第一页就再也没了。
+                    // ★ 番剧/用户结果不在 Items 里, 所以"本页取到几条"必须按 kind 分流,
+                    //   否则那两类永远是 0 ⇒ HasMore 恒 false ⇒ 只给第一页就再也没了。
                     // ★ media_ft 合并后条数会变多, 所以这段必须放在它**之后**算(见上面那段注释)。
-                    var got = kind == ContentKind.Bangumi
-                        ? result.BangumiItems.Count
-                        : result.Items.Count;
+                    var got = SearchResultCount(result, kind);
                     result.HasMore = got > 0 &&
                                      (numResults <= 0 ? got >= pageSize
                                                       : page * pageSize < numResults);
                     if (page == 1 && numResults > 0)
                         result.TotalPages = Math.Max(1, (numResults + pageSize - 1) / pageSize);
-                    // ★ 判空同样分流: 番剧结果在 BangumiItems 里, 用 Items.Count 判会永远是 0
-                    //   ⇒ 明明搜到了番剧却报"没有找到相关番剧"。
+                    // ★ 判空同样分流: 番剧/用户结果在自己的集合里, 用 Items.Count 判会永远是 0
+                    //   ⇒ 明明搜到了却报"没有找到相关视频"。
                     if (got == 0)
-                        result.Error = kind switch
-                        {
-                            ContentKind.Live => "没有找到相关直播间",
-                            ContentKind.Bangumi => "没有找到相关番剧",
-                            _ => "没有找到相关视频"
-                        };
+                        result.Error = SearchEmptyText(kind);
                     result.Ok = true;
                     return result;
                 }
@@ -2640,14 +2636,8 @@ public class ApiClient
                             AppendSearchItems(result, list2, kind);
                             result.Ok = true;
                             result.HasMore = list2.GetArrayLength() >= pageSize;
-                            if (kind == ContentKind.Bangumi ? result.BangumiItems.Count == 0
-                                                             : result.Items.Count == 0)
-                                result.Error = kind switch
-                                {
-                                    ContentKind.Live => "没有找到相关直播间",
-                                    ContentKind.Bangumi => "没有找到相关番剧",
-                                    _ => "没有找到相关视频"
-                                };
+                            if (SearchResultCount(result, kind) == 0)
+                                result.Error = SearchEmptyText(kind);
                             return result;
                         }
                     }
@@ -2662,17 +2652,12 @@ public class ApiClient
                         vfbList.ValueKind == JsonValueKind.Array)
                     {
                         AppendSearchItems(result, vfbList, kind);
-                        var vgot = kind == ContentKind.Bangumi ? result.BangumiItems.Count : result.Items.Count;
+                        var vgot = SearchResultCount(result, kind);
                         result.Ok = vgot > 0;
                         // 与主路径同规则: 页大小是固定的, 拿本页条数与它比才知道还有没有下一页
                         result.HasMore = vgot > 0 && vgot >= pageSize;
                         if (vgot == 0)
-                            result.Error = kind switch
-                            {
-                                ContentKind.Live => "没有找到相关直播间",
-                                ContentKind.Bangumi => "没有找到相关番剧",
-                                _ => "没有找到相关视频"
-                            };
+                            result.Error = SearchEmptyText(kind);
                         return result;
                     }
                     result.Blocked = true;
@@ -2690,16 +2675,9 @@ public class ApiClient
                 result.Ok = true;
                 // ★ 条数要按 media_ft 合并**之后**算 —— 上面那次合并可能刚补进来一堆纪录片,
                 //   这时再说"没找到"就是错的。
-                var gotFallback = kind == ContentKind.Bangumi
-                    ? result.BangumiItems.Count
-                    : result.Items.Count;
+                var gotFallback = SearchResultCount(result, kind);
                 result.HasMore = gotFallback > 0 && gotFallback >= pageSize;
-                result.Error = gotFallback == 0 ? (kind switch
-                {
-                    ContentKind.Live => "没有找到相关直播间",
-                    ContentKind.Bangumi => "没有找到相关番剧",
-                    _ => "没有找到相关视频"
-                }) : "";
+                result.Error = gotFallback == 0 ? SearchEmptyText(kind) : "";
                 return result;
             }
 
@@ -2732,7 +2710,7 @@ public class ApiClient
                     fbList.ValueKind == JsonValueKind.Array)
                 {
                     AppendSearchItems(result, fbList, kind);
-                    var got = kind == ContentKind.Bangumi ? result.BangumiItems.Count : result.Items.Count;
+                    var got = SearchResultCount(result, kind);
                     result.Ok = got > 0;
                     // 与主路径同规则: 页大小固定, 拿本页条数与它比(裸端点也回 numResults)
                     var fbNum = fbData.Value.TryGetProperty("numResults", out var fbNr) &&
@@ -2740,12 +2718,7 @@ public class ApiClient
                     result.HasMore = got > 0 &&
                                      (fbNum <= 0 ? got >= pageSize : page * pageSize < fbNum);
                     if (got == 0)
-                        result.Error = kind switch
-                        {
-                            ContentKind.Live => "没有找到相关直播间",
-                            ContentKind.Bangumi => "没有找到相关番剧",
-                            _ => "没有找到相关视频"
-                        };
+                        result.Error = SearchEmptyText(kind);
                     return result;
                 }
                 result.Blocked = true;
@@ -2887,7 +2860,31 @@ public class ApiClient
         catch { /* media_ft 只是补充, 失败静默 */ }
     }
 
-    /// <summary>把一段 result 数组按 kind 解析进结果集(视频/直播/番剧三套字段)</summary>
+    /// <summary>
+    /// 当前类别已经解析出多少条。
+    ///
+    /// ★★★ 收成一个方法而不是在主流程里反复写 `kind == Bangumi ? ... : ...`:
+    ///   搜索结果有四类(视频/直播/番剧/用户), 这套判断在 SearchAsync 里重复了 5 次
+    ///   (主路径 / voucher 重试 / voucher 降级 / data 为 null / 风控降级)。加一个新类别时
+    ///   只要漏掉一处, 就会出现"明明搜到了结果却报没有找到"或"永远显示有下一页"这类隐蔽 bug。
+    /// </summary>
+    private static int SearchResultCount(SearchData r, ContentKind kind) => kind switch
+    {
+        ContentKind.Bangumi => r.BangumiItems.Count,
+        ContentKind.User => r.UserItems.Count,
+        _ => r.Items.Count
+    };
+
+    /// <summary>当前类别"没搜到"时的提示文案(同样收口, 避免 5 处 switch 各漏一个分支)</summary>
+    private static string SearchEmptyText(ContentKind kind) => kind switch
+    {
+        ContentKind.Live => "没有找到相关直播间",
+        ContentKind.Bangumi => "没有找到相关番剧",
+        ContentKind.User => "没有找到相关 UP 主",
+        _ => "没有找到相关视频"
+    };
+
+    /// <summary>把一段 result 数组按 kind 解析进结果集(视频/直播/番剧/用户四套字段)</summary>
     private static void AppendSearchItems(SearchData result, JsonElement list, ContentKind kind)
     {
         foreach (var e in list.EnumerateArray())
@@ -2900,9 +2897,59 @@ public class ApiClient
                 if (b != null) result.BangumiItems.Add(b);
                 continue;
             }
+            if (kind == ContentKind.User)
+            {
+                // 用户同样单独一个集合: 条目没有 bvid, 点开是 UP 主主页而不是播放
+                var u = ParseUserSearchItem(e);
+                if (u != null) result.UserItems.Add(u);
+                continue;
+            }
             var item = kind == ContentKind.Live ? ParseLiveSearchItem(e) : ParseSearchItem(e);
             if (item != null) result.Items.Add(item);
         }
+    }
+
+    /// <summary>
+    /// 搜索结果里的一条**用户 / UP 主**(search_type=bili_user, 2026-11-06 新增, issue #47)。
+    ///
+    /// ★ 字段按实测响应取(关键词「极客湾」第一条就是官方账号):
+    ///     mid=25876945 / uname=极客湾Geekerwan / fans=5670832 / videos=643 /
+    ///     upic=`//i1.hdslb.com/...` / official_verify.type=0
+    /// ★ upic 带 `//` 前缀, 必须过 UrlUtil.Normalize(与直播封面同坑)。
+    /// ★ uname/usign 实测(极客湾/老番茄)是纯文本, 没有视频标题那种 `<em class="keyword">`
+    ///   高亮标签; 仍然照旧过一遍 StripHtml —— 服务端换一种渲染时直接把标签甩到界面上很难看,
+    ///   而这个方法只去掉那对固定标签, 对正常名字无副作用。
+    /// </summary>
+    private static SearchUserItem? ParseUserSearchItem(JsonElement e)
+    {
+        var mid = GetLong(e, "mid");
+        if (mid <= 0) return null;   // 没有 mid 就点不开主页, 直接丢掉
+
+        // 签名里可能带换行(实测有用户写了多行简介)。卡片是一行截断的列表,
+        // 原样塞进去会让那一行突然变高、整列参差不齐 —— 统一压成单行。
+        var sign = GetStr(e, "usign").StripHtml().Replace("\r", " ").Replace("\n", " ").Trim();
+
+        var u = new SearchUserItem
+        {
+            Mid = mid,
+            Name = GetStr(e, "uname").StripHtml(),
+            Face = UrlUtil.Normalize(GetStr(e, "upic")),
+            Sign = sign,
+            Fans = GetLong(e, "fans"),
+            Videos = GetLong(e, "videos"),
+            Level = GetInt(e, "level")
+        };
+
+        if (e.TryGetProperty("official_verify", out var ov) && ov.ValueKind == JsonValueKind.Object)
+        {
+            u.VerifyType = GetInt(ov, "type");
+            u.VerifyDesc = GetStr(ov, "desc");
+            // ★ 实测(2026-11-06): 未认证用户的 type 是 **127**, 不是 -1。
+            //   只认 0(个人)/1(机构), 其余一律归一成"未认证", 否则每个普通用户都会挂一个认证勾。
+            if (u.VerifyType is not (0 or 1)) u.VerifyType = -1;
+        }
+
+        return u.Name.Length > 0 ? u : null;
     }
 
     /// <summary>

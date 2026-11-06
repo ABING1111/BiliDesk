@@ -35,6 +35,12 @@ public class SearchViewModel : ObservableObject
     /// <summary>番剧结果(2026-10-11 新增)。与 <see cref="Results"/> 互斥, 见 <see cref="ContentKind.Bangumi"/>。</summary>
     public ObservableCollection<BangumiItem> BangumiResults { get; } = new();
 
+    /// <summary>
+    /// 用户 / UP 主结果(2026-11-06 新增, issue #47)。
+    /// 与 <see cref="Results"/> / <see cref="BangumiResults"/> 三者互斥, 见 <see cref="ContentKind.User"/>。
+    /// </summary>
+    public ObservableCollection<SearchUserItem> UserResults { get; } = new();
+
     /// <summary>关键词。清空输入框时要顺带决定"要不要显示搜索历史", 所以这里是自定义 setter。</summary>
     public string Keyword
     {
@@ -53,13 +59,13 @@ public class SearchViewModel : ObservableObject
     // ★ ResultCount 的定义在下面"搜索类别"一节里(它要按类别取不同的集合),
     //   这里**不要**再写一个只看 Results 的版本, 否则会把它遮住。
 
-    // ---------------- 搜索类别(视频 / 直播间 / 番剧) ----------------
+    // ---------------- 搜索类别(视频 / 直播间 / 番剧 / UP主) ----------------
 
     private ContentKind _kind = Svc.Settings.SearchKind;
 
     /// <summary>
-    /// 当前搜的是视频还是直播间。切换时**重新搜一次**(带着同一个关键词) ——
-    /// 两类内容来自完全不同的接口, 不重搜就只能看到上一类的残留结果。
+    /// 当前搜的是哪一类(视频 / 直播间 / 番剧 / UP主)。切换时**重新搜一次**(带着同一个关键词) ——
+    /// 几类内容来自完全不同的接口, 不重搜就只能看到上一类的残留结果。
     /// </summary>
     public ContentKind Kind
     {
@@ -74,19 +80,23 @@ public class SearchViewModel : ObservableObject
             OnPropertyChanged(nameof(IsVideoKind));
             OnPropertyChanged(nameof(IsLiveKind));
             OnPropertyChanged(nameof(IsBangumiKind));
-            // ★★★ IsBangumiSearch **必须**一起通知(2026-11-12 用户截图报"番剧 tab 选中但
-            //   结果一片空白"的真根因): 两个结果列表的 Visibility 绑的就是它 ——
-            //   视频列表 `InvBoolToVis`、番剧列表 `BoolToVis`。它是一个只读投影,
-            //   setter 里漏通知它就永远是构造时那个值(false) ⇒ 番剧列表恒 Collapsed、
-            //   视频列表恒 Visible 且绑的是空的 Results ⇒ 界面就是"tab 选中、啥也没有"。
-            //   ★ tab 的高亮绑 IsBangumiKind(那个有通知), 所以看起来像是"只有结果没出来"。
+            OnPropertyChanged(nameof(IsUserKind));
+            // ★★★ IsBangumiSearch / IsUserSearch / IsVideoSearch **必须**一起通知
+            //   (2026-11-12 用户截图报"番剧 tab 选中但结果一片空白"的真根因):
+            //   三个结果列表的 Visibility 分别绑这三个只读投影, setter 里漏通知就永远是
+            //   构造时那个值 ⇒ 列表恒 Collapsed / 恒 Visible 但绑的是空集合, 界面就是
+            //   "tab 选中、啥也没有"。★ tab 的高亮绑的是 IsXxxKind(那些已经逐条通知),
+            //   所以看起来更像是"只有结果没出来"。
             OnPropertyChanged(nameof(IsBangumiSearch));
+            OnPropertyChanged(nameof(IsUserSearch));
+            OnPropertyChanged(nameof(IsVideoSearch));
             OnPropertyChanged(nameof(IdleHint));
             OnPropertyChanged(nameof(ResultCount));
             // 换类别 = 换一套结果: 清空旧结果并重搜(没搜过关键词就只是清一下)
             _generation++;          // 让在途请求的结果作废, 免得旧类别的响应灌进新列表
             Results.Clear();
             BangumiResults.Clear(); // ★ 番剧也要清 —— 否则切回视频/直播时海报还挂在那儿
+            UserResults.Clear();    // ★ 用户同样要清 —— 否则切回视频时上一批头像还挂在列表里
             Error = "";
             Blocked = false;
             HasMore = false;
@@ -95,7 +105,7 @@ public class SearchViewModel : ObservableObject
         }
     }
 
-    /// <summary>XAML 里三个 RadioButton 的绑定(IsChecked 只支持 bool, 所以给三个派生属性)</summary>
+    /// <summary>XAML 里四个 RadioButton 的绑定(IsChecked 只支持 bool, 所以给四个派生属性)</summary>
     public bool IsVideoKind
     {
         get => _kind == ContentKind.Video;
@@ -115,19 +125,39 @@ public class SearchViewModel : ObservableObject
         set { if (value) Kind = ContentKind.Bangumi; }
     }
 
+    /// <summary>用户 / UP 主类别(2026-11-06 新增, issue #47)</summary>
+    public bool IsUserKind
+    {
+        get => _kind == ContentKind.User;
+        set { if (value) Kind = ContentKind.User; }
+    }
+
     /// <summary>当前类别是不是"结果走另一个集合"的番剧 —— 页面据此切列表</summary>
     public bool IsBangumiSearch => _kind == ContentKind.Bangumi;
+
+    /// <summary>用户结果列表的显隐(与 IsBangumiSearch 同款用途)</summary>
+    public bool IsUserSearch => _kind == ContentKind.User;
+
+    /// <summary>
+    /// 视频/直播间共用同一个结果列表(两者都是 VideoItem)。
+    /// ★ 不能再像以前那样拿 IsBangumiSearch 取反来判断: 新增用户类别后,
+    ///   取反会让「UP主」tab 下面也露出一个空的视频列表。
+    /// </summary>
+    public bool IsVideoSearch => _kind is ContentKind.Video or ContentKind.Live;
 
     /// <summary>空状态提示语跟着类别走 —— "搜索你想看的视频"在直播/番剧类别下就说不通了</summary>
     public string IdleHint => _kind switch
     {
         ContentKind.Live => "输入关键词, 搜索你想看的直播间",
         ContentKind.Bangumi => "输入关键词, 搜索你想看的番剧",
+        ContentKind.User => "输入关键词, 搜索你想找的 UP 主",
         _ => "输入关键词, 搜索你想看的视频"
     };
 
-    /// <summary>番剧结果条数: 跟着类别取对应的集合, 否则番剧类别永远显示 0 条</summary>
-    public int ResultCount => IsBangumiSearch ? BangumiResults.Count : Results.Count;
+    /// <summary>结果条数: 跟着类别取对应的集合, 否则番剧/用户类别永远显示 0 条</summary>
+    public int ResultCount => IsBangumiSearch ? BangumiResults.Count
+                           : IsUserSearch ? UserResults.Count
+                           : Results.Count;
 
     /// <summary>
     /// 番剧结果去重追加。
@@ -150,8 +180,28 @@ public class SearchViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 用户结果去重追加。
+    /// ★ 用 mid 而不是 Bvid/season_id: 用户的唯一键就是 mid; 搜索排序在翻页之间可能变,
+    ///   同一个账号偶尔会重复出现(与视频/番剧同款问题)。
+    /// </summary>
+    private static void AppendUserDistinct(
+        ObservableCollection<SearchUserItem> target, System.Collections.Generic.IEnumerable<SearchUserItem> items)
+    {
+        foreach (var it in items)
+        {
+            var dup = false;
+            foreach (var existing in target)
+            {
+                if (existing.Mid == it.Mid) { dup = true; break; }
+            }
+            if (!dup) target.Add(it);
+        }
+    }
+
     /// <summary>是否为初始空状态(未搜索过)</summary>
-    public bool IsIdle => !Searching && _lastKeyword == null && Results.Count == 0 && BangumiResults.Count == 0;
+    public bool IsIdle => !Searching && _lastKeyword == null
+                          && Results.Count == 0 && BangumiResults.Count == 0 && UserResults.Count == 0;
 
     // ---------------- 搜索历史 ----------------
 
@@ -185,14 +235,17 @@ public class SearchViewModel : ObservableObject
 
     public SearchViewModel()
     {
-        // ★ 初始类别来自设置(上次停在哪个 tab), 所以要把三个投影属性各通知一次 ——
-        //   否则 RadioButton 组的 IsChecked 全绑到 false, 界面表现为"三个 tab 一个都没选"。
-        //   (XAML 里三个按钮都没写 IsChecked="True", 选中态完全靠这两条绑定。)
-        // ★ IsBangumiSearch 也必须通知: 它决定结果区两个列表的显隐, 见 Kind setter 里的说明。
+        // ★ 初始类别来自设置(上次停在哪个 tab), 所以要把四个投影属性各通知一次 ——
+        //   否则 RadioButton 组的 IsChecked 全绑到 false, 界面表现为"四个 tab 一个都没选"。
+        //   (XAML 里四个按钮都没写 IsChecked="True", 选中态完全靠这些绑定。)
+        // ★ 三个列表的显隐投影也必须通知, 见 Kind setter 里的说明。
         OnPropertyChanged(nameof(IsVideoKind));
         OnPropertyChanged(nameof(IsLiveKind));
         OnPropertyChanged(nameof(IsBangumiKind));
+        OnPropertyChanged(nameof(IsUserKind));
         OnPropertyChanged(nameof(IsBangumiSearch));
+        OnPropertyChanged(nameof(IsUserSearch));
+        OnPropertyChanged(nameof(IsVideoSearch));
         OnPropertyChanged(nameof(IdleHint));
         OnPropertyChanged(nameof(ResultCount));
 
@@ -201,11 +254,12 @@ public class SearchViewModel : ObservableObject
         RetryCommand = new AsyncRelayCommand(SearchAsync);
         OpenWebSearchCommand = new RelayCommand(() =>
             Svc.Navigate?.OpenWebViewWindow(
-                // 网页版的搜索类型也分视频/直播/番剧, 跟着当前类别走才对得上
+                // 网页版的搜索类型也分视频/直播/番剧/用户, 跟着当前类别走才对得上
                 (_kind switch
                  {
                      ContentKind.Live => "https://search.bilibili.com/live?keyword=",
                      ContentKind.Bangumi => "https://search.bilibili.com/bangumi?keyword=",
+                     ContentKind.User => "https://search.bilibili.com/upuser?keyword=",
                      _ => "https://search.bilibili.com/all?keyword="
                  }) + Uri.EscapeDataString(_lastKeyword ?? ""),
                 "搜索 - 网页版"));
@@ -261,9 +315,11 @@ public class SearchViewModel : ObservableObject
                 Searching = false;
                 Results.Clear();
                 BangumiResults.Clear();
-                // ★ 两套集合按类别分流: 番剧结果在 data.BangumiItems, 不在 data.Items。
-                //   都往 Results 灌的话, 番剧那一类会是空的(点开又播不了, 本来也不该走播放)。
+                UserResults.Clear();
+                // ★ 三套集合按类别分流: 番剧在 data.BangumiItems、用户在 data.UserItems,
+                //   都不在 data.Items 里。灌错集合的后果是"界面一片空白 / 点开走错路"。
                 if (IsBangumiSearch) AppendBangumiDistinct(BangumiResults, data.BangumiItems);
+                else if (IsUserSearch) AppendUserDistinct(UserResults, data.UserItems);
                 else VideoList.AppendDistinct(Results, data.Items);
                 HasMore = data.HasMore;
                 Blocked = data.Blocked;
@@ -313,6 +369,7 @@ public class SearchViewModel : ObservableObject
                 _page = next;
                 // ★ 同样按类别分流(见 SearchAsync 里那条注释): 翻页追加的也是各自那个集合。
                 if (IsBangumiSearch) AppendBangumiDistinct(BangumiResults, data.BangumiItems);
+                else if (IsUserSearch) AppendUserDistinct(UserResults, data.UserItems);
                 else VideoList.AppendDistinct(Results, data.Items);   // ★ 去重: 搜索排序会变, 同一稿件可能又给一遍
                 HasMore = data.HasMore;
                 OnPropertyChanged(nameof(ResultCount));

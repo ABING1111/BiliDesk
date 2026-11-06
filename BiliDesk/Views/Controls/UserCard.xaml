@@ -1,0 +1,88 @@
+<UserControl x:Class="BiliDesk.Views.Controls.UserCard"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             Focusable="False" Background="Transparent"
+             PreviewMouseLeftButtonDown="OnCardPress"
+             MouseLeave="OnCardLeave">
+    <!--
+        搜索结果里的一个用户 / UP 主(2026-11-06 新增, issue #47)。
+
+        形态参考 B 站网页版「用户」分区: 头像 + 名字 + 认证 + 签名 + 粉丝/投稿,
+        单列竖排 —— 按名字找账号时逐行扫比卡片墙快。
+
+        ★ 点击打开 UP 主主页(MouseLeftButtonUp)。与 VideoCard 一样必须做
+          "没有配对 Down 的 Up 不认"的判定: 搜索结果在窗口最大化等重排之后,
+          抬起坐标可能落到别的行上, 只靠 Up 会误打开别人的主页。
+    -->
+    <Border x:Name="Root" Margin="20,3" Padding="12,10" CornerRadius="10"
+            Background="Transparent" Cursor="Hand" ToolTip="打开 UP 主主页"
+            MouseLeftButtonUp="OnOpen">
+        <Border.Style>
+            <Style TargetType="Border">
+                <Setter Property="Background" Value="Transparent" />
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource ControlFillHoverBrush}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+        </Border.Style>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 头像: 外圈圆角裁切由 Border 自己完成; 没加载出图片时露出底下的占位图标 -->
+            <Border Width="56" Height="56" CornerRadius="28"
+                    Background="{DynamicResource AccentSoftFillBrush}" ClipToBounds="True"
+                    helpers:Cover.Source="{Binding Face}">
+                <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="22" Foreground="{DynamicResource AccentTextBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+
+            <StackPanel Grid.Column="1" Margin="14,0,12,0" VerticalAlignment="Center">
+                <!-- 名字 + 认证图标。名字列用 * 让它在窄窗口里自动省略, 不把认证挤出去 -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="{Binding Name}"
+                               FontSize="15" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding Name}" />
+                    <TextBlock Grid.Column="1" Text="&#xE73E;"
+                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="12" Margin="6,0,0,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource AccentTextBrush}"
+                               ToolTip="{Binding VerifyDesc}"
+                               Visibility="{Binding HasVerify, Converter={StaticResource BoolToVis}}" />
+                </Grid>
+
+                <!-- 签名: 一行截断; 空签名整行藏掉, 免得名字和统计之间多出一条空白 -->
+                <TextBlock Text="{Binding Sign}" FontSize="12" Margin="0,3,0,0"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding Sign}"
+                           Visibility="{Binding HasSign, Converter={StaticResource BoolToVis}}" />
+
+                <!-- 粉丝 / 投稿 / 等级。空项已在 MetaText 里省掉, 不会留下悬空的分隔点 -->
+                <TextBlock Text="{Binding MetaText}" FontSize="11" Margin="0,5,0,0"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           Visibility="{Binding MetaText, Converter={StaticResource StrToVis}}" />
+            </StackPanel>
+
+            <!-- 右侧的"进入主页"提示箭头 -->
+            <TextBlock Grid.Column="2" Text="&#xE72A;"
+                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                       FontSize="12" Foreground="{DynamicResource TextTertiaryBrush}"
+                       VerticalAlignment="Center" Margin="6,0,4,0" />
+        </Grid>
+    </Border>
+</UserControl>

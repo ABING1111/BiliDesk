@@ -367,7 +367,7 @@ public class SettingsStore
     }
 
     /// <summary>
-    /// 上次用的搜索类别(见 <see cref="Models.ContentKind"/>: 0=视频 1=直播间 2=番剧)。
+    /// 上次用的搜索类别(见 <see cref="Models.ContentKind"/>: 0=视频 1=直播间 2=番剧 3=UP主)。
     ///
     /// ★ 为什么要记住它(2026-11-12 用户报"番剧依然无法被搜索"):
     ///   从首页搜索框发起搜索时, 搜索页用的是**默认类别(视频)** —— 于是搜"咒术回战"

@@ -6,12 +6,12 @@
              Background="{DynamicResource AppBackgroundBrush}"
              PreviewMouseDown="OnPagePreviewMouseDown">
     <Grid>
-        <!-- ===== 搜索类别(视频 / 直播间 / 番剧): 左上角常驻 =====
+        <!-- ===== 搜索类别(视频 / 直播间 / 番剧 / UP主): 左上角常驻 =====
              2026-10-03 用户要求把它从搜索卡内部挪到页面左上角 —— 搜索框聚焦才展开,
              类别不该藏在里面。白椭圆底 + 投影, 与收藏页夹子条同一形态。
-             三类内容来自**完全不同的接口**(search_type=video / live_room / bangumi),
+             四类内容来自**完全不同的接口**(search_type=video / live_room / bangumi / bili_user),
              切换时必须重搜一次 —— 由 VM 的 Kind setter 负责。
-             ★ 番剧这一档是 2026-10-11 用户要求加的。 -->
+             ★ 番剧这一档是 2026-10-11 用户要求加的; UP主 是 2026-11-06 修 issue #47 加的。 -->
         <Border HorizontalAlignment="Left" VerticalAlignment="Top"
                 Margin="36,24,0,0" Panel.ZIndex="5"
                 Background="{DynamicResource CardBackgroundBrush}"
@@ -29,6 +29,12 @@
                 <RadioButton GroupName="SearchKind" Style="{StaticResource SettingsTabStyle}"
                              Content="番剧" Margin="2,0,0,0"
                              IsChecked="{Binding IsBangumiKind, Mode=TwoWay}" />
+                <!-- 用户 / UP 主(2026-11-06 新增, issue #47):
+                     B 站网页版把"用户"单列一档, 程序里以前完全没有这一类 —— 按 UP 主名字搜索
+                     只能搜到 TA 的视频、搜不到账号本身。走 search_type=bili_user。 -->
+                <RadioButton GroupName="SearchKind" Style="{StaticResource SettingsTabStyle}"
+                             Content="UP主" Margin="2,0,0,0"
+                             IsChecked="{Binding IsUserKind, Mode=TwoWay}" />
             </StackPanel>
         </Border>
 
@@ -91,7 +97,7 @@
                     <StackPanel>
                         <!-- 视频 / 直播间结果 -->
                         <ItemsControl ItemsSource="{Binding Results}"
-                                      Visibility="{Binding IsBangumiSearch, Converter={StaticResource InvBoolToVis}}">
+                                      Visibility="{Binding IsVideoSearch, Converter={StaticResource BoolToVis}}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <helpers:CardWallPanel helpers:CardWall.Enable="True" />
@@ -120,6 +126,24 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <controls:BangumiCard />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!-- ===== 用户 / UP 主结果(2026-11-06 新增, issue #47) =====
+                             ★ 单列列表而不是卡片墙: 搜索用户时是在"按名字找账号", 头像 + 名字 + 签名
+                               逐行扫比网格快; 与网页版「用户」分区也一致。
+                             ★ 每行自带点击 → 打开 UP 主主页(见 UserCard)。 -->
+                        <ItemsControl ItemsSource="{Binding UserResults}"
+                                      Visibility="{Binding IsUserSearch, Converter={StaticResource BoolToVis}}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <controls:UserCard />
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
