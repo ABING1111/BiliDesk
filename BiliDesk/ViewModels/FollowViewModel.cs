@@ -844,6 +844,8 @@ public class FollowViewModel : ObservableObject
             else if (existing.IsPlaceholder)
             {
                 if (existing.Name != w.Name && w.Name.Length > 0) existing.Name = w.Name;
+                // 头像: 服务端可能这轮才给 face(之前是空的), 有了就补上
+                if (w.Face.Length > 0 && existing.Face != w.Face) existing.Face = w.Face;
                 if (w.Pub > existing.LatestPubdate) existing.LatestPubdate = w.Pub;
                 if (existing.NewCount != w.NewCount) existing.NewCount = w.NewCount;
                 var cur = Users.IndexOf(existing);

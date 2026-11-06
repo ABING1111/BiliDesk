@@ -645,7 +645,28 @@ public class FollowUser : System.ComponentModel.INotifyPropertyChanged
 
     public long Mid { get; set; }
     public string Name { get; set; } = "";
-    public string Face { get; set; } = "";
+
+    /// <summary>
+    /// UP 头像地址。
+    ///
+    /// ★ 必须带通知(2026-11-06 用户报"更新的 UP 头像不显示/显示别人的头像"):
+    ///   未读占位行的头像来自 portal 的 up_list, 是**之后**才补上的 ——
+    ///   属性不带通知的话, 那一格不会被重新绑定, 于是要么没头像, 要么留着
+    ///   虚拟化回收时上一个 UP 的头像。
+    /// </summary>
+    private string _face = "";
+    public string Face
+    {
+        get => _face;
+        set
+        {
+            if (_face == value) return;
+            _face = value;
+            PropertyChanged?.Invoke(this,
+                new System.ComponentModel.PropertyChangedEventArgs(nameof(Face)));
+        }
+    }
+
     public string Sign { get; set; } = "";
     public int VerifyType { get; set; } = -1;
     public string VerifyDesc { get; set; } = "";

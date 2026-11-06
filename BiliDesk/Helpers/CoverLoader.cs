@@ -406,6 +406,24 @@ public static class Cover
         DependencyProperty.RegisterAttached("DecodedPixelWidth", typeof(int), typeof(Cover),
             new PropertyMetadata(0));
 
+    /// <summary>
+    /// 贴图**之前**那一格原本的底色(头像的浅粉圆 / 卡片的占位底板)。
+    ///
+    /// ★ 为什么单独存一份: 贴图时 <c>border.Background</c> 被 ImageBrush **覆盖**了,
+    ///   而 XAML 里写的 Background(浅粉圆)是**同一个属性**的本地值 —— 一旦被覆盖就找不回来,
+    ///   直接置 null 会连浅粉圆一起丢掉(头像变成没有底的透明圆)。
+    ///   换源清图时用它还原, 才是"回到没图之前的样子"。
+    /// </summary>
+    private static readonly DependencyProperty PlaceholderBrushProperty =
+        DependencyProperty.RegisterAttached("PlaceholderBrush", typeof(Brush), typeof(Cover),
+            new PropertyMetadata(null));
+
+    private static Brush? GetPlaceholderBrush(DependencyObject d) =>
+        (Brush?)d.GetValue(PlaceholderBrushProperty);
+
+    private static void SetPlaceholderBrush(DependencyObject d, Brush? v) =>
+        d.SetValue(PlaceholderBrushProperty, v);
+
     /// <summary>显示需求(物理像素)超过已解码宽度这么多倍才重解码 —— 量化档位本身有 0~40% 富余,
     /// 阈值太小会在档位内反复重解码。</summary>
     public const double RedecodeFactor = 1.12;
@@ -424,6 +442,24 @@ public static class Cover
         //   命中内存缓存走快路径时**根本不碰 Opacity**, 封面稳稳地直接换上。
         border.SetValue(DecodedPixelWidthProperty, 0);
         var url = e.NewValue as string;
+
+        // ★★★ 换源时**必须先把旧图清掉**(2026-11-06 用户报"更新的 UP 显示的是别人的头像"):
+        //   虚拟化 ListBox(Recycling 模式)会把容器回收给下一个 UP, 同一块 Border 上的
+        //   Background 还留着**上一个 UP 的 ImageBrush**。新图是异步下载+解码的,
+        //   这中间(可达几百毫秒, 网络慢时更久)那一格就显示着别人的头像 ——
+        //   滚动时表现为"头像乱跳/串行"。
+        //   这里把 Background 还原成占位底色(浅粉圆)并让占位人形重新可见, 等新图到位再贴上。
+        //   ★ 还原成"占位底色"而不是 null: null 会把 XAML 里写的浅粉圆一起丢掉
+        //   (贴图时被覆盖了, 找不回来), 头像会变成没有底的透明圆。
+        //   ★ 占位底色在这里捕获(而不是等 ApplyDecoded): 换源可能发生在**第一张图还没贴上**时,
+        //   那时 Background 还是 XAML 写的浅粉圆, 正该记下来。
+        if (GetPlaceholderBrush(border) == null && border.Background is not ImageBrush)
+            SetPlaceholderBrush(border, border.Background);
+        if (border.Background is ImageBrush)
+        {
+            border.Background = GetPlaceholderBrush(border);
+            if (border.Child != null) border.Child.Visibility = Visibility.Visible;
+        }
 
         // 尺寸变化监听: 变宽超过已解码宽度的一定比例就重解码。先 - 再 + 防同元素换源时重复订阅;
         // 处理器挂在静态类上、目标随卡片销毁, 无泄漏面。
@@ -525,6 +561,10 @@ public static class Cover
             brush.Freeze();
             // ★ Fant(高质量重采样): 默认 Linear 在"解码宽 > 显示宽"的缩小场景下明显偏软。
             border.SetValue(RenderOptions.BitmapScalingModeProperty, BitmapScalingMode.Fant);
+            // 记住贴图前的占位底色(浅粉圆等): 换源清图时要用它还原 —— 见 PlaceholderBrushProperty。
+            // (正常流程里 OnSourceChanged 已经记下了; 这里兜底, 防它没跑到。)
+            if (GetPlaceholderBrush(border) == null && border.Background is not ImageBrush)
+                SetPlaceholderBrush(border, border.Background);
             border.Background = brush;
             // 图片加载成功后隐藏占位符(如头像里的人形图标), 否则会一直叠在图片上
             if (border.Child != null) border.Child.Visibility = Visibility.Collapsed;
