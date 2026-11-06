@@ -17,7 +17,30 @@ namespace BiliDesk.Views.Controls;
 /// </summary>
 public partial class DynamicCard : UserControl
 {
-    public DynamicCard() => InitializeComponent();
+    /// <summary>
+    /// 本次左键手势是否从这张卡片上按下(与 VideoCard._pressInside 同款)。
+    /// 动态卡现在跑在虚拟化 ListBox 里, 容器会被回收复用; 窗口最大化/页面重排后
+    /// 一个没有配对 Down 的 Up 也可能落到卡片上, 没有这道闸会误播。
+    /// </summary>
+    private bool _pressInside;
+
+    public DynamicCard()
+    {
+        InitializeComponent();
+        DataContextChanged += (_, _) => _pressInside = false;
+    }
+
+    private void OnCardPress(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left) _pressInside = true;
+    }
+
+    private bool TakePress()
+    {
+        if (!_pressInside) return false;
+        _pressInside = false;
+        return true;
+    }
 
     /// <summary>当前卡片对应的条目(右键菜单的各个处理器都从它取数据)</summary>
     private VideoItem? Current => DataContext as VideoItem;
@@ -26,6 +49,7 @@ public partial class DynamicCard : UserControl
     private void OnOpenClick(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
+        if (!TakePress()) return;
         if (DataContext is not VideoItem v) return;
         if (string.IsNullOrEmpty(v.Bvid)) return;
         Svc.Player.PlayVideo(v.Bvid, v.Title);
@@ -35,6 +59,7 @@ public partial class DynamicCard : UserControl
     private void OnUpClick(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
+        if (!TakePress()) return;
         if (DataContext is not VideoItem v) return;
         if (v.OwnerMid <= 0)
         {

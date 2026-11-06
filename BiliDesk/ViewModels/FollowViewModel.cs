@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using BiliDesk.Helpers;
@@ -14,12 +15,17 @@ namespace BiliDesk.ViewModels;
 /// 「动态」页 ViewModel。
 ///
 /// 布局是左右两栏(参考 B 站客户端动态页):
-///   · 左栏 = 「全部动态」入口 + 关注的 UP 主列表(有未读时头像左侧显示红点、
-///     头像右下角显示条数角标);
+///   · 左栏 = 搜索关注的 UP + 「全部动态」入口 + 关注的 UP 主列表
+///     (有未读时头像左侧显示红点、头像右下角显示条数角标);
 ///   · 右栏 = 当前选中对象的内容, 两档排版由 <see cref="UseCardWall"/> 切:
 ///       - 全部动态: 关注的所有 UP 近期的**视频投稿**(动态时间线接口, 游标分页);
 ///       - 具体某 UP: 该 UP 的投稿视频(空间投稿接口, 页码分页)。
-/// 动态里非视频的内容(图文/纯文字/投票)没有可播对象, 不进这个列表。
+///
+/// ★ 2026-11-06 关注 2790+ UP 的性能重做:
+///   · 左栏不再一次创建全部行 —— 页面用虚拟化 ListBox, 只生成可见行;
+///   · 关注列表每页 50(接口上限), 用接口 total 判断到底, 不再靠空页/offset 猜;
+///   · 左栏/右栏加载状态分离, 左栏翻页不再让右栏底部转圈;
+///   · 搜索走 `/x/relation/followings/search`, 只返回已关注的人, 不需要把 2790 人全拉下来。
 ///
 /// 未读红点由应用级 <see cref="DynamicNotifyService"/> 维护, 这个 VM 只负责把状态
 /// 应用到左栏并排序。
@@ -27,16 +33,32 @@ namespace BiliDesk.ViewModels;
 public class FollowViewModel : ObservableObject
 {
     private bool _loading;
-    private bool _loadingMore;
+    private bool _loadingMore;          // 右栏动态流加载更多
+    private bool _loadingMoreUsers;     // 左栏关注列表加载更多(与右栏分开, 否则两边一起转圈)
     private bool _hasMore = true;
+    private bool _hasMoreUsers = true;
+    private bool _loadMoreError;
+    private int _emptyFeedPages;
     private string _error = "";
+    private string _usersLoadError = "";
     private long _selfMid;
     private int _followingPage = 1;      // 左栏 UP 列表的翻页
+    private int _totalFollowings;
 
     public ObservableCollection<FollowUser> Users { get; } = new();
 
+    /// <summary>左栏搜索结果(只含已关注的 UP)。非空时替代普通关注列表显示。</summary>
+    public ObservableCollection<FollowUser> FollowingSearchResults { get; } = new();
+
     /// <summary>右栏内容(视频卡片)。切选择时整体换血。</summary>
     public ObservableCollection<VideoItem> FeedItems { get; } = new();
+
+    /// <summary>
+    /// 卡片墙显示用的条目。CardWallPanel 不会虚拟化, 这里最多放 300 条,
+    /// 防止 2790+ 关注下滑到几百条时一次生成太多卡片容器。
+    /// </summary>
+    public ObservableCollection<VideoItem> WallItems { get; } = new();
+    private const int WallItemLimit = 300;
 
     private FollowUser? _selectedUp;
 
@@ -73,12 +95,100 @@ public class FollowViewModel : ObservableObject
     /// 让旧内容留着、右栏自己呈现加载状态更稳。
     /// </summary>
     public bool ShowFullLoading => Loading && FeedItems.Count == 0;
+
+    /// <summary>右栏动态流正在加载下一页(底部转圈只绑这个)。</summary>
     public bool LoadingMore { get => _loadingMore; private set => SetProperty(ref _loadingMore, value); }
     public bool HasMore { get => _hasMore; private set => SetProperty(ref _hasMore, value); }
+
+    /// <summary>左栏关注列表正在加载下一页(与右栏分开, 否则左栏翻页时右栏也转圈)。</summary>
+    public bool LoadingMoreUsers
+    {
+        get => _loadingMoreUsers;
+        private set => SetProperty(ref _loadingMoreUsers, value);
+    }
+
+    public bool HasMoreUsers { get => _hasMoreUsers; private set => SetProperty(ref _hasMoreUsers, value); }
+
+    /// <summary>右栏翻页失败: 底部显示重试, 滚动不再自动重试(否则会无限转圈)。</summary>
+    public bool LoadMoreError { get => _loadMoreError; private set => SetProperty(ref _loadMoreError, value); }
+
+    /// <summary>左栏关注列表翻页失败</summary>
+    public string UsersLoadError
+    {
+        get => _usersLoadError;
+        private set
+        {
+            if (!SetProperty(ref _usersLoadError, value)) return;
+            OnPropertyChanged(nameof(HasUsersLoadError));
+        }
+    }
+    public bool HasUsersLoadError => UsersLoadError.Length > 0;
     public string Error { get => _error; private set => SetProperty(ref _error, value); }
-    public int Count => Users.Count;
+
+    /// <summary>接口给出的关注总数(2790 这类大账号靠它判断到底, 不看空页)。</summary>
+    public int TotalFollowings
+    {
+        get => _totalFollowings;
+        private set
+        {
+            if (!SetProperty(ref _totalFollowings, value)) return;
+            OnPropertyChanged(nameof(Count));
+            OnPropertyChanged(nameof(FollowingsSummary));
+        }
+    }
+
+    /// <summary>头部显示的关注数: 优先用接口 total, 还没拿到时退回已加载条数。</summary>
+    public int Count => TotalFollowings > 0 ? TotalFollowings : Users.Count(u => !u.IsPlaceholder);
+
+    /// <summary>左栏状态行: "已加载 300 / 2790"(占位行不计入已加载数)。</summary>
+    public string FollowingsSummary => TotalFollowings > 0
+        ? $"已加载 {Users.Count(u => !u.IsPlaceholder)} / {TotalFollowings}"
+        : $"已加载 {Users.Count(u => !u.IsPlaceholder)}";
+
     public bool NotLoggedIn => !Svc.Session.HasLogin;
 
+    // ------------------------------------------------------------ 搜索已关注 UP(2026-11-06)
+
+    private string _userSearchText = "";
+    private bool _userSearching;
+    private string _userSearchError = "";
+    private CancellationTokenSource? _userSearchCts;
+
+    /// <summary>搜索框文本。输入即触发 300ms 防抖, 调 B 站「搜索关注明细」接口。</summary>
+    public string UserSearchText
+    {
+        get => _userSearchText;
+        set
+        {
+            if (!SetProperty(ref _userSearchText, value)) return;
+            OnPropertyChanged(nameof(HasUserSearch));
+            OnPropertyChanged(nameof(ShowUserSearchEmpty));
+            StartUserSearch();
+        }
+    }
+
+    public bool HasUserSearch => !string.IsNullOrWhiteSpace(UserSearchText);
+
+    public bool UserSearching
+    {
+        get => _userSearching;
+        private set => SetProperty(ref _userSearching, value);
+    }
+
+    public string UserSearchError
+    {
+        get => _userSearchError;
+        private set
+        {
+            if (!SetProperty(ref _userSearchError, value)) return;
+            OnPropertyChanged(nameof(HasUserSearchError));
+        }
+    }
+    public bool HasUserSearchError => UserSearchError.Length > 0;
+
+    /// <summary>搜索结果为空时的提示(区分"正在搜"和"没搜到")。</summary>
+    public bool ShowUserSearchEmpty =>
+        HasUserSearch && !UserSearching && !HasUserSearchError && FollowingSearchResults.Count == 0;
 
     /// <summary>动态页头部「全部已读」按钮的可见性。</summary>
     public bool HasAnyUnread => Svc.DynamicNotify.HasUnread;
@@ -188,8 +298,10 @@ public class FollowViewModel : ObservableObject
 
     public ICommand RefreshCommand { get; }
     public ICommand LoadMoreCommand { get; }
+    public ICommand LoadMoreFeedCommand { get; }
     public ICommand LoginCommand { get; }
     public ICommand OpenUpCommand { get; }
+    public ICommand ClearUserSearchCommand { get; }
     public ICommand MarkAllReadCommand { get; }
 
     // 分页游标(两种来源各自一套)。
@@ -208,6 +320,8 @@ public class FollowViewModel : ObservableObject
     {
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
         LoadMoreCommand = new AsyncRelayCommand(LoadMoreAsync);
+        LoadMoreFeedCommand = new AsyncRelayCommand(LoadMoreFeedAsync);
+        ClearUserSearchCommand = new RelayCommand(ClearUserSearch);
         MarkAllReadCommand = new RelayCommand(() =>
         {
             Svc.DynamicNotify.MarkAllRead();
@@ -232,6 +346,10 @@ public class FollowViewModel : ObservableObject
         });
         Svc.Session.Changed += OnSessionChanged;
         Svc.DynamicNotify.Updated += OnNotifyUpdated;
+        FeedItems.CollectionChanged += (_, _) =>
+        {
+            if (UseCardWall) SyncWallItems();
+        };
     }
 
     private void OnNotifyUpdated()
@@ -251,9 +369,14 @@ public class FollowViewModel : ObservableObject
         {
             // 退出登录: 不要让上一个账号的关注列表/未读状态留在界面上。
             Users.Clear();
+            FollowingSearchResults.Clear();
             FeedItems.Clear();
+            WallItems.Clear();
+            TotalFollowings = 0;
+            HasMoreUsers = false;
             SelectedUp = null;
             OnPropertyChanged(nameof(Count));
+            OnPropertyChanged(nameof(FollowingsSummary));
             OnPropertyChanged(nameof(HasAnyUnread));
         }
         _ = RefreshAsync();
@@ -280,8 +403,11 @@ public class FollowViewModel : ObservableObject
     public void RemoveUser(FollowUser u)
     {
         Users.Remove(u);
+        FollowingSearchResults.Remove(u);
         Svc.DynamicNotify.Forget(u.Mid);
+        if (TotalFollowings > 0) TotalFollowings = Math.Max(0, TotalFollowings - 1);
         OnPropertyChanged(nameof(Count));
+        OnPropertyChanged(nameof(FollowingsSummary));
         OnPropertyChanged(nameof(HasAnyUnread));
         if (SelectedUp?.Mid == u.Mid) SelectedUp = null;
     }
@@ -289,6 +415,8 @@ public class FollowViewModel : ObservableObject
     /// <summary>选中「全部动态」</summary>
     public Task SelectAllAsync()
     {
+        // 从搜索结果点回「全部动态」时退出搜索, 否则左栏还停在搜索结果上, 与右栏不一致。
+        if (HasUserSearch) ClearUserSearch();
         SelectedUp = null;
         return LoadSelectionAsync(reset: true);
     }
@@ -297,7 +425,10 @@ public class FollowViewModel : ObservableObject
     public Task SelectUpAsync(FollowUser u)
     {
         if (u == null || u.Mid <= 0) return Task.CompletedTask;
-        SelectedUp = u;
+        // 搜索结果可能是一个新的 FollowUser 实例; 已加载的 Users 里有同一个 mid 时
+        // 优先用 Users 的实例, 这样左栏的选中高亮/排序仍然围绕同一个对象。
+        var target = Users.FirstOrDefault(x => x.Mid == u.Mid) ?? u;
+        SelectedUp = target;
         // 点开 TA = 已读: 清掉这个 UP 的红点, 基准推进到最新一条。
         Svc.DynamicNotify.MarkRead(u.Mid);
         ApplyNotifyStates();
@@ -308,6 +439,8 @@ public class FollowViewModel : ObservableObject
     {
         Loading = true;
         Error = "";
+        UsersLoadError = "";
+        LoadMoreError = false;
         if (!Svc.Session.HasLogin)
         {
             Loading = false;
@@ -326,7 +459,7 @@ public class FollowViewModel : ObservableObject
             }
             _selfMid = me.Mid;
 
-            var (ok, err, list) = await Svc.Api.GetFollowingsAsync(_selfMid, 1, 30);
+            var (ok, err, list, total) = await Svc.Api.GetFollowingsAsync(_selfMid, 1, 50);
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 if (list != null)
@@ -334,7 +467,21 @@ public class FollowViewModel : ObservableObject
                     Users.Clear();
                     foreach (var u in list) Users.Add(u);
                     _followingPage = 1;
+                    TotalFollowings = total;
+                    // 刷新会换掉 Users 的实例: 把选中项重新指向新实例, 否则左栏高亮会消失。
+                    if (SelectedUp != null)
+                    {
+                        var keep = Users.FirstOrDefault(x => x.Mid == SelectedUp.Mid);
+                        SelectedUp = keep;
+                    }
+                    // total 是权威值; 拿不到时退回"本页是否满 50"。
+                    // 首页为空也必须停, 否则会一直请求下一页。
+                    HasMoreUsers = list.Count > 0 &&
+                                   (total > 0
+                                       ? Users.Count(u => !u.IsPlaceholder) < total
+                                       : list.Count >= 50);
                     OnPropertyChanged(nameof(Count));
+                    OnPropertyChanged(nameof(FollowingsSummary));
                     // 进入页面/刷新是**唯一**重排左栏的时机(2026-11-06 用户要求:
                     // 点带红点的 UP 不要当场跳位置, 位置只在重新进入动态页后刷新)。
                     ApplyNotifyStates();
@@ -359,45 +506,86 @@ public class FollowViewModel : ObservableObject
         }
     }
 
-    /// <summary>左栏翻页: 关注列表一页 30 个。只补列表, 不动右栏。</summary>
+    /// <summary>
+    /// 左栏翻页: 关注列表一页 50 个(接口上限)。
+    /// ★ 与右栏的 LoadingMore 完全分开: 左栏翻页时右栏底部不能跟着转圈。
+    /// ★ 用接口 total 判断到底; 空页/重复页不会让页码卡住反复重试。
+    /// </summary>
     public async Task LoadMoreAsync()
     {
-        if (LoadingMore || Loading || _selfMid <= 0) return;
-        LoadingMore = true;
+        if (LoadingMoreUsers || !HasMoreUsers || Loading || _selfMid <= 0) return;
+        LoadingMoreUsers = true;
+        UsersLoadError = "";
         try
         {
-            var (ok, err, list) = await Svc.Api.GetFollowingsAsync(_selfMid, _followingPage + 1, 30);
+            var nextPage = _followingPage + 1;
+            var (ok, err, list, total) = await Svc.Api.GetFollowingsAsync(_selfMid, nextPage, 50);
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
-                LoadingMore = false;
-                if (list != null && list.Count > 0)
+                if (!ok || list == null)
                 {
-                    _followingPage++;
-                    var seen = new HashSet<long>();
-                    foreach (var u in Users) seen.Add(u.Mid);
-                    foreach (var u in list)
-                        if (u.Mid > 0 && seen.Add(u.Mid)) Users.Add(u);
-                    OnPropertyChanged(nameof(Count));
-
-                    // ★ 左栏翻出新 UP 后要立刻按已缓存的动态流补算一次红点。
-                    //   以前只 Add 用户、不跑 UpdateUnreadBadges —— 关注了 30+ 人的账号
-                    //   往下滚出来的 UP 永远 NewCount=0, 明明有新投稿也不亮红点。
-                    //   只在「全部动态」下算: 单 UP 视图的 FeedItems 只有该 UP 的投稿,
-                    //   拿来给别的 UP 判新旧会把基准写错。
-                    //
-                    // ★ 2026-11-05: 同样在这里补一次"按最近更新排序" ——
-                    //   新翻出来的 UP 也要参与排序(它可能在动态流里出现过, 有时间戳),
-                    //   否则它们会一直挂在列表末尾, 与排序规则矛盾。
-                    if (SelectedUp == null)
-                    {
-                    }
+                    // 失败时保留 HasMoreUsers, 底部显示重试; 滚动不再自动重试。
+                    UsersLoadError = err ?? "加载关注列表失败";
+                    return;
                 }
+
+                _followingPage = nextPage;
+                if (total > 0) TotalFollowings = total;
+
+                var seen = new HashSet<long>(Users.Where(u => !u.IsPlaceholder).Select(u => u.Mid));
+                var added = 0;          // 新增到列表的行数(不含占位行替换)
+                var progressed = 0;     // 本页真正被消费的行数(新增 + 占位行补全)
+                foreach (var u in list)
+                {
+                    if (u.Mid <= 0) continue;
+
+                    // 这个 UP 已经在左栏最前面有一条"未读占位行": 用真实数据**就地替换**它,
+                    // 而不是再加一行(否则同一个 UP 会出现两次, 用户会以为关注了两个同名账号)。
+                    // ★ 这一步必须在 seen 判重**之前**: 占位行的 mid 也在 Users 里,
+                    //   先判重的话会把它当成"已存在"直接跳过, 占位行就永远补不成真实数据。
+                    var placeholder = Users.FirstOrDefault(x => x.Mid == u.Mid && x.IsPlaceholder);
+                    if (placeholder != null)
+                    {
+                        var idx = Users.IndexOf(placeholder);
+                        u.IsSelected = placeholder.IsSelected;
+                        u.NewCount = placeholder.NewCount;
+                        if (placeholder.LatestPubdate > u.LatestPubdate) u.LatestPubdate = placeholder.LatestPubdate;
+                        Users[idx] = u;
+                        if (SelectedUp == placeholder) SelectedUp = u;
+                        progressed++;
+                        continue;
+                    }
+
+                    if (!seen.Add(u.Mid)) continue;
+                    Users.Add(u);
+                    added++;
+                    progressed++;
+                }
+
+                OnPropertyChanged(nameof(Count));
+                OnPropertyChanged(nameof(FollowingsSummary));
+
+                // 到底的判据: 有 total 用 total; 没有 total 时本页不满 50。
+                // ★ 空页/全是重复项也必须停, 否则滚到底会无限重试同一页(转圈不消失)。
+                // ★ 用 progressed 而不是 added: 一页全是"占位行补全"时列表条数没涨,
+                //   但页码确实前进了, 不该因此误判到底。
+                HasMoreUsers = list.Count > 0 && progressed > 0 &&
+                               (TotalFollowings > 0
+                                   ? Users.Count(u => !u.IsPlaceholder) < TotalFollowings
+                                   : list.Count >= 50);
+
+                // 新翻出来的 UP 也要立刻应用未读状态(红点数字), 但**不重排** ——
+                // 位置只在进入动态页/点刷新时刷新(2026-11-06 用户要求)。
+                ApplyNotifyStates();
             });
         }
         catch (Exception ex)
         {
-            LoadingMore = false;
-            Error = ex.Message;
+            UsersLoadError = ex.Message;
+        }
+        finally
+        {
+            LoadingMoreUsers = false;
         }
     }
 
@@ -412,6 +600,9 @@ public class FollowViewModel : ObservableObject
             Loading = true;
             FeedItems.Clear();
             _seenBvid.Clear();
+            _feedOffset = null;
+            _emptyFeedPages = 0;
+            LoadMoreError = false;
             Error = "";
             OnPropertyChanged(nameof(ShowFullLoading));
         }
@@ -431,18 +622,15 @@ public class FollowViewModel : ObservableObject
         {
             if (forUp == null)
             {
-                if (reset) _feedOffset = null;
                 var (rOk, rErr, rItems, nextOffset, rHasMore) =
                     await Svc.Api.GetDynamicFeedAsync(reset ? null : _feedOffset);
                 ok = rOk; err = rErr; items = rItems;
-                // 翻页依据: "服务端给了新 offset 且与当前不同", 原样回传 = 到底了。
-                // ★ 为什么不用接口的 has_more(2026-10-17 修正): 原来这里的理由是"has_more 实测不可靠,
-                //   第一页标 false 却还有下一页" —— 那其实是**解析 bug**造成的: 接口给的是
-                //   bool(true/false), 而解析按 Number 读(恒为 false)。现在解析已认 bool,
-                //   has_more 是准的(探针 6 页全是 true)。
-                //   仍然保留 offset 这套判据: 它不依赖任何接口字段的语义, 且顺便挡住
-                //   "offset 原样回传却还标着 has_more=true"那类自相矛盾的响应。
-                hasMore = ok && !string.IsNullOrEmpty(nextOffset) && nextOffset != _feedOffset;
+
+                // ★ 2026-11-06: 真正使用接口的 has_more, 同时保留 offset 前进判断。
+                //   旧版只看 offset, 接口失败/连续返回重复页时会一直认为"还有下一页",
+                //   每次滚动都再请求一次, 底部转圈永远不消失。
+                hasMore = ok && rHasMore && !string.IsNullOrEmpty(nextOffset) &&
+                          nextOffset != _feedOffset;
                 if (ok) _feedOffset = nextOffset;
             }
             else
@@ -485,8 +673,21 @@ public class FollowViewModel : ObservableObject
                         FeedItems.Add(it);
                         added++;
                     }
+
+                if (reset) _emptyFeedPages = 0;
+                if (added == 0) _emptyFeedPages++;
+                else _emptyFeedPages = 0;
+
+                // 连续 2 页没有任何新视频 = 到底, 或接口一直回重复页/空页。
+                // 不设这道闸时, 滚到底会无限"加载中 → 0 条 → 再加载"。
+                if (_emptyFeedPages >= 2) hasMore = false;
+
                 HasMore = hasMore;
                 OnPropertyChanged(nameof(ShowFullLoading));
+                OnPropertyChanged(nameof(FollowingsSummary));
+                if (UseCardWall) SyncWallItems();
+                OnPropertyChanged(nameof(ShowWallLimitHint));
+
                 if (FeedItems.Count == 0)
                     Error = forUp == null ? "关注的 UP 最近没有视频投稿" : "该 UP 暂时没有投稿视频";
 
@@ -524,10 +725,23 @@ public class FollowViewModel : ObservableObject
             if (!SetProperty(ref _useCardWall, value)) return;
             Svc.Settings.FollowCardWall = value;
             Svc.Settings.Save();
+            if (value) SyncWallItems();
+            OnPropertyChanged(nameof(ShowWallLimitHint));
         }
     }
 
+    /// <summary>卡片墙超过 300 条时的提示(避免用户以为后面没有内容了)。</summary>
+    public bool ShowWallLimitHint => UseCardWall && FeedItems.Count > WallItems.Count;
 
+    /// <summary>把 FeedItems 的前 300 条同步到卡片墙集合。</summary>
+    private void SyncWallItems()
+    {
+        var want = Math.Min(FeedItems.Count, WallItemLimit);
+        if (WallItems.Count == want) return;
+        WallItems.Clear();
+        for (var i = 0; i < want; i++) WallItems.Add(FeedItems[i]);
+        OnPropertyChanged(nameof(ShowWallLimitHint));
+    }
 
     // ------------------------------------------------------------ 未读红点(应用级服务)
 
@@ -551,7 +765,9 @@ public class FollowViewModel : ObservableObject
     private void ApplyNotifyStates()
     {
         foreach (var u in Users) ApplyNotifyState(u);
+        foreach (var u in FollowingSearchResults) ApplyNotifyState(u);
         OnPropertyChanged(nameof(HasAnyUnread));
+        OnPropertyChanged(nameof(ShowUserSearchEmpty));
     }
 
     /// <summary>
@@ -636,6 +852,7 @@ public class FollowViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(Count));
+        OnPropertyChanged(nameof(FollowingsSummary));
     }
 
     private static void ApplyNotifyState(FollowUser u)
@@ -700,11 +917,100 @@ public class FollowViewModel : ObservableObject
         }
     }
 
+    // ------------------------------------------------------------ 搜索已关注 UP
 
-    /// <summary>右栏滚动到底: 追加下一页</summary>
+    /// <summary>
+    /// 输入防抖 300ms 后调「搜索关注明细」接口。
+    /// ★ 不做本地过滤: 2790 个关注全部加载/每次输入刷新 2790 行会直接卡死 UI。
+    /// </summary>
+    private async void StartUserSearch()
+    {
+        _userSearchCts?.Cancel();
+        _userSearchCts?.Dispose();
+        _userSearchCts = null;
+
+        FollowingSearchResults.Clear();
+        UserSearchError = "";
+        OnPropertyChanged(nameof(ShowUserSearchEmpty));
+
+        var keyword = UserSearchText.Trim();
+        if (keyword.Length == 0)
+        {
+            UserSearching = false;
+            return;
+        }
+        if (_selfMid <= 0)
+        {
+            UserSearching = false;
+            UserSearchError = "账号信息还没准备好, 请稍后再试";
+            return;
+        }
+
+        // 防抖期间也显示"搜索中" —— 否则用户输入后 300ms 内一片空白, 像没反应。
+        UserSearching = true;
+        OnPropertyChanged(nameof(ShowUserSearchEmpty));
+
+        var cts = new CancellationTokenSource();
+        _userSearchCts = cts;
+        try
+        {
+            await Task.Delay(300, cts.Token);
+            if (cts.IsCancellationRequested) return;
+
+            var (ok, err, list, _) = await Svc.Api.SearchFollowingsAsync(_selfMid, keyword, 1, 50);
+            if (cts.IsCancellationRequested) return;
+
+            if (!ok || list == null)
+            {
+                UserSearchError = err ?? "搜索失败, 请重试";
+                return;
+            }
+
+            var seen = new HashSet<long>();
+            foreach (var u in list)
+                if (u.Mid > 0 && seen.Add(u.Mid)) FollowingSearchResults.Add(u);
+            ApplyNotifyStates();
+        }
+        catch (OperationCanceledException)
+        {
+            // 输入还在继续, 这一次作废。
+        }
+        catch (Exception ex)
+        {
+            UserSearchError = ex.Message;
+        }
+        finally
+        {
+            if (ReferenceEquals(_userSearchCts, cts))
+            {
+                _userSearchCts = null;
+                UserSearching = false;
+                OnPropertyChanged(nameof(ShowUserSearchEmpty));
+            }
+            cts.Dispose();
+        }
+    }
+
+    private void ClearUserSearch()
+    {
+        _userSearchCts?.Cancel();
+        _userSearchCts = null;
+        UserSearchText = "";       // setter 会清空结果并取消搜索
+        FollowingSearchResults.Clear();
+        UserSearchError = "";
+        UserSearching = false;
+        OnPropertyChanged(nameof(ShowUserSearchEmpty));
+    }
+
+    // ------------------------------------------------------------ 右栏加载更多
+
+    /// <summary>右栏滚动到底 / 底部重试按钮: 追加下一页。</summary>
     public async Task LoadMoreFeedAsync()
     {
         if (Loading || LoadingMore || !HasMore) return;
+        if (UseCardWall && WallItems.Count >= WallItemLimit) return;
+        // 手动/自动重试前清掉上一次的错误, 让 LoadSelectionAsync 不再被它挡住。
+        if (LoadMoreError) LoadMoreError = false;
         await LoadSelectionAsync(reset: false);
     }
 }

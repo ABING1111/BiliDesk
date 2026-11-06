@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
@@ -10,18 +11,35 @@ using BiliDesk.ViewModels;
 namespace BiliDesk.Views.Pages;
 
 /// <summary>
-/// 「动态」页: 左栏 = 全部动态 + 关注 UP 列表(有未读时头像左侧带红点、头像右下角带条数角标),
-/// 右栏 = 选中对象的内容, 两档排版(单列动态卡 / 多列卡片墙)由右上角的两枚 chip 切换。
-/// 选中态与数据都在 FollowViewModel; 这个 code-behind 只做事件转发、滚动加载与排版 chip 的选中态。
+/// 「动态」页: 左栏 = 搜索 + 全部动态 + 关注 UP 列表(虚拟化 ListBox),
+/// 右栏 = 选中对象的内容(默认动态卡也是虚拟化 ListBox, 卡片墙带上限)。
+///
+/// 2026-11-06 关注 2790+ 的性能重做:
+///   · 左栏不再用 ScrollViewer + StackPanel 一次性创建所有行;
+///   · 左右加载状态分开, 左栏翻页不再让右栏转圈;
+///   · 滚动到底的自动翻页统一用 ScrollChanged 的 Extent/Viewport 像素值。
 /// </summary>
 public partial class FollowPage : UserControl
 {
-    private const double AutoLoadThreshold = 240;
+    /// <summary>
+    /// 自动翻页阈值(单位 = **条目**, 不是像素)。
+    /// ListBox 用默认的 item-based 虚拟化(CanContentScroll=True), 滚动距离按行数算;
+    /// 设成像素值会在 50 条一页的左栏上永远触发/永远不触发。
+    /// </summary>
+    private const double UserAutoLoadThreshold = 8;
+    private const double FeedAutoLoadThreshold = 4;
 
     /// <summary>看板轮询间隔: "关注的主播开播了"要能自己冒出来, 不能靠用户去点刷新。</summary>
     private static readonly TimeSpan LiveBoardPollInterval = TimeSpan.FromSeconds(60);
 
     private DispatcherTimer? _liveBoardTimer;
+
+    /// <summary>
+    /// 左栏本次左键手势是否从页面内按下(与 VideoCard 的 _pressInside 同款)。
+    /// 窗口最大化/页面重排后, 一个没有配对 Down 的 Up 可能落到某一行上;
+    /// 没有这道闸会误触发"选中 UP"。
+    /// </summary>
+    private bool _leftPressSeen;
 
     public FollowPage()
     {
@@ -38,10 +56,10 @@ public partial class FollowPage : UserControl
         {
             // 动态流与"关注的主播正在直播"都纳入全局屏蔽(与首页/收藏/历史同一套条件)
             FilterService.Instance.Attach(vm.FeedItems);
+            FilterService.Instance.Attach(vm.WallItems);
             FilterService.Instance.Attach(vm.LiveNow);
 
-            // 看板默认折叠(2026-11-03 用户要求"仅点击后再展开"): 页面实例会被 MainWindow
-            // 缓存、VM 里的展开态会跨次保留, 所以每次进入页面都归位到收起, 不沿用上次的展开态。
+            // 看板默认折叠: 页面实例会被 MainWindow 缓存, 每次进入都归位到收起。
             vm.LiveBoardOpen = false;
             UpdateLayoutChips(vm);
             await vm.InitAsync();
@@ -56,19 +74,18 @@ public partial class FollowPage : UserControl
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(async () =>
         {
             if (!IsLoaded || DataContext is not FollowViewModel vm) return;
-            var sv = FeedScroll;
+            var sv = GetVisibleFeedScroll();
             if (sv == null) return;
             var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
-            var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;
-            if (distanceToBottom > AutoLoadThreshold && !contentShort) return;
+            var contentShort = sv.ScrollableHeight <= 0;
+            if (distanceToBottom > FeedAutoLoadThreshold && !contentShort) return;
             await vm.LoadMoreFeedAsync();
         }));
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        // 页面实例不会跟着导航销毁(MainWindow 缓存), 定时器必须自己停:
-        // 否则用户在别的页面上, 这边还在定时打接口。
+        // 页面实例不会跟着导航销毁(MainWindow 缓存), 定时器必须自己停。
         _liveBoardTimer?.Stop();
     }
 
@@ -118,10 +135,30 @@ public partial class FollowPage : UserControl
 
     // ------------------------------------------------------------ 选择
 
+    /// <summary>
+    /// 记录"左栏有一次真实按下"。配合 Up 的 TakeLeftPress 使用, 防止窗口最大化重排后
+    /// 一个没有配对 Down 的 Up 误选中 UP。
+    /// </summary>
+    private void OnLeftColumnPress(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left) _leftPressSeen = true;
+    }
+
+    /// <summary>Up 冒泡到左栏时清掉标记(有效点击已在行处理器里消费)。</summary>
+    private void OnLeftColumnUp(object sender, MouseButtonEventArgs e) => _leftPressSeen = false;
+
+    private bool TakeLeftPress()
+    {
+        if (!_leftPressSeen) return false;
+        _leftPressSeen = false;
+        return true;
+    }
+
     /// <summary>点「全部动态」: 右栏显示关注 UP 近期的视频投稿</summary>
     private void OnSelectAll(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
+        if (!TakeLeftPress()) return;
         if (DataContext is FollowViewModel vm) _ = vm.SelectAllAsync();
     }
 
@@ -129,19 +166,32 @@ public partial class FollowPage : UserControl
     private void OnSelectUp(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
+        if (!TakeLeftPress()) return;
         if (((FrameworkElement)sender).DataContext is not FollowUser u) return;
         if (DataContext is FollowViewModel vm) _ = vm.SelectUpAsync(u);
     }
 
-    // ------------------------------------------------------------ 关注直播看板(2026-10-31)
+    private void OnClearUserSearch(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is FollowViewModel vm) vm.ClearUserSearchCommand.Execute(null);
+    }
 
-    /// <summary>点看板标题行: 折叠/展开主播列表</summary>
+    /// <summary>右下角工具列「刷新」: 刷新后把右栏滚回顶部(与首页刷新同一套体验)。</summary>
+    private async void OnRefreshClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not FollowViewModel vm) return;
+        await vm.RefreshAsync();
+        var sv = GetVisibleFeedScroll();
+        if (sv != null) sv.ScrollToTop();
+    }
+
+    // ------------------------------------------------------------ 关注直播看板
+
     private void OnToggleLiveBoard(object sender, MouseButtonEventArgs e)
     {
         if (DataContext is FollowViewModel vm) vm.LiveBoardOpen = !vm.LiveBoardOpen;
     }
 
-    /// <summary>点看板里的一个主播: 直接进 TA 的直播间</summary>
     private void OnLiveItemClick(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
@@ -151,25 +201,66 @@ public partial class FollowPage : UserControl
 
     // ------------------------------------------------------------ 滚动加载
 
-    /// <summary>右栏: 内容滚动到底自动补下一页(全部动态 = 游标; 单 UP = 页码)</summary>
+    /// <summary>
+    /// 取滚动事件里的 ScrollViewer。ListBox 的 ScrollChanged 是附加事件,
+    /// OriginalSource 通常就是内部 ScrollViewer; 取不到时再从 ListBox 里找。
+    /// </summary>
+    private static ScrollViewer? ScrollViewerOf(RoutedEventArgs e, object? sender)
+    {
+        if (e.OriginalSource is ScrollViewer sv) return sv;
+        return sender is DependencyObject d ? FindChild<ScrollViewer>(d) : null;
+    }
+
+    /// <summary>右栏: 滚动到底自动补下一页(全部动态 = 游标; 单 UP = 页码)</summary>
     private void FeedScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (DataContext is not FollowViewModel vm) return;
-        var sv = (ScrollViewer)sender;
+
+        var sv = ScrollViewerOf(e, sender);
+
+        // 卡片墙有 300 条上限: 到上限后不再自动翻页, 底部会提示切换动态卡。
+        if (vm.UseCardWall && vm.WallItems.Count >= 300) return;
+        if (vm.LoadingMore || vm.LoadMoreError || !vm.HasMore) return;
+
+        if (sv == null || sv.ScrollableHeight <= 0) return;
         var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
-        if (distanceToBottom > AutoLoadThreshold) return;
+        if (distanceToBottom > FeedAutoLoadThreshold) return;
+
         _ = vm.LoadMoreFeedAsync();
     }
 
-    /// <summary>左栏: UP 列表滚到底自动补(一页 30 个)</summary>
+    /// <summary>左栏: UP 列表滚到底自动补(一页 50 个)。搜索结果显示时不平铺翻页。</summary>
     private void UpListScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (DataContext is not FollowViewModel vm) return;
-        var sv = (ScrollViewer)sender;
-        var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
-        if (distanceToBottom > AutoLoadThreshold) return;
+        if (vm.HasUserSearch || vm.LoadingMoreUsers || vm.HasUsersLoadError || !vm.HasMoreUsers) return;
         if (vm.Users.Count == 0) return;
+
+        var sv = ScrollViewerOf(e, sender);
+        if (sv == null || sv.ScrollableHeight <= 0) return;
+        var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
+        if (distanceToBottom > UserAutoLoadThreshold) return;
         _ = vm.LoadMoreAsync();
+    }
+
+    private ScrollViewer? GetVisibleFeedScroll()
+    {
+        var vm = DataContext as FollowViewModel;
+        var list = vm?.UseCardWall == true ? (DependencyObject?)FeedWallList : FeedList;
+        return list == null ? null : FindChild<ScrollViewer>(list);
+    }
+
+    private static T? FindChild<T>(DependencyObject root) where T : DependencyObject
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T hit) return hit;
+            var nested = FindChild<T>(child);
+            if (nested != null) return nested;
+        }
+        return null;
     }
 
     // ------------------------------------------------------------ 左栏条目的右键操作

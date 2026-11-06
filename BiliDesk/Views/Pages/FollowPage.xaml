@@ -46,6 +46,195 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- 关注 UP 行模板(2026-11-06): 普通列表与搜索结果共用。
+             ★ 行本身仍是 Border + 现有选中/红点/角标样式, ListBox 只负责虚拟化;
+               ListBoxItem 的默认选中高亮在下面用空模板关掉。
+             ★★ 2026-11-06 用户反馈"选中时的粉色底衬与头像名字的位置不和谐, 应放到左边去":
+                  原来红点单独占一条 22px 的列(没红点的行也照样留白), 行的左右内边距又是
+                  6 / 12 —— 头像离底衬左缘 28px、右侧只留 12px, 粉色块整体看着往右倒。
+                  现在红点列压到 8px、左右内边距改成 6 / 10 ⇒ 头像离左缘 14px,
+                  与右侧的时间标签视觉上对称, 底衬的重心回到左边。 -->
+        <DataTemplate x:Key="FollowUserRowTemplate">
+            <!-- ★★ 2026-11-06 用户反馈"选中时的粉色底衬与头像名字的位置不和谐, 应放到左边去":
+                   原来红点单独占一条 22px 的列(没红点的行也照样留白), 行的左右内边距又是
+                   6 / 12 —— 头像离底衬左缘 28px、右侧只留 12px, 粉色块整体看着往右倒。
+                   ★ 现在的结构: **底衬本身不留内边距**, 内边距挪到"内容列"上 ——
+                     红点列固定在最左(0px 起), 头像列从 8px 起, 左右两端的留白
+                     (8 / 10)由内容列自己的 Margin 给出 ⇒ 底衬的重心回到左边,
+                     而且红点紧贴底衬左缘, 一眼就能看到"这一行有更新"。 -->
+            <Border CornerRadius="10" Padding="0" Margin="0,0,0,4" Cursor="Hand"
+                    MouseLeftButtonUp="OnSelectUp"
+                    ToolTip="只看 TA 的投稿视频">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="Background" Value="Transparent" />
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource NavItemHoverBrush}" />
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource AccentBorderFillBrush}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <!-- 未读红点: 固定在最左 8px 那一列, 紧贴底衬左缘 -->
+                    <Border Grid.Column="0" Width="8" Height="28"
+                            Background="Transparent" VerticalAlignment="Center">
+                        <Border Width="6" Height="6" CornerRadius="3"
+                                Background="{DynamicResource UnreadDotBrush}"
+                                HorizontalAlignment="Left" VerticalAlignment="Center"
+                                Visibility="{Binding HasNew, Converter={StaticResource BoolToVis}}" />
+                    </Border>
+                    <Grid Grid.Column="1" Width="36" Height="36" Margin="6,8,0,8">
+                        <Border Width="36" Height="36" CornerRadius="18"
+                                Background="{DynamicResource AccentSoftFillBrush}"
+                                ClipToBounds="True"
+                                helpers:Cover.Source="{Binding Face}">
+                            <Border.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="打开 UP 主页" Click="OnVisitClick">
+                                        <MenuItem.Icon>
+                                            <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                       FontSize="13" VerticalAlignment="Center" />
+                                        </MenuItem.Icon>
+                                    </MenuItem>
+                                    <MenuItem Header="查看头像大图" Click="OnViewAvatar">
+                                        <MenuItem.Icon>
+                                            <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                       FontSize="13" VerticalAlignment="Center" />
+                                        </MenuItem.Icon>
+                                    </MenuItem>
+                                    <MenuItem Header="下载头像到本地" Click="OnDownloadAvatar">
+                                        <MenuItem.Icon>
+                                            <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                       FontSize="13" VerticalAlignment="Center" />
+                                        </MenuItem.Icon>
+                                    </MenuItem>
+                                    <Separator />
+                                    <MenuItem Header="取消关注" Click="OnUnfollowClick">
+                                        <MenuItem.Icon>
+                                            <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                       FontSize="13" VerticalAlignment="Center" />
+                                        </MenuItem.Icon>
+                                    </MenuItem>
+                                </ContextMenu>
+                            </Border.ContextMenu>
+                            <TextBlock Text="&#xE77B;"
+                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="16"
+                                       Foreground="{DynamicResource AccentTextBrush}"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Border>
+                        <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                MinWidth="16" Height="16" CornerRadius="8" Padding="4,0"
+                                Background="{DynamicResource AccentBrush}"
+                                ToolTipService.IsEnabled="{Binding HasNew}"
+                                ToolTip="{Binding NewCount, StringFormat='{}{0} 条新动态'}"
+                                Visibility="{Binding HasNew, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding NewCount}" FontSize="10"
+                                       Foreground="{DynamicResource TextOnAccentBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </Grid>
+                    <TextBlock Grid.Column="2" Text="{Binding Name}"
+                               FontSize="13" Margin="10,0,8,0"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                        <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <TextBlock Grid.Column="3" Text="{Binding ActivityLabel}"
+                               FontSize="11" VerticalAlignment="Center"
+                               HorizontalAlignment="Right"
+                               MaxWidth="72" Margin="0,0,10,0"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               Visibility="{Binding HasActivity, Converter={StaticResource BoolToVis}}" />
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <!-- 关注 UP 列表专用 ListBox 样式: 打开虚拟化(条目滚动), 关掉 ListBox 自带选中高亮。
+             ★ 2790+ 关注必须虚拟化, 否则会一次性创建几千个行控件/头像, UI 线程直接卡死。 -->
+        <Style x:Key="FollowUserListStyle" TargetType="ListBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+            <!-- ★ 2026-11-06 用户报"动态页出现多个可以左右拖动的横条":
+                 虚拟化 ListBox 的 HorizontalScrollBarVisibility 默认是 Auto, 只要有一行
+                 比视口宽一点点(长 UP 名/长文案)就会长出一条水平滚动条; 左栏、动态流、卡片墙
+                 各自一条, 看起来就是"好几个横条", 而且拖它会让内容左右晃动("画面不固定")。
+                 这里一律 Disabled: 行内文本本来就都做了 TextTrimming/TextWrapping,
+                 不需要横向滚动。 -->
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Focusable" Value="False" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <ContentPresenter />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 右栏动态流 ListBox: 默认动态卡虚拟化(卡片墙用另一个 ListBox + CardWallPanel,
+             因为 CardWallPanel 本身不虚拟化, 由 VM 限制最多 300 条)。 -->
+        <Style x:Key="FeedListStyle" TargetType="ListBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+            <!-- 同上: 动态流也不要有横向滚动条(卡片宽度本来就跟视口一致) -->
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Focusable" Value="False" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <ContentPresenter />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
     <Grid>
         <Grid.RowDefinitions>
@@ -53,11 +242,13 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 标题 + 刷新 -->
+        <!-- 标题 -->
         <!--
                     右上角的窗口按钮(最小化/最大化/关闭)浮在内容区之上、占 y=4~36。
                     头部因此撑到 62 高: 标题贴顶(和左侧 logo 同一水平线), 右侧操作按钮
                     贴底 —— 它们的顶边落在 44, 正好让开窗口按钮, 谁也不压谁。
+                    ★ 2026-11-06 用户要求"已读和刷新按钮做成右下角工具列": 头部右侧原来那两个
+                      按钮移到了页面右下角的浮动工具列(见下方 ToolBar), 头部只剩标题。
                 -->
         <Grid Grid.Row="0" Margin="24,20,24,8" MinHeight="62">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
@@ -66,11 +257,6 @@
                            VerticalAlignment="Bottom" Margin="6,0,0,6"
                            Foreground="{DynamicResource TextTertiaryBrush}" FontSize="14" />
             </StackPanel>
-            <Button HorizontalAlignment="Right" Style="{StaticResource IconButtonStyle}"
-                    Command="{Binding RefreshCommand}" ToolTip="刷新" VerticalAlignment="Bottom">
-                <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                           FontSize="15" />
-            </Button>
         </Grid>
 
         <!-- 内容 -->
@@ -106,203 +292,144 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- ===== 左: 全部动态 + UP 列表 ===== -->
-                <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto"
-                              ScrollChanged="UpListScroll_OnScrollChanged"
-                              Margin="12,4,0,20">
-                    <StackPanel Margin="8,0,8,0">
-                        <!-- 全部动态入口: 选中高亮跟 VM.IsAllSelected 走 -->
-                        <!-- 选中/悬停观感与左侧导航栏一致: 悬停灰(NavItemHoverBrush),
-                             选中粉底(AccentSoftFillBrush) + 粉字(AccentTextBrush)。 -->
-                        <!-- ★ 左内边距 28 = 6(UP 行左内边距) + 22(红点通道): 这样「全部动态」的
-                             图标与下方各 UP 的头像落在同一条竖线上, 不会因为红点通道而错位。 -->
-                        <Border CornerRadius="10" Padding="28,10,12,10" Margin="0,4,0,6" Cursor="Hand"
-                                MouseLeftButtonUp="OnSelectAll">
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <Setter Property="Background" Value="Transparent" />
-                                    <Style.Triggers>
-                                        <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource NavItemHoverBrush}" />
-                                        </Trigger>
-                                        <DataTrigger Binding="{Binding IsAllSelected}" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource AccentBorderFillBrush}" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Border.Style>
-                            <StackPanel Orientation="Horizontal">
-                                <Border Width="36" Height="36" CornerRadius="18"
-                                        Background="{DynamicResource AccentSoftFillBrush}">
-                                    <Path Data="{DynamicResource DynamicIconGeometry}"
-                                          Stroke="{DynamicResource AccentTextBrush}" StrokeThickness="1.6"
-                                          Width="18" Height="18" Stretch="Uniform"
-                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                </Border>
-                                <TextBlock Text="全部动态" FontSize="14" FontWeight="SemiBold"
-                                           Margin="10,0,0,0" VerticalAlignment="Center">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsAllSelected}" Value="True">
-                                                    <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </StackPanel>
-                        </Border>
+                <Grid Grid.Column="0" Margin="12,4,0,20"
+                      PreviewMouseLeftButtonDown="OnLeftColumnPress"
+                      MouseLeftButtonUp="OnLeftColumnUp">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
 
-                        <!-- 关注的 UP(点击 = 只看 TA 的投稿) -->
-                        <ItemsControl ItemsSource="{Binding Users}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border CornerRadius="10" Padding="6,8,12,8" Margin="0,0,0,4" Cursor="Hand"
-                                            MouseLeftButtonUp="OnSelectUp"
-                                            ToolTip="只看 TA 的投稿视频">
-                                        <Border.Style>
-                                            <Style TargetType="Border">
-                                                <Setter Property="Background" Value="Transparent" />
-                                                <Style.Triggers>
-                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter Property="Background" Value="{DynamicResource NavItemHoverBrush}" />
-                                                    </Trigger>
-                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                        <Setter Property="Background" Value="{DynamicResource AccentBorderFillBrush}" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Border.Style>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <!-- 红点通道: 固定 22px(6px 红点 + 16px 到头像的间距),
-                                                     **始终占位** —— 有没有未读, 头像与名字的位置都不能跳。 -->
-                                                <ColumnDefinition Width="22" />
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="*" />
-                                                <!-- 最近更新时间(2026-11-05): 自适应宽度, 右对齐。
-                                                     独占一列而不是叠在名字上 —— 名字要能省略号截断,
-                                                     两者抢同一格会把名字压没。 -->
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <!-- 未读红点: 照 B 站客户端, 点在头像左侧、垂直居中(静态, 不做动画)。
-                                                 ★ 它只表达"有没有新动态"; **具体条数由头像右下角的
-                                                   数字角标显示**(见下面头像那一格) —— 数字直接
-                                                   看得见, 不必靠悬停才知道有几条。
-                                                 ★ 外层透明 Border 是给鼠标留的悬停热区。 -->
-                                            <Border Grid.Column="0" Width="22" Height="28"
-                                                    Background="Transparent" VerticalAlignment="Center">
-                                                <Border Width="6" Height="6" CornerRadius="3"
-                                                        Background="{DynamicResource UnreadDotBrush}"
-                                                        HorizontalAlignment="Left" VerticalAlignment="Center"
-                                                        Visibility="{Binding HasNew, Converter={StaticResource BoolToVis}}" />
-                                            </Border>
-                                            <!-- 头像。右键可看大图 / 保存。
-                                                 ★ 外面套一层同尺寸 Grid: 固定 36×36 的占位, 头像 Border 自己
-                                                   ClipToBounds 裁成圆 —— 数字角标是这张 Grid 的**兄弟节点**
-                                                   (不是头像的子节点), 所以它能越出圆形头像、贴在右下角。
-                                                   (头像那个 Border 设了 ClipToBounds=True, 越界的子元素会被裁掉。) -->
-                                            <Grid Grid.Column="1" Width="36" Height="36">
-                                                <Border Width="36" Height="36" CornerRadius="18"
-                                                        Background="{DynamicResource AccentSoftFillBrush}"
-                                                        ClipToBounds="True"
-                                                        helpers:Cover.Source="{Binding Face}">
-                                                    <Border.ContextMenu>
-                                                        <ContextMenu>
-                                                            <MenuItem Header="打开 UP 主页" Click="OnVisitClick">
-                                                                <MenuItem.Icon>
-                                                                    <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                                               FontSize="13" VerticalAlignment="Center" />
-                                                                </MenuItem.Icon>
-                                                            </MenuItem>
-                                                            <MenuItem Header="查看头像大图" Click="OnViewAvatar">
-                                                                <MenuItem.Icon>
-                                                                    <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                                               FontSize="13" VerticalAlignment="Center" />
-                                                                </MenuItem.Icon>
-                                                            </MenuItem>
-                                                            <MenuItem Header="下载头像到本地" Click="OnDownloadAvatar">
-                                                                <MenuItem.Icon>
-                                                                    <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                                               FontSize="13" VerticalAlignment="Center" />
-                                                                </MenuItem.Icon>
-                                                            </MenuItem>
-                                                            <Separator />
-                                                            <MenuItem Header="取消关注" Click="OnUnfollowClick">
-                                                                <MenuItem.Icon>
-                                                                    <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                                               FontSize="13" VerticalAlignment="Center" />
-                                                                </MenuItem.Icon>
-                                                            </MenuItem>
-                                                        </ContextMenu>
-                                                    </Border.ContextMenu>
-                                                    <TextBlock Text="&#xE77B;"
-                                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                               FontSize="16"
-                                                               Foreground="{DynamicResource AccentTextBrush}"
-                                                               HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center" />
-                                                </Border>
-                                                <!-- 未读数字角标: 与消息页会话列表同款(强调色底 + 数字, 贴右下角)。
-                                                     ★ 2026-11-05 改回这个形态: 之前(2026-11-04)把数字收进了
-                                                       红点的悬浮提示里, 结果"有 12 条新动态"这件事**看不见** ——
-                                                       只有把鼠标精确移到那个 6px 红点上才知道有多少。
-                                                       数字角标直接把条数摆在脸上, 红点继续负责"有更新"这个提示。
-                                                     计数来源见 FollowViewModel.UpdateUnreadBadges ——
-                                                     本地比对出来"这个 UP 有新动态", 不额外请求接口。 -->
-                                                <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                                        MinWidth="16" Height="16" CornerRadius="8" Padding="4,0"
-                                                        Background="{DynamicResource AccentBrush}"
-                                                        ToolTipService.IsEnabled="{Binding HasNew}"
-                                                        ToolTip="{Binding NewCount, StringFormat='{}{0} 条新动态'}"
-                                                        Visibility="{Binding HasNew, Converter={StaticResource BoolToVis}}">
-                                                    <TextBlock Text="{Binding NewCount}" FontSize="10"
-                                                               Foreground="{DynamicResource TextOnAccentBrush}"
-                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                </Border>
-                                            </Grid>
-                                            <TextBlock Grid.Column="2" Text="{Binding Name}"
-                                                       FontSize="13" Margin="10,0,8,0"
-                                                       VerticalAlignment="Center"
-                                                       TextTrimming="CharacterEllipsis">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                            <!-- 最近更新(2026-11-05): 左栏按"最近有更新"排序,
-                                                 这里把时间摆出来, 用户不用点进去就知道排序依据。
-                                                 ★ 措辞与动态卡片上的发布时间同一套(同一个格式化函数)。
-                                                 ★ 独占一列(不是叠在名字上): 名字要能省略号截断,
-                                                   两者抢同一格会把名字压没。 -->
-                                            <TextBlock Grid.Column="3" Text="{Binding ActivityLabel}"
-                                                       FontSize="11" VerticalAlignment="Center"
-                                                       HorizontalAlignment="Right"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       Foreground="{DynamicResource TextTertiaryBrush}"
-                                                       Visibility="{Binding HasActivity, Converter={StaticResource BoolToVis}}" />
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                    <!-- 搜索已关注的 UP(2026-11-06): 服务端搜索, 不要求先把 2790 人全部加载下来 -->
+                    <Grid Grid.Row="0" Margin="8,2,8,6">
+                        <TextBox x:Name="UserSearchBox" Style="{StaticResource FluentTextBoxStyle}"
+                                 Height="34" Padding="30,0,30,0" FontSize="13"
+                                 VerticalContentAlignment="Center"
+                                 Text="{Binding UserSearchText, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="13" VerticalAlignment="Center"
+                                   Margin="10,0,0,0" HorizontalAlignment="Left"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   IsHitTestVisible="False" />
+                        <TextBlock Text="搜索已关注的 UP" FontSize="12.5"
+                                   VerticalAlignment="Center" Margin="30,0,30,0"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   IsHitTestVisible="False"
+                                   Visibility="{Binding UserSearchText, Converter={StaticResource InvStrToVis}}" />
+                        <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                FontSize="10" Width="24" Height="24" Padding="0"
+                                HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0"
+                                Style="{StaticResource IconButtonStyle}"
+                                Click="OnClearUserSearch"
+                                Visibility="{Binding HasUserSearch, Converter={StaticResource BoolToVis}}" />
+                    </Grid>
 
-                        <!-- 左栏补页 -->
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6"
-                                    Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
-                            <controls:LoadingRing Width="14" Height="14" />
+                    <!-- 全部动态入口: 选中高亮跟 VM.IsAllSelected 走。
+                           选中态/悬停态与 UP 行完全同款。 -->
+                    <Border Grid.Row="1" CornerRadius="10"
+                            Padding="14,10,10,10" Margin="8,4,8,6" Cursor="Hand"
+                            MouseLeftButtonUp="OnSelectAll">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="Transparent" />
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource NavItemHoverBrush}" />
+                                    </Trigger>
+                                    <DataTrigger Binding="{Binding IsAllSelected}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource AccentBorderFillBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel Orientation="Horizontal">
+                            <Border Width="36" Height="36" CornerRadius="18"
+                                    Background="{DynamicResource AccentSoftFillBrush}">
+                                <Path Data="{DynamicResource DynamicIconGeometry}"
+                                      Stroke="{DynamicResource AccentTextBrush}" StrokeThickness="1.6"
+                                      Width="18" Height="18" Stretch="Uniform"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <TextBlock Text="全部动态" FontSize="14" FontWeight="SemiBold"
+                                       Margin="10,0,0,0" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsAllSelected}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                         </StackPanel>
-                    </StackPanel>
-                </ScrollViewer>
+                    </Border>
+
+                    <!-- 关注 UP 列表: 虚拟化 ListBox。搜索时切换成搜索结果列表。
+                         ★ 2026-11-06 用户要求"左栏只做一个面板, 不要分有新视频和 UP 多个面板":
+                           有未读但还没分页加载出来的 UP 现在作为**占位行**插在这个列表最前面
+                           (见 FollowViewModel.SyncUnreadPlaceholders), 不再单独开一个面板。 -->
+                    <Grid Grid.Row="2">
+                        <ListBox x:Name="UsersList" Style="{StaticResource FollowUserListStyle}"
+                                 Margin="8,0,8,0"
+                                 ItemsSource="{Binding Users}"
+                                 ItemTemplate="{StaticResource FollowUserRowTemplate}"
+                                 ScrollViewer.ScrollChanged="UpListScroll_OnScrollChanged"
+                                 Visibility="{Binding HasUserSearch, Converter={StaticResource InvBoolToVis}}" />
+                        <ListBox x:Name="UserSearchList" Style="{StaticResource FollowUserListStyle}"
+                                 Margin="8,0,8,0"
+                                 ItemsSource="{Binding FollowingSearchResults}"
+                                 ItemTemplate="{StaticResource FollowUserRowTemplate}"
+                                 Visibility="{Binding HasUserSearch, Converter={StaticResource BoolToVis}}" />
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Visibility="{Binding ShowUserSearchEmpty, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="没有匹配的已关注 UP" FontSize="12"
+                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                       HorizontalAlignment="Center" />
+                        </StackPanel>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Visibility="{Binding UserSearching, Converter={StaticResource BoolToVis}}">
+                            <controls:LoadingRing Width="18" Height="18" HorizontalAlignment="Center" />
+                            <TextBlock Text="搜索中…" FontSize="11" Margin="0,8,0,0"
+                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                       HorizontalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding UserSearchError}" FontSize="12"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" MaxWidth="200"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   Visibility="{Binding HasUserSearchError, Converter={StaticResource BoolToVis}}" />
+                    </Grid>
+
+                    <!-- 左栏底部状态: 与右栏的 LoadingMore 完全分开。
+                         ★ 2026-11-06 用户要求去掉"已加载 N / 2790"那行统计提示 —— 左下角不再显示。 -->
+                    <Grid Grid.Row="3" Margin="8,4,8,0">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                    Visibility="{Binding LoadingMoreUsers, Converter={StaticResource BoolToVis}}">
+                            <controls:LoadingRing Width="14" Height="14" />
+                            <TextBlock Text="正在加载关注列表…" FontSize="11" Margin="6,0,0,0"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                    Visibility="{Binding HasUsersLoadError, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding UsersLoadError}" FontSize="11"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                       TextTrimming="CharacterEllipsis" MaxWidth="150" />
+                            <Button Content="重试" Style="{StaticResource LinkButtonStyle}" Margin="8,0,0,0"
+                                    Command="{Binding LoadMoreCommand}" />
+                        </StackPanel>
+                    </Grid>
+                </Grid>
 
                 <!-- ===== 右: 内容(两档排版, 右上角可切) ===== -->
+                <!-- ★ 底部只留 20px 常规间距(2026-11-06 用户要求删掉之前那 96px 的留白):
+                     96px 是为右下角浮动工具列预留的, 但它在列表底部形成一块灰色空带,
+                     看着像"被一个长方形画幅遮挡住了"。工具列浮在内容上是常态(首页同款),
+                     滚到底时它只压住最后一张卡片的右下角。 -->
                 <Grid Grid.Column="1" Margin="12,4,24,20">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -439,76 +566,189 @@
                         </StackPanel>
                     </Border>
 
-                    <ScrollViewer x:Name="FeedScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto"
-                                  ScrollChanged="FeedScroll_OnScrollChanged">
-                        <StackPanel>
-                            <!-- 出错/为空提示(非阻断, 放在列表上方) -->
-                            <Border HorizontalAlignment="Center" MaxWidth="520"
-                                    Margin="4,4,4,10" Padding="14,10" CornerRadius="8"
-                                    Background="{DynamicResource InfoBarBackgroundBrush}"
-                                    BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"
-                                    Visibility="{Binding Error, Converter={StaticResource StrToVis}}">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE7BA;" Foreground="{DynamicResource AccentTextBrush}"
-                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                               FontSize="14" VerticalAlignment="Center" />
-                                    <TextBlock Text="{Binding Error}" Margin="10,0,0,0"
-                                               VerticalAlignment="Center"
-                                               Foreground="{DynamicResource TextSecondaryBrush}" />
-                                    <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
-                                            Margin="16,0,0,0" Padding="10,4"
-                                            Command="{Binding RefreshCommand}" />
-                                </StackPanel>
-                            </Border>
+                    <Grid Grid.Row="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
 
-                            <!-- ===== 两档排版共用同一个 FeedItems, 只切可见性 =====
-                                 ★ 不做"换模板/重建列表": 那会把滚动位置和已生成的容器一起丢掉,
-                                   切一下就跳回顶部。两个 ItemsControl 各自绑自己的可见性最省事 ——
-                                   Collapsed 的那个不参与测量, 也不会生成容器。
-                                 ★ 默认档 = 动态卡(见 SettingsStore.FollowCardWall)。 -->
+                        <!-- 出错/为空提示(非阻断, 固定在列表上方, 不随滚动跑掉) -->
+                        <Border Grid.Row="0" HorizontalAlignment="Center" MaxWidth="520"
+                                Margin="4,4,4,10" Padding="14,10" CornerRadius="8"
+                                Background="{DynamicResource InfoBarBackgroundBrush}"
+                                BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"
+                                Visibility="{Binding Error, Converter={StaticResource StrToVis}}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE7BA;" Foreground="{DynamicResource AccentTextBrush}"
+                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="14" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Error}" Margin="10,0,0,0"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
+                                        Margin="16,0,0,0" Padding="10,4"
+                                        Command="{Binding RefreshCommand}" />
+                            </StackPanel>
+                        </Border>
 
-                            <!-- 动态卡(默认): 单列, 每条 = 头像 + UP 名 + 发布时间 + 视频。
-                                 不挂卡片墙(CardWallPanel) —— 卡片墙是"一屏铺满尽量多张"的网格,
-                                 而动态流要的是每条都有清晰的作者与时间归属, 两者目标相反。 -->
-                            <ItemsControl ItemsSource="{Binding FeedItems}" Margin="4,0,8,0"
-                                          Visibility="{Binding UseCardWall, Converter={StaticResource InvBoolToVis}}">
-                                <ItemsControl.ItemTemplate>
+                        <!-- 底部状态: 加载中 / 失败重试 / 卡片墙上限 / 已经到底
+                             ★★ 2026-11-06 用户要求"把最下面那个长方形画幅彻底删除":
+                             那个矩形其实是**被裁掉的半张动态卡** —— ListBox 滚到底时按**像素**
+                             停, 最后一张卡只露出顶部一行(头像+标题), 它的白色卡片底色
+                             横贯整个右栏宽度, 看着就像"下面压着一个长方形画幅"。
+                             两处一起改:
+                               ① 底部状态区从 Grid 的独立一行改成**浮在列表之上的浮层**
+                                  (不再占一行高度, 列表能一直铺到面板底边);
+                               ② 滚到底时按**项**对齐(见 FeedScroll_OnScrollChanged 的
+                                  ScrollIntoView), 让最后一张卡完整显示而不是裁一半。 -->
+                        <Grid Grid.Row="1">
+                            <!-- 默认动态卡: 虚拟化 ListBox, 只创建可见卡片。
+                                 ★ 不加外部 ScrollViewer, 否则虚拟化会失效。 -->
+                            <ListBox x:Name="FeedList" Style="{StaticResource FeedListStyle}"
+                                     Margin="4,0,8,0"
+                                     ItemsSource="{Binding FeedItems}"
+                                     ScrollViewer.ScrollChanged="FeedScroll_OnScrollChanged"
+                                     Visibility="{Binding UseCardWall, Converter={StaticResource InvBoolToVis}}">
+                                <ListBox.ItemTemplate>
                                     <DataTemplate>
                                         <controls:DynamicCard />
                                     </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
 
-                            <!-- 卡片墙(切换档): 复用 VideoCard(点击播放/右键操作/全局屏蔽同首页) -->
-                            <ItemsControl ItemsSource="{Binding FeedItems}" Margin="4,0,0,0"
-                                          Visibility="{Binding UseCardWall, Converter={StaticResource BoolToVis}}">
-                                <ItemsControl.ItemsPanel>
+                            <!-- 卡片墙: CardWallPanel 不虚拟化, VM 里限制最多 300 条。 -->
+                            <ListBox x:Name="FeedWallList" Style="{StaticResource FeedListStyle}"
+                                     Margin="4,0,0,0"
+                                     ItemsSource="{Binding WallItems}"
+                                     ScrollViewer.ScrollChanged="FeedScroll_OnScrollChanged"
+                                     Visibility="{Binding UseCardWall, Converter={StaticResource BoolToVis}}">
+                                <ListBox.ItemsPanel>
                                     <ItemsPanelTemplate>
                                         <helpers:CardWallPanel helpers:CardWall.Enable="True" />
                                     </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemTemplate>
                                     <DataTemplate>
                                         <controls:VideoCard />
                                     </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
 
-                            <!-- 底部状态 -->
-                            <StackPanel Margin="0,10,0,24" HorizontalAlignment="Center">
-                                <StackPanel Orientation="Horizontal"
-                                            Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
-                                    <controls:LoadingRing Width="18" Height="18" />
-                                    <TextBlock Text="加载中…" Margin="8,0,0,0"
-                                               VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
-                                </StackPanel>
-                                <TextBlock Text="已经到底啦" Style="{StaticResource MetaTextStyle}"
-                                           Visibility="{Binding HasMore, Converter={StaticResource InvBoolToVis}}" />
+                            <!-- 底部状态浮层: 盖在列表底部, 不占高度。
+                                 ★★★ 2026-11-06 用户报"底部状态区加载一遍后会出现椭圆一样的东西
+                                 且一直显示不会自动隐藏" —— 那是**这个 Border 本身**:
+                                 它有 Padding="12,6" + 背景色 + 圆角, 即使里面四个子项
+                                 全是 Collapsed, 它照样渲染成一个 24×12 的小圆角块(看着像椭圆),
+                                 而且永远在那儿。⇒ 整个浮层必须跟着内容一起消失。
+                                 ★ 用一个 Bool 统一控制: 四个子项里**只要有一个可见**就显示浮层,
+                                 否则整个 StackPanel 收起来(Visibility=Collapsed, 不占任何空间)。 -->
+                            <StackPanel x:Name="FeedStatusOverlay" Grid.Row="1"
+                                        HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                        Margin="0,0,0,10" Panel.ZIndex="5">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding LoadingMore}" Value="True" />
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </MultiDataTrigger>
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding LoadMoreError}" Value="True" />
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </MultiDataTrigger>
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding ShowWallLimitHint}" Value="True" />
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </MultiDataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <Border Background="{DynamicResource AppBackgroundBrush}"
+                                        CornerRadius="8" Padding="12,6"
+                                        Opacity="0.94">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal"
+                                                    Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
+                                            <controls:LoadingRing Width="18" Height="18" />
+                                            <TextBlock Text="加载中…" Margin="8,0,0,0"
+                                                       VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal"
+                                                    Visibility="{Binding LoadMoreError, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock Text="加载更多失败" Style="{StaticResource MetaTextStyle}"
+                                                       VerticalAlignment="Center" />
+                                            <Button Content="重试" Style="{StaticResource LinkButtonStyle}"
+                                                    Margin="8,0,0,0" Command="{Binding LoadMoreFeedCommand}" />
+                                        </StackPanel>
+                                        <TextBlock Text="卡片墙最多显示 300 条，切换「动态卡」继续浏览"
+                                                   Style="{StaticResource MetaTextStyle}"
+                                                   Visibility="{Binding ShowWallLimitHint, Converter={StaticResource BoolToVis}}" />
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
-                        </StackPanel>
-                    </ScrollViewer>
+                        </Grid>
+                    </Grid>
                 </Grid>
             </Grid>
         </Grid>
+
+        <!-- ===== 右下角浮动工具列(2026-11-06) =====
+             用户要求"已读和刷新按钮做成右下角工具列"。原来这两个按钮在页面头部右侧,
+             现在浮到右下角, 与首页/分区页同一套观感(FloatingIconButtonStyle)。
+             ★ 用 Panel.ZIndex 浮在内容之上, 不占独立列 —— 占列的话右栏滚动条会被挤到
+               按钮左边, 看着没贴到窗口右缘。
+             ★ 未登录时整列隐藏: 没有"关注"可言, 已读/刷新都没有意义。 -->
+        <StackPanel x:Name="ToolBar" Grid.Row="1" Panel.ZIndex="20"
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="0,0,20,20">
+            <StackPanel.Style>
+                <Style TargetType="StackPanel">
+                    <Setter Property="Visibility" Value="Visible" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding NotLoggedIn}" Value="True">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </StackPanel.Style>
+            <!-- 全部已读: 有红点时出现。
+                 ★★ 2026-11-06 用户要求"优化工具列已读按钮图案, 使他更符合功能用途":
+                   原来用的是 E73E(一个**裸对勾**), 单独看只像"选中/完成", 表达不出
+                   "把动态**标记为已读**"这层意思。
+                   改成矢量画的「信封 + 对勾」—— 动态本身就是一条消息(信封),
+                   右下角压一个对勾 = "标记为已读", 与 B 站消息中心的语义一致。
+                   ★ 用矢量而不是字体字形: 字形在不同 Windows 版本上可能缺字/变形,
+                     而 Path 是我们自己画的, 一定长这个样子。 -->
+            <Button x:Name="BtnMarkAllRead" Style="{StaticResource FloatingIconButtonStyle}"
+                    Command="{Binding MarkAllReadCommand}"
+                    ToolTip="全部已读(清空所有 UP 的新视频红点)"
+                    Visibility="{Binding HasAnyUnread, Converter={StaticResource BoolToVis}}">
+                <Grid Width="17" Height="17">
+                    <!-- 信封轮廓 + 封口折线(略偏左上, 给右下角的对勾让位) -->
+                    <Path Data="M 1.5,4 H 11.5 V 11.5 H 1.5 Z M 1.5,4 L 6.5,7.6 L 11.5,4"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.1" StrokeLineJoin="Round"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                    <!-- 右下角的对勾(压在信封角上, 但与封口折线错开) -->
+                    <Path Data="M 8.6,12.4 L 11,14.7 L 15.6,9.2"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.6" StrokeLineJoin="Round"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                </Grid>
+            </Button>
+            <!-- 刷新 -->
+            <Button x:Name="BtnRefresh" Style="{StaticResource FloatingIconButtonStyle}"
+                    Margin="0,6,0,0" Click="OnRefreshClick" ToolTip="刷新">
+                <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+            </Button>
+        </StackPanel>
     </Grid>
 </UserControl>

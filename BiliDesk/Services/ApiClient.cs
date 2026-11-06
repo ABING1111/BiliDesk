@@ -678,8 +678,9 @@ public class ApiClient
         }
     }
 
-    /// <summary>关注列表(关注的 UP 主)。vmid=自己 mid, pn=页码, ps=每页数量(<=50)</summary>
-    public async Task<(bool ok, string? err, List<FollowUser>? list)> GetFollowingsAsync(long vmid, int pn = 1, int ps = 30)
+    /// <summary>关注列表(关注的 UP 主)。vmid=自己 mid, pn=页码, ps=每页数量(<=50)。</summary>
+    public async Task<(bool ok, string? err, List<FollowUser>? list, int total)> GetFollowingsAsync(
+        long vmid, int pn = 1, int ps = 50)
     {
         try
         {
@@ -697,35 +698,102 @@ public class ApiClient
             {
                 var errMsg = msg ?? $"请求失败 (code {code})";
                 if (code == -101) errMsg = "请先登录";
-                return (false, errMsg, null);
+                return (false, errMsg, null, 0);
             }
 
-            var users = new List<FollowUser>();
-            if (data.Value.TryGetProperty("list", out var arr) && arr.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var e in arr.EnumerateArray())
-                {
-                    var u = new FollowUser
-                    {
-                        Mid = GetLong(e, "mid"),
-                        Name = GetStr(e, "uname"),
-                        Face = UrlUtil.Normalize(GetStr(e, "face")),
-                        Sign = GetStr(e, "sign")
-                    };
-                    if (e.TryGetProperty("official_verify", out var ov) && ov.ValueKind == JsonValueKind.Object)
-                    {
-                        u.VerifyType = GetInt(ov, "type");
-                        u.VerifyDesc = GetStr(ov, "desc");
-                    }
-                    if (u.Mid > 0 && !string.IsNullOrEmpty(u.Name)) users.Add(u);
-                }
-            }
-            return (true, null, users);
+            var users = ParseFollowUserList(data.Value, out var total);
+            return (true, null, users, total);
         }
         catch (Exception ex)
         {
-            return (false, ex.Message, null);
+            return (false, ex.Message, null, 0);
         }
+    }
+
+    /// <summary>
+    /// 在**已关注的 UP**里按名字搜索(2026-11-06 动态页搜索用)。
+    ///
+    /// 为什么用这条而不是全局 `search_type=bili_user`:
+    ///   · 动态页左栏只需要"我关注的 UP", 全局搜索会返回没关注的人;
+    ///   · 关注列表可能有几千人, 本地过滤要求先把所有页拉下来 —— 用服务端搜索
+    ///     可以只返回匹配的已关注用户, 一条请求就能找到人。
+    ///
+    /// 接口: GET /x/relation/followings/search?vmid=&name=&ps=50&pn=1
+    /// 返回的 list 与关注列表同一套字段(mid/uname/face/sign/official_verify)。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<FollowUser>? list, int total)> SearchFollowingsAsync(
+        long vmid, string keyword, int pn = 1, int ps = 50)
+    {
+        if (vmid <= 0) return (false, "缺少用户 mid", null, 0);
+        keyword = (keyword ?? "").Trim();
+        if (keyword.Length == 0) return (true, null, new List<FollowUser>(), 0);
+
+        try
+        {
+            await EnsureBuvidAsync();
+            var ps2 = new Dictionary<string, string>
+            {
+                ["vmid"] = vmid.ToString(),
+                ["name"] = keyword,
+                ["pn"] = pn.ToString(),
+                ["ps"] = Math.Min(ps, 50).ToString(),
+            };
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/relation/followings/search", ps2,
+                referer: "https://www.bilibili.com/");
+            if (code == 0 && data == null)
+                return (true, null, new List<FollowUser>(), 0);   // 没搜到, 不是失败
+            if (code != 0 || data == null)
+            {
+                var errMsg = msg ?? $"请求失败 (code {code})";
+                if (code == -101) errMsg = "请先登录";
+                return (false, errMsg, null, 0);
+            }
+
+            var users = ParseFollowUserList(data.Value, out var total);
+            return (true, null, users, total);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null, 0);
+        }
+    }
+
+    /// <summary>把关注列表 / 关注搜索的 data.list 解析成 FollowUser 列表。</summary>
+    private static List<FollowUser> ParseFollowUserList(JsonElement data, out int total)
+    {
+        total = 0;
+        if (data.TryGetProperty("total", out var t) && t.ValueKind == JsonValueKind.Number)
+            total = t.GetInt32();
+
+        var users = new List<FollowUser>();
+        if (data.TryGetProperty("list", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var e in arr.EnumerateArray())
+            {
+                var u = ParseFollowUser(e);
+                if (u != null) users.Add(u);
+            }
+        }
+        return users;
+    }
+
+    /// <summary>关注列表/关注搜索里的一行。字段与搜索页的 SearchUserItem 不同, 不复用。</summary>
+    private static FollowUser? ParseFollowUser(JsonElement e)
+    {
+        var u = new FollowUser
+        {
+            Mid = GetLong(e, "mid"),
+            Name = GetStr(e, "uname"),
+            Face = UrlUtil.Normalize(GetStr(e, "face")),
+            Sign = GetStr(e, "sign")
+        };
+        if (e.TryGetProperty("official_verify", out var ov) && ov.ValueKind == JsonValueKind.Object)
+        {
+            u.VerifyType = GetInt(ov, "type");
+            u.VerifyDesc = GetStr(ov, "desc");
+        }
+        return u.Mid > 0 && !string.IsNullOrEmpty(u.Name) ? u : null;
     }
 
     private static VideoItem? ParseRecommendItem(JsonElement e)
