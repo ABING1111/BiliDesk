@@ -62,7 +62,10 @@ public partial class FollowPage : UserControl
             // 看板默认折叠: 页面实例会被 MainWindow 缓存, 每次进入都归位到收起。
             vm.LiveBoardOpen = false;
             UpdateLayoutChips(vm);
+            // 「全部动态」底衬要与 UP 行对齐: 在列表布局完成后量一次
+            UsersList.SizeChanged += (_, _) => SyncAllDynamicEntry();
             await vm.InitAsync();
+            SyncAllDynamicEntry();
             StartLivePolling();
         }
     }
@@ -176,6 +179,64 @@ public partial class FollowPage : UserControl
         if (DataContext is FollowViewModel vm) vm.ClearUserSearchCommand.Execute(null);
     }
 
+    /// <summary>
+    /// 让「全部动态」入口的底衬与下面 UP 行的底衬**像素级对齐**(2026-11-06)。
+    ///
+    /// ★ 为什么需要代码来同步, 而不是写死一个 Margin:
+    ///   「全部动态」在 UsersList **外面**, UP 行在 UsersList **里面**。
+    ///   ListBox 的内容区宽度要扣掉垂直滚动条(实测约 10px), 所以:
+    ///     · UP 行底衬的右缘 = 列表右缘 - 滚动条宽;
+    ///     · 「全部动态」底衬的右缘 = 列表右缘(不受滚动条影响)。
+    ///   两块粉色底衬因此长短不一 —— 用户看着就是"上下两行没对齐"。
+    ///   而且滚动条出没出现会变(内容不足时没有), 写死的数值必然对不上。
+    /// ⇒ 这里直接量出**第一行 UP 底衬**的左缘与宽度, 套到「全部动态」上, 两者就完全重合。
+    /// </summary>
+    private void SyncAllDynamicEntry()
+    {
+        if (AllDynamicEntry == null || UsersList == null) return;
+        var container = UsersList.ItemContainerGenerator.ContainerFromIndex(0) as FrameworkElement;
+        if (container == null) return;
+
+        // 第一行 UP 的底衬(圆角 10 的那个 Border)
+        var rowBorder = FindRowBorder(container);
+        if (rowBorder == null) return;
+
+        var p = rowBorder.TransformToAncestor(UsersList).Transform(new Point(0, 0));
+        var width = rowBorder.ActualWidth;
+        if (width <= 0) return;
+
+        // 「全部动态」的坐标是相对左栏 Grid 的, UP 行底衬是相对 UsersList 的;
+        // UsersList 相对左栏 Grid 有 Margin="8,0,8,0" 的左内边距 8。
+        var listOffset = UsersList.TransformToAncestor(AllDynamicEntry.Parent as FrameworkElement ?? AllDynamicEntry)
+            .Transform(new Point(0, 0)).X;
+
+        AllDynamicEntry.Margin = new Thickness(listOffset + p.X, 4, 0, 6);
+        AllDynamicEntry.Width = width;
+    }
+
+    /// <summary>在容器里找行底衬(圆角 10、且是那一行的直接内容)。</summary>
+    private static Border? FindRowBorder(FrameworkElement container)
+    {
+        Border? found = null;
+        WalkVisual(container, d =>
+        {
+            if (found != null) return;
+            if (d is Border b && b.CornerRadius.TopLeft == 10 && b.ActualWidth > 0) found = b;
+        });
+        return found;
+    }
+
+    private static void WalkVisual(DependencyObject root, Action<DependencyObject> visit)
+    {
+        var n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < n; i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+            visit(child);
+            WalkVisual(child, visit);
+        }
+    }
+
     /// <summary>右下角工具列「刷新」: 刷新后把右栏滚回顶部(与首页刷新同一套体验)。</summary>
     private async void OnRefreshClick(object sender, RoutedEventArgs e)
     {
@@ -217,6 +278,15 @@ public partial class FollowPage : UserControl
         if (DataContext is not FollowViewModel vm) return;
 
         var sv = ScrollViewerOf(e, sender);
+        if (sv != null)
+        {
+            // ★ 记录"用户当前是否停在列表底部"(2026-11-06):
+            //   「已经到底啦」只在真正滑到底时出现, 往上滚就消失 ——
+            //   它是"到底了"的瞬时反馈, 不该变成常驻横幅。
+            var atBottom = sv.ScrollableHeight <= 0 ||
+                           sv.ScrollableHeight - sv.VerticalOffset <= 1;
+            vm.SetAtFeedBottom(atBottom);
+        }
 
         // 卡片墙有 300 条上限: 到上限后不再自动翻页, 底部会提示切换动态卡。
         if (vm.UseCardWall && vm.WallItems.Count >= 300) return;
@@ -226,7 +296,39 @@ public partial class FollowPage : UserControl
         var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
         if (distanceToBottom > FeedAutoLoadThreshold) return;
 
+        // ★★ 2026-11-06 用户报"右栏最下面被一个长方形画幅遮挡住了": 那是**被裁掉的半张卡** ——
+        //   ListBox 滚到底时按**像素**停, 最后一张动态卡只露出顶部一行(头像+标题),
+        //   而那张卡的白色卡片底色横贯整个右栏宽度, 看着就像"下面压着一个长方形画幅"。
+        //   这里在触底时把最后一项**完整滚进视口**(按项对齐), 半张卡的现象就没了。
+        ScrollLastFeedItemIntoView(sv);
         _ = vm.LoadMoreFeedAsync();
+    }
+
+    /// <summary>
+    /// 把列表最后一项完整滚进视口(按**项**对齐而不是按像素)。
+    ///
+    /// ★ 为什么必须显式做: ListBox 的 ScrollViewer 滚到底是按像素停的, 最后一个
+    ///   容器的高度往往超过剩余空间, 于是它被裁掉一截 —— 动态卡被裁掉的那截正好是
+    ///   它的卡片底色, 横贯整宽, 看着像一块"长方形画幅"。
+    /// ★ 只在真的到底时做: 平时滚动不该被这个打断。
+    /// </summary>
+    private void ScrollLastFeedItemIntoView(ScrollViewer sv)
+    {
+        var list = (DataContext as FollowViewModel)?.UseCardWall == true
+            ? (DependencyObject?)FeedWallList
+            : FeedList;
+        if (list is not ListBox lb || lb.Items.Count == 0) return;
+
+        var last = lb.Items[lb.Items.Count - 1];
+        if (last == null) return;
+        try
+        {
+            lb.ScrollIntoView(last);
+        }
+        catch
+        {
+            // ScrollIntoView 在容器尚未布局时可能抛异常 —— 忽略即可(下一次滚动会再试)。
+        }
     }
 
     /// <summary>左栏: UP 列表滚到底自动补(一页 50 个)。搜索结果显示时不平铺翻页。</summary>

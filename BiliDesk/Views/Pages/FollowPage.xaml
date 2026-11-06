@@ -327,9 +327,15 @@
                     </Grid>
 
                     <!-- 全部动态入口: 选中高亮跟 VM.IsAllSelected 走。
+                         ★★★ 2026-11-06 用户报"全部动态和底下的 up 显示不对称":
+                           这个入口在 ListBox **外面**, 而 UP 行在 ListBox **里面** ——
+                           后者的宽度要扣掉垂直滚动条(约 10px), 于是两块粉色底衬
+                           右缘差一截、左缘也差 1px, 看起来就是"上下两行没对齐"。
+                           这里的 Margin/Width 由 code-behind 精确同步(见 SyncAllDynamicEntry);
                            选中态/悬停态与 UP 行完全同款。 -->
-                    <Border Grid.Row="1" CornerRadius="10"
+                    <Border x:Name="AllDynamicEntry" Grid.Row="1" CornerRadius="10"
                             Padding="14,10,10,10" Margin="8,4,8,6" Cursor="Hand"
+                            HorizontalAlignment="Left"
                             MouseLeftButtonUp="OnSelectAll">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -668,6 +674,12 @@
                                                 </MultiDataTrigger.Conditions>
                                                 <Setter Property="Visibility" Value="Visible" />
                                             </MultiDataTrigger>
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding ShowEndOfFeed}" Value="True" />
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </MultiDataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
@@ -691,6 +703,10 @@
                                         <TextBlock Text="卡片墙最多显示 300 条，切换「动态卡」继续浏览"
                                                    Style="{StaticResource MetaTextStyle}"
                                                    Visibility="{Binding ShowWallLimitHint, Converter={StaticResource BoolToVis}}" />
+                                        <!-- ★ 绑 ShowEndOfFeed(而不是 HasMore 取反): 到底了之后往上滚,
+                                             这句提示要跟着消失 —— 它是"到底了"的瞬时反馈, 不是常驻横幅。 -->
+                                        <TextBlock Text="已经到底啦" Style="{StaticResource MetaTextStyle}"
+                                                   Visibility="{Binding ShowEndOfFeed, Converter={StaticResource BoolToVis}}" />
                                     </StackPanel>
                                 </Border>
                             </StackPanel>

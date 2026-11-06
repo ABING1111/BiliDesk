@@ -98,7 +98,6 @@ public class FollowViewModel : ObservableObject
 
     /// <summary>右栏动态流正在加载下一页(底部转圈只绑这个)。</summary>
     public bool LoadingMore { get => _loadingMore; private set => SetProperty(ref _loadingMore, value); }
-    public bool HasMore { get => _hasMore; private set => SetProperty(ref _hasMore, value); }
 
     /// <summary>左栏关注列表正在加载下一页(与右栏分开, 否则左栏翻页时右栏也转圈)。</summary>
     public bool LoadingMoreUsers
@@ -107,7 +106,39 @@ public class FollowViewModel : ObservableObject
         private set => SetProperty(ref _loadingMoreUsers, value);
     }
 
+    public bool HasMore
+    {
+        get => _hasMore;
+        private set
+        {
+            if (!SetProperty(ref _hasMore, value)) return;
+            OnPropertyChanged(nameof(ShowEndOfFeed));
+        }
+    }
+
     public bool HasMoreUsers { get => _hasMoreUsers; private set => SetProperty(ref _hasMoreUsers, value); }
+
+    /// <summary>
+    /// 「已经到底啦」是否该显示(2026-11-06 用户报"这个提示不会消失, 会一直存在")。
+    ///
+    /// ★ 为什么不能只绑 <c>HasMore</c> 取反:
+    ///   HasMore 一旦变成 false 就再也不变了 —— 用户滚上去再看, 那句"已经到底啦"
+    ///   还钉在列表底部, 像一条常驻的横幅。用户要的是"到底了"这个**瞬时反馈**:
+    ///   滚到底时出现, 往上滚就消失。
+    /// ★ 所以额外要一个"用户当前是不是在列表底部"的状态(由滚动事件写入)。
+    /// </summary>
+    public bool ShowEndOfFeed => !_hasMore && _atFeedBottom;
+
+    /// <summary>用户当前是否停在右栏列表的底部(滚动事件写入)。</summary>
+    private bool _atFeedBottom;
+
+    /// <summary>由 FollowPage 的滚动事件调用: 更新"是否在底部", 决定「已经到底啦」的显隐。</summary>
+    public void SetAtFeedBottom(bool atBottom)
+    {
+        if (_atFeedBottom == atBottom) return;
+        _atFeedBottom = atBottom;
+        OnPropertyChanged(nameof(ShowEndOfFeed));
+    }
 
     /// <summary>右栏翻页失败: 底部显示重试, 滚动不再自动重试(否则会无限转圈)。</summary>
     public bool LoadMoreError { get => _loadMoreError; private set => SetProperty(ref _loadMoreError, value); }
@@ -123,6 +154,7 @@ public class FollowViewModel : ObservableObject
         }
     }
     public bool HasUsersLoadError => UsersLoadError.Length > 0;
+
     public string Error { get => _error; private set => SetProperty(ref _error, value); }
 
     /// <summary>接口给出的关注总数(2790 这类大账号靠它判断到底, 不看空页)。</summary>
@@ -604,11 +636,13 @@ public class FollowViewModel : ObservableObject
             _emptyFeedPages = 0;
             LoadMoreError = false;
             Error = "";
+            // 换内容 ⇒ 不在底部了, 「已经到底啦」先收起来(等用户真滑到底再出现)
+            SetAtFeedBottom(false);
             OnPropertyChanged(nameof(ShowFullLoading));
         }
         else
         {
-            if (LoadingMore || !HasMore) return;
+            if (LoadingMore || !HasMore || LoadMoreError) return;
             LoadingMore = true;
         }
 
@@ -663,9 +697,11 @@ public class FollowViewModel : ObservableObject
                 if (SelectedUp != forUp) return;   // 选择已变, 丢弃本次结果
                 if (items == null)
                 {
-                    if (FeedItems.Count == 0) Error = err ?? "加载失败";
+                    if (reset || FeedItems.Count == 0) Error = err ?? "加载失败";
+                    else LoadMoreError = true;
                     return;
                 }
+
                 var added = 0;
                 foreach (var it in items)
                     if (!string.IsNullOrEmpty(it.Bvid) && _seenBvid.Add(it.Bvid))
@@ -683,6 +719,8 @@ public class FollowViewModel : ObservableObject
                 if (_emptyFeedPages >= 2) hasMore = false;
 
                 HasMore = hasMore;
+                LoadMoreError = false;
+                Error = "";
                 OnPropertyChanged(nameof(ShowFullLoading));
                 OnPropertyChanged(nameof(FollowingsSummary));
                 if (UseCardWall) SyncWallItems();
@@ -691,6 +729,11 @@ public class FollowViewModel : ObservableObject
                 if (FeedItems.Count == 0)
                     Error = forUp == null ? "关注的 UP 最近没有视频投稿" : "该 UP 暂时没有投稿视频";
 
+                // ★ 内容装得下一屏时列表根本没有滚动条, 滚动事件不会触发 ⇒ "是否在底部"没人更新,
+                //   「已经到底啦」也就永远不出现。这里主动按"装得下"置为在底部。
+                //   (装不下的情况由 FeedScroll_OnScrollChanged 负责。)
+                if (!hasMore && FeedItems.Count > 0)
+                    SetAtFeedBottom(true);
 
                 // 左栏未读状态由应用级服务维护; 这里只把最新状态应用上(**不重排**,
                 // 位置只在进入动态页/点刷新时刷新, 见 RefreshUserPositions)。
@@ -701,7 +744,8 @@ public class FollowViewModel : ObservableObject
         {
             Loading = false;
             LoadingMore = false;
-            Error = ex.Message;
+            if (reset) Error = ex.Message;
+            else LoadMoreError = true;
         }
     }
 
