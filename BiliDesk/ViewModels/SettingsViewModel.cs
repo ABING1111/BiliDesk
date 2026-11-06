@@ -1064,6 +1064,62 @@ public class SettingsViewModel : ObservableObject
         }
     }
 
+    // ---- 字幕: 四项设置 ----
+    // ★ 语义与播放器一一对应: 默认显示字幕 / 字幕字号 / 底衬不透明度 / 距画面底部距离。
+
+    /// <summary>默认显示字幕。关掉后播放器取到轨也不自动开。</summary>
+    public bool SubtitleEnabled
+    {
+        get => Svc.Settings.SubtitleEnabled;
+        set
+        {
+            Svc.Settings.SetSubtitleEnabled(value);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>字幕字号倍率(50~300)</summary>
+    public int SubtitleFontScalePercent
+    {
+        get => Svc.Settings.SubtitleFontScalePercent;
+        set
+        {
+            Svc.Settings.SetSubtitleFontScalePercent(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SubtitleFontScaleText));
+        }
+    }
+
+    public string SubtitleFontScaleText => $"{SubtitleFontScalePercent}%";
+
+    /// <summary>字幕底衬不透明度(0~100)。0 = 只有文字, 没有黑底。</summary>
+    public int SubtitleBackgroundOpacityPercent
+    {
+        get => Svc.Settings.SubtitleBackgroundOpacityPercent;
+        set
+        {
+            Svc.Settings.SetSubtitleBackgroundOpacityPercent(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SubtitleBackgroundOpacityText));
+        }
+    }
+
+    public string SubtitleBackgroundOpacityText => $"{SubtitleBackgroundOpacityPercent}%";
+
+    /// <summary>字幕距画面底部距离(px)</summary>
+    public int SubtitleBottomMargin
+    {
+        get => Svc.Settings.SubtitleBottomMargin;
+        set
+        {
+            Svc.Settings.SetSubtitleBottomMargin(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SubtitleBottomMarginText));
+        }
+    }
+
+    public string SubtitleBottomMarginText => $"{SubtitleBottomMargin} px";
+
     /// <summary>弹幕速度档位(0 最慢 ~ 4 最快)</summary>
     public int DanmakuSpeedLevel
     {
