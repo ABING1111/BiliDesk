@@ -142,7 +142,8 @@
                而**20px 以下这一整块**由这层接管 —— 两者拼起来, 顶部可拖动区从 20px 变成约 58px。 -->
         <Border x:Name="TopDragArea" Grid.Row="0" Panel.ZIndex="5"
                 Background="Transparent"
-                MouseLeftButtonDown="OnDragAreaMouseLeftButtonDown" />
+                MouseLeftButtonDown="OnDragAreaMouseLeftButtonDown"
+                MouseLeftButtonUp="OnDragAreaMouseLeftButtonUp" />
 
         <!-- 分段标签 + 选中下划线(2026-10-12 用户要求"tab 改回下划线形式")。
              形态: 五个文字标签横排, 选中那个**文字变强调色 + 下方一根短横线**,

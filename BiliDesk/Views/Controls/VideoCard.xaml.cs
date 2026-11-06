@@ -27,6 +27,19 @@ public partial class VideoCard : UserControl
     private bool _entered;
 
     /// <summary>
+    /// 本次左键手势是否**从这张卡片上按下**。
+    ///
+    /// ★★★ 为什么必须有它(2026-11-06 修 issue #50):
+    ///   卡片的打开动作挂在 MouseLeftButtonUp 上, 而 WPF 的 Up 是**按抬起时的坐标重新命中测试**
+    ///   派发的, 不要求同一个元素先收到 Down。窗口最大化/页面重排之后, 同一个屏幕坐标可能
+    ///   落到另一张卡片的封面上, 它会收到一个"没有配对 Down"的 Up 并直接开始播放。
+    ///   有了这道闸, 只有"在这张卡片上按下、也在这张卡片上抬起"才算点击。
+    ///   ★ 播放器视频区已经在用同一套判据(见 PlayerWindow.OnVideoAreaMouseLeftUp 的
+    ///     _videoGestureActive), 这里是列表侧的对应实现。
+    /// </summary>
+    private bool _pressInside;
+
+    /// <summary>
     /// 已经"亮过相"的视频条目。
     ///
     /// ★ 为什么需要它(2026-10-02 修"切 tab 卡片闪几下"): 入场动画(360ms 淡入+上浮)挂在
@@ -140,6 +153,9 @@ public partial class VideoCard : UserControl
     {
         InitializeComponent();
         Loaded += OnLoaded;
+        // 卡片被复用/换数据时清掉手势标记: 列表容器回收时旧的一次 Down 可能没有配对的 Up,
+        // 不清的话下一条视频会带着上一张卡片的"已按下"状态, 一个漏进来的 Up 就能误播。
+        DataContextChanged += (_, _) => _pressInside = false;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -176,7 +192,26 @@ public partial class VideoCard : UserControl
 
     private void OnMouseEnter(object sender, MouseEventArgs e) => AnimateCoverScale(1.04);
 
-    private void OnMouseLeave(object sender, MouseEventArgs e) => AnimateCoverScale(1);
+    private void OnMouseLeave(object sender, MouseEventArgs e)
+    {
+        // 按下后拖出卡片, 这一次抬起不再算点击(否则松手时如果恰好又滑回封面会误播)
+        _pressInside = false;
+        AnimateCoverScale(1);
+    }
+
+    /// <summary>左键在卡片上按下: 记下"这一次手势是我的"。Up 命中测试换了目标也不会误认。</summary>
+    private void OnCardPress(object sender, MouseButtonEventArgs e) => _pressInside = true;
+
+    /// <summary>
+    /// 消费一次有效点击。返回 false = 这个 Up 没有配对的 Down(标题栏/浮层/最大化重排漏进来的),
+    /// 调用方直接丢弃。
+    /// </summary>
+    private bool TakePress()
+    {
+        if (!_pressInside) return false;
+        _pressInside = false;
+        return true;
+    }
 
     /// <summary>悬停放大(作用在封面卡片上, 用户要求"放大效果不要删")</summary>
     private void AnimateCoverScale(double zoom)
@@ -217,6 +252,7 @@ public partial class VideoCard : UserControl
     private void OnClick(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
+        if (!TakePress()) return;   // 没有配对 Down 的 Up, 丢弃(见 _pressInside)
         OpenVideo();
     }
 
@@ -224,6 +260,7 @@ public partial class VideoCard : UserControl
     private void OnTitleClick(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
+        if (!TakePress()) return;
         OpenVideo();
     }
 
@@ -238,6 +275,7 @@ public partial class VideoCard : UserControl
     private async void OnAuthorClick(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
+        if (!TakePress()) return;
         if (DataContext is not VideoItem v) return;
 
         var mid = v.OwnerMid;

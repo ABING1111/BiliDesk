@@ -5,6 +5,7 @@
              Width="{Binding (behaviors:CardWall.ItemWidth), RelativeSource={RelativeSource Self}}"
              Margin="8,10"
              Background="Transparent" Focusable="False"
+             PreviewMouseLeftButtonDown="OnCardPress"
              MouseEnter="OnMouseEnter" MouseLeave="OnMouseLeave">
     <UserControl.Resources>
         <!--

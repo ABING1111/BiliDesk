@@ -99,6 +99,14 @@ public partial class HomePage : UserControl
     // ------------------------------------------------------------ 加大的窗口拖动区
 
     /// <summary>
+    /// 双击的第二下已经按下, 等抬起后再切窗口状态(见 <see cref="OnDragAreaMouseLeftButtonUp"/>)。
+    /// </summary>
+    private bool _maximizeOnUp;
+
+    /// <summary>记下双击第二下按下的时刻, 防止 Up 丢失后标记一直挂着(见 Up 处理器里的兜底)。</summary>
+    private int _maximizeArmedAt;
+
+    /// <summary>
     /// 首页顶部那层"空闲拖动区"的按下处理: 长按左键拖动窗口、双击最大化/还原。
     ///
     /// ★ 为什么自己实现而不用 WindowChrome 的 CaptionHeight:
@@ -113,6 +121,13 @@ public partial class HomePage : UserControl
     ///
     /// ★ 双击判定: WPF 的 MouseButtonEventArgs.ClickCount 由系统按
     ///   `GetDoubleClickTime()` 与双击距离阈值算好, 直接用, 不要自己数时间戳。
+    ///
+    /// ★★★ 双击的窗口状态切换**必须放到 MouseUp 里**(2026-11-06 修 issue #50):
+    ///   以前是在第二次 Down 里直接改 WindowState, 而窗口最大化会让整页在**第二次 Up 之前**
+    ///   重排完 —— Up 是按抬起时的坐标重新命中测试的, 最大化前还在"标题空白区"的同一个屏幕坐标,
+    ///   最大化后已经落到第一行视频卡片的封面上, 卡片就把这一下当成正常点击开始播放。
+    ///   Down 里现在只置标记; Up 到达时窗口还没动, 命中测试仍落在本层, 状态切换在处理器内部
+    ///   才发生, 后面不会再有鼠标消息漏给卡片。
     /// </summary>
     private void OnDragAreaMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -121,19 +136,45 @@ public partial class HomePage : UserControl
 
         if (e.ClickCount == 2)
         {
-            // 双击 = 最大化 / 还原(与系统标题栏、以及右上角那个按钮同一套语义)
-            win.WindowState = win.WindowState == WindowState.Maximized
-                ? WindowState.Normal
-                : WindowState.Maximized;
+            // 只记下"待最大化", 真正的状态切换留给 Up —— 见上面 issue #50 的说明。
+            // ★ 用 == 而不是 >=: 三连击的第三下(ClickCount=3)不该再把窗口切回去。
+            _maximizeOnUp = true;
+            _maximizeArmedAt = Environment.TickCount;
             e.Handled = true;
-            return;
+            return;   // ★ 这里不能再 DragMove, 否则第二次点击会先把窗口拖走
         }
+
+        _maximizeOnUp = false;
 
         // 单击拖动。★ 必须判左键按下状态: 双击的第一下也会走到这里,
         //   若不判就会先 DragMove 把窗口拖走一小段, 双击的位置跟着漂。
         if (e.LeftButton != MouseButtonState.Pressed) return;
         try { win.DragMove(); }
         catch (InvalidOperationException) { /* 鼠标已松开/拖动被打断, 正常竞态 */ }
+    }
+
+    /// <summary>
+    /// 双击的第二下抬起: 在这里才切最大化/还原。
+    ///
+    /// ★ 只要 Up 还在拖动区上, 命中测试拿到的就是本层(窗口此刻还没改状态), 这一下被吞掉,
+    ///   视频卡片收不到任何鼠标事件 —— 这正是 issue #50 的修法。
+    /// </summary>
+    private void OnDragAreaMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_maximizeOnUp) return;
+        _maximizeOnUp = false;
+
+        // 兜底: 第二下按下后若把鼠标移出拖动区再松开, Up 会落到别处, 标记就永远挂着。
+        // 超过 3s 的 Up 不认, 避免下一次别处漏进来的 Up 突然把窗口最大化。
+        if (unchecked(Environment.TickCount - _maximizeArmedAt) > 3000) return;
+
+        var win = Window.GetWindow(this);
+        if (win == null) return;
+
+        win.WindowState = win.WindowState == WindowState.Maximized
+            ? WindowState.Normal
+            : WindowState.Maximized;
+        e.Handled = true;
     }
 
     // ------------------------------------------------------------ 屏蔽
