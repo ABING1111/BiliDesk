@@ -1119,6 +1119,8 @@
                                                 Thumb.DragStarted="OnProgressDragStart"
                                                 Thumb.DragDelta="OnProgressDragDelta"
                                                 Thumb.DragCompleted="OnProgressDragEnd"
+                                                MouseMove="OnProgressSliderMouseMove"
+                                                MouseLeave="OnProgressSliderMouseLeave"
                                                 ValueChanged="OnProgressValueChanged" />
                                         <!-- 被标注的片段(sponsor 等)在这里画成色块。
                                              · IsHitTestVisible=False —— 绝对不能挡住拖进度条 / 点击跳转;
@@ -1134,6 +1136,9 @@
                                              ★ 为什么需要: 拖动时画面还停在原地, 用户只能从轨道上大致猜位置;
                                                给一个精确的目标时间, 才知道自己正要跳到哪(长视频尤其重要:
                                                1 小时 23 分的视频, 轨道上 1% 就是 50 秒)。
+                                             ★ 2026-11-07 扩展: 鼠标**悬停**在轨道上也显示(同一条气泡) ——
+                                               还没按下去就能看到"这个点是几分钟"。气泡本质是
+                                               "轨道上这个点 = 什么时间", 拖动与悬停只是两种输入。
                                              ★ 为什么放在**进度条这个 Grid 里**(而不是视频区浮层):
                                                Canvas 不参与布局(不撑高度), 气泡用负的 Canvas.Top 浮到轨道上方,
                                                控制栏的排版一点不受影响; 而放进视频区浮层就得自己算轨道坐标,

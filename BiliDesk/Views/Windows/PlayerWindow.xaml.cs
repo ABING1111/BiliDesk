@@ -3550,6 +3550,9 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
 
+        // ★ 非拖动的程序化回写(心跳/seek 钉值)不该赶走悬停气泡: 悬停时气泡显示的是
+        //   **鼠标位置**的时间, 跟播放进度无关; 而且此时气泡如果是悬停亮起的,
+        //   这里若把它藏掉, 用户会发现气泡"自己灭了"。程序化改动不碰气泡。
         if (_mp.Length <= 0) return;
 
         // 用 Time(毫秒) 而不是 Position(0~1 的浮点): 位置量本身就是毫秒,
@@ -3789,6 +3792,8 @@ public partial class PlayerWindow : FluentWindow
         // ★ 气泡**先不亮**: WPF 把"点一下轨道"也当成一次拖动(DragStarted 照样来),
         //   此时亮气泡会闪一下又消失 —— 用户看到的是"莫名其妙弹了个 12:34"。
         //   真正的"拖动"由 DragDelta 判定(见 OnProgressDragDelta): 只有鼠标真的移动了才算。
+        //   ★ 悬停态例外: 气泡在拖动**之前**就已经亮着(悬停亮起的), DragStart 不动它,
+        //     按下去的瞬间气泡从"悬停位置"无缝切成"当前值", 不闪不跳。
         _progressDragMoved = false;
     }
 
@@ -3814,6 +3819,7 @@ public partial class PlayerWindow : FluentWindow
     {
         _isSeeking = false;
         // 气泡立刻收: 松手后画面会跳到新位置, 气泡留着是多余的。
+        // (若鼠标还压在轨道上, 下一条 MouseMove 会以"悬停"身份把气泡重新亮起 —— 那是对的。)
         HideProgressDragHint();
         // 点击轨道 / 点在滑块上但没拖动 ⇒ ValueChanged 已经处理过(或本来就不需要跳),
         // 这里不再重复 seek。重复 seek 会打断正在飞的解复用器, 表现为无限缓冲。
@@ -3832,16 +3838,17 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 更新"拖动进度条时浮出的目标时间气泡"。
+    /// 更新"进度条上方的时间气泡"。
     ///
     /// ★ 目的: 拖动时画面还停在原地, 用户只能从轨道上大致猜位置; 给一个精确的目标时间,
     ///   才知道自己正要跳到哪(长视频里尤其重要 —— 1 小时 23 分的视频, 轨道上 1% 就是 50 秒)。
-    /// ★ 只在**真拖动**时显示: 点击轨道不算(那是"直接跳转", 不是"拖动预览"),
-    ///   见 OnProgressDragDelta 的说明。
+    ///   2026-11-07 扩展: **鼠标悬停**在轨道上也显示 —— 还没按下去就能看到"这个点是几分钟"。
+    /// ★ 两路输入共用本方法: 拖动(显示将要跳到的时间)与悬停(显示鼠标指的位置)。
+    ///   本质都是"轨道上这个点是什么时间", 没必要两套浮层。
     /// ★ 拖动期间**不发 seek**: 发 seek 会打断正在飞的解复用器(表现: 无限缓冲),
-    ///   真正的跳转等松手(见 OnProgressDragEnd)。
+    ///   真正的跳转等松手(见 OnProgressDragEnd)。悬停本来就不改 Value, 天然不涉及。
     /// </summary>
-    /// <param name="sliderValue">进度条当前值(0~1000 量程)</param>
+    /// <param name="sliderValue">进度条量程上的值(0~1000): 拖动时 = 当前 Value, 悬停时 = 鼠标位置反推值</param>
     private void UpdateProgressDragHint(double sliderValue)
     {
         if (_closing || ProgressHint == null || ProgressHintLayer == null) return;
@@ -3883,11 +3890,46 @@ public partial class PlayerWindow : FluentWindow
         ProgressHint.Visibility = Visibility.Visible;
     }
 
-    /// <summary>隐藏"拖动进度条"气泡(松手 / 换片 / 关闭时调用)。</summary>
+    /// <summary>隐藏"进度条时间气泡"(松手 / 鼠标离开 / 换片 / 关闭时调用)。</summary>
     private void HideProgressDragHint()
     {
         if (_closing || ProgressHint == null) return;
+        // ★ 拖动中不能收: 悬停(MouseLeave)与拖动(DragEnd)之外, 还有"拖动期间鼠标
+        //   恰好滑出了轨道边界"这条交叉路径 —— 拖动未结束气泡必须留着。
+        if (_isSeeking) return;
         ProgressHint.Visibility = Visibility.Collapsed;
+    }
+
+    // ------------------------------------------------------------ 进度条悬停提示(2026-11-07)
+
+    /// <summary>
+    /// 鼠标悬停进度条: 气泡浮出, 显示鼠标指的位置对应的时间。
+    ///
+    /// ★ 事件挂在 Slider 上而不是轨道 Grid 上: Slider 的命中区比那条 3px 的白轨道大得多
+    ///   (模板里 MinHeight=18 的透明 Grid), 挂 Slider 才能覆盖"压在轨道附近"的全部区域。
+    /// ★ 拖动中此路**不更新气泡**(拖动有自己的更新路径, 且拖动时鼠标位置 ≠ 目标位置 ——
+    ///   WPF 拖滑块时鼠标可以在轨道外任意远处), 只把悬停标志置上。
+    /// ★ 与拖动的交接: DragCompleted 时鼠标几乎必然还压在轨道上, 那时会落进来一次
+    ///   MouseMove —— 气泡从"拖动的时间"无缝切成"悬停位置的时间", 体验是对的。
+    /// </summary>
+    private void OnProgressSliderMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_closing || ProgressHint == null) return;
+        if (_isSeeking) return;   // 拖动优先: 气泡由拖动路径更新, 不被鼠标位置覆盖
+
+        // 鼠标在 Slider 里的横坐标 → 量程值。方向键等程序化改动不走这里。
+        var p = e.GetPosition(ProgressSlider);
+        var (offset, usable) = TrackMetrics();
+        if (usable <= 0) return;
+        var ratio = Math.Clamp((p.X - offset) / usable, 0, 1);
+        UpdateProgressDragHint(ratio * 1000);
+    }
+
+    /// <summary>鼠标离开进度条: 收气泡(拖动中除外 —— 那时气泡归拖动管)。</summary>
+    private void OnProgressSliderMouseLeave(object sender, MouseEventArgs e)
+    {
+        // ★ 拖动中不收: 见 HideProgressDragHint 里的说明(拖动期间气泡只归拖动路径管)。
+        if (!_isSeeking) HideProgressDragHint();
     }
 
     private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)

@@ -313,11 +313,22 @@
                                    Margin="10,0,0,0" HorizontalAlignment="Left"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
                                    IsHitTestVisible="False" />
+                        <!-- ★ 占位符显隐绑 <c>HasUserSearch</c>(bool) 而不是 UserSearchText(string)+InvStrToVis
+                             (2026-11-07 修"搜索时占位文字不隐藏, 与输入内容重叠"):
+                             · 旧的绑法在源码上是对的(VM 有通知、转换器是对的), 但实测出现过
+                               "输入了文字占位符仍在" —— string 属性通知这条路少一环确认, 出问题
+                               无声无息(绑定失败只写 Output 窗口)。
+                             · HasUserSearch 是 VM 显式 OnPropertyChanged 的 bool, 走项目里
+                               到处都在用的 bool→Visibility 转换器(未读红点/刷新按钮同款),
+                               同一个通知顺带把 ✕ 清除按钮一起驱动 —— 两者的显隐**必然一致**。
+                             · 另一个附带修正: 判空从 IsNullOrEmpty 升级为 IsNullOrWhiteSpace 的语义
+                               (HasUserSearch 本来就是 IsNullOrWhiteSpace) —— 输入纯空格时占位符
+                               也不再显示。 -->
                         <TextBlock Text="搜索已关注的 UP" FontSize="12.5"
                                    VerticalAlignment="Center" Margin="30,0,30,0"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
                                    IsHitTestVisible="False"
-                                   Visibility="{Binding UserSearchText, Converter={StaticResource InvStrToVis}}" />
+                                   Visibility="{Binding HasUserSearch, Converter={StaticResource InvBoolToVis}}" />
                         <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                 FontSize="10" Width="24" Height="24" Padding="0"
                                 HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0"
