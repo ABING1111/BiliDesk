@@ -619,11 +619,13 @@ public partial class PlayerWindow : FluentWindow
     public PlayerWindow(string bvid)
     {
         InitializeComponent();
-        // 窗口大小记忆(2026-11-03 新增): 必须在 Show() 之前套用, 否则会先按 XAML 的
-        // 1280×760 闪一下再跳成记忆尺寸。SizeChanged 用来持续记录"最后一次常规尺寸"
-        // (全屏/最大化期间不记), 关闭时统一落盘(见 SavePlayerWindowSize)。
-        ApplyRememberedPlayerWindowSize();
+        // 窗口大小/位置记忆(2026-11-03 新增大小, 2026-11-07 增加位置): 必须在 Show() 之前套用,
+        // 否则会先按 XAML 的 1280×760 闪一下再跳成记忆尺寸。SizeChanged/LocationChanged 用来
+        // 持续记录"最后一次常规状态"的几何(全屏/最大化/铺满期间不记), 关闭时统一落盘
+        // (见 SavePlayerWindowPlacement)。
+        ApplyRememberedPlayerWindowPlacement();
         SizeChanged += OnPlayerSizeChanged;
+        LocationChanged += OnPlayerLocationChanged;
         Closed += OnClosed;
         Loaded += OnLoaded;
         PreviewKeyDown += OnPreviewKeyDown;
@@ -1633,10 +1635,11 @@ public partial class PlayerWindow : FluentWindow
         nameof(_danmakuPill),
         nameof(_teardownDone),       // 拆解只做一次
         nameof(_playerRegistered),   // 注册计数, 生命周期是窗口而非片源
-        // 倍速弹层/窗口尺寸记忆(2026-11-03 未提交改动)的窗口级状态
+        // 倍速弹层/窗口几何记忆(2026-11-03 未提交改动, 位置 2026-11-07)的窗口级状态
         nameof(_fillingSpeedMenu),   // 填充倍速列表时抑制 SelectionChanged, 纯 UI 瞬时闸
         nameof(_lastNormalWidth), nameof(_lastNormalHeight), // 最后一次常规窗口尺寸
-        nameof(_windowSizeSaved),    // 本次窗口是否已落盘尺寸
+        nameof(_lastNormalLeft), nameof(_lastNormalTop), nameof(_lastNormalPosValid), // 最后一次常规窗口位置
+        nameof(_windowPlacementSaved), // 本次窗口是否已落盘几何
         nameof(_seasonOpen),         // 合集面板的展开态: 用户开着面板连看几集是常态, 换片收起它很烦
         nameof(_isFillWindow),       // 「铺满窗口」是窗口级的显示模式(同 _isFullscreen), 换片不该把它弹回去
         nameof(_commentSort),        // 评论排序是用户看评论的习惯(同 _seasonOpen): 选过一次就一直是那个顺序
@@ -1797,13 +1800,21 @@ public partial class PlayerWindow : FluentWindow
         UpdateButtonState();
         // 窗口是复用的: 按当前状态(铺满/常规)同步一次信息栏与窗口最小尺寸
         ApplyInfoPanelState();
-        // 窗口大小记忆: 起播时先记下当前常规尺寸, 用户不动窗口直接关闭也能沿用上次的尺寸
-        // (铺满模式下的尺寸不记: 那是在"详情栏已收起"的布局里拖出来的, 下次按常规布局
-        //  打开会被最小宽度顶回去, 记了也用不上, 见 OnPlayerSizeChanged)
+        // 窗口大小/位置记忆: 起播时先记下当前常规几何, 用户不动窗口直接关闭也能沿用
+        // (铺满模式下的几何不记: 那是在"详情栏已收起"的布局里拖出来的, 下次按常规布局
+        //  打开会被最小宽度顶回去, 记了也用不上, 见 OnPlayerSizeChanged/OnPlayerLocationChanged)
         if (!_isFullscreen && !_isFillWindow && WindowState == WindowState.Normal)
         {
             _lastNormalWidth = ActualWidth;
             _lastNormalHeight = ActualHeight;
+            // ★ 位置只有真正生效过才记: 按记忆位置打开时 Left/Top 已是有限值;
+            //   CenterScreen 居中时是 NaN, 不能把 NaN 记进去(保存层会拒绝它)。
+            if (double.IsFinite(Left) && double.IsFinite(Top))
+            {
+                _lastNormalLeft = Left;
+                _lastNormalTop = Top;
+                _lastNormalPosValid = true;
+            }
         }
         // 「铺满窗口」按钮的字形初值: XAML 里写的是"进入前"那个字形(E9A6), 这里按实际状态
         // 再同步一次 —— 窗口是复用的, 复用到一个"上次已铺满"的窗口时不能显示成未铺满。
@@ -6588,22 +6599,42 @@ public partial class PlayerWindow : FluentWindow
         MinHeight = hide ? FillWindowMinHeight : NormalWindowMinHeight;
     }
 
-    // ------------------------------------------------------------ 播放器窗口大小记忆(2026-11-03)
+    // ------------------------------------------------------------ 播放器窗口大小/位置记忆(2026-11-03, 位置 2026-11-07)
 
-    /// <summary>最后一次"常规态"的窗口尺寸(全屏/最大化期间不更新)。关闭时从这里落盘。</summary>
+    /// <summary>最后一次"常规态"的窗口尺寸(全屏/最大化/铺满期间不更新)。关闭时从这里落盘。</summary>
     private double _lastNormalWidth;
     private double _lastNormalHeight;
 
-    /// <summary>本次窗口是否已经保存过尺寸(OnClosing 可能被调用两次: 先取消、拆解完再真关)。</summary>
-    private bool _windowSizeSaved;
+    /// <summary>最后一次"常规态"的窗口位置(DIP; 与尺寸同一套过滤条件)。关闭时从这里落盘。</summary>
+    private double _lastNormalLeft;
+    private double _lastNormalTop;
+
+    /// <summary>_lastNormalLeft/Top 是否采到了真实值。
+    /// ★ 不能拿 0 当哨兵: 多屏布局里 0 是合法坐标; 也不能直接读 Left ——
+    ///   WindowStartupLocation=CenterScreen 的窗口只要用户没动过, Left/Top 一直是 NaN。</summary>
+    private bool _lastNormalPosValid;
+
+    /// <summary>本次窗口是否已经保存过几何(OnClosing 可能被调用两次: 先取消、拆解完再真关)。</summary>
+    private bool _windowPlacementSaved;
+
+    // 记忆位置不可用时, 保证窗口至少露出的可见区域(标题栏 + 一块可点面积),
+    // 参考 Chrome/资源管理器对"屏幕外窗口"的救援标准。
+    private const double PlacementVisibleMinWidth = 160;
+    private const double PlacementVisibleMinHeight = 120;
 
     /// <summary>
-    /// 套用设置里记住的窗口宽高(设置项关闭时什么都不做, 保持 XAML 默认 1280×760)。
+    /// 套用设置里记住的窗口宽高与位置(设置项关闭时什么都不做, 保持 XAML 默认 1280×760 + CenterScreen)。
     ///
-    /// ★ 夹取规则: 不能小于窗口最小尺寸(常规态要放得下右侧详情栏), 也不能超过当前
+    /// ★ 夹取规则(尺寸): 不能小于窗口最小尺寸(常规态要放得下右侧详情栏), 也不能超过当前
     ///   主屏工作区 —— 用户换到更小的显示器/改过缩放后, 旧的大尺寸会让窗口伸出屏幕外。
+    /// ★ 夹取规则(位置, 2026-11-07): 按**虚拟桌面**夹, 而不是主屏工作区 ——
+    ///   多屏布局里负坐标完全合法(副屏在主屏左侧/上方), 按"必须是正数"夹会误杀;
+    ///   真正要防的是"上次用的副屏被拔掉"之后整窗落进无人区。做法是保证左上角(标题栏)
+    ///   始终留在虚拟桌面内, 且至少 160×120 的窗口面积可见, 位置尽量不变。
+    /// ★ 位置必须配合 WindowStartupLocation=Manual: XAML 里是 CenterScreen, 不改成 Manual
+    ///   的话 WPF 会用居中结果覆盖手写的 Left/Top。
     /// </summary>
-    private void ApplyRememberedPlayerWindowSize()
+    private void ApplyRememberedPlayerWindowPlacement()
     {
         if (!Svc.Settings.RememberPlayerWindowSize) return;
         var w = Svc.Settings.PlayerWindowWidth;
@@ -6614,36 +6645,72 @@ public partial class PlayerWindow : FluentWindow
         var maxH = Math.Max(MinHeight, SystemParameters.WorkArea.Height - 32);
         Width = Math.Clamp((double)w, MinWidth, maxW);
         Height = Math.Clamp((double)h, MinHeight, maxH);
+
+        // 没记过位置(老配置/只在旧版用过) ⇒ 保持 XAML 的 CenterScreen 居中, 只还原大小。
+        var left = Svc.Settings.PlayerWindowLeft;
+        var top = Svc.Settings.PlayerWindowTop;
+        if (!left.HasValue || !top.HasValue) return;
+
+        var vsL = SystemParameters.VirtualScreenLeft;
+        var vsT = SystemParameters.VirtualScreenTop;
+        var vsR = vsL + SystemParameters.VirtualScreenWidth;
+        var vsB = vsT + SystemParameters.VirtualScreenHeight;
+        // 可见的右/下边界: 左上角最多向左/向上退到"还留得出 160×120 可见区"的位置。
+        var maxLeft = vsR - PlacementVisibleMinWidth;
+        var maxTop = vsB - PlacementVisibleMinHeight;
+
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = Math.Clamp((double)left.Value, vsL - (Width - PlacementVisibleMinWidth), maxLeft);
+        Top = Math.Clamp((double)top.Value, vsT - (Height - PlacementVisibleMinHeight), maxTop);
     }
 
     /// <summary>
-    /// 记录最后一次常规尺寸。最大化/全屏时 SizeChanged 也会发, 但那时记录的是屏幕尺寸,
+    /// 记录最后一次常规几何。最大化/全屏时 SizeChanged 也会发, 但那时记录的是屏幕尺寸,
     /// 带进下一次启动就会"一打开就铺满" —— 所以按窗口状态过滤。
     /// ★ 铺满模式(_isFillWindow)也不记: 那个布局里窗口下限是 320×200, 用户拖出来的小窗
     ///   下次按**常规布局**打开时会被 840×600 的最小尺寸顶回去, 记了等于没记。
+    /// ★ 位置(LocationChanged)与尺寸(SizeChanged)走同一套过滤, 两个事件都汇到这里,
+    ///   保证拖尺寸和拖位置总是成对更新(拖边缘时 WPF 两个事件都会发)。
     /// </summary>
+    private bool IsNormalStateForPlacement()
+    {
+        return IsLoaded && !_closing && !_isFullscreen && !_isFillWindow
+            && WindowState == WindowState.Normal
+            && ActualWidth >= 100 && ActualHeight >= 100;
+    }
+
     private void OnPlayerSizeChanged(object? sender, SizeChangedEventArgs e)
     {
-        if (!IsLoaded || _closing || _isFullscreen || _isFillWindow) return;
-        if (WindowState != WindowState.Normal) return;
-        if (ActualWidth < 100 || ActualHeight < 100) return;
+        if (!IsNormalStateForPlacement()) return;
         _lastNormalWidth = ActualWidth;
         _lastNormalHeight = ActualHeight;
     }
 
-    /// <summary>
-    /// 关闭时保存窗口大小(设置项关掉时直接跳过, 也不清掉旧值 —— 重新打开还能沿用)。
-    /// ★ 在 OnClosing **最前面**调用: 后面会把全屏态还原成 Normal, 那时再读尺寸就不准了。
-    /// </summary>
-    private void SavePlayerWindowSize()
+    private void OnPlayerLocationChanged(object? sender, EventArgs e)
     {
-        if (_windowSizeSaved) return;
-        _windowSizeSaved = true;
+        if (!IsNormalStateForPlacement()) return;
+        _lastNormalLeft = Left;
+        _lastNormalTop = Top;
+        _lastNormalPosValid = double.IsFinite(Left) && double.IsFinite(Top);
+    }
+
+    /// <summary>
+    /// 关闭时保存窗口几何(设置项关掉时直接跳过, 也不清掉旧值 —— 重新打开还能沿用)。
+    /// ★ 在 OnClosing **最前面**调用: 后面会把全屏态还原成 Normal, 那时再读几何就不准了。
+    /// </summary>
+    private void SavePlayerWindowPlacement()
+    {
+        if (_windowPlacementSaved) return;
+        _windowPlacementSaved = true;
         if (!Svc.Settings.RememberPlayerWindowSize) return;
 
         var w = _lastNormalWidth > 0 ? _lastNormalWidth : Width;
         var h = _lastNormalHeight > 0 ? _lastNormalHeight : Height;
-        Svc.Settings.SetPlayerWindowSize(w, h);
+        // 位置没采到(窗口居中打开且用户没拖动过 ⇒ Left/Top 还是 NaN)就不写坐标,
+        // 按上次记录的位置沿用 —— 与尺寸"没采到就沿用旧值"同一个策略。
+        Svc.Settings.SetPlayerWindowPlacement(w, h,
+            _lastNormalPosValid ? _lastNormalLeft : double.NaN,
+            _lastNormalPosValid ? _lastNormalTop : double.NaN);
     }
 
     // ------------------------------------------------------------ 窄视频区控制栏
@@ -9369,8 +9436,8 @@ public partial class PlayerWindow : FluentWindow
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         // ★ 必须在最前面: 下面会把全屏态(WindowStyle/WindowState)还原成普通窗口,
-        //   之后再读尺寸就变成了还原后的值, 记忆会失效。
-        SavePlayerWindowSize();
+        //   之后再读几何就变成了还原后的值, 记忆会失效。
+        SavePlayerWindowPlacement();
 
         // 为什么要"先隐藏 -> 后台拆解 -> 再真正 Close":
         // LibVLC 的 Stop/Dispose 会阻塞等待解复用/解码线程退出(实测约 1 秒),

@@ -399,15 +399,15 @@
                     <TextBlock Text="画质" Style="{StaticResource SettingsGroupHeaderStyle}"
                                Margin="0,10,0,0" />
 
-                    <!-- 播放器窗口大小记忆(2026-11-03 新增): 只记宽高, 不记位置/最大化状态。
-                         关闭后播放器每次都回到 XAML 的默认 1280×760, 也不再写盘。 -->
+                    <!-- 播放器窗口大小/位置记忆(2026-11-03 新增大小, 2026-11-07 增加位置)。
+                         关闭后播放器每次都回到 XAML 的默认 1280×760 并居中, 也不再写盘。 -->
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                            <TextBlock Text="记住播放器窗口大小" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="记住播放器窗口大小和位置" Style="{StaticResource SettingsRowTitleStyle}" />
                             <TextBlock Text="{Binding RememberPlayerWindowSizeHint}"
                                        Style="{StaticResource SettingsRowDescStyle}" />
                         </StackPanel>

@@ -1559,7 +1559,7 @@ public class AppSettings
     public bool AutoResume { get; set; } = true;
 
     /// <summary>
-    /// 是否记住播放器窗口大小(默认开)。关闭后播放器每次都用 XAML 默认尺寸.
+    /// 是否记住播放器窗口大小**和位置**(默认开)。关闭后播放器每次都用 XAML 默认尺寸并居中.
     /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
     /// </summary>
     public bool RememberPlayerWindowSize { get; set; } = true;
@@ -1569,6 +1569,17 @@ public class AppSettings
 
     /// <summary>上次播放器窗口高度(DIP; 0 = 尚未记录, 用默认 760)。范围由 SettingsStore 夹取。</summary>
     public int PlayerWindowHeight { get; set; }
+
+    /// <summary>
+    /// 上次播放器窗口左上角坐标(2026-11-07 新增; DIP; null = 尚未记录, 保持 CenterScreen 居中)。
+    /// ★ 用可空接: 老配置没有这个字段 ⇒ null, 恰好就是"没记过"的语义, 不需要版本兼容;
+    ///   也不能用 0 哨兵 —— (0,0) 是合法坐标(多屏布局常见), 会把没记过误判成记在原点。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public int? PlayerWindowLeft { get; set; }
+
+    /// <summary>上次播放器窗口左上角的 Y(DIP; null = 尚未记录, 保持居中)。契约同 <see cref="PlayerWindowLeft"/>。</summary>
+    public int? PlayerWindowTop { get; set; }
 
     /// <summary>
     /// LibVLC 网络缓冲(毫秒)。控制流式播放的预读深度: 越小越省内存, 越大越抗网络抖动。

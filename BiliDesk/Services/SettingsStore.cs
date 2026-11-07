@@ -316,12 +316,13 @@ public class SettingsStore
     public bool AutoResume { get; set; } = true;
 
     /// <summary>
-    /// 是否记住播放器窗口大小(默认开)。
+    /// 是否记住播放器窗口大小**和位置**(默认开)。
     ///
-    /// ★ 关掉后: 播放器每次打开都用 XAML 里的默认 1280×760, 也不再写盘 ——
-    ///   给"不想让窗口尺寸被上次操作影响"的用户一个干净入口(多显示器/演示场景常见)。
-    /// ★ 只记**宽高**, 不记位置与最大化/全屏状态: 用户要的是"窗口大小", 位置交给
-    ///   WindowStartupLocation=CenterScreen; 全屏是临时态, 不该带到下一次启动。
+    /// ★ 关掉后: 播放器每次打开都用 XAML 里的默认 1280×760 并按 CenterScreen 居中,
+    ///   也不再写盘 —— 给"不想让窗口被上次操作影响"的用户一个干净入口(多显示器/演示场景常见)。
+    /// ★ 位置记忆(2026-11-07 新增)与大小共用这一个开关: 用户的心智是同一件事 ——
+    ///   "我摆好的窗口, 下次打开还是那样", 大小归大小、位置归位置拆成两个开关反而难解释。
+    /// ★ 仍不记最大化/全屏状态: 那是临时态, 不该带到下一次启动。
     /// </summary>
     public bool RememberPlayerWindowSize { get; set; } = true;
 
@@ -330,6 +331,15 @@ public class SettingsStore
 
     /// <summary>上一次播放器窗口的高度(DIP; 0 = 还没记过, 用 XAML 默认值)</summary>
     public int PlayerWindowHeight { get; set; }
+
+    /// <summary>
+    /// 上一次播放器窗口左上角的 X(DIP; null = 还没记过, 保持 CenterScreen 居中)。
+    /// ★ 用可空而不是 0 哨兵: (0,0) 本身是合法坐标(多屏布局里常见), 必须能区分"没记过"。
+    /// </summary>
+    public int? PlayerWindowLeft { get; set; }
+
+    /// <summary>上一次播放器窗口左上角的 Y(DIP; null = 还没记过, 保持 CenterScreen 居中)</summary>
+    public int? PlayerWindowTop { get; set; }
 
     /// <summary>播放器窗口记忆尺寸的合法下限(与 PlayerWindow 的 FillWindowMin 一致, 防止存入不可用的小窗)</summary>
     public const int PlayerWindowMinWidth = 320;
@@ -342,6 +352,12 @@ public class SettingsStore
 
     /// <inheritdoc cref="PlayerWindowMaxWidth"/>
     public const int PlayerWindowMaxHeight = 10000;
+
+    /// <summary>
+    /// 播放器窗口记忆坐标的绝对值上限。真实多屏布局的虚拟桌面坐标远到不了这个量级
+    /// (±32768 是 Win32 坐标的硬边界), 它只用来拦手改配置塞进的离谱值。
+    /// </summary>
+    public const int PlayerWindowPosLimit = 100000;
 
     /// <summary>
     /// LibVLC 的网络缓冲(毫秒)。
@@ -422,6 +438,15 @@ public class SettingsStore
         => value >= min && value <= max;
 
     /// <summary>
+    /// 窗口坐标是否可用。多屏布局允许负坐标(副屏在主屏左侧/上方), 所以只设绝对值上限,
+    /// 不做"必须为正"这类误杀; 两个坐标要么都要, 要么都不要 —— 半新半旧的位置记了等于没记。
+    /// </summary>
+    private static bool IsValidPlayerWindowPos(int? x, int? y)
+        => x.HasValue && y.HasValue
+        && Math.Abs(x.Value) <= PlayerWindowPosLimit
+        && Math.Abs(y.Value) <= PlayerWindowPosLimit;
+
+    /// <summary>
     /// 改"是否记住播放器窗口大小"并落盘。
     /// 关掉时保留已记录的值(下次再开还能沿用), 只是不再读取/写入 ——
     /// 用户重新打开开关不会突然回到默认尺寸。
@@ -434,11 +459,14 @@ public class SettingsStore
     }
 
     /// <summary>
-    /// 记录播放器窗口大小并落盘(只在"记住窗口大小"开着时生效)。
+    /// 记录播放器窗口大小**和位置**并落盘(只在"记住窗口大小"开着时生效)。
     /// ★ 调用方传的是 DIP, 这里四舍五入成整数: JSON 里不要出现 1279.999999 这种噪声。
     /// ★ 越界/异常值直接忽略, 不写盘 —— 宁可沿用上一次的好值, 也不要把坏值存进去。
+    ///   尺寸有效但坐标异常时仍保存尺寸; 坐标异常**沿用旧坐标**而不是清空:
+    ///   典型场景是"窗口按记忆位置打开、用户没拖动就关闭", 此时 WPF 的 Left/Top 可能还是
+    ///   NaN 没采到值 —— 那说明位置和上次一模一样, 沿用即可, 清成 null 会让位置记忆丢失。
     /// </summary>
-    public void SetPlayerWindowSize(double width, double height)
+    public void SetPlayerWindowPlacement(double width, double height, double left, double top)
     {
         if (!RememberPlayerWindowSize) return;
         if (!double.IsFinite(width) || !double.IsFinite(height)) return;
@@ -446,11 +474,19 @@ public class SettingsStore
         var w = (int)Math.Round(width);
         var h = (int)Math.Round(height);
         if (!IsValidPlayerWindowSize(w, PlayerWindowMinWidth, PlayerWindowMaxWidth)) return;
-        if (!IsValidPlayerWindowSize(h, PlayerWindowMinHeight, PlayerWindowMaxHeight)) return;
-        if (PlayerWindowWidth == w && PlayerWindowHeight == h) return;
+
+        // 坐标独立校验: 坏坐标不拖累好尺寸; 无效时沿用旧值(见方法注释), 而不是清成 null。
+        int? x = double.IsFinite(left) ? (int)Math.Round(left) : null;
+        int? y = double.IsFinite(top) ? (int)Math.Round(top) : null;
+        if (!IsValidPlayerWindowPos(x, y)) { x = PlayerWindowLeft; y = PlayerWindowTop; }
+
+        if (PlayerWindowWidth == w && PlayerWindowHeight == h
+            && PlayerWindowLeft == x && PlayerWindowTop == y) return;
 
         PlayerWindowWidth = w;
         PlayerWindowHeight = h;
+        PlayerWindowLeft = x;
+        PlayerWindowTop = y;
         Save();
     }
 
@@ -662,6 +698,12 @@ public class SettingsStore
             ? s.PlayerWindowWidth : 0;
         PlayerWindowHeight = IsValidPlayerWindowSize(s.PlayerWindowHeight, PlayerWindowMinHeight, PlayerWindowMaxHeight)
             ? s.PlayerWindowHeight : 0;
+        // 位置记忆(2026-11-07 新增): 老配置没有这两个字段 ⇒ null(= 保持 CenterScreen 居中),
+        // 可空类型天然承载"没记过"的语义, 不需要版本兼容。两个坐标必须一起有效,
+        // 半新半旧(只落盘成功一个)的情况一律当没记过。
+        PlayerWindowLeft = IsValidPlayerWindowPos(s.PlayerWindowLeft, s.PlayerWindowTop)
+            ? s.PlayerWindowLeft : null;
+        PlayerWindowTop = PlayerWindowLeft;   // 上面校验过两者同有效/同无效, 直接取同值
 
         // 网络缓冲: 老配置缺字段 ⇒ AppSettings 的初始化值 1000(与旧版一致)。
         // ★ 这里仍要夹取: 手改配置可能塞进 0(等于关掉缓冲)或十万(白占内存)。
@@ -851,6 +893,8 @@ public class SettingsStore
         RememberPlayerWindowSize = RememberPlayerWindowSize,
         PlayerWindowWidth = PlayerWindowWidth,
         PlayerWindowHeight = PlayerWindowHeight,
+        PlayerWindowLeft = PlayerWindowLeft,
+        PlayerWindowTop = PlayerWindowTop,
         NetworkCachingMs = NetworkCachingMs,
         AutoBufferPolicy = AutoBufferPolicy,
         LastSearchKind = (int)SearchKind
