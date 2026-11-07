@@ -4,6 +4,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -231,6 +232,10 @@ public partial class HomePage : UserControl
     /// <summary>
     /// 屏蔽条件刚落到列表上。等这次布局跑完再判断"当前页内容够不够一屏",
     /// 不够就补下一页 —— 否则一键屏蔽十几个 UP 之后, 页面会停在一大片空白上。
+    ///
+    /// ★ 布局回调里若分帧填充还在进行, TriggerAutoLoad 的 fill.IsActive 闸门会先挡住 ——
+    ///   这是对的: 屏蔽 Refresh 让 DeferredFill 回到填充态, 不能拿"半途的高度"判"不够一屏"。
+    ///   等它填完抛出的 ScrollChanged 会再次走到补页判断, 那一拍才是真的"还缺内容"。
     /// </summary>
     private void OnFilterApplied()
     {
@@ -1153,16 +1158,22 @@ public partial class HomePage : UserControl
 /// 其余的插在渲染间隙里补, 眼睛看到的是"立刻出来了、多滚几下逐渐铺满", 而不是"卡死一下再全出来"。
 ///
 /// 实现要点:
-/// - 读源集合用 **索引** 而不是枚举器: 填充过程中源集合还可能被改(直播 tab 切回会 Clear+重灌、
-///   滚动加载会 Add), ObservableCollection 的枚举器一遇到修改就抛异常, 索引不会。
+/// - ★ 数据源是**默认 CollectionView**(而不是原始集合): 全局屏蔽(FilterService)装在视图的
+///   Filter 谓词上, 直接按索引复制原始集合会把被屏蔽的内容原样搬进界面 —— 那正是
+///   "右键屏蔽了、右下角也显示已屏蔽, 首页却还在推荐"的根(2026-11-06 用户报)。
+///   从视图读, 拿到的天然就是过滤后的可见项; 屏蔽条件变化时 FilterService 会 Refresh 视图,
+///   视图发 Reset, 下面的重建逻辑正好接住。
+/// - 读数据源用 **索引快照** 而不是枚举器: 填充过程中数据源还可能被改(直播 tab 切回会
+///   Clear+重灌、滚动加载会 Add、屏蔽刷新会 Reset), 枚举器一遇到修改就抛异常, 索引不会。
 /// - 填充中的 Add 不直接进视图(交给游标自然扫到, 保证顺序); 填充完的 Add 直接补
 ///   (就是普通的滚动加载, 一次 20 条, 逐个生成容器的负担可以接受)。
-/// - Reset/Remove/Replace/Move 一律全量重同步: 这些只发生在"刷新"语义里, 简单正确优先。
+/// - Reset/Remove/Replace/Move 一律全量重同步: 这些只发生在"刷新/屏蔽变化"语义里, 简单正确优先。
 /// </summary>
 internal sealed class DeferredFill
 {
     private readonly ItemsControl _list;
     private readonly IList _source;
+    private readonly ICollectionView? _viewSource;
     private readonly ObservableCollection<object> _view = new();
     private readonly int _chunk;
     private DispatcherOperation? _pending;
@@ -1177,6 +1188,9 @@ internal sealed class DeferredFill
     {
         _list = list;
         _source = (IList)source;
+        // 默认视图拿不到时(极少数集合)存 null —— FillChunk 会按"没有视图"处理,
+        // 行为与旧版(直接读原始集合)一致, 不至于让填充整个失效。
+        _viewSource = CollectionViewSource.GetDefaultView(source);
         _chunk = chunk;
     }
 
@@ -1189,7 +1203,9 @@ internal sealed class DeferredFill
     public void Start()
     {
         _list.ItemsSource = _view;
-        if (_source is INotifyCollectionChanged ncc) ncc.CollectionChanged += OnSourceChanged;
+        // 订阅**视图**而不是原始集合: 屏蔽 Refresh 发的 Reset 只在视图上, 原始集合收不到。
+        // 视图的 CollectionChanged 会把原始集合自己的 Add/Reset 一起带过来, 不会漏。
+        if (_viewSource is INotifyCollectionChanged ncc) ncc.CollectionChanged += OnSourceChanged;
         Pump();
     }
 
@@ -1198,7 +1214,7 @@ internal sealed class DeferredFill
         if (_disposed) return;
         _disposed = true;
         _pending?.Abort();
-        if (_source is INotifyCollectionChanged ncc) ncc.CollectionChanged -= OnSourceChanged;
+        if (_viewSource is INotifyCollectionChanged ncc) ncc.CollectionChanged -= OnSourceChanged;
     }
 
     private void OnSourceChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -1243,12 +1259,16 @@ internal sealed class DeferredFill
     private bool _rebuildPending;
 
     /// <summary>
-    /// 把源列表的下一批补进视图, 返回补了几条(Reset 的"先清后填"也在这里合并完成)。
+    /// 把数据源(过滤后的视图)的下一批补进视图, 返回补了几条(Reset 的"先清后填"也在这里合并完成)。
     ///
-    /// ★★ 关键点: `_view.Clear()` 与随后的第一批填充必须在**同一个调用**里落地。
+    /// ★★ 关键点 1: `_view.Clear()` 与随后的第一批填充必须在**同一个调用**里落地。
     ///   本类原来的 Reset 分支是"当场 Clear + 排一帧再填", 中间隔了一次布局/渲染的机会 ——
     ///   ScrollViewer 会看到内容高度塌到 0 并把滚动偏移夹小(探针实测 700 → 140),
     ///   用户的位置就再也回不去了, 表现是"点刷新后页面自己滑走"。
+    ///
+    /// ★★ 关键点 2: 每次进来先对视图做一份**索引快照**再按游标切块。
+    ///   不能直接对视图枚举着数 —— 填充进行中屏蔽条件可能再变(Refresh → Reset),
+    ///   视图枚举器遇到修改会抛异常; 快照只在这一次调用内存活, 天然免疫中途变化。
     /// </summary>
     private void FillChunk()
     {
@@ -1260,14 +1280,27 @@ internal sealed class DeferredFill
             _view.Clear();
         }
 
-        var added = 0;
-        while (added < _chunk && _index < _source.Count)
+        // 过滤后的可见项快照。视图存在就用视图(屏蔽生效的关键); 拿不到时退回原始集合。
+        IList snapshot;
+        if (_viewSource != null)
         {
-            _view.Add(_source[_index]!);
+            var visible = new List<object>();
+            foreach (var item in _viewSource) visible.Add(item!);
+            snapshot = visible;
+        }
+        else
+        {
+            snapshot = _source;
+        }
+
+        var added = 0;
+        while (added < _chunk && _index < snapshot.Count)
+        {
+            _view.Add(snapshot[_index]!);
             _index++;
             added++;
         }
-        if (_index >= _source.Count) _completed = true;
+        if (_index >= snapshot.Count) _completed = true;
         if (added > 0) Progress?.Invoke(this, EventArgs.Empty);
     }
 
