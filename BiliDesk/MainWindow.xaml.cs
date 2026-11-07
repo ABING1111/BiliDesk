@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -184,7 +185,8 @@ public partial class MainWindow : FluentWindow
 
         EmbeddedTitle.Text = title;
         EmbeddedContent.Content = page;
-        PageHost.Visibility = Visibility.Collapsed;
+        // 页面层整体藏起来(显示中的那一页保持原状, 收起内嵌页后立刻还原, 不必重新布局)
+        PageLayer.Visibility = Visibility.Collapsed;
         EmbeddedHost.Visibility = Visibility.Visible;
 
         // 淡入 + 轻微上浮, 和切换导航页的入场观感保持一致
@@ -216,7 +218,7 @@ public partial class MainWindow : FluentWindow
         EmbeddedHost.Visibility = Visibility.Collapsed;
         // 释放页面对象: 下次点进来重新 new 一个, 顺带重新拉一次数据(而不是显示上次的旧资料)
         EmbeddedContent.Content = null;
-        PageHost.Visibility = Visibility.Visible;
+        PageLayer.Visibility = Visibility.Visible;
     }
 
     private void OnEmbeddedBackClick(object sender, RoutedEventArgs e) => HideEmbedded();
@@ -270,75 +272,131 @@ public partial class MainWindow : FluentWindow
 
     // ------------------------------------------------------------ 切页过渡
 
-    /// <summary>
-    /// 切页过渡(三段式淡出→换页→淡入)。
-    /// 逻辑与理由见 <see cref="PageTransition"/>。
-    /// </summary>
+    /// <summary>切页过渡。逻辑与理由见 <see cref="PageTransition"/>。</summary>
     private PageTransition? _navTransition;
 
-    private PageTransition NavTransition => _navTransition ??= new PageTransition(PageHost);
+    private PageTransition NavTransition => _navTransition ??= new PageTransition();
+
+    /// <summary>当前可见页面。页面对象常驻 <see cref="PageLayer"/>，切页只切 Visibility。</summary>
+    private FrameworkElement? _currentPage;
 
     /// <summary>
     /// 切换页面。
     ///
-    /// ★★★ 过渡载体从"纯色幕布"改回 **PageHost 自己**(2026-10-11, 用户报
-    ///   "云母和亚克力时切页, 白色的幕布过渡很突兀"):
+    /// ★★★ 2026-11-07 重做: 页面**不再摘出可视树**，全部常驻 PageLayer。
+    ///   旧实现每次切页都把 ContentControl.Content 换掉，旧页一离开可视树就丢了布局状态；
+    ///   首页是零虚拟化卡片墙，重新挂回时要重新测量/排布整棵树 —— 本机探针实测
+    ///   430 张卡 89ms、830 张 176ms、1530 张 278ms，慢机器上就是用户报的"白屏一秒"。
+    ///   现在旧页只是 Visibility.Collapsed（不渲染、不参与布局，但**布局状态保留**），
+    ///   探针实测 830 张卡 Collapsed→Visible 的 UpdateLayout 只要 11ms。
     ///
-    ///   幕布是一块**自己上色**的板子 —— 颜色得在本地算出来。纯色模式下算得准, 但材质模式下
-    ///   窗口底色是**全透明的**(为让 DWM 采样壁纸的合成层透出来), 真实底色是**壁纸**, 程序无从得知;
-    ///   拿主题实色合成必然偏亮(实测 241 vs 真实 ~229) ⇒ 切页闪一下白。
-    ///   ⇒ 改为淡出 PageHost 本身: 露出来的是**窗口自己的底色**, 与页面底天然同层,
-    ///     任何材质/主题/壁纸下都自动正确, 不需要再算颜色 —— 幕布连同 NavVeilBrush 一并删除。
+    /// ★ 新页一定先在**旧页仍然完整可见**的时候完成布局，然后再播过渡；
+    ///   所以无论页面多重建、第一次建页要多久，用户看到的都是旧页，不会出现白底。
     ///
-    ///   ★★ 实测(探针 `%TEMP%\bd-probe-navframes`, 真实窗口量合成帧间隔, 325 张卡):
-    ///      子树静止时动画 PageHost.Opacity 与动画幕布**一样**(p50 ~7ms / p95 ~14ms / 掉帧 0);
-    ///      子树在变时两者也一样(~127ms 一次长帧, 那是**卡片批量重排**的账, 与透明度动画无关)。
-    ///     ⇒ **动画载体不是卡顿来源**。别把这段改写成"幕布是为了流畅"。
-    ///
-    ///   ★ 真正要保住的是**建页时机**(这条有实测):
-    ///     `PageOf` 首次要解析整棵 XAML, Release 口径实测首页 **~360ms**(`bd-probe-navcost` A 段;
-    ///     其余页面 7~23ms)。放在 ShowPage 最前面 ⇒ 那 360ms 卡在"点击 → 动画开始"之间,
-    ///     用户看到的是"点了没反应"。现在它落在**页面已完全透明**之后, 用户只看到"一片底色"。
-    ///     附带好处: 淡出期间改点别的导航项时, 这一拍被代数闸取消 ⇒ 页面根本不会被建。
-    ///
-    ///   ★ 三段式节奏不变, 只是承载体换了:
-    ///       ① 页面 1→0(90ms): 旧页面淡出, 露出窗口底色;
-    ///       ② 页面全透明时换页 + 建页: 切换被完全遮住, 用户看不到任何跳变;
-    ///       ③ 页面 0→1(170ms): 新页面淡入。
-    ///
-    ///   ★ 别在过渡中间加 `PageHost.UpdateLayout()`(会把整墙测量同步堆在点击那一拍)。
+    /// ★ 过渡只动旧页（淡出 + 上浮），新页始终不透明地待在下面 —— 两页同时做透明度
+    ///   会在中间一拍露出窗口底色（材质模式下是壁纸，纯色下是浅色闪白）。见 PageTransition。
     /// </summary>
     private void ShowPage(PageKey key, bool animate)
     {
-        // 目标就是当前页: 直接返回, 免得"点当前导航项"白播一段动画。
-        // ★ 但过渡**在途**时不能早退: 那一刻 PageHost 上还挂着旧页面, 而换页已经排上队,
-        //   早退会让那次换页照常发生 —— 用户点了"首页"却停在别的页上。这种情况要走一次完整过渡。
-        if (!NavTransition.InFlight && _pages.TryGetValue(key, out var showing)
-            && ReferenceEquals(PageHost.Content, showing)) return;
+        // 在途过渡先立即落定, 再建页/换页: 否则"建一个很重的页面"会卡住正在跑的动画
+        // (首次建页要解析整棵 XAML, 首页实测 ~360ms)。
+        if (NavTransition.InFlight) NavTransition.FinishNow();
+
+        var target = PageOf(key);
 
         // 首次显示(窗口刚出来)不播过渡: 那时还没有"上一个页面"可淡出。
-        if (!animate) { NavTransition.Jump(() => SwitchPageNow(PageOf(key))); return; }
-
-        // ★ 建页推迟到 swap 里(页面已完全透明): 见上面"真正要保住的是建页时机"。
-        NavTransition.Run(() =>
+        if (!animate)
         {
-            PageHost.Content = PageOf(key);
+            NavTransition.Cancel();
+            ShowImmediately(target);
+            return;
+        }
+
+        // 目标就是当前页: 直接返回, 免得"点当前导航项"白播一段动画。
+        if (ReferenceEquals(_currentPage, target)) return;
+
+        ShowAnimated(target);
+    }
+
+    /// <summary>不播过渡、立即显示某一页(首次显示 / 过渡被打断时的兜底)。</summary>
+    private void ShowImmediately(FrameworkElement page)
+    {
+        AttachPage(page);
+        foreach (var child in PageLayer.Children.OfType<FrameworkElement>())
+        {
+            if (!ReferenceEquals(child, page) && child.Visibility != Visibility.Collapsed)
+                child.Visibility = Visibility.Collapsed;
+        }
+
+        page.BeginAnimation(OpacityProperty, null);
+        page.Opacity = 1;
+        page.Visibility = Visibility.Visible;
+        page.IsHitTestVisible = true;
+        Panel.SetZIndex(page, 1);
+        if (page.RenderTransform is TranslateTransform tt)
+        {
+            tt.BeginAnimation(TranslateTransform.YProperty, null);
+            tt.Y = 0;
+        }
+        _currentPage = page;
+        MemoryTrim.RequestTrim();
+    }
+
+    /// <summary>带 Win11 Fluent 过渡地切到某一页。见 <see cref="ShowPage"/> 的说明。</summary>
+    private void ShowAnimated(FrameworkElement target)
+    {
+        AttachPage(target);
+
+        var outgoing = _currentPage;
+        if (outgoing == null || ReferenceEquals(outgoing, target))
+        {
+            ShowImmediately(target);
+            return;
+        }
+
+        // ★ z 序必须在目标页 Visible **之前**摆好: 页面是按创建顺序加进 Children 的,
+        //   新页面天然排在后面(更靠上)。若先 Visible 再设 ZIndex, 它会在 UpdateLayout 那一拍
+        //   直接盖住旧页 —— 用户会看到一眼"还没排好的新页面"。
+        Panel.SetZIndex(target, 1);
+        Panel.SetZIndex(outgoing, 2);
+
+        // 目标页先完成布局: 此刻旧页仍然完整地盖在上面, 这里花多少时间用户都看不到白底。
+        // (之前显示过的页面是 Collapsed 回来的, 布局状态还在, 这一句通常只要十几毫秒。)
+        target.BeginAnimation(OpacityProperty, null);
+        target.Opacity = 1;
+        target.Visibility = Visibility.Visible;
+        target.IsHitTestVisible = false;
+        target.UpdateLayout();
+
+        // 旧页淡出上浮, 露出的**始终是新页**, 不会露出窗口底色。
+        outgoing.Visibility = Visibility.Visible;
+        outgoing.IsHitTestVisible = false;
+
+        NavTransition.Run(outgoing, target, () =>
+        {
+            outgoing.BeginAnimation(OpacityProperty, null);
+            outgoing.Opacity = 1;
+            outgoing.Visibility = Visibility.Collapsed;
+            target.IsHitTestVisible = true;
+            Panel.SetZIndex(target, 2);
+            Panel.SetZIndex(outgoing, 0);
+            _currentPage = target;
             MemoryTrim.RequestTrim();
         });
     }
 
     /// <summary>
-    /// 立刻换页的收尾: 清掉 `PageHost` 上可能残留的透明度动画(过渡被打断时会留下),
-    /// 并请求一次内存回收 —— 旧页面刚离开可视树, 它的卡片容器/封面位图全变成了等 GC 的垃圾。
-    /// 不主动收的话, 任务管理器里的数字就是"点遍所有页面后一直不降"的观感。
+    /// 把页面挂进 PageLayer(只挂一次)。页面常驻, 切页只改 Visibility —— 布局状态必须留住。
+    /// 初始为 Collapsed + Opacity 0: 既不会在切页动画里抢先露出来, 也不参与布局。
     /// </summary>
-    private void SwitchPageNow(FrameworkElement page)
+    private void AttachPage(FrameworkElement page)
     {
-        PageHost.Content = page;
-        // 清动画 + 落定 1: 换页这一拍页面必须完全可见, 否则新页面会"半透明地"出现
-        PageHost.BeginAnimation(OpacityProperty, null);
-        PageHost.Opacity = 1;
-        MemoryTrim.RequestTrim();
+        if (ReferenceEquals(page.Parent, PageLayer)) return;
+        page.Visibility = Visibility.Collapsed;
+        page.Opacity = 0;
+        page.IsHitTestVisible = false;
+        Panel.SetZIndex(page, 0);
+        PageLayer.Children.Add(page);
     }
 
     // ------------------------------------------------------------ 账户区

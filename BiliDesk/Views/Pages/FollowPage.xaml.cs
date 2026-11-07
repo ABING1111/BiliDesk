@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -108,8 +109,9 @@ public partial class FollowPage : UserControl
     public FollowPage()
     {
         InitializeComponent();
-        Loaded += OnLoaded;
-        Unloaded += OnUnloaded;
+        // ★ 页面常驻 PageLayer 后, 导航不再触发 Unloaded/Loaded(只是 Visibility 切换),
+        //   所以"进入/离开页面"要挂在 IsVisibleChanged 上 —— 定时器才会在离开页面时停掉。
+        IsVisibleChanged += OnPageVisibleChanged;
         // 屏蔽把动态流筛空后补下一页(否则会停在一片空白上)
         FilterService.Instance.Changed += OnFilterApplied;
 
@@ -136,7 +138,17 @@ public partial class FollowPage : UserControl
         UserSearchPlaceholder.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private async void OnLoaded(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// 页面可见性变化(= 切页, 见构造函数里的说明)。可见时走原来 OnLoaded 的流程,
+    /// 不可见时停掉直播轮询定时器 —— 页面常驻后这是唯一可靠的"离开页面"信号。
+    /// </summary>
+    private async void OnPageVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (IsVisible) await OnEnteredPage();
+        else _liveBoardTimer?.Stop();
+    }
+
+    private async Task OnEnteredPage()
     {
         if (DataContext is FollowViewModel vm)
         {
@@ -190,12 +202,6 @@ public partial class FollowPage : UserControl
             if (distanceToBottom > FeedAutoLoadThreshold && !contentShort) return;
             await LoadMoreFeedGuardedAsync();
         }));
-    }
-
-    private void OnUnloaded(object sender, RoutedEventArgs e)
-    {
-        // 页面实例不会跟着导航销毁(MainWindow 缓存), 定时器必须自己停。
-        _liveBoardTimer?.Stop();
     }
 
     private void StartLivePolling()

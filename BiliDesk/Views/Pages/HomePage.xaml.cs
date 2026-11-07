@@ -39,26 +39,18 @@ public partial class HomePage : UserControl
         LiveTab.Checked += OnLiveChecked;
         BangumiTab.Checked += OnBangumiChecked;
         // 页面被重新挂载到可视树时刷新问候语(应用长时间挂在后台再切回来, 文案要跟着时段变)
-        Loaded += (_, _) =>
+        // ★ 页面常驻 PageLayer 后, 切页只改 Visibility —— 用 IsVisibleChanged 收"进入页面"信号;
+        //   Loaded 仍然保留: 它负责**首次**挂载(那一次布局相关的初始化必须做)。
+        Loaded += OnPageFirstLoaded;
+        IsVisibleChanged += (_, e) =>
         {
+            if (!(bool)e.NewValue) return;
             Vm?.RefreshGreeting();
             RefreshThemeIcon();
             RefreshFilterButton();
             AttachFilterViews();
-            // 构造函数里 RecommendTab.IsChecked=true 触发 ShowTab 时 DataContext 还没赋, EnsureFill
-            // 早退了 —— 这里(DataContext 已就绪)补上当前 tab 的分帧填充器, 让首次推荐流也走分帧。
-            if (CurrentTabFromVm() is { } cur) EnsureFill(cur);
             // 本页可能停在下滑位置被切走再切回来: 「回到顶部」的显隐要按当前偏移重算一次
             UpdateBackToTop(ScrollOf(CurrentTabFromVm() ?? HomeTabKind.Recommend));
-            // DataContext 是外面赋进来的, 构造函数里还拿不到 VM, 所以订阅放在这里
-            HookSearchCard();
-            // 分段标签的下划线要等布局出来才摆得对(首次布局前 ActualWidth 都是 0);
-            // 派到 Loaded 优先级 = 排在本次布局之后, 且首次摆放不带动画
-            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
-            {
-                // 首次摆放(不带动画)。布局前 ActualWidth 还是 0, 所以必须等布局跑完。
-                MoveTabIndicator(CurrentTabFromVm() ?? HomeTabKind.Recommend, animate: false);
-            }));
         };
         // 主题可能被设置页改掉, 这里跟着更新图标。
         // 只在构造函数里订阅一次、不解绑: 本页实例被 MainWindow 长期缓存, 生命周期等同于应用,
@@ -98,6 +90,27 @@ public partial class HomePage : UserControl
     }
 
     // ------------------------------------------------------------ 加大的窗口拖动区
+
+    /// <summary>
+    /// 首次挂载的初始化(只跑一次): 分帧填充器、搜索卡订阅、tab 下划线的首次摆放。
+    /// 之后的"切页回来"由 IsVisibleChanged 处理(见构造函数), 不会重复跑这些。
+    /// </summary>
+    private void OnPageFirstLoaded(object sender, RoutedEventArgs e)
+    {
+        Loaded -= OnPageFirstLoaded;
+        // 构造函数里 RecommendTab.IsChecked=true 触发 ShowTab 时 DataContext 还没赋, EnsureFill
+        // 早退了 —— 这里(DataContext 已就绪)补上当前 tab 的分帧填充器, 让首次推荐流也走分帧。
+        if (CurrentTabFromVm() is { } cur) EnsureFill(cur);
+        // DataContext 是外面赋进来的, 构造函数里还拿不到 VM, 所以订阅放在这里
+        HookSearchCard();
+        // 分段标签的下划线要等布局出来才摆得对(首次布局前 ActualWidth 都是 0);
+        // 派到 Loaded 优先级 = 排在本次布局之后, 且首次摆放不带动画
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            // 首次摆放(不带动画)。布局前 ActualWidth 还是 0, 所以必须等布局跑完。
+            MoveTabIndicator(CurrentTabFromVm() ?? HomeTabKind.Recommend, animate: false);
+        }));
+    }
 
     /// <summary>
     /// 双击的第二下已经按下, 等抬起后再切窗口状态(见 <see cref="OnDragAreaMouseLeftButtonUp"/>)。
@@ -546,7 +559,7 @@ public partial class HomePage : UserControl
     ///   它属于**窗口级**功能(分区面板盖住整个窗口、含导航栏), 而不是首页的内容,
     ///   所以按钮不该放在 HomePage 的右下角工具栏里。
     /// ★ 用 <see cref="SvcWindow.Main"/> 而不是"往上找父窗口":
-    ///   MainWindow 嵌在 PageHost(一个 ContentControl)里时, 父级链上未必有 MainWindow 那个类型;
+    ///   MainWindow 把页面挂在 PageLayer 里时, 父级链上未必有 MainWindow 那个类型;
     ///   SvcWindow 是 App 启动时登记的全局引用, 哪儿都能拿到。
     /// ★ 主窗口不可用时(启动早期/探针环境)静默跳过: 分区面板是导航增强, 缺了不该抛。
     /// </summary>

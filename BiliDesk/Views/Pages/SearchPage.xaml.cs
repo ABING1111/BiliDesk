@@ -73,8 +73,13 @@ public partial class SearchPage : UserControl
         };
         // 屏蔽筛掉一批结果后, 结果区可能不够一屏: 主动补下一页(滚动事件不会因此触发)
         FilterService.Instance.Changed += OnFilterApplied;
-        // 切到别的页时本页会被摘出可视树: 焦点跟着没了, 卡片也该收回去(不然后面切回来它是开着的)
-        Unloaded += (_, _) => ResetCard();
+        // ★ 切到别的页时收起搜索卡: 页面常驻 PageLayer 后导航不再触发 Unloaded,
+        //   挂 IsVisibleChanged 才能收到"离开页面"的信号(焦点丢失 + 卡片应收起)。
+        IsVisibleChanged += (_, e) =>
+        {
+            if ((bool)e.NewValue) return;
+            ResetCard();
+        };
     }
 
     // ------------------------------------------------------------ 交互
