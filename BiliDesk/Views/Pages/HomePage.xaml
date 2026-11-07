@@ -99,6 +99,16 @@
                         <ThicknessAnimation Storyboard.TargetName="TabsRow"
                                             Storyboard.TargetProperty="Margin"
                                             To="20,18,0,8" Duration="0" />
+                        <!-- 窄档藏掉问候语(2026-11-07 用户反馈"窗口拖到最小时搜索框与左上角文字重叠"):
+                             搜索框是 440(展开 520)且**水平居中**, 窗口 840 时内容区只有约 743,
+                             搜索框左缘约在 x=152, 而「首页」标题右缘约 76 —— 真正被压住的是
+                             右边那串问候语(早上好 + kaomoji, 右缘可到 x≈195)。
+                             问候语是装饰性文案, 窄档直接淡出; 标题保留(它离搜索框还有 70 多 px)。
+                             用 Opacity 而不是 Collapsed: 状态组已有 0.18s 过渡, 淡出比硬切自然,
+                             而且它只是横向 StackPanel 里的一段, 留空不影响任何布局。 -->
+                        <DoubleAnimation Storyboard.TargetName="GreetingPanel"
+                                         Storyboard.TargetProperty="Opacity"
+                                         To="0" Duration="0" />
                     </Storyboard>
                 </VisualState>
             </VisualStateGroup>
@@ -114,8 +124,10 @@
         <StackPanel x:Name="PageHeader" Grid.Row="0" Orientation="Horizontal" Margin="36,20,36,0">
             <TextBlock Text="首页" Style="{StaticResource PageTitleStyle}" />
             <!-- 主文案用主文字色而非次级色: 深色主题下次级色(#B0B0B0)在深底上偏灰暗。
-                 kaomoji 跟随强调色。 -->
-            <StackPanel Orientation="Horizontal" Margin="14,0,0,6" VerticalAlignment="Bottom">
+                 kaomoji 跟随强调色。
+                 ★ x:Name 是给窄档隐藏用的(见上面 Compact 状态): 窗口缩到最小, 搜索框居中会压住
+                   这串问候语, 而「首页」标题本身不会被压。 -->
+            <StackPanel x:Name="GreetingPanel" Orientation="Horizontal" Margin="14,0,0,6" VerticalAlignment="Bottom">
                 <TextBlock Text="{Binding Greeting}" FontSize="13"
                            Foreground="{DynamicResource TextPrimaryBrush}"
                            VerticalAlignment="Center" />

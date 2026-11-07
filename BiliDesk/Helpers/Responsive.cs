@@ -185,9 +185,12 @@ public static class Responsive
         if (sender is not FrameworkElement el) return;
         Subscribe(el);
 
-        // 首次挂载时**不带动画**落一次状态。带的话启动瞬间（以及每次切页回来）会看到一段
-        // "从默认档滑到当前档"的过渡 —— 用户没在拖窗口，却看到东西自己在动，很像故障。
-        if ((bool)el.GetValue(FirstAppliedProperty)) return;
+        // ★ 每次重新挂载都要**不带动画**同步一次当前档位（2026-11-07 修）：
+        //   页面被切走时会 Unsubscribe，期间窗口若跨了档，这份元素的状态就停在旧档；
+        //   切回来如果不补 Apply，会一直保留旧的 VisualState —— 症状就是"搜索页在窄窗口下
+        //   标签栏仍然显示、搜索框继续压着标签"。
+        //   animate:false 是必须的：用户并没有在拖窗口，切页回来时看到元素自己从旧档滑到
+        //   新档，很像故障（这也是原来那段注释要规避的东西）。
         el.SetValue(FirstAppliedProperty, true);
         Apply(el, animate: false);
     }

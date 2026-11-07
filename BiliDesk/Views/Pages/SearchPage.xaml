@@ -11,12 +11,28 @@
              类别不该藏在里面。白椭圆底 + 投影, 与收藏页夹子条同一形态。
              四类内容来自**完全不同的接口**(search_type=video / live_room / bangumi / bili_user),
              切换时必须重搜一次 —— 由 VM 的 Kind setter 负责。
-             ★ 番剧这一档是 2026-10-11 用户要求加的; UP主 是 2026-11-06 修 issue #47 加的。 -->
-        <Border HorizontalAlignment="Left" VerticalAlignment="Top"
+             ★ 番剧这一档是 2026-10-11 用户要求加的; UP主 是 2026-11-06 修 issue #47 加的。
+
+             ★ 窄档收起(2026-11-07 用户要求"直接隐藏标签 tab"):
+               窗口 840 时内容区只有约 743, 居中的 440 搜索框左缘在 x≈152, 而这排标签右缘
+               约 x≈316 —— 横向必然重叠。这里直接绑继承来的档位，而不是走 VisualState：
+               这个状态只有一个离散的 Visibility 动画，在当前"带过渡进入 Compact"的路径下
+               实测不会真正落值（标签一直不消失）；绑到 Class 上则宽窄切换和切页回来都可靠。 -->
+        <Border x:Name="KindTabs" HorizontalAlignment="Left" VerticalAlignment="Top"
                 Margin="36,24,0,0" Panel.ZIndex="5"
                 Background="{DynamicResource CardBackgroundBrush}"
                 BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
                 CornerRadius="22" Padding="5">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding (helpers:Responsive.Class), RelativeSource={RelativeSource Self}}"
+                                     Value="{x:Static helpers:WidthClass.Compact}">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
             <Border.Effect>
                 <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
             </Border.Effect>
@@ -40,7 +56,8 @@
 
         <!-- 结果区。顶部空出的 76 = 16(上边距) + 48(收起态搜索框高) + 12(间隙) ——
              搜索框是**浮在上面**的(见文件末尾那块, 不参与这层布局), 所以展开时它直接盖住结果区顶部,
-             结果列表不会被挤得抖一下(与首页那张卡一个思路)。 -->
+             结果列表不会被挤得抖一下(与首页那张卡一个思路)。
+             窄档收起分类标签栏后搜索框仍在 y=16, 所以这里不需要跟着动。 -->
         <Grid Margin="0,76,0,0">
             <!-- 初始空状态 -->
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -164,8 +181,10 @@
              不会平移, 但有展开动画"。于是它和首页那张卡是**同一套视觉与同一套展开动作**, 差别只有两点:
 
                ① 位置固定 —— HorizontalAlignment=Center + 上边距 16, 收起态就在正上方中间。
-                  **所以没有任何位移补偿**: 宽度 440→520 时布局自己会把它继续摆在正中
+                  **横向没有任何位移补偿**: 宽度 440→520 时布局自己会把它继续摆在正中
                   (首页那张卡要从右上角"飞"过来, 才需要算平移量、才有关键帧那一堆推导)。
+                  ★ 2026-11-07: 窄档重叠问题不走"移动搜索框", 而是由根 Grid 的 Compact 状态
+                    直接收起左上角的分类标签栏(见文件开头), 搜索框位置在所有档位都不变。
                ② 触发方式 —— 这里是**聚焦输入框**才展开(用户定), 首页是点一下那条灰框。
 
              展开后露出的内容只有「搜索历史」(用户定): 页面原先那条独立的搜索历史条已经挪进来了,
