@@ -108,6 +108,19 @@ public static class CoverLoader
     /// <summary>加载图片。decodeWidth>0 时按目标像素宽解码(大幅降低内存),
     /// 0 表示按原图解码。不同档位的结果分别缓存</summary>
     public static Task<BitmapImage?> LoadAsync(string? url, int decodeWidth = 0)
+        => LoadAsync(url, decodeWidth, null);
+
+    /// <summary>
+    /// 带"放弃判定"的加载。<paramref name="abandoned"/> 在**拿到解码槽之后**被调用一次:
+    /// 返回 true 表示"这张图已经没人要了, 别再花解码时间", 直接把槽让给别人。
+    ///
+    /// ★ 只有 <see cref="Cover"/> 的内部路径会传它(见那里的说明): 卡片墙的卡片是
+    ///   "一被添加就发起加载"的, 滚动时会有几十上百张卡排队等解码槽; 等轮到它们时
+    ///   卡片早被滚过去甚至已被 <see cref="Cover.Release"/> 放掉了。此时解码纯属浪费 ——
+    ///   而且是在跟"用户正看着的那一屏"抢槽。
+    /// </summary>
+    internal static Task<BitmapImage?> LoadAsync(string? url, int decodeWidth,
+        Func<bool>? abandoned)
     {
         url = UrlUtil.Normalize(url);
         if (url.Length == 0) return Task.FromResult<BitmapImage?>(null);
@@ -126,7 +139,7 @@ public static class CoverLoader
             if (InFlight.TryGetValue(cacheKey, out var running)) return running;
         }
 
-        var task = LoadCoreAsync(url, cacheKey, w);
+        var task = LoadCoreAsync(url, cacheKey, w, abandoned);
         lock (Lock)
         {
             // 极端情况下两个线程同时走到这里, 后者会覆盖前者 —— 两者结果等价(都会写同一个缓存键),
@@ -165,7 +178,8 @@ public static class CoverLoader
         return false;
     }
 
-    private static async Task<BitmapImage?> LoadCoreAsync(string url, string cacheKey, int decodeWidth)
+    private static async Task<BitmapImage?> LoadCoreAsync(string url, string cacheKey, int decodeWidth,
+        Func<bool>? abandoned = null)
     {
         try
         {
@@ -196,12 +210,25 @@ public static class CoverLoader
             // 解码放后台线程: 一张 1280 宽的 JPEG 解码要几毫秒到几十毫秒,
             // 放在 UI 线程上会直接表现为滚动/切页的卡顿。
             // ★ 并发闸门见 DecodeGate 的说明: 一次铺 24 张时不再让 24 个解码同时开跑。
+            //
+            // ★★★ 2026-11-07 第五次修"回顶要 2 秒才出图": 拿到解码槽之后**先确认这张卡还要不要图**。
+            //   卡片墙的卡片是"一被添加就发起加载"的, 而滚动时几十上百张卡在排队等槽。
+            //   等轮到它们时, 卡片早就被滚过去了(甚至已被 Release 放掉) —— 这时再花 15ms
+            //   解一张没人要的图, 就是在跟"用户正看着的那一屏"抢槽。
+            //   探针实测: 滚 6 页后 InFlight 积压 138 个、DecodeGate 一个空槽都没有,
+            //   回顶后 24 张要等近 2 秒(600 张 × 15ms ÷ 4 槽 ≈ 2.25s, 与实测吻合)。
+            //   ⇒ 已释放的卡片直接放弃解码(位图本来也不会被贴上去), 把槽让给视口内的。
+            //     `Restore` 会把 Released 清掉并重新发起, 所以滚回来时照样能加载。
             BitmapImage? img;
             if (File.Exists(cacheFile))
             {
                 var path = cacheFile;
                 await DecodeGate.WaitAsync().ConfigureAwait(false);
-                try { img = await Task.Run(() => FromFile(path, decodeWidth)).ConfigureAwait(false); }
+                try
+                {
+                    if (abandoned != null && abandoned()) { img = null; }
+                    else img = await Task.Run(() => FromFile(path, decodeWidth)).ConfigureAwait(false);
+                }
                 finally { DecodeGate.Release(); }
             }
             else if (downloaded != null)
@@ -209,7 +236,11 @@ public static class CoverLoader
                 // 磁盘上没有文件(写失败), 但字节在手上 ⇒ 直接从内存解码, 绝不让封面空着
                 var bytes = downloaded;
                 await DecodeGate.WaitAsync().ConfigureAwait(false);
-                try { img = await Task.Run(() => FromBytes(bytes, decodeWidth)).ConfigureAwait(false); }
+                try
+                {
+                    if (abandoned != null && abandoned()) { img = null; }
+                    else img = await Task.Run(() => FromBytes(bytes, decodeWidth)).ConfigureAwait(false);
+                }
                 finally { DecodeGate.Release(); }
             }
             else
@@ -559,6 +590,9 @@ public static class Cover
         return Environment.TickCount64 - since < LoadingStaleMs;
     }
 
+    /// <summary>这一格现在是否真的有一轮加载在跑(带过期自愈)。供卡片墙判断"该不该释放"。</summary>
+    public static bool IsLoadingNow(DependencyObject d) => IsLoading(d);
+
     private static void MarkLoading(DependencyObject d, bool on)
         => d.SetValue(LoadingSinceProperty, on ? Environment.TickCount64 : 0L);
 
@@ -650,7 +684,16 @@ public static class Cover
     /// </summary>
     public static void Release(Border border)
     {
-        if (!HasImage(border)) return;
+        // ★★★ 2026-11-07 第五次修: 这里**不能**在"没图"时直接返回。
+        //   旧代码第一句是 `if (!HasImage(border)) return;` —— 于是"正在加载中(还没贴图)"
+        //   的卡片**完全被跳过**: 既没解钉, 也没打 `Released` 标记。
+        //   后果: 那张卡的在途任务回来后照样贴图(`rel=False`), 释放等于白做;
+        //   而且这些在途任务会一直占着解码槽 —— 探针实测滚过 6 页后
+        //   InFlight 积压 212 个、DecodeGate 一个空槽都没有, 用户回顶时要等近 2 秒
+        //   才能看到第一张(200 多个任务排在前面)。
+        //   ⇒ 现在无论有没有图都要走完整流程: 解钉、打标记、还原占位。
+        //     打上 `Released` 后, 在途结果回来时 ApplyDecoded 会直接丢弃, 不再贴图。
+        var hadImage = HasImage(border);
 
         var key = GetDecodedCacheKey(border);
         if (key.Length > 0) CoverLoader.Unpin(key);
@@ -661,12 +704,15 @@ public static class Cover
         border.SetValue(ReleasedProperty, true);
 
         // 还原成"没图之前的样子": 占位底色 + 占位图标(头像里的人形)重新可见
-        border.Background = GetPlaceholderBrush(border);
-        if (border.Child != null) border.Child.Visibility = Visibility.Visible;
-        border.SetValue(DecodedPixelWidthProperty, 0);
-        // 淡入动画可能还挂着: 清掉, 免得恢复时被旧的动画值接管
-        border.BeginAnimation(UIElement.OpacityProperty, null);
-        border.Opacity = 1.0;
+        if (hadImage)
+        {
+            border.Background = GetPlaceholderBrush(border);
+            if (border.Child != null) border.Child.Visibility = Visibility.Visible;
+            border.SetValue(DecodedPixelWidthProperty, 0);
+            // 淡入动画可能还挂着: 清掉, 免得恢复时被旧的动画值接管
+            border.BeginAnimation(UIElement.OpacityProperty, null);
+            border.Opacity = 1.0;
+        }
     }
 
     /// <summary>
@@ -687,24 +733,27 @@ public static class Cover
         var url = GetSource(border);
         if (string.IsNullOrWhiteSpace(url)) return;
 
-        if (!force)
-        {
-            if (IsFailedCoolingDown(border)) return;          // 失败冷却中, 过一阵再试
-            if (IsLoading(border)) return;                    // 已有一轮在跑(带过期自愈)
-        }
+        // ★★★ 2026-11-07 第五次修: `force` 的语义收窄为"**忽略失败冷却**",
+        //   **不再无条件打断在途加载**。
+        //
+        //   旧写法在 force 时先 `MarkLoading(false)` 再发 —— 本意是"那一轮可能早就死了"。
+        //   但卡片墙的扫描是每 150ms 一轮, 于是**每一轮都会把上一轮的在途标记清掉、
+        //   再发一个新的**。后果是同一张图被并发加载十几次, 而旧任务的 finally 又会把
+        //   新任务的标记清掉 —— 标记彻底失去意义, 解码队列被重复任务塞满,
+        //   真正该先出的视口封面排在后面。
+        //
+        //   现在: 只要确实有一轮在跑(且没超过 LoadingStaleMs)就**直接返回**;
+        //   超过 1.5 秒才认为它死了, 才重新发起 —— 这条对 force 同样成立,
+        //   否则"每轮都重发"的请求风暴会回来。
+        if (!force && IsFailedCoolingDown(border)) return;    // 失败冷却中, 过一阵再试
+        if (IsLoading(border)) return;                        // 已有一轮在跑(带过期自愈)
 
         // ★★★ 这里**必须**清 Released: 它的语义是"在途结果回来时不许贴图"。
         //   一旦那轮加载已经结束, 就再没人清它 —— 而 ApplyDecoded 见到它就**永远不贴图**,
         //   于是这张卡永久灰, 连滚回来都救不了(只能改窗口尺寸强制重排)。
         //   ⇒ Restore 是"我要这张图"的明确意图, 清掉它才能真的恢复。
         border.SetValue(ReleasedProperty, false);
-        if (force)
-        {
-            // 强制路径: 把"在途"标记清掉再发 —— 否则 IsLoading 会挡住新的尝试,
-            // 而那一轮可能早就死在某次布局异常里了。
-            MarkLoading(border, false);
-            border.SetValue(FailedAtProperty, 0L);
-        }
+        if (force) border.SetValue(FailedAtProperty, 0L);
         _ = LoadAsync(border, url);
     }
 
@@ -880,7 +929,10 @@ public static class Cover
         // 缓存 miss: 真正要下载/解码。这里**也不清透明度** —— 封面 Border 默认 Opacity=1 但还没
         // 贴背景(透明), 于是外层 CoverCard 的 PlaceholderBrush 会透出来当占位符; 等图解好
         // ApplyDecoded(fade:true) 再播 0→1 淡入盖上去。全程没有"先整块变黑再变回来"的闪。
-        var img = await CoverLoader.LoadAsync(url, w);
+        var img = await CoverLoader.LoadAsync(url, w,
+            // ★ 拿到解码槽后复核: 这张卡若已被卡片墙 Release(滚过去了), 就别解了 ——
+            //   位图不会被贴上去, 只会白占一次解码槽(见 CoverLoader.LoadAsync 的说明)。
+            abandoned: () => (bool)border.GetValue(ReleasedProperty)).ConfigureAwait(true);
         if (img == null)
         {
             // ★ 记下"这一张取不到"的时刻: 卡片墙每 150ms 会重扫一遍没有图的卡片并调 Restore,

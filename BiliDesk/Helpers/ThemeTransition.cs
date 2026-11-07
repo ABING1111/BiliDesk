@@ -335,16 +335,44 @@ public static class ThemeTransition
     /// <summary>
     /// 从池子里取一张同尺寸的位图(没有就新建)。见 <see cref="Pool"/> 的说明。
     /// 池子最多留两张: 超过时丢掉最久没用的 —— 它对应的覆盖层早已被摘掉。
+    ///
+    /// ★★★ 2026-11-07 第五次修"快速点按深浅色内存不断上涨":
+    ///   旧逻辑是"遍历池, 第一个尺寸匹配的就用; 若它正好是 <see cref="_lastRented"/>
+    ///   就放弃并**新建一张**"。而池是 List, `_lastRented` 又恰好常常排在前面
+    ///   (它就是上一轮刚用过的那张), 于是:
+    ///   <code>
+    ///     池 [A, B]
+    ///     第 1 次: A 匹配, A != lastRented  → 复用 A          (lastRented = A)
+    ///     第 2 次: A 匹配, A == lastRented  → 新建 C, 删 B    ← 每两次点击必新建一张
+    ///     第 3 次: A 匹配, A != lastRented  → 复用 A          (lastRented = A)
+    ///     第 4 次: A 匹配, A == lastRented  → 新建 D, 删 C    ← 又新建
+    ///   </code>
+    ///   每张 420k 像素 ≈ 1.6MB **原生内存**, 托管包装对象很小、不触发 GC ——
+    ///   连点几十下, 任务管理器里就是"点一次涨一点", 而 GC 在后面追着跑(锯齿)。
+    ///   探针 bd-probe-theme-ripple 实测: 30 次连点, 私有内存 181MB → 207MB 锯齿上行。
+    ///
+    ///   ⇒ 现在**优先选不是 `_lastRented` 的那一张**, 池里两张真正交替使用:
+    ///     每张至少间隔一次完整切换(用户点击间隔远大于一帧), 重绘一定安全, 且**永不新建**。
+    ///     `_lastRented` 只在"池里确实只有这一张"时才作为兜底(那种情况不得不新建)。
     /// </summary>
     private static RenderTargetBitmap? RentSnapshot(int w, int h, double dpiX, double dpiY)
     {
         RenderTargetBitmap? reuse = null;
+        PooledSnapshot? onlyCandidate = null;   // 尺寸匹配但正好是 lastRented: 仅在别无选择时用
         PooledSnapshot? oldest = null;
+
         foreach (var p in Pool)
         {
-            if (p.Width == w && p.Height == h &&
-                Math.Abs(p.DpiX - dpiX) < 0.01 && Math.Abs(p.DpiY - dpiY) < 0.01)
+            var sizeMatches = p.Width == w && p.Height == h &&
+                              Math.Abs(p.DpiX - dpiX) < 0.01 && Math.Abs(p.DpiY - dpiY) < 0.01;
+            if (sizeMatches)
             {
+                if (ReferenceEquals(p.Bitmap, _lastRented))
+                {
+                    // 这一张可能还在渲染线程的当帧里被读 —— 记下当兜底, 但**继续找另一张**。
+                    onlyCandidate ??= p;
+                    continue;
+                }
                 reuse = p.Bitmap;
                 p.LastUse = ++_poolClock;
                 break;
@@ -352,9 +380,12 @@ public static class ThemeTransition
             if (oldest == null || p.LastUse < oldest.LastUse) oldest = p;
         }
 
-        // ★ 绝不复用"上一次刚拍过"的那张: 它的内容可能还在渲染线程的当帧里被读取。
-        //   (正常情况下池里两张会交替命中, 走不到这里; 这是窗口尺寸变化时的兜底。)
-        if (reuse != null && ReferenceEquals(reuse, _lastRented)) reuse = null;
+        // 池里只有一张匹配的, 而且正是刚拍过的那张: 不得不新建(见上面的说明)。
+        if (reuse == null && onlyCandidate != null)
+        {
+            reuse = onlyCandidate.Bitmap;
+            onlyCandidate.LastUse = ++_poolClock;
+        }
 
         RenderTargetBitmap? created = null;
         if (reuse == null)

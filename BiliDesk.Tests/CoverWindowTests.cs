@@ -4,16 +4,16 @@ using Xunit;
 namespace BiliDesk.Tests;
 
 /// <summary>
-/// 封面补图区间(2026-11-07 第三次重做后的语义)。
+/// 封面补图区间 + 常驻上限(2026-11-07 第五次重做后的语义)。
 ///
-/// ★ 这里**只测"补图"**, 不再测"释放" —— 因为释放已经不在滚动路径上了
-///   (见 <see cref="CoverWindow"/> 的说明: 释放只在"整面墙离开屏幕"时发生,
-///   那一刻没有"哪张卡在哪"的判断, 所以没有可测的几何)。
+/// ★ 这里测两件事:
+///   ① **补图区间**: 视口内的卡一定要补(判错 ⇒ 边缘出现半张灰卡);
+///   ② **常驻上限**: 上限必须明显大于补图区间(判错 ⇒ 刚补上就被挤掉的抖动),
+///      也不能太大(判错 ⇒ 内存不回落, 就是用户报的"一直下滑内存不断涨")。
 ///
-/// 判错的后果:
-///   · 补得太少 ⇒ 快速滚动时视口边缘出现半张灰卡;
-///   · 补得太多 ⇒ 单页常驻的封面变多(内存), 但不会出灰块。
-/// 所以下面钉的是"视口内的卡一定在区间内"这条底线。
+/// ★ 为什么"释放判据"不在这里测: 它已经不是几何判断, 而是"最后被看到的时间戳"
+///   (见 CardWallPanel.ReleaseStalestCovers)。时间戳的排序逻辑由探针
+///   bd-probe-scroll-mem 端到端验证(6 页滚动、常驻张数、回顶出图速度)。
 /// </summary>
 public class CoverWindowTests
 {
@@ -108,6 +108,40 @@ public class CoverWindowTests
     public void 严格视口判定_视口非法时一律false(double viewport)
     {
         Assert.False(CoverWindow.InViewport(0, 200, viewport));
+    }
+
+    // ---------------------------------------------------------------- 常驻上限
+
+    [Fact]
+    public void 常驻上限是视口张数的3倍()
+    {
+        // 视口 24 张 ⇒ 上限 72 张。这是"内存有上界"与"不会刚补上就被挤掉"的折中,
+        // 见 CoverWindow.ResidentScreens 的说明。
+        Assert.Equal(72, CoverWindow.ResidentCap(24));
+        Assert.Equal(36, CoverWindow.ResidentCap(12));
+        Assert.Equal(120, CoverWindow.ResidentCap(40));
+    }
+
+    [Fact]
+    public void 常驻上限必须明显大于补图区间_否则会抖动()
+    {
+        // 补图区间 = 视口 ± 半屏 = 2 屏。上限若 ≤ 2 屏, 就会出现
+        // "刚补上 → 名额不够 → 立刻被放掉 → 下一轮又补"的循环。
+        // 这里钉住"至少留一整屏的余量"。
+        Assert.True(CoverWindow.ResidentScreens >= 1 + 2 * CoverWindow.PrefetchScreens,
+            $"ResidentScreens={CoverWindow.ResidentScreens} 必须 >= " +
+            $"{1 + 2 * CoverWindow.PrefetchScreens}(补图区间) + 余量");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(-100)]
+    public void 视口张数非法时上限为0_调用方应跳过释放(int visibleCount)
+    {
+        // 0 表示"没有视口就没有上限", 调用方必须跳过释放 ——
+        // 否则会按 0 张上限把整墙放光(用户切回来一片灰)。
+        Assert.Equal(0, CoverWindow.ResidentCap(visibleCount));
     }
 
     // ---------------------------------------------------------------- 开关

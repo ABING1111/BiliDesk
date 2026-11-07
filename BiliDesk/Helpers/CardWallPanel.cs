@@ -499,6 +499,17 @@ public class CardWallPanel : Panel
     /// </summary>
     private const int CoverWindowDebounceMs = 150;
 
+    /// <summary>
+    /// 每轮扫描里, **视口外**的余量带最多发起多少个恢复请求。
+    ///
+    /// ★ 为什么必须限量(2026-11-07 第五次): 释放之后会有几十上百张卡同时变成"没图",
+    ///   而 <see cref="CoverLoader"/> 的解码闸门只有 min(CPU/2, 4) 个槽。一次把余量带
+    ///   全部发起, 就是几百个任务抢 4 个槽 —— 用户正看着的那一屏排在队伍最后。
+    ///   探针实测: 回顶后 InFlight 峰值 212, 视口内 24 张要等近 2 秒才出来。
+    ///   ⇒ 视口内的**不限量**(用户看得见, 必须立刻出图), 余量带每轮只发一小批,
+    ///     剩下的交给 150ms 防抖/1.5s 心跳的下一轮 —— 反正它们还没进视野。
+    /// </summary>
+    private const int PrefetchBurst = 8;
     private ScrollViewer? _coverScroll;
     private DispatcherTimer? _coverWindowTimer;
     private bool _coverWindowQueued;
@@ -623,28 +634,23 @@ public class CardWallPanel : Panel
     }
 
     /// <summary>
-    /// 按当前滚动位置把**视口内**缺图的封面补上。**不释放任何东西**。
+    /// 按当前滚动位置补图, 并把**常驻封面张数**压在上限之内。
     ///
-    /// ★★★ 2026-11-07 第三次重做(用户报"滑下去再划上来封面不加载"、"排行榜下面全灰")：
-    ///   **把"释放"从滚动路径上彻底拿掉。**
+    /// ★★★ 2026-11-07 第五次重做(用户报"首页一直往下滑刷新, 内存不断涨, 不回落"):
+    ///   上一版为了彻底消灭"滚回来封面不加载", 把滚动时的释放**整个拿掉了** ——
+    ///   只有"离开屏幕"(切页/切 tab)才放。于是**无限滚动的首页**上滚过多少张就常驻多少张,
+    ///   永远不回落。这不是漏了回收, 而是那一版的**设计后果**: 不离开页面就没有释放时机。
     ///
-    ///   前两版都在滚动时做"放掉离屏封面、滚回来再贴"。探针反复复现同一个问题：
-    ///   只要"释放"与"滚动"耦合，就必然存在"用户马上要看到的那张正好被放掉"的窗口 ——
-    ///   而释放是不可逆的（要等下一轮扫描才恢复），于是表现就是"封面不加载，
-    ///   改窗口大小（强制重排 + 重新扫描）才恢复"。三次修都没能消除这个窗口：
-    ///     · 第一次：`Released` 只置不清 → 永久灰
-    ///     · 第二次：坐标缓存过期 / `TransformToAncestor` 滞后 → 误判离屏
-    ///     · 第三次：即使加了"连续两轮才释放"，滚动到底部时 `ScrollableHeight` 被夹住，
-    ///       最后一行的判定仍然会翻，探针稳定复现"滚到 75% 有 20 张灰"。
+    ///   ⇒ 这次在滚动时恢复释放, 但**判据换了** —— 不再按"哪张在视口内"(前三版都栽在这里:
+    ///     坐标缓存过期 / `TransformToAncestor` 滞后 / 滚到底时 `ScrollableHeight` 被夹住,
+    ///     一旦把"马上要看到的那张"判成离屏就是不可逆的永久灰)。
+    ///     现在按 **"多久没被看到"**:
+    ///       · 每轮扫描给"补图区间内"的卡片打一次 <see cref="LastSeenTickProperty"/>;
+    ///       · 常驻张数超上限时, 只放**时间戳最旧**的那些(必然是最早被滚过去的);
+    ///       · 视口内的卡片每轮都被打戳 ⇒ **结构上不可能是最旧的** ⇒ 不可能被误放。
+    ///     再加上"回到屏幕是无条件补图(force)", 即使判错也只是多解码一次, 不会永久灰。
     ///
-    ///   ⇒ 现在的分工（结构上不存在"放了又要用"的窗口）：
-    ///     · **滚动**：只负责"补"（视口内缺图就贴），**从不释放**；
-    ///     · **离开屏幕**（切页 / 切 tab，见 <see cref="ReleaseOffscreenCovers"/>）：
-    ///       整面墙的封面一起放掉 —— 此刻用户看不见它，放掉零风险。
-    ///
-    ///   内存上界：**可见的那一页最多常驻它自己所有卡片封面**（排行榜 100 张 ≈ 50MB），
-    ///   而不是"滚过多少张就涨多少、永不回落"。用户已确认"单页内存有上限"比
-    ///   "绝不出现灰块"更重要 —— 这个方案两者都满足，代价是单页内不做滚动回收。
+    ///   这也正好落实用户明确表达的优先级:"单页内存不能超过某个值"优先于"绝不出现灰块"。
     /// </summary>
     private void UpdateCoverWindow()
     {
@@ -665,43 +671,210 @@ public class CardWallPanel : Panel
             return;
         }
 
-        // ★ 只补不放：与视口(上下各留半屏余量)有交集的卡片，没图就贴。
-        //   余量与边界判据在 CoverWindow(纯函数、可单测)。
+        // 补图区间与边界判据在 CoverWindow(纯函数、可单测)。
         var bands = CoverWindow.For(viewport);
         if (bands == null) return;
         var b = bands.Value;
 
+        // ★★★ 先把布局付清(2026-11-07 第五次): `TransformToAncestor` 给的是**渲染位置**,
+        //   而它可能滞后于 `VerticalOffset` —— 尤其是 `ScrollToTop()`/跳滚这种"偏移一次跳很远"
+        //   的场景: 偏移已经变成 0, 渲染位置还是底部那一屏。
+        //   后果不是"慢", 而是**补错对象**: 扫描以为视口在底部, 于是去补底部的 24 张,
+        //   真正在顶部的 24 张一张都没发起加载 —— 探针实测要等 1.5s 心跳才纠正
+        //   (回顶后 0~1600ms 视口缺图数一直停在 24, 而全墙有图在涨)。
+        //   代价: 一次同步布局, 而扫描本身只有 150ms 防抖 + 1.5s 心跳, 完全付得起。
+        try { sv.UpdateLayout(); } catch { /* 布局异常: 按现有位置继续(总比不扫好) */ }
+
+        var tick = Environment.TickCount64;
         var missingInViewport = 0;
-        for (var i = 0; i < InternalChildren.Count; i++)
+        var visibleCount = 0;
+
+        // ★★★ 2026-11-07 第五次修"回顶要 2 秒才出图":
+        //   释放会让几十上百张卡同时变成"没图", 而下一轮扫描会把**补图区间内**的全部
+        //   一起发起恢复 —— 探针实测 InFlight 峰值 212 个任务抢 4 个解码槽,
+        //   用户正看着的那 24 张排在 200 多个任务后面, 要等近 2 秒。
+        //
+        //   ⇒ 分两趟:
+        //     第 1 趟只补**严格视口内**(用户真正看得见的), 立刻发起;
+        //     第 2 趟补视口外的余量带, 而且**限量**(见 PrefetchBurst),
+        //        避免一次把解码队列塞满。
+        //   这样"看得见的先出图"成为结构性保证, 而不是靠运气。
+        var prefetchPending = new List<(double Top, FrameworkElement Card)>();
+
+        for (var pass = 0; pass < 2; pass++)
         {
-            var child = InternalChildren[i];
-            if (child is not FrameworkElement fe) continue;
+            for (var i = 0; i < InternalChildren.Count; i++)
+            {
+                var child = InternalChildren[i];
+                if (child is not FrameworkElement fe) continue;
 
-            double top;
-            try { top = fe.TransformToAncestor(sv).Transform(new Point(0, 0)).Y; }
-            catch { continue; }
-            var bottom = top + fe.ActualHeight;
-            if (double.IsNaN(top) || double.IsNaN(bottom)) continue;
+                double top;
+                try { top = fe.TransformToAncestor(sv).Transform(new Point(0, 0)).Y; }
+                catch { continue; }
+                var bottom = top + fe.ActualHeight;
+                if (double.IsNaN(top) || double.IsNaN(bottom)) continue;
 
-            var inViewport = CoverWindow.InViewport(top, bottom, viewport);
-            // ★ 记下来给"离开屏幕时只放视口外"用(见 WasInViewportProperty)。
-            child.SetValue(WasInViewportProperty, inViewport);
+                var inViewport = CoverWindow.InViewport(top, bottom, viewport);
+                if (pass == 0)
+                {
+                    if (inViewport) visibleCount++;
+                    // ★ 记下来给"离开屏幕时只放视口外"用(见 WasInViewportProperty)。
+                    child.SetValue(WasInViewportProperty, inViewport);
+                }
 
-            if (!CoverWindow.ShouldRestore(top, bottom, b)) continue;
+                if (!CoverWindow.ShouldRestore(top, bottom, b)) continue;
 
+                // ★★★ 打"最后被看到"的时间戳 —— 这是新的释放判据(见方法头)。
+                //   补图区间内的卡片每一轮都会刷新它, 所以越早滚过去的时间戳越旧。
+                child.SetValue(LastSeenTickProperty, tick);
+
+                // 第 1 趟只要视口内的; 第 2 趟收视口外的余量带。
+                if (pass == 0 && !inViewport) continue;
+                if (pass == 1 && inViewport) continue;   // 第 1 趟已经处理过
+
+                var borders = CacheCoverBorders(fe);
+                var needsAny = false;
+                foreach (var border in borders)
+                    if (!Cover.HasImage(border)) { needsAny = true; break; }
+                if (!needsAny) continue;
+
+                if (pass == 1)
+                {
+                    prefetchPending.Add((top, fe));
+                    continue;
+                }
+
+                foreach (var border in borders)
+                {
+                    if (Cover.HasImage(border)) continue;
+                    missingInViewport++;
+                    // ★ force: 用户看得到的地方必须立刻有图, 忽略失败冷却。
+                    Cover.Restore(border, force: true);
+                }
+            }
+        }
+
+        // ★ 视口外的余量带: 按"离视口近"优先, 且**每轮限量**发起 ——
+        //   见上面那段说明(一次铺几百个任务会把解码队列堵死, 用户正看着的反而最后出图)。
+        prefetchPending.Sort((x, y) => x.Top.CompareTo(y.Top));
+        var budget = PrefetchBurst;
+        foreach (var (_, fe) in prefetchPending)
+        {
+            if (budget <= 0) break;
             foreach (var border in CacheCoverBorders(fe))
             {
                 if (Cover.HasImage(border)) continue;
-                if (inViewport) missingInViewport++;
-                // ★ force: 用户看得到的地方必须立刻有图, 忽略失败冷却与在途标记。
+                if (budget-- <= 0) break;
                 Cover.Restore(border, force: true);
             }
         }
+
+        // ★ 常驻张数超上限 ⇒ 放掉**最久没被看到**的那些(见 CoverWindow.ResidentScreens)。
+        //
+        // ★★ 为什么这里**不看** missingInViewport(2026-11-07 第五次, 改了三版):
+        //   试过"视口补齐后才释放", 结果回顶时 24 张要 1.8 秒才齐, 这 1.8 秒里
+        //   **一张都不放**, 全墙常驻从 67 涨到 238 —— 释放被补图堵死了。
+        //   正确的分工是**两件独立的事**:
+        //     · 补图: 视口内缺图 → 无条件补(force);
+        //     · 释放: 只按"最久没被看到"淘汰, **与补图进度无关**。
+        //   ReleaseStalestCovers 里已经排除了"视口内"的卡片, 所以它永远动不到
+        //   用户正看着的那一屏 —— 不需要再加一层"等补完"的门。
+        var released = ReleaseStalestCovers(CoverWindow.ResidentCap(visibleCount), tick);
+        if (released > 0) MemoryTrim.RequestTrim();
 
         // ★ 视口内还有空封面 ⇒ 再排一轮（恢复是异步的，本轮结束时它们还没贴上）。
         //   若这之后没有任何事件（用户不再滚动），就不会有下一轮扫描 —— 那几张会停在
         //   占位色上直到下一次心跳（1.5s）。这里主动收尾，让"滚到哪都有图"立刻成立。
         if (missingInViewport > 0) QueueCoverWindowShort();
+    }
+
+    /// <summary>
+    /// 常驻封面超过 <paramref name="cap"/> 时, 放掉**最久没被看到**的卡片封面。
+    ///
+    /// ★ 为什么按"最后被看到"而不是按"离视口多远": 距离需要一次可靠的坐标判断
+    ///   (前三版全栽在这里); 而"最后被看到"是一个**单调递增的时间戳** ——
+    ///   谁早被滚过去谁就旧, 与布局时序、`ScrollableHeight` 是否被夹住都无关。
+    ///
+    /// ★★ 三条**结构性保证**(这次能安全在滚动里释放的全部依据):
+    ///   ① **视口内的卡片永不释放** —— 直接读 <see cref="WasInViewportProperty"/>,
+    ///      不靠"时间戳够不够新"这种间接推理;
+    ///   ② 时间戳为 0(从没被扫描过, 通常是跳滚时被跳过的中间那几屏)按**最旧**处理 ——
+    ///      它们必然不在视口内(视口内的每轮都会被扫描并打戳);
+    ///   ③ **名额按"视口内有多少张卡"算, 不按"视口内有几张图"算** ——
+    ///      后者会让"视口内的图还没加载出来"被误算成"视口外可以多留",
+    ///      于是多放一批 → 下一轮又补 → 再放, 形成震荡。
+    ///      探针实测: 用"有图张数"时全墙在 54↔77 之间反复跳, 视口封面永远出不来。
+    ///
+    /// ★ 返回真正放掉的张数(给调用方决定要不要请求一次 GC)。
+    /// </summary>
+    private int ReleaseStalestCovers(int cap, long now)
+    {
+        if (cap <= 0) return 0;
+
+        // 收集"当前有图且**不在视口内**"的卡片 + 它们的时间戳。
+        // 没有图的卡片不需要放, 也不占常驻名额。
+        var candidates = new List<(UIElement Child, long Tick)>(InternalChildren.Count);
+        var visibleCards = 0;
+        for (var i = 0; i < InternalChildren.Count; i++)
+        {
+            var child = InternalChildren[i];
+            if (child is not DependencyObject d) continue;
+
+            var inViewport = (bool)d.GetValue(WasInViewportProperty);
+            if (inViewport) visibleCards++;
+
+            // ★ 保证 ①: 用户正看着的, 一律不动。
+            if (inViewport) continue;
+
+            var borders = CacheCoverBorders(child);
+            if (borders.Length == 0) continue;
+
+            var hasAny = false;
+            foreach (var border in borders)
+                if (Cover.HasImage(border)) { hasAny = true; break; }
+
+            // ★★★ 正在加载的卡片**不参与淘汰**(2026-11-07 第五次):
+            //   放掉它并不能省下什么 —— 位图还没生成, 而任务已经在解码队列里了。
+            //   更糟的是它会立刻被下一轮扫描重新发起, 形成"放掉 → 重发"的循环,
+            //   把解码槽全占满(探针实测 InFlight 积压 212 个, 用户回顶 2 秒看不到图)。
+            //   ⇒ 只淘汰"已经真的有图"的卡片。它们的位图才是真正的内存大头。
+            if (!hasAny) continue;
+            if (Cover.IsLoadingNow(child)) continue;
+
+            // ★ 保证 ②: 0 = 从没被扫描到 = 最旧(见方法头)。
+            candidates.Add((child, (long)d.GetValue(LastSeenTickProperty)));
+        }
+
+        if (candidates.Count == 0) return 0;
+
+        // ★ 保证 ③: 名额按**视口内有多少张卡**算(不管有没有图)。
+        var keepOutside = Math.Max(0, cap - visibleCards);
+        if (candidates.Count <= keepOutside) return 0;
+
+        var need = candidates.Count - keepOutside;
+        // ★ 多放一点点(上限的 1/4), 避免"每轮都刚好卡在线上"的反复释放/恢复。
+        var margin = Math.Max(1, cap / 4);
+        var target = Math.Min(candidates.Count, need + margin);
+
+        candidates.Sort((a, c) => a.Tick.CompareTo(c.Tick));
+
+        var released = 0;
+        for (var i = 0; i < candidates.Count && released < target; i++)
+        {
+            var (child, seen) = candidates[i];
+            // ★ 刚被看到的不放: 它们可能是"上一轮刚补上、用户刚滚过去"的。
+            //   1 秒的窗口远大于一次扫描间隔(150ms), 正常滚动时不会挡住真正的淘汰
+            //   (要淘汰的都是好几屏之前的, 时间戳早就超过 1 秒了)。
+            if (seen != 0 && now - seen < 1000) continue;
+
+            foreach (var border in CacheCoverBorders(child))
+            {
+                if (!Cover.HasImage(border)) continue;
+                Cover.Release(border);
+                released++;
+            }
+        }
+        return released;
     }
 
     /// <summary>
@@ -806,6 +979,21 @@ public class CardWallPanel : Panel
     private static readonly DependencyProperty WasInViewportProperty =
         DependencyProperty.RegisterAttached("WasInViewport", typeof(bool), typeof(CardWallPanel),
             new PropertyMetadata(false));
+
+    /// <summary>
+    /// 这个孩子上一次被**补图区间覆盖**的时刻(<see cref="Environment.TickCount64"/>)。
+    ///
+    /// ★★★ 这是"滚动时该放掉谁"的**唯一判据**(2026-11-07 第五次)。
+    ///   为什么不用坐标: 前三版都按"离视口多远"判, 而那个判断依赖布局时序 ——
+    ///   坐标缓存会过期、`TransformToAncestor` 会滞后于 `VerticalOffset`、滚到底时
+    ///   `ScrollableHeight` 被夹住会让最后一行的判定翻转。一旦把"用户马上要看到的那张"
+    ///   判成离屏, 就是不可逆的永久灰。
+    ///   ⇒ 时间戳没有这些问题: 它是一个单调递增的整数, 谁早被滚过去谁就旧。
+    ///     视口内的卡片每轮扫描都会刷新它, 所以**结构上不可能**是最旧的。
+    /// </summary>
+    private static readonly DependencyProperty LastSeenTickProperty =
+        DependencyProperty.RegisterAttached("LastSeenTick", typeof(long), typeof(CardWallPanel),
+            new PropertyMetadata(0L));
 
     // ------------------------------------------------------------ 测量 / 排列
 
