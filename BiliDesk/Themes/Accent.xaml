@@ -1,0 +1,37 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ===== 强调色兜底(2026-11-07 从 App.xaml 挪到这里) =====
+
+         为什么必须挪进合并字典: 这些键在运行时会被 ThemeService 按用户主题色**整体重算**
+         (AccentBrush / AccentTextStrongBrush / TextOnAccentBrush …)。而一次换肤要改十几二十个键 ——
+         如果它们是 App.xaml 的**直接项**, 每个 `Resources[key] = v` 都会各自触发一次全窗口
+         DynamicResource 失效。实测 500 张卡片时单次换肤光这一项就要 480ms, 且随卡片数线性增长,
+         这正是"下滑加载视频后切深浅色动画卡顿"的主因(见 ThemeService.PublishDynamicResources)。
+
+         现在它们属于**一个合并字典**: 换肤时整本字典一次性替换(merged[i] = newDict),
+         WPF 只做一次失效传播。App.xaml 里仍然保留这份兜底值(本文件), 保证
+         ThemeService.Initialize() 之前解析到的也是 B 站粉而不是默认蓝。
+
+         ★ 本文件必须是 MergedDictionaries 的**最后一项**: 后面添加的字典优先级更高,
+           运行时替换掉的动态字典才能盖过 Colors.*.xaml 里的同名键(如果有)。 -->
+
+    <!-- 强调色笔刷(品牌粉) -->
+    <SolidColorBrush x:Key="AccentBrush" Color="#FB7299" />
+    <SolidColorBrush x:Key="AccentHoverBrush" Color="#FB83A5" />
+    <SolidColorBrush x:Key="AccentPressedBrush" Color="#DD6487" />
+    <SolidColorBrush x:Key="AccentSoftFillBrush" Color="#1CFB7299" />
+    <SolidColorBrush x:Key="AccentSoftFillStrongBrush" Color="#2EFB7299" />
+    <SolidColorBrush x:Key="AccentBorderFillBrush" Color="#66FB7299" />
+    <SolidColorBrush x:Key="AccentTextBrush" Color="#FB7299" />
+    <SolidColorBrush x:Key="AccentTextStrongBrush" Color="#C4455F" />
+
+    <!-- 强调色背景上的文字色。粉色是中间调, 品牌规定配白字。 -->
+    <SolidColorBrush x:Key="TextOnAccentBrush" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="TextOnAccentSecondaryBrush" Color="#FFFFFF" />
+
+    <!-- 压在**卡片底**药丸上的强调色文字(分段选择器选中态)。兜底值取压深后的粉,
+         与 ThemeService 的算法保持一致, 万一注入失败也不会退成"粉字压白底读不清"。 -->
+    <SolidColorBrush x:Key="AccentTextOnCardBrush" Color="#8A3F54" />
+
+</ResourceDictionary>

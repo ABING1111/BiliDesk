@@ -10,39 +10,14 @@
                 <!-- 第 0 项会被 ThemeService 动态替换以实现深浅色切换 -->
                 <ResourceDictionary Source="Themes/Colors.Light.xaml" />
                 <ResourceDictionary Source="Themes/Styles.xaml" />
+                <!-- ★ 强调色兜底必须是**最后一项**: 运行时整本替换成按用户主题色算出的值,
+                     放在最后才能盖过前面字典里的同名键。见 Themes/Accent.xaml 的说明。 -->
+                <ResourceDictionary Source="Themes/Accent.xaml" />
             </ResourceDictionary.MergedDictionaries>
-
-            <!-- 强调色笔刷(品牌粉) -->
-            <!--
-                这里只是"解析兜底": 真正生效的值由 ThemeService.ApplyAccent() 启动时写入
-                Application.Resources(直接项优先于字典项)。但兜底值也要跟品牌色一致 ——
-                万一注入流程整条失败, 界面至少还是 B 站粉而不是默认蓝。
-            -->
-            <SolidColorBrush x:Key="AccentBrush" Color="#FB7299" />
-            <SolidColorBrush x:Key="AccentHoverBrush" Color="#FB83A5" />
-            <SolidColorBrush x:Key="AccentPressedBrush" Color="#DD6487" />
-            <SolidColorBrush x:Key="AccentSoftFillBrush" Color="#1CFB7299" />
-            <SolidColorBrush x:Key="AccentSoftFillStrongBrush" Color="#2EFB7299" />
-            <SolidColorBrush x:Key="AccentBorderFillBrush" Color="#66FB7299" />
-            <SolidColorBrush x:Key="AccentTextBrush" Color="#FB7299" />
-            <SolidColorBrush x:Key="AccentTextStrongBrush" Color="#C4455F" />
-            <!--
-                强调色背景上的文字色。粉色是中间调, 品牌规定配白字(粉底白字是 B 站的标准搭配),
-                所以这里和 ThemeService.BrandOnAccent 一样写白色。
-            -->
-            <SolidColorBrush x:Key="TextOnAccentBrush" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="TextOnAccentSecondaryBrush" Color="#FFFFFF" />
-
-            <!-- ★ 压在**卡片底**药丸上的强调色文字(分段选择器选中态)。
-                 和 TextOnAccentBrush 一样只是"解析兜底" —— 真正生效的值由
-                 ThemeService.ApplyAccent() 按当前主题色算出来(浅色压深 35%)。
-                 兜底值取压深后的粉, 与 ThemeService 的算法保持一致,
-                 这样万一注入失败也不会退成"粉字压白底读不清"那种情况。 -->
-            <SolidColorBrush x:Key="AccentTextOnCardBrush" Color="#8A3F54" />
 
             <!--
                 ★ NavVeilBrush 已删除(2026-10-11): 切页过渡不再用"自己上色的幕布",
-                  改为淡出 PageHost 本身(见 Helpers/PageTransition 与 MainWindow.xaml 的说明)。
+                  改为淡出旧页面本身(见 Helpers/PageTransition 与 MainWindow.xaml 的说明)。
                   幕布在材质(云母/亚克力)模式下永远算不准底色 —— 那时真实底色是壁纸。
             -->
 

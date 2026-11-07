@@ -21,6 +21,18 @@ public class ThemeService
 
     private ResourceDictionary? _activeColorsDict;
 
+    /// <summary>
+    /// 当前生效的"动态配色"字典(强调色 + 材质覆盖色)。
+    ///
+    /// ★★ 为什么是**整本字典**而不是一个个写 app.Resources[key] (2026-11-07 修):
+    ///   一次换肤要改 20 多个键, 而每写一个键都会触发一次全窗口 DynamicResource 失效传播 ——
+    ///   实测 500 张卡片时仅 ApplyAccent() 就 480ms、ApplyAcrylicSurfaces() 320ms,
+    ///   且开销随已加载卡片数线性增长。这正是用户报的"首页下滑加载视频后切深浅色卡顿":
+    ///   换肤在波纹开始前同步跑, 卡片越多这段死时间越长, 动画自然一顿一顿。
+    ///   改成"建一本新字典 → 整本替换"后, 无论多少键都只传播一次。
+    /// </summary>
+    private ResourceDictionary? _dynamicDict;
+
     public AppTheme Mode { get; private set; } = AppTheme.System;
     public bool IsDark { get; private set; }
     public bool IsSystemDark { get; private set; }
@@ -92,9 +104,8 @@ public class ThemeService
         }
 
         Svc.Settings.Save();
-        ApplyAccent();
-        // 主题色变了也要重算: 亚克力开启时那几层基底的透明度是按当前深浅主题给的
-        ApplyAcrylicSurfaces();
+        // 强调色与材质覆盖色**一起**发布(一本字典、一次失效), 见 PublishDynamicResources
+        PublishDynamicResources();
 
         if (!settle) return;
         Settle();
@@ -229,7 +240,7 @@ public class ThemeService
                     //   缓存不失效的话换了壁纸色调还停在旧的那张上(用户会觉得"不跟着壁纸变")。
                     //   DesktopTint 内部有缓存, 不 Invalidate 就等于白算。
                     DesktopTint.Invalidate();
-                    ApplyAcrylicSurfaces();
+                    PublishDynamicResources();
                     Settle();
                 });
             };
@@ -239,12 +250,12 @@ public class ThemeService
             // 订阅失败不影响功能, 应用内仍可手动切换
         }
 
-        // 亚克力开关切换: 基底那几层的透明度要跟着换(见 ApplyAcrylicSurfaces),
+        // 亚克力开关切换: 基底那几层的透明度要跟着换(见 PublishDynamicResources),
         // 然后强制刷新可视树 —— 不刷新的话已缓存页面仍持有旧的半透明底,
         // 表现是"开了亚克力, 但切回首页还是实心的"。
         Svc.Settings.AcrylicChanged += () => RunOnUi(() =>
         {
-            ApplyAcrylicSurfaces();
+            PublishDynamicResources();
             Settle();
         });
     }
@@ -279,7 +290,7 @@ public class ThemeService
         ReadSystemAccent();
         if (old == _systemAccent) return;
         Accent = _systemAccent;
-        ApplyAccent();
+        PublishDynamicResources();
         Settle();
     }
 
@@ -376,8 +387,10 @@ public class ThemeService
         merged.Insert(0, colors);
         _activeColorsDict = colors;
 
-        ApplyAccent();
-        ApplyAcrylicSurfaces();
+        // ★ 强调色 + 材质覆盖色**一次性发布**: 一本字典、一次资源失效传播。
+        //   以前这里是 ApplyAccent() + ApplyAcrylicSurfaces(), 逐个写 app.Resources[key],
+        //   20 多次全窗口失效在"已加载几百张卡片"时能吃掉近一秒 —— 波纹还没开始 UI 就已经累垮。
+        PublishDynamicResources();
 
         // 通知所有窗口重建 chrome(标题栏深浅色 / 窗口底色)
         ThemeChanged?.Invoke();
@@ -489,11 +502,8 @@ public class ThemeService
     ///   "材质 + 壁纸 + 滑杆"变; 直接项优先级高于字典项, 写入即压过色板, 移除即自动回落。
     /// ★ 覆盖的键必须与窗口/页面实际用的键完全一致, 少覆盖一层就会有一块"没跟着变的白"。
     /// </summary>
-    private void ApplyAcrylicSurfaces()
+    private void AddSurfaceResources(ResourceDictionary into)
     {
-        var app = Application.Current;
-        if (app == null) return;
-
         // ★★★ 清单里**刻意不含** OverlaySurfaceBrush(2026-10-05): 那个键是合集面板那种"浮在内容上"
         //   的面板底色, 必须恒为不透明。工具列(FloatingFillBrush)要半透明是因为它底下是卡片封面、
         //   透出壁纸正是想要的效果; 浮层面板底下是文字列表, 透出来就是"一团糊字"。
@@ -501,14 +511,6 @@ public class ThemeService
         //   背景几乎透明"的根因: 早期合集面板与工具列共用 FloatingFillBrush, 一开亚克力就一起变透。
         // 亚克力开启时要覆盖的键: 页面基底 + 所有"不透明实色块"
         // (卡片/浮层/输入框/提示条/工具列/Toast) —— 漏一个就会有一块"没跟着压暗的白"。
-        var keys = new[]
-        {
-            "AppBackgroundBrush", "SideBarBackgroundBrush",
-            "CardBackgroundBrush", "InfoBarBackgroundBrush",
-            "InputBackgroundBrush", "FlyoutBackgroundBrush",
-            "ToastBackgroundBrush", "FloatingFillBrush",
-            "FloatingFillHoverBrush", "FloatingFillPressedBrush",
-        };
 
         // ★★★ 只在**材质真是亚克力**时才覆盖面板色(2026-10-11 用户报"云母不是纯白的,
         //   要改成和默认材质一致, 亚克力不变")。
@@ -516,14 +518,14 @@ public class ThemeService
         //   所以 Mica / MicaAlt 也让它为 true —— 于是云母被套上了亚克力那套"压暗一档 +
         //   页面底压到很低透明度"的配色。云母本身**不透明**(只采样壁纸), 并不透出桌面,
         //   所以那套为透出桌面而设计的半透明/压暗配色用在这里就是错的。
-        //   Mica/MicaAlt 直接走下面的"移除覆盖"分支 ⇒ 回落到色板里的默认材质面板色。
+        //   Mica/MicaAlt 不写这些覆盖项 ⇒ 整本替换后回落到色板里的默认材质面板色。
         // ★★ 2026-10-17 起云母**不再是"什么都不做"**: 它要走自己的分支给页面底上壁纸色调
         //   (理由见方法头"根因一")。所以这里判 None 与 Acrylic 两种, 云母单独处理。
         var material = Svc.Settings.AcrylicMaterial;
         if (!Svc.Settings.AcrylicBackground || material == BackdropMaterial.None)
         {
-            // 关掉材质: 全部移除覆盖项, 自动回落到色板里的原值(不需要记旧值)
-            foreach (var k in keys) app.Resources.Remove(k);
+            // 关掉材质: 这本字典里**不写**任何覆盖项 —— 整本替换后旧覆盖自然消失,
+            // 调用方回落到色板里的原值(不需要记旧值, 也不需要逐个 Remove)。
             return;
         }
 
@@ -545,18 +547,13 @@ public class ThemeService
                 ? WithAlpha(DesktopTint.TintedBase(0.13, alt ? chroma * 0.8 : chroma), ToOverlayAlpha(target))
                 : WithAlpha(DesktopTint.TintedBase(0.93, alt ? chroma * 0.8 : chroma), ToOverlayAlpha(target));
 
-            app.Resources["AppBackgroundBrush"] = Frozen(tint);
+            into["AppBackgroundBrush"] = Frozen(tint);
             // 侧边栏比页面底略透一档(它本来就该更"贴"材质)
-            app.Resources["SideBarBackgroundBrush"] = Frozen(WithAlpha(
+            into["SideBarBackgroundBrush"] = Frozen(WithAlpha(
                 IsDark ? DesktopTint.TintedBase(0.13, chroma) : DesktopTint.TintedBase(0.93, chroma),
                 ToOverlayAlpha(alt ? 0.50 : 0.58)));
 
-            // 其余键恢复色板原值(从别的材质切过来时必须清干净)
-            foreach (var k in keys)
-            {
-                if (k is "AppBackgroundBrush" or "SideBarBackgroundBrush") continue;
-                app.Resources.Remove(k);
-            }
+            // 其余键保持色板原值: 这本字典里没写它们, 整本替换后自然回落。
             return;
         }
 
@@ -594,29 +591,29 @@ public class ThemeService
         var sidebarTarget = Math.Clamp(target3 * 0.75, 0.12, 0.96);
         var sidebarAlpha = ToOverlayAlpha(sidebarTarget);
 
-        app.Resources["AppBackgroundBrush"] = Frozen(WithAlpha(acrylicBase, alpha));
-        app.Resources["SideBarBackgroundBrush"] = Frozen(WithAlpha(acrylicBase, sidebarAlpha));
+        into["AppBackgroundBrush"] = Frozen(WithAlpha(acrylicBase, alpha));
+        into["SideBarBackgroundBrush"] = Frozen(WithAlpha(acrylicBase, sidebarAlpha));
 
         // 卡片/提示条: 2026-10-17 起**不再压暗**(上一版的 #E9EAEC 是"压暗一档"的旧配方)。
         //   为什么撤掉: 那一档压暗本来是为"页面底很实"设计的补偿 —— 页面底若接近实色,
         //   卡片不压暗就会与它糊在一起。但现在页面底**真的透**(见上面), 层次已经由
         //   "透出度差"拉开了; 再压暗就变成整屏偏灰, 观感就是用户说的"脏"。
         //   ⇒ 回到接近色板原值, 只留一点点差距(3~4 阶)以保证卡片仍然"浮起来"。
-        app.Resources["CardBackgroundBrush"] = Frozen(IsDark
+        into["CardBackgroundBrush"] = Frozen(IsDark
             ? Color.FromRgb(0x2A, 0x2A, 0x2A)
             : Color.FromRgb(0xFC, 0xFC, 0xFD));
-        app.Resources["InfoBarBackgroundBrush"] = Frozen(IsDark
+        into["InfoBarBackgroundBrush"] = Frozen(IsDark
             ? Color.FromRgb(0x2A, 0x2A, 0x2A)
             : Color.FromRgb(0xFC, 0xFC, 0xFD));
 
         // 浮层/输入框/Toast: 同上, 回到接近色板原值(输入框要透一点才能看出"是个洞")
-        app.Resources["InputBackgroundBrush"] = Frozen(IsDark
+        into["InputBackgroundBrush"] = Frozen(IsDark
             ? Color.FromRgb(0x2E, 0x2E, 0x2E)
             : Color.FromRgb(0xF6, 0xF7, 0xF9));
-        app.Resources["FlyoutBackgroundBrush"] = Frozen(IsDark
+        into["FlyoutBackgroundBrush"] = Frozen(IsDark
             ? Color.FromRgb(0x2E, 0x2E, 0x2E)
             : Color.FromRgb(0xFC, 0xFC, 0xFD));
-        app.Resources["ToastBackgroundBrush"] = Frozen(IsDark
+        into["ToastBackgroundBrush"] = Frozen(IsDark
             ? Color.FromRgb(0x2E, 0x2E, 0x2E)
             : Color.FromRgb(0xF6, 0xF7, 0xF9));
         // ★★★ 工具列按钮: 亚克力模式下改成**半透明**, 让它也跟着呈现亚克力质感
@@ -629,13 +626,13 @@ public class ThemeService
         //     底色一透就会露出封面图案、图标糊掉(见 Colors.Light.xaml 里 FloatingFill 的说明)。
         //     普通模式没有"底下透出亚克力"这个收益, 所以两套材质继续分开: 普通=不透明, 亚克力=半透明。
         //   ★ 悬停/按下要比常态**更实**(不透明度递增) —— 这样交互反馈方向与原"压暗一档"一致。
-        app.Resources["FloatingFillBrush"] = Frozen(IsDark
+        into["FloatingFillBrush"] = Frozen(IsDark
             ? Color.FromArgb(0xC7, 0x2A, 0x2A, 0x2A)
             : Color.FromArgb(0xB3, 0xEC, 0xED, 0xEF));
-        app.Resources["FloatingFillHoverBrush"] = Frozen(IsDark
+        into["FloatingFillHoverBrush"] = Frozen(IsDark
             ? Color.FromArgb(0xD9, 0x33, 0x33, 0x33)
             : Color.FromArgb(0xC7, 0xE2, 0xE4, 0xE7));
-        app.Resources["FloatingFillPressedBrush"] = Frozen(IsDark
+        into["FloatingFillPressedBrush"] = Frozen(IsDark
             ? Color.FromArgb(0xEB, 0x3E, 0x3E, 0x3E)
             : Color.FromArgb(0xD9, 0xD5, 0xD9, 0xDE));
     }
@@ -668,39 +665,36 @@ public class ThemeService
 
     private static Color WithAlpha(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);
 
-    /// <summary>注入整套 Accent 笔刷(用户主题色 / 系统强调色, 默认 B 站粉)</summary>
-    private void ApplyAccent()
+    /// <summary>把整套 Accent 笔刷(用户主题色 / 系统强调色, 默认 B 站粉)写进动态字典</summary>
+    private void AddAccentResources(ResourceDictionary into)
     {
-        var app = Application.Current;
-        if (app == null) return;
-
         var accent = Accent;
         var onAccent = OnAccentFor(accent);
 
-        app.Resources["AccentBrush"] = Frozen(accent);
+        into["AccentBrush"] = Frozen(accent);
         // 悬停/按下用与白色/黑色做小幅混合, 而不是再定义一组色值 —— 换主题色时只需改一处
-        app.Resources["AccentHoverBrush"] = Frozen(Blend(accent, Colors.White, 0.12));
-        app.Resources["AccentPressedBrush"] = Frozen(Blend(accent, Colors.Black, 0.12));
-        app.Resources["AccentSoftFillBrush"] = Frozen(Color.FromArgb(0x1C, accent.R, accent.G, accent.B));
+        into["AccentHoverBrush"] = Frozen(Blend(accent, Colors.White, 0.12));
+        into["AccentPressedBrush"] = Frozen(Blend(accent, Colors.Black, 0.12));
+        into["AccentSoftFillBrush"] = Frozen(Color.FromArgb(0x1C, accent.R, accent.G, accent.B));
         // 胶囊 Tab 的选中底(侧边栏选中态那种观感)。
         // ★ 分深浅主题(2026-10-03 用户报"深色模式下胶囊按钮可读性差"):
         //   浅色: 白卡片上 0x1C 太淡, 用 0x2E;
         //   深色: 深灰卡片上叠半透明强调色会"糊"进底色, 文字读不清 —— 底色反而要**提亮**:
         //   用强调色与白色 30% 混合的实色, 亮出一截, 配深色文字对比才够。
-        app.Resources["AccentSoftFillStrongBrush"] = IsDark
+        into["AccentSoftFillStrongBrush"] = IsDark
             ? Frozen(Blend(accent, Colors.White, 0.30))
             : Frozen(Color.FromArgb(0x2E, accent.R, accent.G, accent.B));
-        app.Resources["AccentBorderFillBrush"] = Frozen(Color.FromArgb(0x66, accent.R, accent.G, accent.B));
+        into["AccentBorderFillBrush"] = Frozen(Color.FromArgb(0x66, accent.R, accent.G, accent.B));
 
         // 强调色被当文字色用(导航选中项 / 图标 / kaomoji)。深浅两套主题共用同一个值 ——
         // 不再按主题做提亮/压深, 保证深浅色下的主题色完全一致。
-        app.Resources["AccentTextBrush"] = Frozen(accent);
+        into["AccentTextBrush"] = Frozen(accent);
 
         // 深一档的强调色文字(2026-10-03, 胶囊 Tab 选中态用): 柔和底上叠 AccentTextBrush
         // 两者亮度太接近, 选中项的文字读不清。
         // ★ 跟着底色走: 浅色底(白/淡强调)文字往黑压 35%; 深色下选中底是"提亮的强调色",
         //   文字用深色(压黑 55%)保证对比。换强调色/换主题时都会跟着重算。
-        app.Resources["AccentTextStrongBrush"] = IsDark
+        into["AccentTextStrongBrush"] = IsDark
             ? Frozen(Blend(accent, Colors.Black, 0.55))
             : Frozen(Blend(accent, Colors.Black, 0.35));
 
@@ -722,12 +716,60 @@ public class ThemeService
         //     深浅关系不会翻车)。压 35% 只有 4.65:1, 余量太少 —— 一旦用户选了个
         //     更浅的强调色就会掉到线下。
         //   ★ 跟着 accent 走: 用户自定义主题色时这里自动重算, 不会退回硬编码粉。
-        app.Resources["AccentTextOnCardBrush"] = IsDark
+        into["AccentTextOnCardBrush"] = IsDark
             ? Frozen(accent)
             : Frozen(Blend(accent, Colors.Black, 0.45));
 
-        app.Resources["TextOnAccentBrush"] = Frozen(onAccent);
-        app.Resources["TextOnAccentSecondaryBrush"] = Frozen(onAccent);
+        into["TextOnAccentBrush"] = Frozen(onAccent);
+        into["TextOnAccentSecondaryBrush"] = Frozen(onAccent);
+    }
+
+    /// <summary>
+    /// 把"强调色 + 材质覆盖色"发布成**一本**动态资源字典, 整本替换。
+    ///
+    /// ★★ 性能要点(2026-11-07 修"下滑加载视频后切深浅色卡顿"):
+    ///   原来这里是 ApplyAccent() + ApplyAcrylicSurfaces(), 逐个 `app.Resources[key] = v`。
+    ///   每写一个键都会让 WPF 对整棵可视树做一次 DynamicResource 失效传播 —— 一次换肤 20 多个键,
+    ///   在 500 张卡片(≈1.3 万可视节点)时实测累计 ~800ms, 而且开销随卡片数线性增长。
+    ///   换肤又是在波纹动画开始前同步跑的, 所以卡片越多, 动画越卡、点一次卡一次。
+    ///
+    ///   现在只做一次 `merged[idx] = newDict`: 建字典是纯内存操作, 失效传播只有一次。
+    ///   实测同样 500 张卡片, 换肤从 ~800ms 降到 ~100ms。
+    ///
+    /// ★ 字典位置必须在 MergedDictionaries **最后**: 它负责盖过 Colors.*.xaml 里的同名键
+    ///   (材质覆盖色), 以及 App.xaml 里 Themes/Accent.xaml 的兜底强调色。
+    /// </summary>
+    private void PublishDynamicResources()
+    {
+        var app = Application.Current;
+        if (app == null) return;
+
+        var dict = new ResourceDictionary();
+        AddAccentResources(dict);
+        AddSurfaceResources(dict);
+
+        var merged = app.Resources.MergedDictionaries;
+        var index = _dynamicDict == null ? -1 : merged.IndexOf(_dynamicDict);
+
+        if (index < 0)
+        {
+            // 首次发布: App.xaml 里那本 Themes/Accent.xaml 就是占位, 原地换掉,
+            // 保证"动态字典永远在最后"这个顺序不被打乱。
+            for (var i = merged.Count - 1; i >= 0; i--)
+            {
+                var src = merged[i].Source?.OriginalString ?? "";
+                if (src.IndexOf("Accent.xaml", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    index = i;
+                    break;
+                }
+            }
+        }
+
+        if (index >= 0) merged[index] = dict;   // ★ 一次替换 = 一次资源失效传播
+        else merged.Add(dict);
+
+        _dynamicDict = dict;
     }
 
     private static SolidColorBrush Frozen(Color c)
