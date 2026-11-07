@@ -749,33 +749,19 @@
                 </Style>
             </StackPanel.Style>
             <!-- 全部已读: 有红点时出现。
-                 ★★ 2026-11-06 用户要求"优化工具列已读按钮图案, 使他更符合功能用途":
-                   原来用的是 E73E(一个**裸对勾**), 单独看只像"选中/完成", 表达不出
-                   "把动态**标记为已读**"这层意思。
-                 ★★ 2026-11-07 用户报"右下角图案很丑": 第一版矢量是"小信封缩在左上 +
-                   粗对勾斜插右下角", 两个元素大小失衡、重心偏斜。现在重画为
-                   **居中的信封 + 信封体内嵌对勾**: 轮廓对称、笔画粗细统一(1.4/1.5 圆头),
-                   对勾落在信封下半区、与封口折线错开, 语义仍是"消息已读"。 -->
+                 ★★ 2026-11-07 用户最终拍板"已读图案变成打勾即可":
+                   之前先后用过 E73E(裸对勾字形)与"信封+内嵌对勾"矢量, 均不满意。
+                   现在就是一个居中的矢量对勾 —— Path 自己画的, 任何 Windows 版本
+                   都长这个样子, 不依赖字体字形。 -->
             <Button x:Name="BtnMarkAllRead" Style="{StaticResource FloatingIconButtonStyle}"
                     Command="{Binding MarkAllReadCommand}"
                     ToolTip="全部已读(清空所有 UP 的新视频红点)"
                     Visibility="{Binding HasAnyUnread, Converter={StaticResource BoolToVis}}">
-                <Grid Width="18" Height="18">
-                    <Grid.RenderTransform>
-                        <!-- 内容整体比画布重心偏上 0.5px: 对勾压在下半区, 视觉重心才会居中 -->
-                        <TranslateTransform Y="0.5" />
-                    </Grid.RenderTransform>
-                    <!-- 信封主体: 圆角矩形 + 封口折线, 居中(1.5~16.5, 宽 15 高 10.5) -->
-                    <Path Data="M 4.2,2.75 H 13.8 A 1.45,1.45 0 0 1 15.25,4.2 V 12.8 A 1.45,1.45 0 0 1 13.8,14.25 H 4.2 A 1.45,1.45 0 0 1 2.75,12.8 V 4.2 A 1.45,1.45 0 0 1 4.2,2.75 Z M 2.75,5.4 L 8.55,9.05 A 0.85,0.85 0 0 0 9.45,9.05 L 15.25,5.4"
-                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                          StrokeThickness="1.4" StrokeLineJoin="Round"
-                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                    <!-- 信封体内的对勾: 落在下半区, 与封口折线(最低 ~9.05)保持 ≥0.7px 间隙 -->
-                    <Path Data="M 6.5,11.1 L 8.4,12.8 L 11.6,9.8"
-                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                          StrokeThickness="1.5" StrokeLineJoin="Round"
-                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                </Grid>
+                <!-- 对勾: 18x18 画布居中, 起笔收笔圆头, 与刷新(E72C)粗细一致(1.6) -->
+                <Path Data="M 3.6,9.6 L 7.6,13.5 L 14.4,5"
+                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                      StrokeThickness="1.6" StrokeLineJoin="Round"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
             </Button>
             <!-- 刷新 -->
             <Button x:Name="BtnRefresh" Style="{StaticResource FloatingIconButtonStyle}"
