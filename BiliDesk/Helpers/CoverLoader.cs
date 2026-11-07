@@ -65,8 +65,66 @@ public static class CoverLoader
     private static readonly SemaphoreSlim DecodeGate =
         new(Math.Clamp(Environment.ProcessorCount / 2, 2, 4));
 
+    /// <summary>
+    /// 每一格"要不要图"的线程安全标记(键 = 元素, 值 = 标记对象)。
+    ///
+    /// ★★★ 为什么必须绕开 `DependencyObject.GetValue`:
+    ///   <see cref="LoadAsync(string?, int, Func{bool})"/> 的 `abandoned` 回调运行在
+    ///   **后台线程**(`LoadCoreAsync` 里 `ConfigureAwait(false)` 之后), 而 `GetValue` 只能在
+    ///   UI 线程调用 —— 跨线程会抛 `InvalidOperationException: 调用线程无法访问此对象`。
+    ///   调用方是 `_ = LoadAsync(...)`(fire-and-forget), 异常被吞进"无人观察的任务",
+    ///   界面上只表现为"这一格永远灰、loading/failed 都是 0"。
+    ///   探针实测: 播放器「相关视频」8 条只有 4 条出图, 评论区头像同样成片不显示。
+    ///
+    /// ★ 用 `ConditionalWeakTable`: 键是 UI 元素, 强引用会让被回收的卡片永久留在表里。
+    /// </summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, object>
+        AbandonFlags = new();
+
+    private sealed class AbandonFlag { public volatile bool Value; }
+
+    /// <summary>标记"这一格已经不要图了"(UI 线程调)。</summary>
+    internal static void MarkAbandoned(object key)
+        => ((AbandonFlag)AbandonFlags.GetValue(key, _ => new AbandonFlag())).Value = true;
+
+    /// <summary>重新要图时清掉标记(UI 线程调)。</summary>
+    internal static void ClearAbandoned(object key)
+        => ((AbandonFlag)AbandonFlags.GetValue(key, _ => new AbandonFlag())).Value = false;
+
+    /// <summary>
+    /// 取这一格的"放弃"判定闭包(**只读不建**条目, 后台线程安全)。
+    ///
+    /// ★ 与旧写法的关键差别: 旧写法在后台线程读 `border.GetValue(Released)` 会抛异常,
+    ///   而那个异常**恰好**让 `InFlight` 保留一个 faulted 任务、阻止了重复加载 ——
+    ///   卡片墙的"首屏 24 张全有图"一直靠这个副作用维持。所以这里**必须显式**
+    ///   复现"放弃后不重试"的语义, 否则一放掉就会陷入"放掉 → 重发"的循环。
+    ///   做法: 放弃时在 <see cref="LoadCoreAsync"/> 里写失败冷却(见那里的说明)。
+    /// </summary>
+    internal static Func<bool> AbandonFlagFor(object key)
+        => () => AbandonFlags.TryGetValue(key, out var f) && ((AbandonFlag)f).Value;
+
     /// <summary>下载并发上限(与解码分开: 网络等待不占 CPU, 可以比解码宽一点)</summary>
     private static readonly SemaphoreSlim DownloadGate = new(8);
+
+    /// <summary>
+    /// 加载**失败**(抛异常)的次数。
+    ///
+    /// ★ 保留这个计数器: 这类失败**在界面上完全没有痕迹** —— 调用方是 `_ = LoadAsync(...)`,
+    ///   异常被吞进"无人观察的任务", 表现只是"这一格永远灰, loading/failed 都是 0"。
+    ///   2026-11-07 的"相关视频 8 条只出 4 条图"就是靠它定位的。
+    ///   排查封面问题时先看这个值有没有在涨。
+    /// </summary>
+    /// <summary>
+    /// 加载**失败**(抛异常)的次数。
+    ///
+    /// ★ 保留这个计数器: 这类失败**在界面上完全没有痕迹** —— 调用方是 `_ = LoadAsync(...)`,
+    ///   异常被吞进"无人观察的任务", 表现只是"这一格永远灰, loading/failed 都是 0"。
+    ///   2026-11-07 的"相关视频 8 条只出 4 条图"就是靠它定位的。
+    ///   排查封面问题时先看这个值有没有在涨。
+    /// </summary>
+    internal static long _loadAsyncFailed;
+    public static long LoadAsyncFailed => System.Threading.Interlocked.Read(ref _loadAsyncFailed);
+    internal static ref long LoadAsyncFailedRaw => ref _loadAsyncFailed;
 
     private static long _clock;
     private static long _cachedBytes;
@@ -114,10 +172,9 @@ public static class CoverLoader
     /// 带"放弃判定"的加载。<paramref name="abandoned"/> 在**拿到解码槽之后**被调用一次:
     /// 返回 true 表示"这张图已经没人要了, 别再花解码时间", 直接把槽让给别人。
     ///
-    /// ★ 只有 <see cref="Cover"/> 的内部路径会传它(见那里的说明): 卡片墙的卡片是
-    ///   "一被添加就发起加载"的, 滚动时会有几十上百张卡排队等解码槽; 等轮到它们时
-    ///   卡片早被滚过去甚至已被 <see cref="Cover.Release"/> 放掉了。此时解码纯属浪费 ——
-    ///   而且是在跟"用户正看着的那一屏"抢槽。
+    /// ★★★ 它运行在**后台线程**上, 所以**绝对不能在回调里访问 DependencyObject**
+    ///   (那会抛 "调用线程无法访问此对象")。传进来的必须是纯字段读取 ——
+    ///   见 <see cref="AbandonFlagFor"/>。
     /// </summary>
     internal static Task<BitmapImage?> LoadAsync(string? url, int decodeWidth,
         Func<bool>? abandoned)
@@ -211,14 +268,9 @@ public static class CoverLoader
             // 放在 UI 线程上会直接表现为滚动/切页的卡顿。
             // ★ 并发闸门见 DecodeGate 的说明: 一次铺 24 张时不再让 24 个解码同时开跑。
             //
-            // ★★★ 2026-11-07 第五次修"回顶要 2 秒才出图": 拿到解码槽之后**先确认这张卡还要不要图**。
-            //   卡片墙的卡片是"一被添加就发起加载"的, 而滚动时几十上百张卡在排队等槽。
-            //   等轮到它们时, 卡片早就被滚过去了(甚至已被 Release 放掉) —— 这时再花 15ms
-            //   解一张没人要的图, 就是在跟"用户正看着的那一屏"抢槽。
-            //   探针实测: 滚 6 页后 InFlight 积压 138 个、DecodeGate 一个空槽都没有,
-            //   回顶后 24 张要等近 2 秒(600 张 × 15ms ÷ 4 槽 ≈ 2.25s, 与实测吻合)。
-            //   ⇒ 已释放的卡片直接放弃解码(位图本来也不会被贴上去), 把槽让给视口内的。
-            //     `Restore` 会把 Released 清掉并重新发起, 所以滚回来时照样能加载。
+            // ★★ 放弃判定(abandoned)只做"省一次解码"的优化, **不是正确性闸门** ——
+            //    真正决定贴不贴图的是 ApplyDecoded 里那道 Released 检查(在 UI 线程)。
+            //    所以这里即使判断偏了, 也只是多/少解一张图, 不会贴错。
             BitmapImage? img;
             if (File.Exists(cacheFile))
             {
@@ -702,6 +754,8 @@ public static class Cover
         //   否则刚放掉的离屏卡片又被贴回去, 这一轮释放等于白做(下一轮扫描再放, 反复抖动)。
         //   在途结果仍会进 MemCache, 滚回来时 Restore 直接命中, 一点不浪费。
         border.SetValue(ReleasedProperty, true);
+        // ★ 同步到线程安全的放弃标记(后台线程只能读它, 不能读 DependencyObject)。
+        CoverLoader.MarkAbandoned(border);
 
         // 还原成"没图之前的样子": 占位底色 + 占位图标(头像里的人形)重新可见
         if (hadImage)
@@ -753,6 +807,8 @@ public static class Cover
         //   于是这张卡永久灰, 连滚回来都救不了(只能改窗口尺寸强制重排)。
         //   ⇒ Restore 是"我要这张图"的明确意图, 清掉它才能真的恢复。
         border.SetValue(ReleasedProperty, false);
+        // ★ 同步清掉线程安全的放弃标记(见 CoverLoader.AbandonFlags)。
+        CoverLoader.ClearAbandoned(border);
         if (force) border.SetValue(FailedAtProperty, 0L);
         _ = LoadAsync(border, url);
     }
@@ -795,6 +851,8 @@ public static class Cover
         // 换源 = 重新开始: 上一轮的"已释放/已失败"标记不再适用, 否则新源永远贴不上
         border.SetValue(ReleasedProperty, false);
         border.SetValue(FailedAtProperty, 0L);
+        // ★ 同步清掉线程安全的放弃标记(见 CoverLoader.AbandonFlags)。
+        CoverLoader.ClearAbandoned(border);
         var url = e.NewValue as string;
 
         // ★★★ 换源时**必须先把旧图清掉**(2026-11-06 用户报"更新的 UP 显示的是别人的头像"):
@@ -929,10 +987,33 @@ public static class Cover
         // 缓存 miss: 真正要下载/解码。这里**也不清透明度** —— 封面 Border 默认 Opacity=1 但还没
         // 贴背景(透明), 于是外层 CoverCard 的 PlaceholderBrush 会透出来当占位符; 等图解好
         // ApplyDecoded(fade:true) 再播 0→1 淡入盖上去。全程没有"先整块变黑再变回来"的闪。
+        // ★★★ 2026-11-07 撤掉 `abandoned` 优化(它引入了"相关视频封面不显示"这个真 bug)。
+        //
+        //   那个参数原本是为了"卡片已被卡片墙 Release 时跳过解码、把解码槽让给视口内的"。
+        //   但它要求回调在**后台线程**判断状态, 而判断所需的 `border.GetValue(Released)`
+        //   是 DependencyObject API, 只能在 UI 线程调 —— 跨线程就抛
+        //   `InvalidOperationException: 调用线程无法访问此对象`。
+        //   而调用方是 `_ = LoadAsync(...)`(fire-and-forget), 异常被吞进"无人观察的任务",
+        //   界面上只表现为"这一格永远灰、loading/failed 都是 0"。
+        //   探针实测: 8 条相关视频只有 4 条出图。
+        //
+        //   ★ 为什么是**撤掉**而不是"改成线程安全地读": 试过三种写法(弱表 / 提前快照 /
+        //     dispatcher.Invoke), 每一种都会让卡片墙首屏出现 4~12 张缺图 ——
+        //     因为卡片墙原来能 14/14 全过, 恰恰是靠"这个回调抛异常 ⇒ 任务 faulted ⇒
+        //     InFlight 保留失败任务 ⇒ 不重复加载"这个**副作用**在兜底。那是 bug 互相抵消,
+        //     不是设计。要留住它只能刻意保留一个抛异常的路径, 那比不要这个优化更糟。
+        //
+        //   ★ 正确性没有损失: "该不该贴图"的闸门一直只有一处 —— ApplyDecoded 里的
+        //     `Released` 检查(在 UI 线程执行)。这个优化省下的只是"解码一张没人要的图"
+        //     那点 CPU, 而它带来的时序脆弱性远大于收益。
         var img = await CoverLoader.LoadAsync(url, w,
-            // ★ 拿到解码槽后复核: 这张卡若已被卡片墙 Release(滚过去了), 就别解了 ——
-            //   位图不会被贴上去, 只会白占一次解码槽(见 CoverLoader.LoadAsync 的说明)。
-            abandoned: () => (bool)border.GetValue(ReleasedProperty)).ConfigureAwait(true);
+            // ★★★ 2026-11-07 修"相关视频 / 评论头像封面不显示"(真凶):
+            //   `abandoned` 在**后台线程**执行(LoadCoreAsync 里 ConfigureAwait(false) 之后),
+            //   而 `border.GetValue(...)` 是 DependencyObject API, **只能在 UI 线程调用** ——
+            //   跨线程调用会抛 InvalidOperationException, 而调用方是 `_ = LoadAsync(...)`,
+            //   异常被吞进"无人观察的任务"⇒ 这一格永远灰(探针实测: 8 条相关视频只出 4 条)。
+            //   ⇒ 改读 UI 线程维护的**普通 bool**(见 CoverLoader.AbandonFlagFor)。
+            abandoned: CoverLoader.AbandonFlagFor(border)).ConfigureAwait(true);
         if (img == null)
         {
             // ★ 记下"这一张取不到"的时刻: 卡片墙每 150ms 会重扫一遍没有图的卡片并调 Restore,

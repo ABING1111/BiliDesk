@@ -676,6 +676,15 @@ public class CardWallPanel : Panel
         if (bands == null) return;
         var b = bands.Value;
 
+        // ★★★ 先把布局付清(2026-11-07 第六次, 修"卡片墙首屏最前面几张永远灰"):
+        //   `TransformToAncestor` 给的是**渲染位置**, 它可能滞后于 `VerticalOffset`。
+        //   首次上屏/跳滚那一拍尤其明显: 布局还没结算, 前几张卡拿到的位置是错的,
+        //   于是被判定为"不在视口内" —— 第 1 趟(pass 0)不会加载它们, 只能等第 2 趟
+        //   的限量预取, 而预取每轮只发 PrefetchBurst 个, 前几张就排在很后面。
+        //   探针实测: 首屏 24 张里稳定缺 4~12 张, 而且**总是最前面那几张**。
+        //   代价: 一次同步布局。扫描只有 150ms 防抖 + 1.5s 心跳, 完全付得起。
+        try { sv.UpdateLayout(); } catch { /* 布局异常: 按现有位置继续(总比不扫好) */ }
+
         // ★★★ 先把布局付清(2026-11-07 第五次): `TransformToAncestor` 给的是**渲染位置**,
         //   而它可能滞后于 `VerticalOffset` —— 尤其是 `ScrollToTop()`/跳滚这种"偏移一次跳很远"
         //   的场景: 偏移已经变成 0, 渲染位置还是底部那一屏。
@@ -841,8 +850,18 @@ public class CardWallPanel : Panel
             if (!hasAny) continue;
             if (Cover.IsLoadingNow(child)) continue;
 
-            // ★ 保证 ②: 0 = 从没被扫描到 = 最旧(见方法头)。
-            candidates.Add((child, (long)d.GetValue(LastSeenTickProperty)));
+            // ★★★ 保证 ②(2026-11-07 第六次, 修"卡片墙首屏前几张永远灰"):
+            //   **从没被扫描到过**的卡片(tick == 0)一律不释放。
+            //   首轮扫描时 `TransformToAncestor` 可能因为布局还没结算而抛异常,
+            //   那时 `WasInViewport` 保持默认 false —— 这张卡会被误判成"离屏",
+            //   于是**用户正看着的那几张被放掉**, 而它们又因为 tick=0 排在最前面,
+            //   必然被选中。探针实测: 首屏 24 张里稳定缺 4~12 张, 且总是最前面那几张。
+            //   ⇒ 只有"确实被看到过、而且已经很久没被看到"的才允许淘汰。
+            //     没扫描到说明位置未知, 宁可多留一张, 也不要在信息不足时放掉。
+            var seen = (long)d.GetValue(LastSeenTickProperty);
+            if (seen == 0) continue;
+
+            candidates.Add((child, seen));
         }
 
         if (candidates.Count == 0) return 0;
