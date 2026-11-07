@@ -470,7 +470,7 @@ public partial class FollowPage : UserControl
         }
     }
 
-    /// <summary>右键头像 → 预览大图</summary>
+    /// <summary>右键 UP 行 → 预览大图</summary>
     private void OnViewAvatar(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.DataContext is FollowUser u)
@@ -479,7 +479,7 @@ public partial class FollowPage : UserControl
         }
     }
 
-    /// <summary>右键头像 → 下载到本地</summary>
+    /// <summary>右键 UP 行 → 下载到本地</summary>
     private async void OnDownloadAvatar(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.DataContext is FollowUser u)

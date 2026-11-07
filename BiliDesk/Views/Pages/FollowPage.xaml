@@ -66,6 +66,37 @@
             <Border CornerRadius="10" Padding="0" Margin="0,0,0,4" Cursor="Hand"
                     MouseLeftButtonUp="OnSelectUp"
                     ToolTip="只看 TA 的投稿视频">
+                <!-- 右键菜单挂在**整行**上(2026-11-07 用户要求): 原来只挂在头像上,
+                     必须精准右键头像才弹; 现在头像/昵称/时间/行尾空白处右键都能打开。 -->
+                <Border.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="打开 UP 主页" Click="OnVisitClick">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="13" VerticalAlignment="Center" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="查看头像大图" Click="OnViewAvatar">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="13" VerticalAlignment="Center" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="下载头像到本地" Click="OnDownloadAvatar">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="13" VerticalAlignment="Center" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <Separator />
+                        <MenuItem Header="取消关注" Click="OnUnfollowClick">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="13" VerticalAlignment="Center" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                    </ContextMenu>
+                </Border.ContextMenu>
                 <Border.Style>
                     <Style TargetType="Border">
                         <Setter Property="Background" Value="Transparent" />
@@ -99,35 +130,6 @@
                                 Background="{DynamicResource AccentSoftFillBrush}"
                                 ClipToBounds="True"
                                 helpers:Cover.Source="{Binding Face}">
-                            <Border.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem Header="打开 UP 主页" Click="OnVisitClick">
-                                        <MenuItem.Icon>
-                                            <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                       FontSize="13" VerticalAlignment="Center" />
-                                        </MenuItem.Icon>
-                                    </MenuItem>
-                                    <MenuItem Header="查看头像大图" Click="OnViewAvatar">
-                                        <MenuItem.Icon>
-                                            <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                       FontSize="13" VerticalAlignment="Center" />
-                                        </MenuItem.Icon>
-                                    </MenuItem>
-                                    <MenuItem Header="下载头像到本地" Click="OnDownloadAvatar">
-                                        <MenuItem.Icon>
-                                            <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                       FontSize="13" VerticalAlignment="Center" />
-                                        </MenuItem.Icon>
-                                    </MenuItem>
-                                    <Separator />
-                                    <MenuItem Header="取消关注" Click="OnUnfollowClick">
-                                        <MenuItem.Icon>
-                                            <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                       FontSize="13" VerticalAlignment="Center" />
-                                        </MenuItem.Icon>
-                                    </MenuItem>
-                                </ContextMenu>
-                            </Border.ContextMenu>
                             <TextBlock Text="&#xE77B;"
                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                        FontSize="16"
