@@ -945,7 +945,7 @@ public class SettingsStore
             _version++;
             _pendingJson = null;
         }
-        try { File.WriteAllText(FilePath, json); } catch { /* 写入失败不影响使用 */ }
+        try { WriteAtomic(json); } catch { /* 写入失败不影响使用 */ }
     }
 
     /// <summary>把当前设置序列化成 JSON(纯内存操作, 微秒级)</summary>
@@ -969,7 +969,10 @@ public class SettingsStore
     /// <summary>写入内容的版本号。用于让"已经取走旧内容的后台写"作废(见 WriteLoop)。</summary>
     private int _version;
 
-    /// <summary>后台写循环: 有内容就写, 没有就退出并把"在写"标记还给下一个调用者</summary>
+    /// <summary>
+    /// 后台写循环: 有内容就写, 没有就退出并把"在写"标记还给下一个调用者。
+    /// 退出前会把"本次写已完成"的信号发给等待者(见 _drained, Flush 用它等在途写落地)。
+    /// </summary>
     private void WriteLoop()
     {
         while (true)
@@ -981,6 +984,7 @@ public class SettingsStore
                 if (_pendingJson == null)
                 {
                     _writing = false;
+                    SignalDrained();
                     return;
                 }
                 json = _pendingJson;
@@ -992,22 +996,68 @@ public class SettingsStore
                 // 取内容到真正落盘之间可能又有更新的内容进来(新的 Save, 或 SaveNow 的同步写) ——
                 // 那这次写就已经过时, 跳过它, 免得用旧值把新值覆盖回去。
                 // 跳过是安全的: 新内容要么还在 _pendingJson 里(循环下一轮会写), 要么已被 SaveNow 写完。
-                if (Volatile.Read(ref _version) != version) continue;
-                File.WriteAllText(FilePath, json);
+                if (Volatile.Read(ref _version) != version)
+                {
+                    SignalDrained();
+                    continue;
+                }
+                WriteAtomic(json);
             }
             catch
             {
                 // 写入失败不影响使用
             }
+            SignalDrained();
         }
     }
 
     /// <summary>
-    /// 同步把待写内容落盘(进程退出前调用)。
-    /// 退出时后台线程可能刚被排上还没跑, 不 Flush 会丢掉"刚点的同意/刚改的设置"。
+    /// "在途写已落地(或已作废)"信号。★ Flush 退出前必须等它, 否则:
+    ///   WriteLoop 刚从队列取走内容、正在 File.WriteAllText 写到一半 → 进程退出 →
+    ///   settings.json 留下半个文件 → 下次启动 JSON 解析失败 → 用户所有设置回默认。
+    /// 用 TCS 而不是 Sleep/轮询: 写完的那一瞬间立刻放行, 退出不多等一毫秒。
+    /// </summary>
+    private TaskCompletionSource<bool>? _drained;
+
+    /// <summary>唤醒所有等"写净"的调用方。调用方须持 _saveGate。</summary>
+    private void SignalDrained()
+    {
+        if (_drained == null) return;
+        var tcs = _drained;
+        _drained = null;
+        tcs.TrySetResult(true);
+    }
+
+    /// <summary>
+    /// 同步把所有未落盘的内容写净(进程退出前调用)。
+    ///
+    /// 2026-11-07 修: 旧版只写 _pendingJson 就返回 —— 如果 WriteLoop 已经取走了内容、
+    /// 正在写文件的半路上, 这次退出会把它拦腰砍断, 留下损坏的 JSON(见 _drained 的说明)。
+    /// 现在的顺序: ① 作废在途写(版本号+1, 让 WriteLoop 那次写跳过) ② 等它真正退出写循环
+    /// ③ 若队列里还有新内容(作废之后又 Save 过), 同步补写一次。
     /// </summary>
     public void Flush()
     {
+        Task drainedWait;
+        lock (_saveGate)
+        {
+            // ① 让"已取走、还没写"的后台写作废: 它落盘的话会盖掉这份 pending(或未来的写)
+            _version++;
+            _pendingJson = null;
+            // ② 等 WriteLoop 走完当前这一轮(写完或作废跳过)并退出
+            if (_writing)
+            {
+                _drained ??= new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                drainedWait = _drained.Task;
+            }
+            else
+            {
+                return;   // 没有在途写, 队列也空了
+            }
+        }
+        try { drainedWait.Wait(); } catch { /* 等待被中断也要继续补写 */ }
+
+        // ③ 作废期间又有新 Save 进来的话, 这里补上最后一次
         string? json;
         lock (_saveGate)
         {
@@ -1015,7 +1065,26 @@ public class SettingsStore
             _pendingJson = null;
         }
         if (json == null) return;
-        try { File.WriteAllText(FilePath, json); } catch { /* 退出阶段忽略 */ }
+        try { WriteAtomic(json); } catch { /* 退出阶段忽略 */ }
+    }
+
+    /// <summary>
+    /// 原子写: 先写临时文件再替换。直接覆写 settings.json 的话, 写入瞬间崩溃/断电
+    /// 会留下半个文件 —— 下次启动解析失败 = 全部设置回默认。
+    /// 临时名带唯一后缀: WriteLoop(后台)与 SaveNow/Flush(退出路径)可能并发到这里。
+    /// </summary>
+    private static void WriteAtomic(string json)
+    {
+        var tmp = FilePath + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, FilePath, overwrite: true);
+        }
+        finally
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* 尽力而为 */ }
+        }
     }
 
     /// <summary>
