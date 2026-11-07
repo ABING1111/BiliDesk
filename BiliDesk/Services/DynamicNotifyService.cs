@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
+using BiliDesk.Helpers;
 using BiliDesk.Models;
 
 namespace BiliDesk.Services;
@@ -559,7 +560,7 @@ public sealed class DynamicNotifyService
                 lock (Gate)
                 {
                     Directory.CreateDirectory(AppPaths.DataDir);
-                    File.WriteAllText(FilePath,
+                    AtomicFile.WriteAllText(FilePath,
                         JsonSerializer.Serialize(new { baseline }));
                 }
             }

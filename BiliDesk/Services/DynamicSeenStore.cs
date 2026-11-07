@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using BiliDesk.Helpers;
 
 namespace BiliDesk.Services;
 
@@ -100,7 +101,7 @@ public static class DynamicSeenStore
         try
         {
             Directory.CreateDirectory(AppPaths.DataDir);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(Map));
+            AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(Map));
             _dirty = false;
         }
         catch

@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using BiliDesk.Helpers;
 
 namespace BiliDesk.Services;
 
@@ -49,7 +50,7 @@ public class SearchHistoryService
     {
         try
         {
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(Items.ToArray(), JsonOpts));
+            AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(Items.ToArray(), JsonOpts));
         }
         catch
         {

@@ -1071,21 +1071,9 @@ public class SettingsStore
     /// <summary>
     /// 原子写: 先写临时文件再替换。直接覆写 settings.json 的话, 写入瞬间崩溃/断电
     /// 会留下半个文件 —— 下次启动解析失败 = 全部设置回默认。
-    /// 临时名带唯一后缀: WriteLoop(后台)与 SaveNow/Flush(退出路径)可能并发到这里。
+    /// ★ 2026-11-07 收敛到 Helpers.AtomicFile: 仓库里同一惯用法已有四份, 只留一份。
     /// </summary>
-    private static void WriteAtomic(string json)
-    {
-        var tmp = FilePath + ".tmp-" + Guid.NewGuid().ToString("N");
-        try
-        {
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, FilePath, overwrite: true);
-        }
-        finally
-        {
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* 尽力而为 */ }
-        }
-    }
+    private static void WriteAtomic(string json) => AtomicFile.WriteAllText(FilePath, json);
 
     /// <summary>
     /// 改"跳过赞助片段"的开关与类别并落盘。

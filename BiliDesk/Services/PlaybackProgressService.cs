@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using BiliDesk.Helpers;
 
 namespace BiliDesk.Services;
 
@@ -249,7 +250,9 @@ public sealed class PlaybackProgressService
             Directory.CreateDirectory(AppPaths.DataDir);
             PruneLocked();
             var json = JsonSerializer.Serialize(Map);
-            File.WriteAllText(FilePath, json);
+            // ★ 2026-11-07 改原子写: 直接覆写时, 播放中崩溃/断电会留下半个 progress.json,
+            //   下次启动解析失败 = 全部本机进度丢失。与其余 JSON 落盘同一套惯用法(AtomicFile)。
+            AtomicFile.WriteAllText(FilePath, json);
             _dirty = false;
             _lastFlushAt = Now;
         }
