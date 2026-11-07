@@ -48,6 +48,13 @@ public partial class FollowPage : UserControl
     /// </summary>
     private void OnUsersListSizeChanged(object sender, SizeChangedEventArgs e) => SyncAllDynamicEntry();
 
+    /// <summary>
+    /// 「全部动态」入口是否已量准尺寸。量准前该入口保持透明 —— 它的宽度是
+    /// code-behind 量出来才设置的, XAML 初始是"贴内容的窄条"(约为最终宽度的一半),
+    /// 若直接亮出来, 用户会看到"先半截、量完闪成全宽"的跳变(2026-11-07 用户实测仍复现)。
+    /// </summary>
+    private bool _allEntrySized;
+
     public FollowPage()
     {
         InitializeComponent();
@@ -102,6 +109,15 @@ public partial class FollowPage : UserControl
             // ★ 延迟到 Loaded 优先级: InitAsync 返回时 Users 刚填充、虚拟化列表还没走完
             //   布局, 容器尚未生成, 立刻量是空跑; 排一个布局完成后的事件再量才量得到。
             _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(SyncAllDynamicEntry));
+            // ★ 兜底: 列表为空(未登录/加载失败/一个关注都没有)时没有 UP 行可量,
+            //   入口会永远停在透明态 —— 排一个低优先级检查, 量不准就按 XAML 默认样子亮出来,
+            //   宁可显示窄条也不要什么都没有。
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
+            {
+                if (AllDynamicEntry == null || _allEntrySized) return;
+                _allEntrySized = true;
+                AllDynamicEntry.Opacity = 1;
+            }));
             StartLivePolling();
         }
     }
@@ -248,6 +264,13 @@ public partial class FollowPage : UserControl
 
         AllDynamicEntry.Margin = new Thickness(listOffset + p.X, 4, 0, 6);
         AllDynamicEntry.Width = width;
+
+        // ★ 尺寸量准的这一拍才让入口可见(同一帧生效, 窄条状态从未被渲染过)。
+        if (!_allEntrySized)
+        {
+            _allEntrySized = true;
+            AllDynamicEntry.Opacity = 1;
+        }
     }
 
     /// <summary>在容器里找行底衬(圆角 10、且是那一行的直接内容)。</summary>

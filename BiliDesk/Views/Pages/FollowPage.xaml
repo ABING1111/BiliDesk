@@ -345,7 +345,7 @@
                            选中态/悬停态与 UP 行完全同款。 -->
                     <Border x:Name="AllDynamicEntry" Grid.Row="1" CornerRadius="10"
                             Padding="14,10,10,10" Margin="8,4,8,6" Cursor="Hand"
-                            HorizontalAlignment="Left"
+                            HorizontalAlignment="Left" Opacity="0"
                             MouseLeftButtonUp="OnSelectAll">
                         <Border.Style>
                             <Style TargetType="Border">
