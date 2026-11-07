@@ -658,8 +658,8 @@ public partial class ApiClient
             //      (见 FillQualityMenu) ⇒ 之后每条视频都被钉死在 720P;
             //      画质菜单也被换成 durl 的列表 ⇒ **1080P 那档直接消失**, 用户再也选不回去。
             //   ② **AutoQn(=0) 不是最低画质, 而是"自动(最高可用)"**(见 QualityPreference,
-            //      内部换算成 127)。所以判"是否 ≤720P"必须**先排除它** ——
-            //      直接写 `qn <= 64` 会把 0 也吃进去, 于是用户默认就落进 durl 那条路。
+            //      内部换算成 120/4K, 封顶在能正常渲染的最高档)。所以判"是否 ≤720P"必须
+            //      **先排除它** —— 直接写 `qn <= 64` 会把 0 也吃进去, 于是用户默认就落进 durl 那条路。
             var isAuto = qn == QualityPreference.AutoQn;
             if (!isAuto && qn <= 64)
             {
@@ -757,15 +757,35 @@ public partial class ApiClient
                         }
                     }
                     // 请求的 qn 不可用时取最高档(同档仍按上面的编码优先级挑)
+                    // ★ 兜底也要守住"自动不落进杜比视界/HDR/8K"这条规则(2026-11-07):
+                    //   本分支原来没有任何过滤, 直接取整个列表的最高一条 —— 视频里有 DV 流时
+                    //   会挑中 126。而这条路径的触发条件恰恰是"qn 太低/该档没源", 用户此时
+                    //   最不想要的就是一条渲染不了的高档流。所以先只在"常规档"里挑,
+                    //   整条视频真的只有 DV/HDR/8K 时才退回原来的最高档(宁可播也别什么都不播)。
                     if (bestId == 0 && videos.GetArrayLength() > 0)
                     {
+                        var foundRegular = false;
                         foreach (var v in videos.EnumerateArray())
                         {
                             var id = GetInt(v, "id");
+                            if (id <= 0 || QualityPreference.IsAutoSkipTier(id)) continue;
                             var rank = CodecRank(GetStr(v, "codecs"));
-                            if (id > bestId || (id == bestId && rank > bestRank))
+                            if (!foundRegular || id > bestId || (id == bestId && rank > bestRank))
                             {
                                 best = v; bestId = id; bestRank = rank;
+                                foundRegular = true;
+                            }
+                        }
+                        if (!foundRegular)
+                        {
+                            foreach (var v in videos.EnumerateArray())
+                            {
+                                var id = GetInt(v, "id");
+                                var rank = CodecRank(GetStr(v, "codecs"));
+                                if (id > bestId || (id == bestId && rank > bestRank))
+                                {
+                                    best = v; bestId = id; bestRank = rank;
+                                }
                             }
                         }
                     }
@@ -1162,8 +1182,8 @@ public partial class ApiClient
     /// <summary>清晰度 id 转显示名</summary>
     public static string QnToLabel(int qn) => qn switch
     {
-        127 => "杜比视界",
-        126 => "杜比全景声",
+        127 => "8K",
+        126 => "杜比视界",
         125 => "HDR",
         120 => "4K",
         116 => "1080P60",

@@ -412,7 +412,8 @@ public partial class PlayerWindow : FluentWindow
     ///   当前这一条有效, 下一条仍然从用户选定的默认档起播(B 站客户端同款语义)。
     ///
     /// ★ 为什么走 <see cref="QualityPreference.RequestQn"/> 而不是直接赋值:
-    ///   设置页把「自动(最高可用)」存成哨兵值 0, 而发给接口的必须是"最高可用档"(127)。
+    ///   设置页把「自动(最高可用)」存成哨兵值 0, 而发给接口的必须是"最高可用档"(120/4K,
+    ///   见 QualityPreference.HighestQn —— 封顶在能正常渲染的档, 不含杜比视界/HDR/8K)。
     ///   同时 RequestQn 内部会 Normalize —— 配置被手改坏 / 存着已下线的档位时,
     ///   不会把一个谁也不认识的 qn 发进取流请求。
     /// </summary>

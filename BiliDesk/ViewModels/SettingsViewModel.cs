@@ -719,7 +719,7 @@ public class SettingsViewModel : ObservableObject
     /// </summary>
     public string QualityHint =>
         Svc.Settings.PreferredQualityQn == QualityPreference.AutoQn
-            ? "每次起播自动取当前账号可用的最高清晰度"
+            ? "每次起播自动取当前账号可用的最高清晰度(最高到 4K; 杜比视界/HDR/8K 需在播放器里手动选)"
             : $"每次起播都请求 {QualityPreference.LabelOf(Svc.Settings.PreferredQualityQn)}; " +
               "该清晰度不存在或没有权限时自动降到可用的下一档";
 

@@ -600,8 +600,9 @@ public partial class PlayerWindow : FluentWindow
             if (actualQn > 0) _currentQn = actualQn;
             // ★★★ 按钮上的文字必须按"**接口实际给的**档位"或"用户的偏好"来取,
             //   **绝不能**对 _currentQn 直接调 QnToLabel(2026-10-04 修):
-            //   「默认画质 = 自动」时 _currentQn 是发给接口的请求上界 127, 而 QnToLabel(127)
-            //   是"杜比视界"(那是真实流里的 8K 档)。于是本地文件/直播/起播失败(actualQn == 0)
+            //   「默认画质 = 自动」时 _currentQn 是发给接口的请求上界(现在是 120/4K,
+            //   见 QualityPreference.HighestQn), 而 QnToLabel 只认**真实流**里的档位名。
+            //   于是本地文件/直播/起播失败(actualQn == 0)
             //   这些"没有实际档位可显示"的路径上, 按钮会写成一个用户根本没有的档位。
             //   这里只显示**确实在播的那一档**: 有实际档位就说它, 没有(本地/直播)就说用户的偏好,
             //   两者都不会把"请求用的内部值"当成画质名报给用户。
