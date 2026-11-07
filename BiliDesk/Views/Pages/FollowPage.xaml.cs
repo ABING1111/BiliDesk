@@ -68,6 +68,43 @@ public partial class FollowPage : UserControl
     /// </summary>
     private bool _allEntrySized;
 
+    /// <summary>
+    /// 正在把最后一张卡完整滚进视口。
+    ///
+    /// ★★ 为什么需要这道闸(2026-11-07 修"卡片墙连续下滑后崩溃"):
+    ///   <see cref="ScrollLastFeedItemIntoView"/> 调 ListBox.ScrollIntoView 会**同步**引发
+    ///   ScrollChanged; 而 ScrollChanged 的处理里, 只要"离底 ≤ 4px"又会再调一次对齐。
+    ///   在某几种布局状态下(容器刚生成/被重建, 或滚到底后 Extent 又变了一点),
+    ///   ScrollIntoView 不移动偏移但照样触发一次 ScrollChanged —— 于是自己调自己,
+    ///   一路递归到栈溢出。StackOverflowException 是**不可捕获**的, 表现就是进程直接消失,
+    ///   errors.txt 里一个字都没有。有了这个标记, 重入的那一次直接返回。
+    /// </summary>
+    private bool _aligningFeedBottom;
+
+    /// <summary>
+    /// 下一次允许做"最后一项按项对齐"的时间戳(TickCount64)。
+    /// ScrollChanged 在布局变化时会连成一串, 300ms 冷却是给动态卡那条路用的第二道闸;
+    /// 卡片墙根本不走对齐(见 FeedScroll_OnScrollChanged)。
+    /// </summary>
+    private long _nextFeedBottomAlignAt;
+
+    /// <summary>
+    /// 页面侧再兜一道"自动翻页在途"的闸。
+    /// vm.LoadingMore 负责正常情况; 这里防的是滚动事件的连锁触发(一批内容落地后
+    /// 尺寸变化又冒出一串 ScrollChanged), 不靠它兜底就会在底部反复发起同一页。
+    /// </summary>
+    private bool _feedAutoLoadBusy;
+
+    /// <summary>
+    /// 连续"内容还不够一屏"的自动补页次数。
+    /// ★ 只在**用户没有滚动**时累积(见 FeedScroll_OnScrollChanged 里的 VerticalChange 判断),
+    ///   用户一滚动就清零。上限用于防止"接口一直回空页/被屏蔽筛空"时页面自己无限补页。
+    /// </summary>
+    private int _shortContentFills;
+
+    /// <summary>"内容不足一屏"补页的连续上限(与首页 TriggerAutoLoad 的防死循环思路一致)。</summary>
+    private const int MaxShortContentFills = 3;
+
     public FollowPage()
     {
         InitializeComponent();
@@ -119,9 +156,13 @@ public partial class FollowPage : UserControl
             UsersList.SizeChanged -= OnUsersListSizeChanged;
             UsersList.SizeChanged += OnUsersListSizeChanged;
             await vm.InitAsync();
+            _shortContentFills = 0;
             // ★ 延迟到 Loaded 优先级: InitAsync 返回时 Users 刚填充、虚拟化列表还没走完
             //   布局, 容器尚未生成, 立刻量是空跑; 排一个布局完成后的事件再量才量得到。
             _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(SyncAllDynamicEntry));
+            // ★ 首屏/刷新后如果内容还不够一屏, 列表根本不会产生滚动, ScrollChanged
+            //   也就永远等不到 —— 这里主动补一次(有 MaxShortContentFills 上限)。
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(TryAutoFillShortContent));
             // ★ 兜底: 列表为空(未登录/加载失败/一个关注都没有)时没有 UP 行可量,
             //   入口会永远停在透明态 —— 排一个低优先级检查, 量不准就按 XAML 默认样子亮出来,
             //   宁可显示窄条也不要什么都没有。
@@ -147,7 +188,7 @@ public partial class FollowPage : UserControl
             var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
             var contentShort = sv.ScrollableHeight <= 0;
             if (distanceToBottom > FeedAutoLoadThreshold && !contentShort) return;
-            await vm.LoadMoreFeedAsync();
+            await LoadMoreFeedGuardedAsync();
         }));
     }
 
@@ -183,12 +224,24 @@ public partial class FollowPage : UserControl
 
     private void OnLayoutCardsClick(object sender, RoutedEventArgs e)
     {
-        if (DataContext is FollowViewModel vm) { vm.UseCardWall = false; UpdateLayoutChips(vm); }
+        if (DataContext is FollowViewModel vm)
+        {
+            vm.UseCardWall = false;
+            UpdateLayoutChips(vm);
+            _shortContentFills = 0;
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(TryAutoFillShortContent));
+        }
     }
 
     private void OnLayoutWallClick(object sender, RoutedEventArgs e)
     {
-        if (DataContext is FollowViewModel vm) { vm.UseCardWall = true; UpdateLayoutChips(vm); }
+        if (DataContext is FollowViewModel vm)
+        {
+            vm.UseCardWall = true;
+            UpdateLayoutChips(vm);
+            _shortContentFills = 0;
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(TryAutoFillShortContent));
+        }
     }
 
     /// <summary>
@@ -227,7 +280,7 @@ public partial class FollowPage : UserControl
     {
         if (e.ChangedButton != MouseButton.Left) return;
         if (!TakeLeftPress()) return;
-        if (DataContext is FollowViewModel vm) _ = vm.SelectAllAsync();
+        if (DataContext is FollowViewModel vm) _ = AfterSelectionChangedAsync(vm.SelectAllAsync());
     }
 
     /// <summary>点某个 UP: 右栏只显示 TA 的投稿视频</summary>
@@ -236,7 +289,19 @@ public partial class FollowPage : UserControl
         if (e.ChangedButton != MouseButton.Left) return;
         if (!TakeLeftPress()) return;
         if (((FrameworkElement)sender).DataContext is not FollowUser u) return;
-        if (DataContext is FollowViewModel vm) _ = vm.SelectUpAsync(u);
+        if (DataContext is FollowViewModel vm) _ = AfterSelectionChangedAsync(vm.SelectUpAsync(u));
+    }
+
+    /// <summary>
+    /// 换选择(全部动态 / 某个 UP)之后的收尾: 重置"内容不足一屏"的补页额度,
+    /// 并在新内容布局完成后检查一次够不够一屏(否则卡片墙会停在一页上, 用户滚不动也加载不了)。
+    /// </summary>
+    private async Task AfterSelectionChangedAsync(Task selectionTask)
+    {
+        _shortContentFills = 0;
+        await selectionTask;
+        if (!IsLoaded) return;
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(TryAutoFillShortContent));
     }
 
     private void OnClearUserSearch(object sender, RoutedEventArgs e)
@@ -316,6 +381,10 @@ public partial class FollowPage : UserControl
         await vm.RefreshAsync();
         var sv = GetVisibleFeedScroll();
         if (sv != null) sv.ScrollToTop();
+        _shortContentFills = 0;
+        // 刷新后只有一页时内容常常不够一屏: 不主动补一次的话既没有滚动条也没有 ScrollChanged,
+        // 右栏会一直停在这一页(用户感受就是"刷新之后滑不动了")。
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(TryAutoFillShortContent));
     }
 
     // ------------------------------------------------------------ 关注直播看板
@@ -347,7 +416,7 @@ public partial class FollowPage : UserControl
     /// <summary>右栏: 滚动到底自动补下一页(全部动态 = 游标; 单 UP = 页码)</summary>
     private void FeedScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (DataContext is not FollowViewModel vm) return;
+        if (!IsLoaded || DataContext is not FollowViewModel vm) return;
 
         var sv = ScrollViewerOf(e, sender);
         if (sv != null)
@@ -360,11 +429,31 @@ public partial class FollowPage : UserControl
             vm.SetAtFeedBottom(atBottom);
         }
 
+        // 用户自己滚动过 ⇒「内容不足一屏」的连续补页额度重新开始。
+        if (Math.Abs(e.VerticalChange) > 0.5) _shortContentFills = 0;
+
+        // ★★ 触底对齐中的重入必须立刻返回(2026-11-07 修连续下滑崩溃):
+        //   ScrollIntoView 会同步引发 ScrollChanged; 若此时仍在"离底 ≤ 4px"，
+        //   下面又会调一次 ScrollIntoView —— 自己调自己, 栈溢出直接杀进程。
+        if (_aligningFeedBottom) return;
+
+        // 页面已经切走(实例仍被 MainWindow 缓存)时不要再翻页。
+        if (!IsPageActive()) return;
+
         // 卡片墙有 300 条上限: 到上限后不再自动翻页, 底部会提示切换动态卡。
         if (vm.UseCardWall && vm.WallItems.Count >= 300) return;
         if (vm.LoadingMore || vm.LoadMoreError || !vm.HasMore) return;
 
-        if (sv == null || sv.ScrollableHeight <= 0) return;
+        if (sv == null) return;
+
+        // 内容还不够一屏: 没有滚动条、永远滚不到底, ScrollChanged 也不会再来了 ——
+        // 主动补一次(由 _shortContentFills 限流, 防止接口一直回空页时无限自补)。
+        if (sv.ScrollableHeight <= 0)
+        {
+            TryAutoFillShortContent();
+            return;
+        }
+
         var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
         if (distanceToBottom > FeedAutoLoadThreshold) return;
 
@@ -374,8 +463,66 @@ public partial class FollowPage : UserControl
         //   这里在触底时把最后一项**完整滚进视口**(按项对齐), 半张卡的现象就没了。
         // ★ 2026-11-07: 预取阈值改成 800px(见 FeedAutoLoadThreshold)后, 对齐必须单独
         //   用更小的 FeedBottomAlignThreshold —— 否则离底还差 800px 就把画面拽到最后一张卡。
-        if (distanceToBottom <= FeedBottomAlignThreshold) ScrollLastFeedItemIntoView(sv);
-        _ = vm.LoadMoreFeedAsync();
+        // ★★ 卡片墙**不需要**这一步: 它是多列网格, 最后一行卡片本身就不高, 滚到底时
+        //   整行都在视口里。而 ScrollIntoView 在非虚拟化面板 + 连续滚动下会同步引发
+        //   ScrollChanged, 是"自己调自己"的唯一入口 —— 这一档直接跳过, 从源头断掉。
+        //   动态卡(单列, 卡片可能比视口还高)才需要按项对齐, 并且带 300ms 冷却。
+        if (distanceToBottom <= FeedBottomAlignThreshold
+            && !vm.UseCardWall
+            && Environment.TickCount64 >= _nextFeedBottomAlignAt)
+        {
+            _nextFeedBottomAlignAt = Environment.TickCount64 + 300;
+            ScrollLastFeedItemIntoView(sv);
+        }
+        _ = LoadMoreFeedGuardedAsync();
+    }
+
+    /// <summary>
+    /// 内容明显不足一屏时的主动补页。
+    ///
+    /// ★ 只在"用户没有滚动"的时机调用(页面加载完 / 刷新后 / 切选择后 / 一批内容落地后):
+    ///   这些时候如果没有滚动条, ScrollChanged 不会再来, 不主动补就会永远停在一页上。
+    /// ★ 连补次数有上限(<see cref="MaxShortContentFills"/>), 用户一滚动就清零 ——
+    ///   既不无限自补, 也不会把用户手动滚出来的翻页额度耗掉。
+    /// </summary>
+    private void TryAutoFillShortContent()
+    {
+        if (!IsLoaded || !IsPageActive()) return;
+        if (DataContext is not FollowViewModel vm) return;
+        if (_shortContentFills >= MaxShortContentFills) return;
+        if (vm.Loading || vm.LoadingMore || vm.LoadMoreError || !vm.HasMore) return;
+        if (vm.UseCardWall && vm.WallItems.Count >= 300) return;
+
+        var sv = GetVisibleFeedScroll();
+        if (sv == null) return;
+
+        // 内容明显够长(超过 0.8 个视口)就不补 —— 这是"够不够一屏"的判据, 不是预取阈值。
+        if (sv.ScrollableHeight >= Math.Max(1, sv.ViewportHeight) * 0.8) return;
+
+        _shortContentFills++;
+        _ = LoadMoreFeedGuardedAsync();
+    }
+
+    /// <summary>
+    /// 页面侧的"加载更多"唯一入口: 同一时刻只允许一条在途,
+    /// 完成后再排一次"内容是否还不够一屏"的检查(用 Loaded 优先级, 等新内容布局完)。
+    /// </summary>
+    private async Task LoadMoreFeedGuardedAsync()
+    {
+        if (_feedAutoLoadBusy || DataContext is not FollowViewModel vm) return;
+
+        _feedAutoLoadBusy = true;
+        try
+        {
+            await vm.LoadMoreFeedAsync();
+        }
+        finally
+        {
+            _feedAutoLoadBusy = false;
+        }
+
+        if (!IsLoaded) return;
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(TryAutoFillShortContent));
     }
 
     /// <summary>
@@ -388,6 +535,10 @@ public partial class FollowPage : UserControl
     /// </summary>
     private void ScrollLastFeedItemIntoView(ScrollViewer sv)
     {
+        // ★ 重入保护(2026-11-07): ScrollIntoView 会同步发 ScrollChanged, 而 ScrollChanged
+        //   里"离底 ≤ 4px"又可能再调回来 —— 没有这道闸就是无限递归 → StackOverflow。
+        if (_aligningFeedBottom) return;
+
         var list = (DataContext as FollowViewModel)?.UseCardWall == true
             ? (DependencyObject?)FeedWallList
             : FeedList;
@@ -395,6 +546,8 @@ public partial class FollowPage : UserControl
 
         var last = lb.Items[lb.Items.Count - 1];
         if (last == null) return;
+
+        _aligningFeedBottom = true;
         try
         {
             lb.ScrollIntoView(last);
@@ -402,6 +555,10 @@ public partial class FollowPage : UserControl
         catch
         {
             // ScrollIntoView 在容器尚未布局时可能抛异常 —— 忽略即可(下一次滚动会再试)。
+        }
+        finally
+        {
+            _aligningFeedBottom = false;
         }
     }
 

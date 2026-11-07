@@ -39,6 +39,17 @@ public class FollowViewModel : ObservableObject
     private bool _hasMoreUsers = true;
     private bool _loadMoreError;
     private int _emptyFeedPages;
+
+    /// <summary>
+    /// 右栏加载世代。每次 reset(true) 自增; 在途的旧请求回来时对不上就整批丢弃。
+    ///
+    /// ★ 为什么需要(2026-11-07 "连续下滑 + 刷新"): 翻页请求还在路上时用户点了刷新,
+    ///   刷新会清空 FeedItems 并重新拉第一页; 旧翻页随后返回, 会把自己的条目追加到
+    ///   新列表上(混入上一轮内容), 还把 Loading/LoadingMore 状态改掉。
+    ///   这不会直接崩进程, 但会让卡片墙的"首尾条目"对不上, 触发整墙重建, 连续操作时
+    ///   越滚越乱。世代号是最小、最确定的解决办法。
+    /// </summary>
+    private int _feedGeneration;
     private string _error = "";
     private string _usersLoadError = "";
     private long _selfMid;
@@ -56,6 +67,12 @@ public class FollowViewModel : ObservableObject
     /// <summary>
     /// 卡片墙显示用的条目。CardWallPanel 不会虚拟化, 这里最多放 300 条,
     /// 防止 2790+ 关注下滑到几百条时一次生成太多卡片容器。
+    ///
+    /// ★ 与 <see cref="FeedItems"/> 的同步必须是**增量**的(2026-11-07 修连续下滑崩溃):
+    ///   以前每 Add 一条 FeedItems 就把整墙 Clear 再重建一遍, 而 CardWallPanel 没有虚拟化,
+    ///   一页 20 条 = 20 次 × 最多 300 张卡片容器的创建/销毁。连续翻几页后 UI 线程与
+    ///   WPF 渲染层都被这堆废容器淹没, 表现为越滚越卡、最后直接闪退。
+    ///   现在只在整批落地后调一次, 且只把**新增的尾巴**追加进来(见 SyncWallItems)。
     /// </summary>
     public ObservableCollection<VideoItem> WallItems { get; } = new();
     private const int WallItemLimit = 300;
@@ -390,10 +407,11 @@ public class FollowViewModel : ObservableObject
         });
         Svc.Session.Changed += OnSessionChanged;
         Svc.DynamicNotify.Updated += OnNotifyUpdated;
-        FeedItems.CollectionChanged += (_, _) =>
-        {
-            if (UseCardWall) SyncWallItems();
-        };
+        // ★ 不再逐条监听 FeedItems.CollectionChanged:
+        //   翻一页会 Add 十几到几十条, 逐条通知会让卡片墙**整墙重建 N 次**
+        //   (每次 Clear + 重新 Add 最多 300 条) —— 用户连续下滑加载时 UI 线程被这堆
+        //   容器生成/销毁拖住, 内存曲线也一节一节往上跳, 极端情况下直接把进程拖崩。
+        //   现在改为在"一批加载真正落地后"调一次 SyncWallItems(增量追加), 见 LoadSelectionAsync。
     }
 
     private void OnNotifyUpdated()
@@ -641,8 +659,16 @@ public class FollowViewModel : ObservableObject
         if (Loading) return;
         if (reset)
         {
+            // 新的世代: 之前还在路上的翻页请求全部作废(见 _feedGeneration 的说明)
+            _feedGeneration++;
             Loading = true;
+            // 在途的翻页属于旧世代, 它的结果会被丢弃 —— 这里必须把它的"加载中"标记收掉,
+            // 否则它永远没机会自己清(旧回调看到世代不符已经 return), 之后再也翻不了页。
+            LoadingMore = false;
             FeedItems.Clear();
+            // 右栏换血时卡片墙也要立刻空掉(不然加载期间会留着上一个 UP / 上一轮的内容)。
+            // 这里是**一次性**清空, 不是逐条事件, 代价只有一次。
+            if (UseCardWall) SyncWallItems();
             _seenBvid.Clear();
             _feedOffset = null;
             _emptyFeedPages = 0;
@@ -659,6 +685,7 @@ public class FollowViewModel : ObservableObject
         }
 
         var forUp = SelectedUp;         // 快照: 期间用户又点了别人时, 结果作废
+        var generation = _feedGeneration;   // 快照: 期间发生过 reset 时, 本次结果作废
         bool ok;
         string? err = null;
         List<VideoItem>? items = null;
@@ -713,6 +740,9 @@ public class FollowViewModel : ObservableObject
 
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
+                // ★ 期间发生过 reset(刷新/切选择): 本次结果整批丢弃, **连 Loading 状态都不要碰** ——
+                //   现在这两个标记属于新的那次加载, 旧请求无权清掉(否则刷新遮罩会提前消失)。
+                if (generation != _feedGeneration) return;
                 Loading = false;
                 LoadingMore = false;
                 if (SelectedUp != forUp) return;   // 选择已变, 丢弃本次结果
@@ -763,6 +793,8 @@ public class FollowViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            // 旧世代请求的失败同样不参与状态变更(见上)。
+            if (generation != _feedGeneration) return;
             Loading = false;
             LoadingMore = false;
             if (reset) Error = ex.Message;
@@ -798,13 +830,34 @@ public class FollowViewModel : ObservableObject
     /// <summary>卡片墙超过 300 条时的提示(避免用户以为后面没有内容了)。</summary>
     public bool ShowWallLimitHint => UseCardWall && FeedItems.Count > WallItems.Count;
 
-    /// <summary>把 FeedItems 的前 300 条同步到卡片墙集合。</summary>
+    /// <summary>
+    /// 把 FeedItems 的前 300 条同步到卡片墙集合。
+    ///
+    /// ★★ 增量追加(2026-11-07): 只有"墙确实接不上"时才整墙清空, 其余情况只补尾巴。
+    ///   整墙清空 = CardWallPanel 把最多 300 个卡片容器全部销毁再重建; 连续下滑时
+    ///   每翻一页都来一次, 是"越滚越卡 → 崩溃"的直接来源。
+    ///
+    /// 整墙重建的三种情况:
+    ///   ① 墙空了(want &gt; 0) —— 正常从 0 开始补;
+    ///   ② 墙比目标长(刷新/换 UP/切回卡片墙后 FeedItems 变短);
+    ///   ③ 墙的首尾条目与 FeedItems 对不上 —— 说明整批内容被换过(刷新/切选择/屏蔽)。
+    ///   其余情况(最常见: 翻页后 FeedItems 只是变长)走 append, 开销 = 新增那几条。
+    /// </summary>
     private void SyncWallItems()
     {
         var want = Math.Min(FeedItems.Count, WallItemLimit);
-        if (WallItems.Count == want) return;
-        WallItems.Clear();
-        for (var i = 0; i < want; i++) WallItems.Add(FeedItems[i]);
+
+        var reset = want == 0
+                    || WallItems.Count > want
+                    || (WallItems.Count > 0 &&
+                        (!ReferenceEquals(WallItems[0], FeedItems[0]) ||
+                         !ReferenceEquals(WallItems[WallItems.Count - 1], FeedItems[WallItems.Count - 1])));
+
+        if (reset && WallItems.Count > 0) WallItems.Clear();
+
+        // reset 之后 Count 为 0; 未重置时从这里接着补新增的条目。
+        for (var i = WallItems.Count; i < want; i++) WallItems.Add(FeedItems[i]);
+
         OnPropertyChanged(nameof(ShowWallLimitHint));
     }
 
