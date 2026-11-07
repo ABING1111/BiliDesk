@@ -5,7 +5,6 @@
              xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
              xmlns:vm="clr-namespace:BiliDesk.ViewModels"
              xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
              Title="BiliDesk" Width="1280" Height="800"
              MinWidth="840" MinHeight="660" WindowStartupLocation="CenterScreen"
@@ -421,9 +420,5 @@
                 </Grid>
             </Grid>
         </Border>
-
-        <!-- 隐藏的小 WebView2: 用于退出登录时清理 Cookie(清理时短暂显示 1px) -->
-        <wv2:WebView2 x:Name="HiddenWebView" Grid.Column="1" Width="1" Height="1"
-                      Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Bottom" />
     </Grid>
 </views:FluentWindow>

@@ -1561,8 +1561,9 @@ public class SettingsViewModel : ObservableObject
         Svc.Session.Clear();
         try
         {
-            if (SvcWindow.HiddenWebView is { } hidden)
-                await Svc.WebView2.ClearProfileCookiesAsync(hidden);
+            // ★ 2026-11-07 P4: 临时建一个隐藏 WebView2 去清 Profile 里的 Cookie, 用完 Dispose
+            //   (不再依赖主窗口里那个常驻的 1×1 控件 —— 它已经删掉了)。
+            await Svc.WebView2.WithHiddenAsync(wv => Svc.WebView2.ClearProfileCookiesAsync(wv));
         }
         catch
         {

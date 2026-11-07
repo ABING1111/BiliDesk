@@ -1,5 +1,3 @@
-using Microsoft.Web.WebView2.Wpf;
-
 namespace BiliDesk.Services;
 
 /// <summary>主窗口引用(供退出登录时清 Cookie 等场景使用)</summary>
@@ -11,7 +9,4 @@ public static class SvcWindow
     /// 别在这上面直接解引用: 那会变成一句"空引用异常", 而不是"这一步跳过"。
     /// </summary>
     public static global::BiliDesk.MainWindow? Main { get; set; }
-
-    /// <summary>主窗口里那个 1×1 的隐藏 WebView2; 主窗口还没建好时是 null</summary>
-    public static WebView2? HiddenWebView => Main?.HiddenWebView;
 }

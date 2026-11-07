@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace BiliDesk.Helpers;
@@ -51,6 +52,13 @@ public class CardWallPanel : Panel
     /// <summary>上次 Arrange 时每个孩子的 Y 坐标(与 InternalChildren 对齐), 供"可见区优先"排序。</summary>
     private readonly List<double> _arrangeY = new();
 
+    /// <summary>
+    /// 上次 Arrange 时每个孩子的**底边** Y(= Y + 高度), 与 <see cref="_arrangeY"/> 对齐。
+    /// 封面内存窗口要判"这张卡整个在带外", 只看顶边不够 —— 一张卡可能顶边在带上方、
+    /// 身体还伸进视野里。
+    /// </summary>
+    private readonly List<double> _arrangeBottom = new();
+
     public CardWallPanel()
     {
         // 挂上 CardWall.Enable 之后, SizeChanged 会驱动 CardWall.Update 写 ItemWidth ——
@@ -60,6 +68,43 @@ public class CardWallPanel : Panel
         //   ① **当帧**把可见带的孩子切到"按本次宽度算出的目标宽度" —— 见 OnWallResized;
         //   ② 按锚点把滚动偏移补回来 —— 见 Reanchor。
         SizeChanged += (_, _) => OnWallResized();
+
+        // 封面内存窗口(2026-11-07 P1): 卡片是零虚拟化的, 容器永不销毁, 于是"滚过多少张"
+        // 就等于"常驻多少张解码后的封面位图"。滚出视口足够远之后必须把引用放开,
+        // 否则内存随滚动线性上涨。挂 Loaded/Unloaded 而不是构造: 那时才拿得到 ScrollViewer。
+        Loaded += (_, _) => AttachCoverWindow();
+        Unloaded += (_, _) => DetachCoverWindow();
+        // 切页时页面只是 Visibility.Collapsed(见 MainWindow.ShowPage): 墙没被卸载,
+        // 但用户看不见它了 —— 回到这一页时必须重扫一次, 把这一屏的封面贴回来。
+        //
+        // ★ 回来时派到 **Loaded 优先级**(布局之后)再扫: 此刻布局还没走, _arrangeY 是上一版,
+        //   TransformToAncestor 甚至可能抛。等布局落地再算, 才能一次贴对位置。
+        //   用 Loaded 而不是 150ms 合并, 是因为切页动画只有 200ms —— 拖到 150ms 后
+        //   用户会看到"新页面已经淡入、卡片却是空的"闪一下。
+        //
+        // ★ IsVisibleChanged 是**普通 CLR 事件**(不是路由事件), sender 恒为本元素,
+        //   子元素的可见性变化不会传到这里 —— 所以这里不需要再判来源。
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true)
+            {
+                // ★★ 先把布局付清再扫(2026-11-07 修"排行榜在小窗口下部分封面永久灰"):
+                //   页面从 Collapsed 变 Visible 的这一刻, `ArrangeTop` 可能还是**上一次可见时**
+                //   的旧值(折叠期间从不参与布局), 甚至还没被赋过。直接扫会拿到过期坐标,
+                //   把"其实在视口里"的卡片判成视口外放掉、或反过来不去恢复。
+                //   而且这一轮扫完之后, **用户不滚动就不会再有下一轮** —— 一旦判错就永久灰,
+                //   只有改变窗口尺寸(强制重排)才救得回来, 正是用户报的现象。
+                //   这里 UpdateLayout 只付一次(可见的那一屏, 十几毫秒), 换来的是"切回来必定正确"。
+                try { UpdateLayout(); } catch { /* 布局尚未就绪: 下面的扫描会自然跳过 */ }
+                // ★ 顺便重试"发现 ScrollViewer": 挂载时可能还没进可视树(见 AttachCoverWindow)。
+                TryAttachScroll();
+                UpdateCoverWindow();
+            }
+            else
+            {
+                ReleaseOffscreenCovers();
+            }
+        };
     }
 
     /// <summary>
@@ -447,6 +492,321 @@ public class CardWallPanel : Panel
         RememberOffset(before);
     }
 
+    // ------------------------------------------------------------ 封面内存窗口
+
+    /// <summary>
+    /// 滚动停止后多久扫一次(合并滚动过程中的高频 ScrollChanged)。
+    /// </summary>
+    private const int CoverWindowDebounceMs = 150;
+
+    private ScrollViewer? _coverScroll;
+    private DispatcherTimer? _coverWindowTimer;
+    private bool _coverWindowQueued;
+
+    /// <summary>
+    /// **保底心跳**: 即使所有事件都漏了, 也保证每 1.5 秒重扫一次。
+    ///
+    /// ★★★ 为什么必须有它(2026-11-07 修"排行榜在小窗口下部分封面永久灰"):
+    ///   这套机制原来完全**事件驱动** —— ScrollChanged / ArrangeOverride / IsVisibleChanged
+    ///   三个来源。任何一个环节漏掉(布局被复用、可见性变化发生在挂载之前、扫描时坐标还是旧值),
+    ///   那一格就**永远**停在占位色上, 因为"没有事件 ⇒ 没有下一轮扫描 ⇒ 没有机会纠正"。
+    ///   用户看到的就是"小窗口下灰一片, 把窗口调大(强制重排)就好了"。
+    ///   ⇒ 加一个低频心跳, 让"最终一定会被扫描到"成为不依赖任何事件的性质。
+    ///
+    /// ★ 成本: 每 1.5 秒一次 O(N) 的比较(几百张卡 ≈ 微秒级), 且**只在可见时跑**
+    ///   (不可见时停掉, 见 OnCoverHeartbeatTick)。这比"某张封面永久灰"便宜得多。
+    /// </summary>
+    private const int CoverHeartbeatMs = 1500;
+
+    private DispatcherTimer? _coverHeartbeat;
+
+    private void AttachCoverWindow()
+    {
+        // ★★★ 心跳**必须无条件启动**(2026-11-07 修"切回首页封面不加载"):
+        //   旧代码在 `_coverScroll == null` 时直接 return —— 而 Loaded 只发一次,
+        //   于是"挂载那一刻 ScrollViewer 还没进可视树"就变成**永久放弃**:
+        //   心跳不启动、ScrollChanged 也不订阅, 之后只剩 IsVisibleChanged /
+        //   ArrangeOverride 偶然触发扫描。用户看到的就是"切回来一片灰, 滑一下才出来"
+        //   (滑动会产生 ScrollChanged —— 但那个事件当时根本没订阅上)。
+        //   现在心跳先跑起来, 它每一拍都会调 <see cref="TryAttachScroll"/> 重试发现。
+        StartCoverHeartbeat();
+        TryAttachScroll();
+    }
+
+    /// <summary>
+    /// 找到 ScrollViewer 并订阅它的滚动事件。**可以反复调用**(已订阅则直接返回)。
+    ///
+    /// ★ 为什么要能重试: 卡片墙可能在 ScrollViewer 之前就 Loaded(分帧构建的页面),
+    ///   那时找不到 —— 不能让这个"一时找不到"变成永久失效, 见 <see cref="AttachCoverWindow"/>。
+    /// </summary>
+    private void TryAttachScroll()
+    {
+        if (_coverScroll != null) return;
+        var sv = VisualTreeUtil.FindAncestor<ScrollViewer>(this);
+        if (sv == null) return;
+        _coverScroll = sv;
+        sv.ScrollChanged += OnCoverScrollChanged;
+        // 首屏: 数据是分帧填进来的, 填完不会有 ScrollChanged —— 这里补一次。
+        QueueCoverWindow();
+    }
+
+    private void DetachCoverWindow()
+    {
+        if (_coverScroll != null)
+        {
+            _coverScroll.ScrollChanged -= OnCoverScrollChanged;
+            _coverScroll = null;
+        }
+        _coverWindowTimer?.Stop();
+        StopCoverHeartbeat();
+    }
+
+    private void StartCoverHeartbeat()
+    {
+        _coverHeartbeat ??= CreateCoverHeartbeat();
+        _coverHeartbeat.Start();
+    }
+
+    private void StopCoverHeartbeat() => _coverHeartbeat?.Stop();
+
+    private DispatcherTimer CreateCoverHeartbeat()
+    {
+        var t = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(CoverHeartbeatMs),
+        };
+        t.Tick += (_, _) =>
+        {
+            // 不可见时不扫(省 CPU, 也让切走的页面不再动); 可见性一变 IsVisibleChanged 会重排扫描
+            if (!IsVisible) return;
+            // ★ 顺便重试"发现 ScrollViewer"(见 TryAttachScroll): 挂载时可能还没进可视树。
+            TryAttachScroll();
+            UpdateCoverWindow();
+        };
+        return t;
+    }
+
+    private void OnCoverScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        // 只有纵向偏移/视口变化才影响可见带; 内容高度变化(分帧填充)也要重扫
+        if (e.VerticalChange == 0 && e.ViewportHeightChange == 0 &&
+            e.ExtentHeightChange == 0) return;
+        QueueCoverWindow();
+    }
+
+    /// <summary>
+    /// 合并窗口: 滚动过程中每帧都会发 ScrollChanged, 每次都全表扫一遍是白费。
+    ///
+    /// ★ **只保证"有一个在途", 不重置计时器**(2026-11-07): 原来的写法是每次进来都
+    ///   Stop+Start, 于是持续滚动时这个计时器**永远不触发** —— 一路滚到底的整段时间里
+    ///   一张封面都不放, 内存峰值照样堆起来。改成"已排队就直接返回", 它就变成
+    ///   一个稳定的 150ms 节流: 长滚动期间每 150ms 收一次, 松手后自然还有最后一次。
+    /// </summary>
+    private void QueueCoverWindow()
+    {
+        if (_coverWindowQueued) return;
+        _coverWindowQueued = true;
+        _coverWindowTimer ??= CreateCoverWindowTimer();
+        _coverWindowTimer.Start();
+    }
+
+    private DispatcherTimer CreateCoverWindowTimer()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(CoverWindowDebounceMs) };
+        t.Tick += (_, _) =>
+        {
+            t.Stop();
+            _coverWindowQueued = false;
+            UpdateCoverWindow();
+        };
+        return t;
+    }
+
+    /// <summary>
+    /// 按当前滚动位置把**视口内**缺图的封面补上。**不释放任何东西**。
+    ///
+    /// ★★★ 2026-11-07 第三次重做(用户报"滑下去再划上来封面不加载"、"排行榜下面全灰")：
+    ///   **把"释放"从滚动路径上彻底拿掉。**
+    ///
+    ///   前两版都在滚动时做"放掉离屏封面、滚回来再贴"。探针反复复现同一个问题：
+    ///   只要"释放"与"滚动"耦合，就必然存在"用户马上要看到的那张正好被放掉"的窗口 ——
+    ///   而释放是不可逆的（要等下一轮扫描才恢复），于是表现就是"封面不加载，
+    ///   改窗口大小（强制重排 + 重新扫描）才恢复"。三次修都没能消除这个窗口：
+    ///     · 第一次：`Released` 只置不清 → 永久灰
+    ///     · 第二次：坐标缓存过期 / `TransformToAncestor` 滞后 → 误判离屏
+    ///     · 第三次：即使加了"连续两轮才释放"，滚动到底部时 `ScrollableHeight` 被夹住，
+    ///       最后一行的判定仍然会翻，探针稳定复现"滚到 75% 有 20 张灰"。
+    ///
+    ///   ⇒ 现在的分工（结构上不存在"放了又要用"的窗口）：
+    ///     · **滚动**：只负责"补"（视口内缺图就贴），**从不释放**；
+    ///     · **离开屏幕**（切页 / 切 tab，见 <see cref="ReleaseOffscreenCovers"/>）：
+    ///       整面墙的封面一起放掉 —— 此刻用户看不见它，放掉零风险。
+    ///
+    ///   内存上界：**可见的那一页最多常驻它自己所有卡片封面**（排行榜 100 张 ≈ 50MB），
+    ///   而不是"滚过多少张就涨多少、永不回落"。用户已确认"单页内存有上限"比
+    ///   "绝不出现灰块"更重要 —— 这个方案两者都满足，代价是单页内不做滚动回收。
+    /// </summary>
+    private void UpdateCoverWindow()
+    {
+        if (!CoverWindow.Enabled) return;
+
+        var sv = _coverScroll ??= VisualTreeUtil.FindAncestor<ScrollViewer>(this);
+        if (sv == null || InternalChildren.Count == 0) return;
+        if (!IsVisible) return;
+
+        var viewport = sv.ViewportHeight;
+        // ★★★ 视口还量不出来(切回来/首次上屏的那一拍)时**必须安排重试**:
+        //   这时直接 return 就等于"这一轮什么也没做", 而用户不滚动就不会有下一轮 ——
+        //   要等 1.5s 心跳, 表现就是"切回首页一片灰, 过一会儿才慢慢出来"。
+        //   短延迟重扫(120ms)让它在布局落地后立刻补上, 用户看不到那段空窗。
+        if (double.IsNaN(viewport) || viewport <= 0)
+        {
+            QueueCoverWindowShort();
+            return;
+        }
+
+        // ★ 只补不放：与视口(上下各留半屏余量)有交集的卡片，没图就贴。
+        //   余量与边界判据在 CoverWindow(纯函数、可单测)。
+        var bands = CoverWindow.For(viewport);
+        if (bands == null) return;
+        var b = bands.Value;
+
+        var missingInViewport = 0;
+        for (var i = 0; i < InternalChildren.Count; i++)
+        {
+            var child = InternalChildren[i];
+            if (child is not FrameworkElement fe) continue;
+
+            double top;
+            try { top = fe.TransformToAncestor(sv).Transform(new Point(0, 0)).Y; }
+            catch { continue; }
+            var bottom = top + fe.ActualHeight;
+            if (double.IsNaN(top) || double.IsNaN(bottom)) continue;
+
+            var inViewport = CoverWindow.InViewport(top, bottom, viewport);
+            // ★ 记下来给"离开屏幕时只放视口外"用(见 WasInViewportProperty)。
+            child.SetValue(WasInViewportProperty, inViewport);
+
+            if (!CoverWindow.ShouldRestore(top, bottom, b)) continue;
+
+            foreach (var border in CacheCoverBorders(fe))
+            {
+                if (Cover.HasImage(border)) continue;
+                if (inViewport) missingInViewport++;
+                // ★ force: 用户看得到的地方必须立刻有图, 忽略失败冷却与在途标记。
+                Cover.Restore(border, force: true);
+            }
+        }
+
+        // ★ 视口内还有空封面 ⇒ 再排一轮（恢复是异步的，本轮结束时它们还没贴上）。
+        //   若这之后没有任何事件（用户不再滚动），就不会有下一轮扫描 —— 那几张会停在
+        //   占位色上直到下一次心跳（1.5s）。这里主动收尾，让"滚到哪都有图"立刻成立。
+        if (missingInViewport > 0) QueueCoverWindowShort();
+    }
+
+    /// <summary>
+    /// 短延迟重扫(120ms): 给"刚发起的恢复"留出异步贴图的时间。
+    /// 只用于"视口内还有空封面"的收尾；下一轮若已贴好就不再排，不会形成长循环。
+    /// </summary>
+    private void QueueCoverWindowShort()
+    {
+        if (_coverShortQueued) return;
+        _coverShortQueued = true;
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, async () =>
+        {
+            await Task.Delay(120);
+            _coverShortQueued = false;
+            UpdateCoverWindow();
+        });
+    }
+
+    private bool _coverShortQueued;
+
+    /// <summary>
+    /// 找到并记住这个孩子的封面 Border 列表(找不到返回空数组, 下次再试)。
+    ///
+    /// ★★★ 只在**找到**时缓存(2026-11-07 修): 旧代码把"搜到 0 个"也写进缓存,
+    ///   而"搜到 0 个"有两种情况 —— 一种是这张卡真的没有封面, 另一种是**模板还没应用**。
+    ///   后者被缓存下来就是毒药: 这张卡从此永远不参与释放/恢复, 封面要么一直占内存、
+    ///   要么永远灰。判据(子树是否为空)并不能可靠区分两者(模板应用了但封面还没实例化也算空)。
+    ///   ⇒ 只缓存非空结果。代价是"确实没有封面的卡片"每轮都要 BFS 一次 —— 那种卡片
+    ///     在列表里是少数(收藏夹卡片、占位行), 而扫描本身已经很廉价。
+    /// </summary>
+    private static Border[] CacheCoverBorders(UIElement child)
+    {
+        if (child is not DependencyObject d) return Array.Empty<Border>();
+        if (d.GetValue(CoverBordersProperty) is Border[] cached) return cached;
+
+        var borders = Cover.FindCoverBorders(d);
+        if (borders.Length == 0) return Array.Empty<Border>();   // 不缓存"空"(见上)
+
+        d.SetValue(CoverBordersProperty, borders);
+        return borders;
+    }
+
+    /// <summary>
+    /// 整面墙要离开屏幕了(切 tab / 切页)时, 把**视口外**的封面放掉。
+    ///
+    /// ★★★ 2026-11-07 第四次(用户报"设置页再切回首页 → 封面未加载, 往下滑才出现"):
+    ///   上一版是**全放**, 切回来要重新解码整屏 —— 探针实测 150ms 时视口内还缺 24 张、
+    ///   到 500ms 才补齐。用户看到的就是"切回来一片灰, 滑一下才慢慢出来"。
+    ///
+    ///   现在改成**只放视口外**:
+    ///     · 视口那一屏原位保留 ⇒ 切回来**零等待**, 一帧都不灰;
+    ///     · 视口外(占大头的几十张)照样释放 ⇒ 内存上界仍然成立。
+    ///
+    /// ★ 为什么"只放视口外"这次不会再翻车(前两轮正是栽在这里):
+    ///   前两轮是**滚动时**做释放 —— 判错了就永久灰, 因为滚动路径上没有"一定会恢复"的时机。
+    ///   现在释放只发生在**离开屏幕**那一刻, 而**回到屏幕时 <see cref="UpdateCoverWindow"/>
+    ///   会把补图区间内所有缺图的卡片无条件贴回来**(force)。所以哪怕这里判错、放多了一张,
+    ///   切回来也会立刻补上 —— 错的代价只是"多解码一次", 不是"永久灰"。
+    ///
+    /// ★ 判据用**上一轮扫描记下的 inViewport**(<see cref="WasInViewportProperty"/>),
+    ///   而不是在这里重新算 `TransformToAncestor`: 这一刻布局正在失效(Visibility 刚变),
+    ///   位置信息不可靠; 而"上一次可见时的视口"正是用户最后看到的画面。
+    ///
+    /// ★ 内存上界: 每个页面常驻"它自己视口那一屏"的封面(≈24 张 ≈ 6MB),
+    ///   页面总数是固定的几个 ⇒ 总量有上界, 与"滚过多少张"无关。
+    /// </summary>
+    private void ReleaseOffscreenCovers()
+    {
+        if (!CoverWindow.Enabled) return;
+
+        var released = 0;
+        for (var i = 0; i < InternalChildren.Count; i++)
+        {
+            var child = InternalChildren[i];
+            // ★ 视口内那一屏留着(切回来零等待) —— 见上面的说明。
+            if (child is DependencyObject d && (bool)d.GetValue(WasInViewportProperty)) continue;
+
+            foreach (var border in CacheCoverBorders(child))
+            {
+                Cover.Release(border);
+                released++;
+            }
+        }
+        if (released > 0) MemoryTrim.RequestTrim();
+    }
+
+    /// <summary>孩子 → 它的封面 Border 列表(缓存, 避免每次扫描都做一次子树遍历)</summary>
+    private static readonly DependencyProperty CoverBordersProperty =
+        DependencyProperty.RegisterAttached("CoverBorders", typeof(Border[]), typeof(CardWallPanel),
+            new PropertyMetadata(null));
+
+    /// <summary>
+    /// 上一次扫描时这个孩子是否在**严格视口内**(0 ~ ViewportHeight)。
+    ///
+    /// ★ 用途: 离开屏幕时只释放"视口外"的封面(<see cref="ReleaseOffscreenCovers"/>) ——
+    ///   视口那一屏留着, 切回来零等待。
+    /// ★ 为什么不在离开那一刻现算: 那一刻 Visibility 刚变、布局正在失效,
+    ///   `TransformToAncestor` 拿到的位置不可靠; 而"上一次可见时的视口"正是用户最后看到的画面。
+    /// ★ 判错的代价是**有限的**: 回到屏幕时 <see cref="UpdateCoverWindow"/> 会无条件补图,
+    ///   所以放多了只是多解码一次, 不会出现"永久灰"。
+    /// </summary>
+    private static readonly DependencyProperty WasInViewportProperty =
+        DependencyProperty.RegisterAttached("WasInViewport", typeof(bool), typeof(CardWallPanel),
+            new PropertyMetadata(false));
+
     // ------------------------------------------------------------ 测量 / 排列
 
     protected override Size MeasureOverride(Size availableSize)
@@ -499,6 +859,7 @@ public class CardWallPanel : Panel
         bool firstInLine = true;
 
         _arrangeY.Clear();
+        _arrangeBottom.Clear();
         for (int i = 0; i < InternalChildren.Count; i++)
         {
             var child = InternalChildren[i];
@@ -506,6 +867,7 @@ public class CardWallPanel : Panel
             if (double.IsNaN(size.Width) || double.IsNaN(size.Height))
             {
                 _arrangeY.Add(y);
+                _arrangeBottom.Add(y);
                 continue;
             }
 
@@ -519,11 +881,16 @@ public class CardWallPanel : Panel
 
             child.Arrange(new Rect(x, y, size.Width, size.Height));
             _arrangeY.Add(y);
+            _arrangeBottom.Add(y + size.Height);
 
             x += size.Width;
             lineH = Math.Max(lineH, size.Height);
             firstInLine = false;
         }
+
+        // 分帧填充会一批批地把新卡片塞进来(不会发 ScrollChanged), 首屏也可能一次排完
+        // 却从没滚过 —— 每次排列之后都排一次封面窗口扫描(内部有 150ms 合并)。
+        QueueCoverWindow();
 
         return finalSize;
     }

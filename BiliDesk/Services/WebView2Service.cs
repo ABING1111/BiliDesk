@@ -29,19 +29,130 @@ public class WebView2Service
         await EnsureVideoCleanerInjectedAsync(webView);
     }
 
+    // ------------------------------------------------------------ 临时隐藏 WebView2(2026-11-07 P4)
+
+    /// <summary>
+    /// 建/用临时隐藏 WebView2 的串行闸门。
+    ///
+    /// ★ 为什么必须串行: 这些用途(补齐风控 Cookie / 清 Cookie / 同步登录 Cookie)都可能
+    ///   在启动、退出登录、扫码登录三条路上**几乎同时**触发, 而每建一个控件就是一个
+    ///   Chromium 进程组(几十 MB)。并发进来不但白占内存, 还容易出现
+    ///   "刚建好就被另一条路 Dispose 掉"的竞态。
+    /// </summary>
+    private readonly System.Threading.SemaphoreSlim _hiddenGate = new(1, 1);
+
+    /// <summary>
+    /// 建一个**离屏**的 WebView2, 用完由调用方 <see cref="ReleaseHidden"/> 释放。
+    ///
+    /// ★★ 为什么不再像以前那样在主窗口里常驻一个 1×1 的 WebView2(2026-11-07 P4):
+    ///   它只在三个低频时刻被用到(启动补风控 Cookie、退出登录清 Cookie、扫码登录同步 Cookie),
+    ///   但一旦初始化过, 背后那组 Chromium 进程就会**整个进程生命周期**挂在那里 ——
+    ///   登录用户即便一次都不打开内嵌网页, 也要常年付这 80~150MB。
+    ///   改成"按需建、用完 Dispose", 只在真正需要的那几秒里付出这个代价。
+    ///
+    /// ★ 为什么要一个离屏宿主窗口, 而不是直接 new 一个控件: WebView2 的控制器初始化要求
+    ///   控件已挂进一棵**已显示的**可视树(否则 EnsureCoreWebView2Async 会一直不返回)。
+    ///   宿主窗口挪到屏幕外(-32000)、不进任务栏、不抢焦点, 用户完全看不到。
+    /// </summary>
+    public async Task<WebView2> CreateHiddenAsync()
+    {
+        await _hiddenGate.WaitAsync().ConfigureAwait(true);
+        System.Windows.Window? host = null;
+        WebView2? wv = null;
+        try
+        {
+            host = new System.Windows.Window
+            {
+                Width = 1,
+                Height = 1,
+                Left = -32000,
+                Top = -32000,
+                WindowStyle = System.Windows.WindowStyle.None,
+                ShowInTaskbar = false,
+                ShowActivated = false,
+                ResizeMode = System.Windows.ResizeMode.NoResize,
+            };
+            wv = new WebView2 { Width = 1, Height = 1 };
+            host.Content = wv;
+            host.Show();
+
+            await InitAsync(wv).ConfigureAwait(true);
+            return wv;
+        }
+        catch
+        {
+            // 建不起来就收拾干净, 别把半个宿主窗口留在那里
+            try { wv?.Dispose(); } catch { /* 忽略 */ }
+            try { host?.Close(); } catch { /* 忽略 */ }
+            _hiddenGate.Release();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// 释放 <see cref="CreateHiddenAsync"/> 建出来的控件: 卸掉宿主窗口 + Dispose 控件。
+    ///
+    /// ★ 顺序: 先摘 Content 再关窗 —— 直接 Close 一个还装着 WebView2 的窗口,
+    ///   控件会在窗口销毁过程中被 WPF 反向拆解, 偶发 `InvalidOperationException`
+    ///   ("元素已是另一个父级的子级")。显式摘掉最稳。
+    /// ★ Dispose 之后 Chromium 进程组要一两秒才真正退出, 这是运行时自己的回收节奏,
+    ///   不需要(也不能)在这里等。
+    /// </summary>
+    public void ReleaseHidden(WebView2? wv)
+    {
+        if (wv == null) return;
+        // ★ 幂等: 同一控件被释放两次的话, 信号量会被多释放一次, 闸门就形同虚设了。
+        //   用 Tag 打标记最轻(不需要额外的表)。
+        if (wv.Tag is string s && s == "bd-hidden-released") return;
+        try { wv.Tag = "bd-hidden-released"; } catch { /* 忽略 */ }
+
+        try
+        {
+            if (wv.Parent is System.Windows.Window host)
+            {
+                host.Content = null;
+                try { host.Close(); } catch { /* 忽略 */ }
+            }
+            wv.Dispose();
+        }
+        catch
+        {
+            // 释放失败不影响任何功能(进程退出时系统兜底)
+        }
+        finally
+        {
+            _hiddenGate.Release();
+        }
+    }
+
+    /// <summary>便捷封装: 建临时隐藏控件 → 执行 → 无论成败都释放。</summary>
+    public async Task WithHiddenAsync(Func<WebView2, Task> work)
+    {
+        WebView2? wv = null;
+        try
+        {
+            wv = await CreateHiddenAsync().ConfigureAwait(true);
+            await work(wv).ConfigureAwait(true);
+        }
+        finally
+        {
+            ReleaseHidden(wv);
+        }
+    }
+
     /// <summary>为视频页注入的精简脚本: 隐藏广告/弹幕/推荐/举报/笔记/稍后看等
     /// 只保留播放器、点赞、关注、收藏、合集、UP主卡片、UP主首页入口
     /// 每次新文档创建时执行, 并通过 MutationObserver 持续清理动态加载内容</summary>
-    private static readonly HashSet<int> _cleanerInjectedWebViews = new();
-
     private async Task EnsureVideoCleanerInjectedAsync(WebView2 webView)
     {
-        var hash = webView.GetHashCode();
-        if (_cleanerInjectedWebViews.Contains(hash)) return;
+        // ★ 2026-11-07: 原来的 HashSet<int>(按 GetHashCode 记"这个控件注入过了")已删除 ——
+        //   临时控件会反复创建/销毁, 而 GetHashCode 会被复用 ⇒ 新控件可能被判成"已注入",
+        //   于是视频页的清理脚本一次都不执行。现在每次 InitAsync 都注入一次:
+        //   AddScriptToExecuteOnDocumentCreatedAsync 本身幂等(重复注册只是多跑一遍),
+        //   而 InitAsync 只在控件初始化时调一次, 开销可以忽略。
         try
         {
             await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(VideoPageCleanerScript);
-            _cleanerInjectedWebViews.Add(hash);
         }
         catch
         {

@@ -570,10 +570,20 @@ public partial class LoginWindow : FluentWindow
 
             // 档案里可能还留着上一份登录态(退出登录清 Cookie 失败、或用户手删了 session.json):
             // 不清掉的话下面的 Cookie 轮询会立刻读到旧 SESSDATA, 变成"还没验证就登录成功"。
-            // 用隐藏的那个 WebView2 去清 —— 拿当前这个正在显示的控件去清, 助手收尾时会把它的
-            // Visibility 置回 Collapsed, 页面就没了。
-            if (!Svc.Session.HasLogin && SvcWindow.HiddenWebView is { } hidden)
-                await Svc.WebView2.ClearProfileCookiesAsync(hidden);
+            // 用一个**临时**隐藏 WebView2 去清 —— 拿当前这个正在显示的控件去清, 助手收尾时
+            // 会把它的 Visibility 置回 Collapsed, 页面就没了。
+            // ★ 2026-11-07 P4: 临时建、用完 Dispose, 不再常驻主窗口那个 1×1 控件。
+            if (!Svc.Session.HasLogin)
+            {
+                try
+                {
+                    await Svc.WebView2.WithHiddenAsync(wv => Svc.WebView2.ClearProfileCookiesAsync(wv));
+                }
+                catch
+                {
+                    // 清不掉只是可能读到旧登录态, 后面的 Cookie 校验会兜住; 不阻断登录
+                }
+            }
 
             ApplyWebZoom();   // 官方页原始尺寸偏小: 默认 130% 起, 验证码才看得清
 
@@ -696,11 +706,13 @@ public partial class LoginWindow : FluentWindow
 
         Svc.Toast.Show("登录成功");
 
-        if (syncToWebProfile && SvcWindow.HiddenWebView is { } hidden)
+        if (syncToWebProfile)
         {
             // 不 await: 要起一个 WebView2, 几百毫秒; 失败也只是内嵌网页需要重新登录, 不该拖住关窗。
+            // ★ 2026-11-07 P4: 临时建、用完 Dispose(不再依赖主窗口里那个常驻的隐藏控件)。
             var snapshot = new Dictionary<string, string>(cookies);
-            _ = Svc.WebView2.SyncSessionCookiesAsync(hidden, snapshot);
+            Svc.WebView2.WithHiddenAsync(wv => Svc.WebView2.SyncSessionCookiesAsync(wv, snapshot))
+                .Forget();
         }
 
         DialogResult = true;

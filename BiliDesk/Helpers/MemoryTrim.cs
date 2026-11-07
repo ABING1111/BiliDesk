@@ -32,9 +32,37 @@ public static class MemoryTrim
     private static bool _heavy;
 
     /// <summary>
+    /// 温和回收的**内存闸门**: 距上次回收之后进程私有内存又涨了这么多才值得再收一次。
+    ///
+    /// ★★ 为什么要有它(2026-11-07 速度优化 P2): <see cref="RequestTrim"/> 原来是无条件
+    ///   <c>GC.Collect(2, Forced)</c> + 等终结器, 而它挂在**每一次切页**上 —— 用户在首页/动态/
+    ///   历史之间来回点几下, 就是连续几次 Gen2 全量回收, 每次几十毫秒的标记清扫全落在
+    ///   后台线程和 UI 线程的竞争上, 表现是"切页发涩、风扇转起来"。
+    ///   而切页真正释放的东西往往只有几 MB(页面常驻、卡片也不销毁), 根本不值得收。
+    ///
+    /// ★ 阈值取得比较宽(96MB): 目的是"把无意义的高频回收挡掉", 不是"省下每一次回收"。
+    ///   真的堆了一大块(比如刚看完长视频 / 刚滚过上千张封面)照样会收。
+    /// ★ 首次调用(_lastTrimBytes == 0)直接放行: 启动阶段没有任何基线, 不该被闸门挡住。
+    /// </summary>
+    private const long TrimThresholdBytes = 96L * 1024 * 1024;
+
+    /// <summary>上一次真正回收完成时的进程私有内存(0 = 还没有基线)</summary>
+    private static long _lastTrimBytes;
+
+    /// <summary>当前进程私有内存(拿不到就返回 0 = 视为"不知道", 调用方按放行处理)</summary>
+    private static long PrivateBytes()
+    {
+        try { return System.Diagnostics.Process.GetCurrentProcess().PrivateMemorySize64; }
+        catch { return 0; }
+    }
+
+    /// <summary>
     /// 请求一次内存回收(温和版)。连续调用会合并成"最后一次调用后约 800ms"的一次真回收。
     /// 只应在"刚释放了一批视觉内容(列表容器/位图)"之后调用, 别在热路径上随手调。
     /// 用于**高频**触发点(切 tab / 切页面): 只做托管回收, 不动工作集。
+    ///
+    /// ★ 内部还有一道内存闸门(见 <see cref="TrimThresholdBytes"/>): 涨得不够多就直接跳过,
+    ///   连续切页不会再演变成连续 Gen2 回收。
     /// </summary>
     public static void RequestTrim() => Request(releaseWorkingSet: false, heavy: false);
 
@@ -83,7 +111,14 @@ public static class MemoryTrim
         try
         {
             if (heavy) CollectBlocking(releaseWorkingSet);
-            else CollectBackground();
+            else
+            {
+                // ★ 温和路径的内存闸门: 距上次回收涨得不够多就跳过 —— 见 TrimThresholdBytes。
+                var now = PrivateBytes();
+                var baseline = Interlocked.Read(ref _lastTrimBytes);
+                if (now > 0 && baseline > 0 && now - baseline < TrimThresholdBytes) return;
+                CollectBackground();
+            }
         }
         catch
         {
@@ -109,6 +144,11 @@ public static class MemoryTrim
         GC.Collect();
 
         if (releaseWorkingSet) ReleaseWorkingSet();
+
+        // 重载路径同样要刷新温和路径的基线(且必须是**回收之后**的数字,
+        // 否则下一次会被误判成"又涨了一大截")。
+        var now = PrivateBytes();
+        if (now > 0) Interlocked.Exchange(ref _lastTrimBytes, now);
     }
 
     /// <summary>
@@ -138,6 +178,10 @@ public static class MemoryTrim
                 // 位图像素靠终结器释放。但"等终结器"这件事不能放在 UI 线程上做。
                 GC.WaitForPendingFinalizers();
                 GC.Collect(2, GCCollectionMode.Forced, blocking: false, compacting: false);
+                // ★ 基线在**回收之后**刷新: 回收本身会把私有内存压下去, 拿回收**之前**的数字
+                //   当基线的话, 下一次"只涨了 20MB"也会被误判成"涨了 100MB+"而再收一次。
+                var after = PrivateBytes();
+                if (after > 0) Interlocked.Exchange(ref _lastTrimBytes, after);
             }
             catch
             {

@@ -1,6 +1,5 @@
 ﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
                     xmlns:sys="clr-namespace:System;assembly=System.Runtime">
 
     <!-- ============ 全局控件样式 (Fluent / Win11 风格) ============
@@ -1992,23 +1991,37 @@
         </Grid>
     </ControlTemplate>
 
+    <!--
+        ★★★ 2026-11-07 第二次修"窗口右边缘不能改大小":
+          上一版(66e11f1)给滚动条设了 `WindowChrome.IsHitTestVisibleInChrome=True`,
+          想让"压在滚动条上"返回 HTCLIENT。**那个做法是错的**, 它把整条右边缘的缩放带
+          一起废掉了:
+            · 滚动条是 8px 宽、通高、模板根是 `<Grid Background="Transparent">`;
+            · 它按设计贴着窗口右缘(见 HomePage.xaml 的说明), 整条压在
+              `ResizeBorderThickness=6` 的缩放带上;
+            · 该附加属性会继承到 Thumb / 翻页轨道 —— 于是整条 8px 都返回 HTCLIENT,
+              右边缘 6px 的缩放带被**完全吃掉**。
+          用户看到的就是"光标不在滚动条上、也在右侧其它位置, 却拖不动窗口大小"
+          (轨道是透明的, 看起来像空白, 其实还是 ScrollBar 的命中区)。
+
+          ⇒ 正确做法: **把滚动条整体从缩放带里挪出来**, 而不是让它在缩放带上抢命中。
+            垂直条留 6px 右边距、水平条留 6px 下边距, 正好等于 ResizeBorderThickness。
+            于是:
+              · 外圈 6px 是纯缩放带 —— 右边缘/下边缘能正常拖动改大小;
+              · 滚动条本体完全在客户区内 —— 滑块能拖、轨道能点、光标是箭头。
+            这比 `IsHitTestVisibleInChrome` 干净: 不需要让控件"假装在客户区",
+            两边各管各的地盘, 不存在优先级打架。
+    -->
     <Style TargetType="ScrollBar">
         <Setter Property="Background" Value="Transparent" />
-        <!-- ★ 2026-11-07 修"滚动条贴在窗口边缘时, 鼠标移上去变成改窗口大小的光标":
-             主窗口/播放器都是 WindowStyle=None + WindowChrome(ResizeBorderThickness=6),
-             而 WM_NCHITTEST 里缩放带的判定**优先于** WPF 元素的命中 —— 首页的滚动条
-             贴着窗口右缘(见 HomePage.xaml 的说明), 整条都落在 6px 缩放带里, 压上去
-             就是 SizeWE 光标, 还拖不动滑块。
-             WindowChromeWorker 的命中测试第一步就查 IsHitTestVisibleInChrome(该附加属性
-             继承到 Thumb / 翻页轨道), 命中即返回 HTCLIENT —— 与 WindowButtons 同一招。
-             滚动条本来只出现在客户区, 窗口其余边缘的缩放不受影响。 -->
-        <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+        <Setter Property="Margin" Value="0,0,6,0" />
         <Setter Property="Width" Value="8" />
         <Setter Property="MinWidth" Value="8" />
         <Setter Property="Template" Value="{StaticResource VerticalScrollBarTemplate}" />
         <Style.Triggers>
             <Trigger Property="Orientation" Value="Horizontal">
                 <!-- 横向时宽度交给布局, 改用 Height 约束, 并换上横向模板 -->
+                <Setter Property="Margin" Value="0,0,0,6" />
                 <Setter Property="Width" Value="Auto" />
                 <Setter Property="MinWidth" Value="0" />
                 <Setter Property="Height" Value="8" />

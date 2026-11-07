@@ -201,8 +201,8 @@ public partial class App : Application
     /// <summary>
     /// 从 WebView2 的 Profile 补齐写操作风控 Cookie(见 <see cref="SessionManager.BackfillRiskCookies"/> 的说明)。
     ///
-    /// ★ 用**隐藏**的 WebView2, 不碰用户正在看的那个 —— 初始化一个 WebView2 要几百毫秒,
-    ///   不能在启动路径上同步等它, 更不能抢正在显示的控件。
+    /// ★ 用**临时**隐藏的 WebView2(2026-11-07 P4), 不碰用户正在看的那个 —— 初始化一个 WebView2
+    ///   要几百毫秒, 不能在启动路径上同步等它, 更不能抢正在显示的控件。
     /// ★ 全程静默: 这只是"锦上添花"的补齐, 失败/取不到都只是维持原状(旧行为), 不该打扰用户。
     /// </summary>
     private static async void BackfillRiskCookiesAsync()
@@ -223,38 +223,33 @@ public partial class App : Application
 
             if (Svc.Session.HasRiskCookies) return;
 
-            // ★ 用主窗口里那个**隐藏**的 WebView2, 不碰用户正在看的那个 ——
-            //   初始化一个 WebView2 要几百毫秒, 不能在启动路径上同步等它。
-            //   它是 MainWindow 建的, 所以要等主窗口起来(Loaded 之后)才有。
-            var hidden = await WaitHiddenWebViewAsync();
-            if (hidden == null)
+            // ★ 用**临时**隐藏 WebView2(2026-11-07 P4): 以前是主窗口里常驻一个 1×1 的控件,
+            //   初始化过之后那组 Chromium 进程会一直挂到进程退出 —— 登录用户即便从不打开
+            //   内嵌网页, 也要常年付这 80~150MB。现在只在补齐这一下用一次, 用完立刻 Dispose。
+            //   (详见 WebView2Service.CreateHiddenAsync 的说明。)
+            var ok = false;
+            try
             {
-                // ★ WebView2 拿不到也要把 b_nut 补上: 它是登录时刻时间戳, 不依赖浏览器
-                //   (2026-10-12: 原来这里是 return, 于是"WebView2 起不来"就等于"永远不补 b_nut")
-                Svc.Session.BackfillRiskCookies(new Dictionary<string, string>());
-                return;
+                await Svc.WebView2.WithHiddenAsync(async wv =>
+                {
+                    var cookies = await WebView2Service.ReadBiliCookiesAsync(wv);
+                    Svc.Session.BackfillRiskCookies(cookies);
+                    ok = true;
+                });
+            }
+            catch
+            {
+                // 临时控件建不起来(WebView2 运行时装不上/被策略禁用): 下面还有兜底
             }
 
-            await Svc.WebView2.InitAsync(hidden);
-            var cookies = await WebView2Service.ReadBiliCookiesAsync(hidden);
-            Svc.Session.BackfillRiskCookies(cookies);
+            // ★ WebView2 拿不到也要把 b_nut 补上: 它是登录时刻时间戳, 不依赖浏览器
+            //   (2026-10-12: 原来这条路上是 return, 于是"WebView2 起不来"就等于"永远不补 b_nut")
+            if (!ok) Svc.Session.BackfillRiskCookies(new Dictionary<string, string>());
         }
         catch
         {
             // 静默: 补不齐就退回改动前的行为(带 6 个 Cookie), 不会更坏
         }
-    }
-
-    /// <summary>等主窗口把隐藏 WebView2 建好(最多等几秒; 拿不到就放弃补齐)</summary>
-    private static async Task<Microsoft.Web.WebView2.Wpf.WebView2?>
-        WaitHiddenWebViewAsync()
-    {
-        for (var i = 0; i < 40; i++)
-        {
-            if (SvcWindow.HiddenWebView is { } wv) return wv;
-            await System.Threading.Tasks.Task.Delay(250);
-        }
-        return null;
     }
 
     /// <summary>记录异常到日志文件</summary>
