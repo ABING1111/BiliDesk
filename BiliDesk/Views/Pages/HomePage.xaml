@@ -420,6 +420,10 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
+                    <!-- ★ 底部状态区**一次只允许出现一条**(2026-11-07 用户报"下滑加载时出现三个提示"):
+                         "加载中…" / "加载更多" / "已经到底啦" 三者互斥 —— 加载中只留转圈,
+                         空闲时才在「加载更多」与「已经到底啦」之间二选一。以前按钮只绑 PopularHasMore,
+                         加载期间它还是 true, 于是转圈和按钮会叠在一起。 -->
                     <StackPanel Margin="0,12,0,28" HorizontalAlignment="Center">
                         <StackPanel Orientation="Horizontal"
                                     Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
@@ -427,11 +431,13 @@
                             <TextBlock Text="加载中…" Margin="8,0,0,0"
                                        VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
                         </StackPanel>
-                        <Button x:Name="MoreBtn" Content="加载更多" Style="{StaticResource SubtleButtonStyle}"
-                                Visibility="{Binding PopularHasMore, Converter={StaticResource BoolToVis}}"
-                                Command="{Binding LoadMoreCommand}" />
-                        <TextBlock Text="已经到底啦" Style="{StaticResource MetaTextStyle}"
-                                   Visibility="{Binding PopularHasMore, Converter={StaticResource InvBoolToVis}}" />
+                        <StackPanel Visibility="{Binding LoadingMore, Converter={StaticResource InvBoolToVis}}">
+                            <Button x:Name="MoreBtn" Content="加载更多" Style="{StaticResource SubtleButtonStyle}"
+                                    Visibility="{Binding PopularHasMore, Converter={StaticResource BoolToVis}}"
+                                    Command="{Binding LoadMoreCommand}" />
+                            <TextBlock Text="已经到底啦" Style="{StaticResource MetaTextStyle}"
+                                       Visibility="{Binding PopularHasMore, Converter={StaticResource InvBoolToVis}}" />
+                        </StackPanel>
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
@@ -470,6 +476,10 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
+                    <!-- ★ 同「热门」: 底部状态一次只允许出现一条。
+                         推荐是**无限流**, 没有"到底"这回事 —— 原先那句「已经到底啦」绑的也是
+                         !Loading(整页加载), 只要不在刷新就常驻, 加载更多时和转圈、按钮叠成三条
+                         (2026-11-07 用户报的那个截图)。这里直接删掉, 只保留"加载中 / 加载更多"二选一。 -->
                     <StackPanel Margin="0,12,0,28" HorizontalAlignment="Center">
                         <StackPanel Orientation="Horizontal"
                                     Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
@@ -478,9 +488,8 @@
                                        VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
                         </StackPanel>
                         <Button Content="加载更多" Style="{StaticResource SubtleButtonStyle}"
+                                Visibility="{Binding LoadingMore, Converter={StaticResource InvBoolToVis}}"
                                 Command="{Binding LoadMoreCommand}" />
-                        <TextBlock Text="已经到底啦" Style="{StaticResource MetaTextStyle}"
-                                   Visibility="{Binding Loading, Converter={StaticResource InvBoolToVis}}" />
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
