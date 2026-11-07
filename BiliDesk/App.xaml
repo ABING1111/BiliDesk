@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             xmlns:PresentationOptions="http://schemas.microsoft.com/winfx/2006/xaml/presentation/options"
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
         <ResourceDictionary>
@@ -63,8 +64,11 @@
              旁边四个入口都是 Segoe 细线图标, 填充版信封明显比它们粗一截。 -->
         <PathGeometry x:Key="MessageIconGeometry"
             Figures="M4.6,2.9 H15.4 A2.6,2.6 0 0 1 18.1,5.5 V14.5 A2.6,2.6 0 0 1 15.4,17.1 H4.6 A2.6,2.6 0 0 1 2,14.5 V5.5 A2.6,2.6 0 0 1 4.6,2.9 Z M3.1,6.4 L9.5,10.9 C9.8,11.1 10.2,11.1 10.5,10.9 L16.9,6.4" />
-        <!-- 动态(风车): 用户提供的官方 SVG, 四段描边路径 -->
-        <PathGeometry x:Key="DynamicIconGeometry"
+        <!-- 动态(风车): 用户提供的官方 SVG, 四段描边路径。
+             ★ Freeze(2026-11-07): 这个几何体被侧边栏导航与动态页「全部动态」入口**共享**,
+               两处都只读; 冻结后变成不可变的 Freezable, 首次进入动态页那种"整页折叠→恢复"
+               的密集重布局下不会留下"画了一半"的栅格残留(用户报"全部动态图案第一次显示不全")。 -->
+        <PathGeometry x:Key="DynamicIconGeometry" PresentationOptions:Freeze="True"
             Figures="M10 10.743C7.69883 10.743 5.83333 8.87747 5.83333 6.5763C5.83333 4.27512 7.69883 2.40964 10 2.40964V10.743Z M10 10.743C10 13.0441 8.1345 14.9096 5.83333 14.9096C3.53217 14.9096 1.66667 13.0441 1.66667 10.743H10Z M10 10.743C10 8.44182 11.8655 6.57632 14.1667 6.57632C16.4679 6.57632 18.3333 8.44182 18.3333 10.743H10Z M9.99999 10.743C12.3012 10.743 14.1667 12.6085 14.1667 14.9096C14.1667 17.2108 12.3012 19.0763 9.99999 19.0763V10.743Z" />
         </ResourceDictionary>
     </Application.Resources>

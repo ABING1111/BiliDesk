@@ -363,7 +363,10 @@
                         <StackPanel Orientation="Horizontal">
                             <Border Width="36" Height="36" CornerRadius="18"
                                     Background="{DynamicResource AccentSoftFillBrush}">
-                                <Path Data="{DynamicResource DynamicIconGeometry}"
+                                <!-- ★ StaticResource(2026-11-07): 侧边栏同款图标用的就是 StaticResource;
+                                     DynamicResource 的延迟解析叠上首次加载的"遮罩折叠→恢复"重布局,
+                                     会出现"图案显示不全、加载完才完整"的渲染残留(用户截图)。 -->
+                                <Path Data="{StaticResource DynamicIconGeometry}"
                                       Stroke="{DynamicResource AccentTextBrush}" StrokeThickness="1.6"
                                       Width="18" Height="18" Stretch="Uniform"
                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -749,24 +752,28 @@
                  ★★ 2026-11-06 用户要求"优化工具列已读按钮图案, 使他更符合功能用途":
                    原来用的是 E73E(一个**裸对勾**), 单独看只像"选中/完成", 表达不出
                    "把动态**标记为已读**"这层意思。
-                   改成矢量画的「信封 + 对勾」—— 动态本身就是一条消息(信封),
-                   右下角压一个对勾 = "标记为已读", 与 B 站消息中心的语义一致。
-                   ★ 用矢量而不是字体字形: 字形在不同 Windows 版本上可能缺字/变形,
-                     而 Path 是我们自己画的, 一定长这个样子。 -->
+                 ★★ 2026-11-07 用户报"右下角图案很丑": 第一版矢量是"小信封缩在左上 +
+                   粗对勾斜插右下角", 两个元素大小失衡、重心偏斜。现在重画为
+                   **居中的信封 + 信封体内嵌对勾**: 轮廓对称、笔画粗细统一(1.4/1.5 圆头),
+                   对勾落在信封下半区、与封口折线错开, 语义仍是"消息已读"。 -->
             <Button x:Name="BtnMarkAllRead" Style="{StaticResource FloatingIconButtonStyle}"
                     Command="{Binding MarkAllReadCommand}"
                     ToolTip="全部已读(清空所有 UP 的新视频红点)"
                     Visibility="{Binding HasAnyUnread, Converter={StaticResource BoolToVis}}">
-                <Grid Width="17" Height="17">
-                    <!-- 信封轮廓 + 封口折线(略偏左上, 给右下角的对勾让位) -->
-                    <Path Data="M 1.5,4 H 11.5 V 11.5 H 1.5 Z M 1.5,4 L 6.5,7.6 L 11.5,4"
+                <Grid Width="18" Height="18">
+                    <Grid.RenderTransform>
+                        <!-- 内容整体比画布重心偏上 0.5px: 对勾压在下半区, 视觉重心才会居中 -->
+                        <TranslateTransform Y="0.5" />
+                    </Grid.RenderTransform>
+                    <!-- 信封主体: 圆角矩形 + 封口折线, 居中(1.5~16.5, 宽 15 高 10.5) -->
+                    <Path Data="M 4.2,2.75 H 13.8 A 1.45,1.45 0 0 1 15.25,4.2 V 12.8 A 1.45,1.45 0 0 1 13.8,14.25 H 4.2 A 1.45,1.45 0 0 1 2.75,12.8 V 4.2 A 1.45,1.45 0 0 1 4.2,2.75 Z M 2.75,5.4 L 8.55,9.05 A 0.85,0.85 0 0 0 9.45,9.05 L 15.25,5.4"
                           Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                          StrokeThickness="1.1" StrokeLineJoin="Round"
+                          StrokeThickness="1.4" StrokeLineJoin="Round"
                           StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                    <!-- 右下角的对勾(压在信封角上, 但与封口折线错开) -->
-                    <Path Data="M 8.6,12.4 L 11,14.7 L 15.6,9.2"
+                    <!-- 信封体内的对勾: 落在下半区, 与封口折线(最低 ~9.05)保持 ≥0.7px 间隙 -->
+                    <Path Data="M 6.5,11.1 L 8.4,12.8 L 11.6,9.8"
                           Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                          StrokeThickness="1.6" StrokeLineJoin="Round"
+                          StrokeThickness="1.5" StrokeLineJoin="Round"
                           StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
                 </Grid>
             </Button>

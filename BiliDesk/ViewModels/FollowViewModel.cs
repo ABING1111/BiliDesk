@@ -87,7 +87,19 @@ public class FollowViewModel : ObservableObject
     /// <summary>右栏标题: 说明当前在看谁的内容</summary>
     public string SelectionTitle => SelectedUp == null ? "全部动态" : SelectedUp.Name + " 的视频";
 
-    public bool Loading { get => _loading; private set => SetProperty(ref _loading, value); }
+    /// <summary>整页加载状态。★ 变化时必须连带通知 ShowFullLoading —— 它是计算属性
+    /// (Loading && FeedItems.Count==0), 不手动 raise 绑定就不会刷新。以前只在
+    /// LoadSelectionAsync 里手动 raise 过两处, RefreshAsync 首次置 true 时没人通知,
+    /// 遮罩不出现 ⇒ 加载期间页面"半初始化"地裸露约 1 秒(用户看到残缺的入口图案)。</summary>
+    public bool Loading
+    {
+        get => _loading;
+        private set
+        {
+            if (!SetProperty(ref _loading, value)) return;
+            OnPropertyChanged(nameof(ShowFullLoading));
+        }
+    }
 
     /// <summary>
     /// 整页加载遮罩只在"右栏还没有任何内容"时显示。
@@ -638,7 +650,7 @@ public class FollowViewModel : ObservableObject
             Error = "";
             // 换内容 ⇒ 不在底部了, 「已经到底啦」先收起来(等用户真滑到底再出现)
             SetAtFeedBottom(false);
-            OnPropertyChanged(nameof(ShowFullLoading));
+            // (ShowFullLoading 的通知已由 Loading 的 setter 连带发出, 不再手动 raise)
         }
         else
         {
@@ -730,7 +742,7 @@ public class FollowViewModel : ObservableObject
                 HasMore = hasMore;
                 LoadMoreError = false;
                 Error = "";
-                OnPropertyChanged(nameof(ShowFullLoading));
+                // (ShowFullLoading 的通知已由 Loading 的 setter 连带发出, 不再手动 raise)
                 OnPropertyChanged(nameof(FollowingsSummary));
                 if (UseCardWall) SyncWallItems();
                 OnPropertyChanged(nameof(ShowWallLimitHint));

@@ -41,6 +41,13 @@ public partial class FollowPage : UserControl
     /// </summary>
     private bool _leftPressSeen;
 
+    /// <summary>
+    /// 「全部动态」底衬与 UP 行对齐的同步回调。
+    /// ★ 必须是**命名方法**: OnLoaded 会在页面每次重新可见时触发(页面实例被 MainWindow
+    ///   缓存), 以前这里用 lambda 订阅、从不退订, 每进一次页面就叠一层处理器。
+    /// </summary>
+    private void OnUsersListSizeChanged(object sender, SizeChangedEventArgs e) => SyncAllDynamicEntry();
+
     public FollowPage()
     {
         InitializeComponent();
@@ -87,10 +94,14 @@ public partial class FollowPage : UserControl
             // 占位符显隐再同步一次: 页面被缓存复用, VM 侧可能在页面不可见时清过搜索词
             // (ClearUserSearch), 回来时输入框文字已变但 TextChanged 未必触发过。
             RefreshUserSearchPlaceholder();
-            // 「全部动态」底衬要与 UP 行对齐: 在列表布局完成后量一次
-            UsersList.SizeChanged += (_, _) => SyncAllDynamicEntry();
+            // 「全部动态」底衬要与 UP 行对齐: 在列表布局完成后量一次。
+            // 先 -= 再 += : 页面实例被缓存复用, Loaded 每次进入都会响, 不能叠处理器。
+            UsersList.SizeChanged -= OnUsersListSizeChanged;
+            UsersList.SizeChanged += OnUsersListSizeChanged;
             await vm.InitAsync();
-            SyncAllDynamicEntry();
+            // ★ 延迟到 Loaded 优先级: InitAsync 返回时 Users 刚填充、虚拟化列表还没走完
+            //   布局, 容器尚未生成, 立刻量是空跑; 排一个布局完成后的事件再量才量得到。
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(SyncAllDynamicEntry));
             StartLivePolling();
         }
     }
