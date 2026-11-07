@@ -7,6 +7,7 @@ namespace BiliDesk.Utils;
 public static class UrlParser
 {
     private static readonly Regex BvidRegex = new(@"/(BV[0-9A-Za-z]{10})", RegexOptions.Compiled);
+    // 老版空间地址: 路径里带 /space/{mid}(www.bilibili.com/space/12345 这类)
     private static readonly Regex UidRegex = new(@"/space/(\d+)", RegexOptions.Compiled);
 
     /// <summary>
@@ -40,10 +41,21 @@ public static class UrlParser
         return m.Success ? m.Groups[1].Value : null;
     }
 
-    /// <summary>提取 UP 主 uid(space.bilibili.com/{mid})</summary>
+    /// <summary>提取 UP 主 uid</summary>
     public static string? ExtractUid(string urlOrUri)
     {
         if (!TryParseUri(urlOrUri, out var uri)) return null;
+        var host = uri.Host.Equals("space.bilibili.com", StringComparison.OrdinalIgnoreCase);
+        if (host)
+        {
+            // 现行主页地址: space.bilibili.com/{mid}(AbsolutePath 就是 "/{mid}")
+            // 2026-11-07 修: 原来只有 /space/{mid} 一条正则, 现行域名下的地址永远提取不到 ——
+            // HandleUrl(重新接线后的统一入口)对空间链接会全部失灵。
+            var seg = uri.AbsolutePath.Trim('/');
+            var head = seg.Split('/')[0];
+            return long.TryParse(head, out _) && head.Length > 0 ? head : null;
+        }
+        // 老式地址: 路径里带 /space/{mid}(如 www.bilibili.com/space/12345)
         var m = UidRegex.Match(uri.AbsolutePath);
         return m.Success ? m.Groups[1].Value : null;
     }

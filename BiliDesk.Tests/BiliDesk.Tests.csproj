@@ -1,0 +1,35 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      必须与主工程同为 -windows TFM(NU1201): 主工程 OutputType=WinExe,
+      ProjectReference 一个 exe 工程时 TFM 家族必须一致。
+      测试代码本身不用 WinForms/WPF 类型, 被测对象全是纯逻辑类。
+    -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!--
+      测试工程不引用 WinForms/WPF: 被测对象全部是纯逻辑类(解析器/签名/工具类)。
+      主工程是 net10.0-windows + UseWPF, 但那些类型不进测试面 ——
+      真要测 UI 层时再用 UI 自动化, 不靠单测硬啃。
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BiliDesk\BiliDesk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>
