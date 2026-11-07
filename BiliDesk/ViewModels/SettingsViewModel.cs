@@ -496,6 +496,35 @@ public class SettingsViewModel : ObservableObject
     /// <summary>缩放滑杆上限</summary>
     public double UiScaleMax => Helpers.UiScale.MaxPercent;
 
+    // ---------------- 滚轮速度(2026-11-07) ----------------
+    //
+    // ★ 语义是"每格滑多远"的百分比: 100% = 与引擎默认一格的距离相同, 250% = 2.5 倍。
+    //   缓动曲线(滑过去而不是瞬移)由 Helpers/WheelScroll 统一施加, 这里只调距离。
+    // ★ 条目滚动的虚拟化列表(动态页动态流等)不受影响, 保持引擎原生的"一格 3 条"。
+
+    /// <summary>滚轮速度百分比(100 = 原生距离; 默认 250)</summary>
+    public int WheelSpeedPercent
+    {
+        get => Svc.Settings.WheelSpeedPercent;
+        set
+        {
+            if (value == Svc.Settings.WheelSpeedPercent) return;
+            Svc.Settings.SetWheelSpeedPercent(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(WheelSpeedText));
+        }
+    }
+
+    /// <summary>滚轮速度滑杆下方那行说明(与其它滑杆同款: 数值写进描述行)</summary>
+    public string WheelSpeedText => WheelSpeedPercent == 100
+        ? "滚轮速度 100%（与系统默认距离相同）"
+        : $"滚轮速度 {WheelSpeedPercent}%（系统默认的 {WheelSpeedPercent / 100.0:0.##} 倍）";
+
+    /// <summary>滚轮速度滑杆下限(取自 Helpers/WheelScroll, 单一来源)</summary>
+    public double WheelSpeedMin => Helpers.WheelScroll.MinPercent;
+    /// <summary>滚轮速度滑杆上限</summary>
+    public double WheelSpeedMax => Helpers.WheelScroll.MaxPercent;
+
     // ---------------- 卡片列数(2026-10-06) ----------------
     //
     // ★ 0 = 自动(按窗口宽度算, 沿用原有行为); 2~8 = 固定列数。

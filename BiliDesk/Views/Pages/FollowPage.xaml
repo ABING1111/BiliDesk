@@ -216,6 +216,15 @@
             <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
             <!-- 同上: 动态流也不要有横向滚动条(卡片宽度本来就跟视口一致) -->
             <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+            <!-- ★ 2026-11-07 用户报"动态卡的滚轮没有平滑效果": 默认 ScrollUnit=Item,
+                 一格滚轮 = 3 个条目(3 张整卡), 全局平滑滚轮只认像素偏移, 只能跳过它。
+                 改成按像素滚后, 动态卡与其它页面共用同一套平滑滚轮。
+                 ★ 偏移单位因此从"条"变成像素: 代码后置的 FeedAutoLoadThreshold 已同步改成
+                   800px(原来是 4 个条目), 触底"按项对齐"单独用 4px 的
+                   FeedBottomAlignThreshold —— 与卡片墙那一路(CardWallPanel 本来就是像素滚)
+                   行为一致。
+                 (这个附加属性挂在 ListBox 上、由虚拟化面板通过 ItemsOwner 读取。) -->
+            <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel" />
             <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
             <Setter Property="ItemContainerStyle">
                 <Setter.Value>

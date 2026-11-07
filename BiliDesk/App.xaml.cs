@@ -100,6 +100,10 @@ public partial class App : Application
         // 全局中键自动滚动(浏览器同款): 注册 ScrollViewer 类处理器, 一次装好全应用生效
         MiddleClickAutoscroll.Install();
 
+        // 全局滚轮: "按设置的距离 + 缓动曲线滑过去" —— 引擎原生是逐格瞬移,
+        // 观感一顿一顿的(2026-11-07 用户要求改成有滑动的曲线)。
+        WheelScroll.Install();
+
         // 顺带清理短视频的本地合流缓存(vcache)。
         // 平时每次合流完都会清一次, 这里再补一道: 用户如果从此不再看短视频,
         // 那批文件就再也没机会被清理了。放线程池里跑, 不占启动时间。

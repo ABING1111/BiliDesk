@@ -116,6 +116,16 @@ public class SettingsStore
     public int UiScalePercent { get; set; } = 100;
 
     /// <summary>
+    /// 鼠标滚轮速度百分比(默认 250 = 系统默认每格距离的 2.5 倍, 100 = 与原生相同)。
+    /// 范围/默认值见 <see cref="Helpers.WheelScroll"/> —— 只写在那里一处。
+    ///
+    /// ★ 与"条目滚动"无关: 虚拟化列表按条滚, 保持引擎原生(见 Helpers/WheelScroll 的说明)。
+    /// ★ 它不是"改个资源"那种轻量变更: 生效值落在 WheelScroll 的静态字段上,
+    ///   滚轮事件里直接读, 所以这里只需要同步一次 + 落盘。
+    /// </summary>
+    public int WheelSpeedPercent { get; set; } = Helpers.WheelScroll.DefaultPercent;
+
+    /// <summary>
     /// **自定义下载/缓存位置**(空串 = 用默认的系统「下载」文件夹)。
     /// 下载的视频与"图片另存为"都存到这里(见 <see cref="AppPaths.DownloadDir"/>)。
     /// ★ 2026-10-11 由 <c>CacheRoot</c> 改名而来, 语义从"内部缓存根"改成"下载目录"
@@ -543,9 +553,12 @@ public class SettingsStore
         Helpers.CardWall.SetFixedColumns(CardColumns);
         // 同理: 缩放倍率也是静态的, 启动时要先落到 UiScale 上, 窗口创建时才会按它施加变换。
         Helpers.UiScale.SetPercent(UiScalePercent);
-        // ★ 同理(第三处): 下载目录也是静态的(AppPaths.DownloadDir)。漏了这一步的表现是
+        // 同理(第三处静态值): 滚轮速度落在 WheelScroll 的静态字段上, 滚轮事件里直接读 ——
+        // 漏了这一步的表现是"设置里存着 250%, 重启后滚轮又变回引擎默认距离"。
+        Helpers.WheelScroll.SetPercent(WheelSpeedPercent);
+        // ★ 同理(第四处): 下载目录也是静态的(AppPaths.DownloadDir)。漏了这一步的表现是
         //   "设置里明明存着 D:\视频, 重启后下载还是写回 C:\Users\...\Downloads" ——
-        //   与列数/缩放是同一类错, 所以三处都放在 Load 的末尾一起同步。
+        //   与列数/缩放/滚轮是同一类错, 所以都放在 Load 的末尾一起同步。
         //   ★ 下载目录**不做文件迁移**: 已下载的视频是用户成品, 不是可再生缓存。
         AppPaths.SetDownloadDir(DownloadDir);
         // 内部缓存根目录固定回数据目录(2026-10-11 起不再暴露给用户, 见 AppPaths.CacheRoot)。
@@ -591,6 +604,9 @@ public class SettingsStore
         // ★ 缩放也要夹取: 老配置没这个字段(默认 100), 手改过的可能有 0/负数/超大值。
         //   0 会让整个界面缩成不可见的点, 必须挡住。
         UiScalePercent = Helpers.UiScale.ClampPercent(s.UiScalePercent <= 0 ? 100 : s.UiScalePercent);
+
+        // ★ 滚轮速度同理: 老配置没这个字段(反序列化保持 0)要回落到默认, 手改的越界值夹回范围。
+        WheelSpeedPercent = Helpers.WheelScroll.ClampPercent(s.WheelSpeedPercent);
 
         // 动态页排版: 老配置没这个字段 ⇒ 默认 false(动态卡)。bool 没有越界值, 不需要夹取。
         FollowCardWall = s.FollowCardWall;
@@ -853,6 +869,7 @@ public class SettingsStore
         AcrylicOpacityDark = AcrylicOpacityDark,
         CardColumns = CardColumns,
         UiScalePercent = UiScalePercent,
+        WheelSpeedPercent = WheelSpeedPercent,
         FollowCardWall = FollowCardWall,
         DownloadDir = DownloadDir,
         DanmakuEnabled = DanmakuEnabled,
@@ -1192,6 +1209,20 @@ public class SettingsStore
         Helpers.UiScale.SetPercent(v);
         Save();
         LayoutChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// 设置鼠标滚轮速度百分比并落盘。
+    /// ★ 不需要任何广播: 生效值落在 <see cref="Helpers.WheelScroll"/> 的静态字段上,
+    ///   下一次滚轮事件直接读到新值, 没有已存在的可视树需要重排。
+    /// </summary>
+    public void SetWheelSpeedPercent(int percent)
+    {
+        var v = Helpers.WheelScroll.ClampPercent(percent);
+        if (WheelSpeedPercent == v) return;
+        WheelSpeedPercent = v;
+        Helpers.WheelScroll.SetPercent(v);
+        Save();
     }
 
     /// <summary>

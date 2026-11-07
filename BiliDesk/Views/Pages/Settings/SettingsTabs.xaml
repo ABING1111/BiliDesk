@@ -207,9 +207,70 @@
                                 Value="{Binding AcrylicOpacityDark, Mode=TwoWay}" />
                     </Grid>
 
+                </StackPanel>
+            </Border>
+
+            <!-- ============ 交互 ============
+                 ★ 2026-11-07 用户要求: 把「软件缩放」「卡片列数」从「外观」挪出来,
+                   和新增的「滚轮速度」一起单独成板块 —— 这三项都是"怎么滚 / 怎么排 / 多大"
+                   的操作类偏好, 与配色、材质那些纯观感项分开。 -->
+            <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
+                            Content="交互" />
+
+            <Border Style="{StaticResource SettingsCardStyle}">
+                <StackPanel>
+                    <!-- 滚轮速度(2026-11-07 新增): 一格滚轮滑多远。
+                         ★ 滚动是"按这个距离 + 缓动曲线滑过去"(见 Helpers/WheelScroll), 不是瞬移。
+                         ★ 条目滚动的虚拟化列表(动态页动态流、会话列表等)保持引擎原生的"一格 3 条",
+                           不跟着加速 —— 再乘倍数会一笔跳过好几张整卡。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="240" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="滚轮速度" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding WheelSpeedText}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                            <TextBlock Text="滚轮每格滑过的距离；条目滚动的列表保持系统默认"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                Width="240" VerticalAlignment="Center"
+                                Minimum="{Binding WheelSpeedMin}" Maximum="{Binding WheelSpeedMax}"
+                                IsSnapToTickEnabled="True" TickFrequency="25"
+                                Value="{Binding WheelSpeedPercent, Mode=TwoWay}" />
+                    </Grid>
+
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
-                    <!-- 软件缩放(2026-10-06 新增): 把整个界面按百分比放大/缩小, 与系统 DPI 无关。
+                    <!-- 卡片列数(2026-10-06 新增; 2026-11-07 从「外观」移入「交互」):
+                         0 = 自动(按窗口宽度), 2~8 = 固定列数。
+                         ★ 作用于所有卡片页(首页/历史/收藏/搜索/分区/稍后再看/关注/个人空间) ——
+                           它们共用同一套卡片墙, 且用户选定"所有卡片页统一"。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="240" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="卡片列数" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding CardColumnsText}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                            <TextBlock Text="作用于首页、历史、收藏、搜索等所有卡片页"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                Width="240" VerticalAlignment="Center"
+                                Minimum="{Binding CardColumnsMin}" Maximum="{Binding CardColumnsMax}"
+                                IsSnapToTickEnabled="True" TickFrequency="1"
+                                Value="{Binding CardColumns, Mode=TwoWay}" />
+                    </Grid>
+
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 软件缩放(2026-10-06 新增; 2026-11-07 从「外观」移入「交互」):
+                         把整个界面按百分比放大/缩小, 与系统 DPI 无关。
                          ★ 用 LayoutTransform(见 Helpers/UiScale): 字与控件一起缩, 布局会重新排版。
                          ★★ 说明文案必须点明播放器的缩放范围 —— 只有右侧信息栏(含评论区)跟着缩,
                             视频画面与顶栏保持原尺寸。不能连视频区一起缩: LibVLCSharp.WPF 3.8.0 把
@@ -232,30 +293,6 @@
                                 Minimum="{Binding UiScaleMin}" Maximum="{Binding UiScaleMax}"
                                 IsSnapToTickEnabled="True" TickFrequency="5"
                                 Value="{Binding UiScalePercent, Mode=TwoWay}" />
-                    </Grid>
-
-                    <Border Style="{StaticResource SettingsRowDivider}" />
-
-                    <!-- 卡片列数(2026-10-06 新增): 0 = 自动(按窗口宽度), 2~8 = 固定列数。
-                         ★ 作用于所有卡片页(首页/历史/收藏/搜索/分区/稍后再看/关注/个人空间) ——
-                           它们共用同一套卡片墙, 且用户选定"所有卡片页统一"。 -->
-                    <Grid Style="{StaticResource SettingsRowStyle}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="240" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                            <TextBlock Text="卡片列数" Style="{StaticResource SettingsRowTitleStyle}" />
-                            <TextBlock Text="{Binding CardColumnsText}"
-                                       Style="{StaticResource SettingsRowDescStyle}" />
-                            <TextBlock Text="作用于首页、历史、收藏、搜索等所有卡片页"
-                                       Style="{StaticResource SettingsRowDescStyle}" />
-                        </StackPanel>
-                        <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
-                                Width="240" VerticalAlignment="Center"
-                                Minimum="{Binding CardColumnsMin}" Maximum="{Binding CardColumnsMax}"
-                                IsSnapToTickEnabled="True" TickFrequency="1"
-                                Value="{Binding CardColumns, Mode=TwoWay}" />
                     </Grid>
                 </StackPanel>
             </Border>

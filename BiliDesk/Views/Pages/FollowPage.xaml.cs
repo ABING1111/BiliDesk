@@ -22,12 +22,25 @@ namespace BiliDesk.Views.Pages;
 public partial class FollowPage : UserControl
 {
     /// <summary>
-    /// 自动翻页阈值(单位 = **条目**, 不是像素)。
-    /// ListBox 用默认的 item-based 虚拟化(CanContentScroll=True), 滚动距离按行数算;
+    /// 左栏 UP 列表的自动翻页阈值(单位 = **条目**, 不是像素)。
+    /// 这个列表仍是默认的 item-based 虚拟化(CanContentScroll=True), 滚动距离按行数算;
     /// 设成像素值会在 50 条一页的左栏上永远触发/永远不触发。
     /// </summary>
     private const double UserAutoLoadThreshold = 8;
-    private const double FeedAutoLoadThreshold = 4;
+
+    /// <summary>
+    /// 右栏动态流的自动翻页阈值(单位 = **像素**)。
+    /// ★ 2026-11-07 起两条分支都是像素滚: 动态卡列表设了 ScrollUnit=Pixel(为了让全局
+    ///   滚轮平滑生效), 卡片墙本来就是 CardWallPanel 的像素滚动 —— 统一用像素。
+    ///   800px 大致等于原来"还差三四张卡就开始预取"的时机。
+    /// </summary>
+    private const double FeedAutoLoadThreshold = 800;
+
+    /// <summary>
+    /// "把最后一张卡按项对齐"的触发距离(像素): 只有真的触底才做。
+    /// ★ 预取可以提前(见上), 对齐不行 —— 提前做会把画面往下拽一下。
+    /// </summary>
+    private const double FeedBottomAlignThreshold = 4;
 
     /// <summary>看板轮询间隔: "关注的主播开播了"要能自己冒出来, 不能靠用户去点刷新。</summary>
     private static readonly TimeSpan LiveBoardPollInterval = TimeSpan.FromSeconds(60);
@@ -359,7 +372,9 @@ public partial class FollowPage : UserControl
         //   ListBox 滚到底时按**像素**停, 最后一张动态卡只露出顶部一行(头像+标题),
         //   而那张卡的白色卡片底色横贯整个右栏宽度, 看着就像"下面压着一个长方形画幅"。
         //   这里在触底时把最后一项**完整滚进视口**(按项对齐), 半张卡的现象就没了。
-        ScrollLastFeedItemIntoView(sv);
+        // ★ 2026-11-07: 预取阈值改成 800px(见 FeedAutoLoadThreshold)后, 对齐必须单独
+        //   用更小的 FeedBottomAlignThreshold —— 否则离底还差 800px 就把画面拽到最后一张卡。
+        if (distanceToBottom <= FeedBottomAlignThreshold) ScrollLastFeedItemIntoView(sv);
         _ = vm.LoadMoreFeedAsync();
     }
 

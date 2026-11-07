@@ -16,6 +16,11 @@ namespace BiliDesk.Helpers;
 /// 用法: 任意元素上 <c>helpers:SmoothScroll.Enabled="True"</c>
 /// (挂在 ListBox/ItemsControl 上会自动找它可视树里的第一个 ScrollViewer)。
 ///
+/// ★ 2026-11-07 起, 全应用默认的滚轮已经是"可调速 + 全局缓动"(见 <see cref="WheelScroll"/>),
+///   本类只留给**需要单独手感**的个别位置(目前只有播放器的合集列表)。
+///   同一个滚动区两边都挂也不会双重滚动: 本类在 Preview 阶段就把事件吃掉了,
+///   全局那份注册在冒泡阶段, 收到时已经是 Handled。
+///
 /// 实现: 拦截 PreviewMouseWheel, 不再让引擎瞬移, 而是把目标偏移沿一段缓动过去
 /// (默认 180px / 280ms; 每处可用 <see cref="StepProperty"/> / <see cref="DurationMsProperty"/> 覆盖)。
 /// 动画驱动一个代理附加属性, 它的变更回调里调 ScrollToVerticalOffset。

@@ -194,6 +194,14 @@ public class AppSettings
     public int UiScalePercent { get; set; } = 100;
 
     /// <summary>
+    /// 鼠标滚轮速度百分比(100 = 与系统默认一格的距离相同, 默认 250 = 2.5 倍)。
+    /// 只放大"一格滑多远", 缓动曲线由 Helpers/WheelScroll 统一施加。
+    /// 范围见 Helpers/WheelScroll.MinPercent/MaxPercent。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public int WheelSpeedPercent { get; set; } = 250;
+
+    /// <summary>
     /// 自定义**下载/缓存位置**(空串 = 用默认的系统「下载」文件夹)——
     /// 下载的视频(.mp4)与"图片另存为"都存到这里, 设置页那一行与离线缓存页显示的就是它。
     /// ★ 2026-10-11 由 <c>CacheRoot</c> 改名而来: 用户理解的"缓存位置"是"下载的视频存哪",
