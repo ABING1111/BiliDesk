@@ -34,6 +34,33 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // ★★★ 全局异常兜底必须放在**最前面**。
+        //   2026-11-07 修: 原来它注册在 Svc.Settings.Load()/Session.Load()/VlcCore.Prewarm()
+        //   之后 —— 初始化阶段的任何异常(配置文件被手改坏、LibVLC 原生库加载失败、
+        //   数据目录不可写)会直接闪退, 且 errors.txt 里一个字都不会有, 用户与作者都拿不到线索。
+        //   处理器自身只引用 AppPaths/App.ReportError, 不依赖任何服务, 前移无副作用。
+        DispatcherUnhandledException += (_, args) =>
+        {
+            ReportError(args.Exception);
+            // 致命异常(OOM/栈溢出/非法结构)继续"处理"只会让进程停在更坏的状态:
+            // 记完日志就放行, 让进程按它自己的方式结束。
+            var fatal = args.Exception is OutOfMemoryException
+                or StackOverflowException
+                or AccessViolationException;
+            if (fatal) return;
+            // 弹框节流: 初始化竞态或坏接口可能让这个处理器几秒内被触发十几次,
+            // 连环弹框会把用户锁死在"点掉-又弹"里, 看不到任何可操作的东西。
+            if (CanShowErrorDialog())
+                MessageBox.Show(
+                    "程序遇到一个错误, 已记录到\n" + AppPaths.LogFile + "\n\n" + args.Exception.Message,
+                    "BiliDesk 出错了", MessageBoxButton.OK, MessageBoxImage.Warning);
+            args.Handled = true;
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            if (args.ExceptionObject is Exception ex) ReportError(ex);
+        };
+
         // ★★★ 单实例闸门必须放在**最前面**, 在初始化任何服务之前。
         //   为什么: 第二个实例一旦跑起来, 它会 Load 同一份 session.json/settings.json,
         //   再 Save 回去就会覆盖第一个进程刚写的状态(登录态/设置互相打架), 还会多占一份
@@ -77,20 +104,6 @@ public partial class App : Application
         // 平时每次合流完都会清一次, 这里再补一道: 用户如果从此不再看短视频,
         // 那批文件就再也没机会被清理了。放线程池里跑, 不占启动时间。
         _ = System.Threading.Tasks.Task.Run(ShortVideoCache.Prune);
-
-        // 全局异常兜底: 记录到文件并提示, 避免直接闪退
-        DispatcherUnhandledException += (_, args) =>
-        {
-            ReportError(args.Exception);
-            MessageBox.Show(
-                "程序遇到一个错误, 已记录到\n" + AppPaths.LogFile + "\n\n" + args.Exception.Message,
-                "BiliDesk 出错了", MessageBoxButton.OK, MessageBoxImage.Warning);
-            args.Handled = true;
-        };
-        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
-        {
-            if (args.ExceptionObject is Exception ex) ReportError(ex);
-        };
 
         // 首次启动: 先过免责声明这道门。
         // 放在建主窗口**之前** —— 不同意就直接 Shutdown, 用户不该看到主界面一闪而过。
@@ -245,18 +258,53 @@ public partial class App : Application
     {
         try
         {
-            // 上限保护: errors.txt 只保留最近的错误(发布后没有任何清理它的途径,
-            // 无限追加会在装了几年后变成几十 MB 的"古董日志", 反而没人看)。
-            // 超过 1MB 就整份重来 —— 有新错误时它马上又会有内容。
-            var f = new FileInfo(AppPaths.LogFile);
-            if (f.Exists && f.Length > 1024 * 1024) f.Delete();
-            File.AppendAllText(AppPaths.LogFile,
-                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}\n\n");
+            lock (LogGate)
+            {
+                // 上限保护: errors.txt 只保留最近的错误(发布后没有任何清理它的途径,
+                // 无限追加会在装了几年后变成几十 MB 的"古董日志", 反而没人看)。
+                // ★ 2026-11-07 改为轮转而不是整份删除: 旧版超 1MB 直接 f.Delete(),
+                //   正要排查的问题现场说没就没; 挪成 errors.old, 现场永远保留最近两份。
+                var f = new FileInfo(AppPaths.LogFile);
+                if (f.Exists && f.Length > 1024 * 1024)
+                {
+                    var old = AppPaths.LogFile + ".old";
+                    try { f.MoveTo(old, overwrite: true); }
+                    catch { try { f.Delete(); } catch { /* 挪不掉也删不掉, 追加继续 */ } }
+                }
+
+                // ★ 带调用栈: SessionManager 这类"守卫主动上报"的合成异常没有原始堆栈,
+                //   不补栈的话日志里只有一句话, 定位不到是哪条调用路径触发的。
+                // ★ ex 本身有堆栈时原样输出(ToString 已含), 只给"干净"的合成异常补。
+                var hasStack = !string.IsNullOrEmpty(ex.StackTrace);
+                var body = hasStack ? ex.ToString() : ex + Environment.NewLine + Environment.NewLine +
+                    new System.Diagnostics.StackTrace(1);
+                File.AppendAllText(AppPaths.LogFile,
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {body}\n\n");
+            }
         }
         catch
         {
             // 忽略
         }
+    }
+
+    /// <summary>日志写入闸门: 多线程同时 AppendAllText 会抛 IOException("正由另一进程使用"), 串行化之。</summary>
+    private static readonly object LogGate = new();
+
+    /// <summary>错误弹框节流: 同一分钟内最多弹两次, 其余只记日志(见 DispatcherUnhandledException 里的说明)。</summary>
+    private static DateTime _lastErrorDialogUtc;
+    private static int _errorDialogCountThisMinute;
+
+    private static bool CanShowErrorDialog()
+    {
+        var now = DateTime.UtcNow;
+        if ((now - _lastErrorDialogUtc).TotalMinutes >= 1)
+        {
+            _lastErrorDialogUtc = now;
+            _errorDialogCountThisMinute = 0;
+        }
+        if (++_errorDialogCountThisMinute > 2) return false;
+        return true;
     }
 
     /// <summary>进程退出: 释放共享的 LibVLC 原生实例(窗口关闭时不释放, 避免反复创建销毁)</summary>
