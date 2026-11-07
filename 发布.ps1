@@ -16,7 +16,7 @@
 #
 # 注意: 这里的默认版本号要跟 App.AppVersion / csproj 的 <Version> / installer.iss 的
 # MyAppVersion 一起改 —— 它只决定 zip 的文件名, 不参与程序内部显示。
-param([string]$Version = "1.6.7")
+param([string]$Version = "1.6.7", [switch]$FixIntegrity)
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -101,6 +101,12 @@ foreach ($dll in Get-ChildItem (Join-Path $PortableDir "*_cor3.dll") | Where-Obj
 Write-Host "== 4/5 提回 Medium 完整性(修 Low 标签导致的放不出视频 / 安装包打不开) =="
 icacls $Out /setintegritylevel Medium /T /C | Out-Null
 
+# ★★★ 注意: 这一步**管不到**稍后由 ISCC 生成的 setup.exe。
+#   ISCC 在 Publish\ 下新建的 exe 没有显式完整性标签(只继承目录的 ACE),
+#   而 `icacls <文件>` 查不到标签行时看起来像"没问题", 实际要靠父目录兜底。
+#   2026-11-07 连续两次发布都发现 setup.exe 缺标签, 所以这里在脚本末尾**再补一次**
+#   (见文件最后的 "6/6")。宁可多跑一条无害的命令, 也不要发一个可能打不开的安装包。
+
 Write-Host "== 5/5 打包便携版 =="
 # 文件名用纯 ASCII: GitHub 会把非 ASCII 的资产名截掉(1.2.0 的 zip 在下载页显示成 "BiliDesk-1.2.0-.zip")
 $zip = Join-Path $Out "BiliDesk-$Version-portable.zip"
@@ -113,3 +119,24 @@ Write-Host "  便携版目录 : $PortableDir"
 Write-Host "  便携版 zip : $zip"
 Write-Host "  安装器载荷 : $InstallerDir"
 Write-Host "  下一步     : 用 Inno Setup 编译 Publish\installer.iss (载荷目录与它同级)"
+Write-Host ""
+Write-Host "★ 编译完安装器后, 记得再跑一次(ISCC 新建的 setup.exe 不带完整性标签):"
+Write-Host "    powershell -ExecutionPolicy Bypass -File 发布.ps1 -FixIntegrity"
+Write-Host ""
+
+# ============================================================
+# 独立开关: 只给 Publish\ 下**所有文件**补一次 Medium 完整性。
+#
+# 为什么需要单独一个入口: setup.exe 是 ISCC 在发布脚本**跑完之后**才生成的,
+# 上面 4/5 那一步根本覆盖不到它。2026-11-07 连续两次发布都发现 setup.exe
+# 缺显式标签(靠父目录兜底才没出事), 所以留一个可以随时补跑的命令。
+# ============================================================
+if ($FixIntegrity) {
+    Write-Host "== 补完整性标签(Publish\ 下全部文件) =="
+    icacls $Out /setintegritylevel Medium /T /C | Out-Null
+    foreach ($f in Get-ChildItem $Out -Filter *.exe) {
+        icacls $f.FullName /setintegritylevel Medium | Out-Null
+        Write-Host ("  {0}" -f $f.Name)
+    }
+    Write-Host "完成。"
+}

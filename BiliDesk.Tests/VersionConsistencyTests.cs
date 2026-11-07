@@ -52,7 +52,8 @@ public class VersionConsistencyTests
     public void AppVersion_与发布脚本一致()
     {
         var ps1 = ReadAllText(RepoRoot, "发布.ps1");
-        var m = Regex.Match(ps1, @"param\(\[string\]\$Version\s*=\s*""([\d\.]+)""\)");
+        // ★ 允许 param() 里还有别的参数(如 -FixIntegrity) —— 只要求 $Version 的默认值存在。
+        var m = Regex.Match(ps1, @"param\([^)]*\$Version\s*=\s*""([\d\.]+)""[^)]*\)");
         Assert.True(m.Success, "发布.ps1 里没有默认 $Version 参数");
         Assert.Equal(BiliDesk.App.AppVersion, m.Groups[1].Value);
     }
