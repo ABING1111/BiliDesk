@@ -128,6 +128,17 @@ public sealed class DynamicNavEntry
     /// <summary>发布者昵称(动态流 author.name / portal uname)。未读置顶分组要显示名字。</summary>
     public string AuthorName { get; set; } = "";
 
+    /// <summary>
+    /// 发布者头像地址(feed/nav 的 author.face, 2026-11-07)。
+    ///
+    /// ★ 为什么必须有(用户报"动态页刚更新的 UP 显示默认头像"):
+    ///   左栏未读占位行的头像取自 <c>UpNotifyState.Face</c>; 之前 feed/nav 这条解析路径
+    ///   只读 mid/name 不读 face, 于是"刚被动态流抓到的那个 UP"头像一直是空串,
+    ///   那一格就露出了模板里的默认人形图标 —— 只有 portal 的 up_list 恰好也收录
+    ///   它时才偶尔补上, 表现为"时好时坏"。
+    /// </summary>
+    public string AuthorFace { get; set; } = "";
+
     /// <summary>发布时间(Unix 秒; 接口只给 "2小时前" 时是近似值)。</summary>
     public long Pubdate { get; set; }
 

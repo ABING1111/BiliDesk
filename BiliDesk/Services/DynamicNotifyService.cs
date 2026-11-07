@@ -142,6 +142,27 @@ public sealed class DynamicNotifyService
     }
 
     /// <summary>
+    /// 取某个 UP 的头像快照(2026-11-07)。没有状态或还没拿到头像返回 false。
+    ///
+    /// ★ 用途: 左栏未读占位行的头像可能"这轮才补上"(feed/nav 的 author.face /
+    ///   portal 的 up_list 都是异步轮询里陆续到位的), VM 在 60 秒轮询事件里
+    ///   把它就地同步到 <c>FollowUser.Face</c> —— 属性带变更通知, 那一格会自动重新绑定。
+    /// </summary>
+    public bool TryGetFace(long mid, out string face)
+    {
+        lock (_gate)
+        {
+            if (_states.TryGetValue(mid, out var s) && !string.IsNullOrEmpty(s.Face))
+            {
+                face = s.Face;
+                return true;
+            }
+        }
+        face = "";
+        return false;
+    }
+
+    /// <summary>
     /// 启动服务。App.OnStartup 调一次; 未登录时只挂事件, 登录后自动开始轮询。
     /// </summary>
     public void Start()
@@ -306,6 +327,7 @@ public sealed class DynamicNotifyService
                             {
                                 Mid = mid,
                                 Name = latest.AuthorName,
+                                Face = latest.AuthorFace,
                                 LatestId = latest.Id,
                                 LatestPubdate = latest.Pubdate,
                                 NewCount = 0,
@@ -319,6 +341,7 @@ public sealed class DynamicNotifyService
                         {
                             Mid = mid,
                             Name = latest.AuthorName,
+                            Face = latest.AuthorFace,
                             LatestId = latest.Id,
                             LatestPubdate = latest.Pubdate,
                             NewCount = Math.Min(MaxCountPerUp, Math.Max(1, list.Count)),
@@ -331,6 +354,7 @@ public sealed class DynamicNotifyService
                     {
                         Mid = mid,
                         Name = latest.AuthorName,
+                        Face = latest.AuthorFace,
                         LatestId = latest.Id,
                         LatestPubdate = latest.Pubdate,
                         NewCount = Math.Min(MaxCountPerUp, count),
@@ -351,6 +375,11 @@ public sealed class DynamicNotifyService
                 if (latest.Pubdate > state.LatestPubdate) state.LatestPubdate = latest.Pubdate;
                 if (IsIdNewer(latest.Id, state.LatestId)) state.LatestId = latest.Id;
                 if (!string.IsNullOrEmpty(latest.AuthorName)) state.Name = latest.AuthorName;
+                // 头像也跟着条目走(2026-11-07): 已有状态可能是在 face 还没解析的年代建的
+                // (旧进程残留 / portal 没收录它), 本轮条目带了 face 就补上 ——
+                // 占位行靠它才有头像, 空串不覆盖, 避免把 portal 已补的脸清掉。
+                if (!string.IsNullOrEmpty(latest.AuthorFace) && state.Face != latest.AuthorFace)
+                    state.Face = latest.AuthorFace;
             }
 
             DynamicSeenStore.Flush();

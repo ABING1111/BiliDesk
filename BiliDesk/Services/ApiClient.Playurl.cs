@@ -182,6 +182,14 @@ public partial class ApiClient
                 authorName = GetStr(auName, "name");
             if (authorName.Length == 0) authorName = GetStr(e, "uname");
 
+            // 头像(2026-11-07): 与 author.name 同一个对象里的 author.face; 扁平形态偶尔
+            // 把它放在顶层 face, 一并兜底。Normalize 统一 http→https,
+            // 与 portal 解析(GetRecentUpdatedUpsAsync)里对 face 的处理保持一致。
+            var authorFace = "";
+            if (e.TryGetProperty("author", out var auFace) && auFace.ValueKind == JsonValueKind.Object)
+                authorFace = UrlUtil.Normalize(GetStr(auFace, "face"));
+            if (authorFace.Length == 0) authorFace = UrlUtil.Normalize(GetStr(e, "face"));
+
             var flatType = 0;
             var typeText = GetStr(e, "type");
             if (typeText.Length > 0) int.TryParse(typeText, out flatType);
@@ -200,6 +208,7 @@ public partial class ApiClient
                 Id = id,
                 Mid = mid,
                 AuthorName = authorName,
+                AuthorFace = authorFace,
                 Pubdate = tmp.Pubdate,
                 Bvid = bvid,
                 Type = flatType,

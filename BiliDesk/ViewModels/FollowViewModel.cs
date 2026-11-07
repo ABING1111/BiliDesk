@@ -929,6 +929,12 @@ public class FollowViewModel : ObservableObject
         u.NewCount = count;
         // 服务里的时间比动态流里的近似时间更可靠; 只取更大值, 避免旧数据把排序顶回去。
         if (latestPub > u.LatestPubdate) u.LatestPubdate = latestPub;
+        // 头像(2026-11-07): 占位行("有未读、还没被分页加载出来"的 UP)只能靠服务给头像,
+        // 而它是轮询里陆续到位的 —— 上一轮可能是空串(显示默认人形), 这一轮有了就补上。
+        // FollowUser.Face 带变更通知, 一赋值那一格就会自动重新绑定贴图。
+        // ★ 只补空, 不覆盖非空值: 已加载行的头像来自关注列表接口, 是权威的。
+        if (u.Face.Length == 0 && Svc.DynamicNotify.TryGetFace(u.Mid, out var face))
+            u.Face = face;
     }
 
     // ------------------------------------------------------------ 左栏排序
