@@ -28,13 +28,10 @@ public enum PageKey
     WatchLater = 10
 }
 
-/// <summary>主窗口 ViewModel: 导航 + 登录状态</summary>
+/// <summary>主窗口 ViewModel: 导航(登录态/用户信息的展示由各页面自己的 VM 负责)</summary>
 public class MainViewModel : ObservableObject
 {
     private PageKey _current = PageKey.Home;
-    private bool _isLoggedIn;
-    private string _userName = "";
-    private string _userFace = "";
 
     public PageKey Current
     {
@@ -47,12 +44,7 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    public bool IsLoggedIn { get => _isLoggedIn; private set => SetProperty(ref _isLoggedIn, value); }
-    public string UserName { get => _userName; private set => SetProperty(ref _userName, value); }
-    public string UserFace { get => _userFace; private set => SetProperty(ref _userFace, value); }
-
     public event Action? PageChanged;
-    public event Action? UserChanged;
 
     public ICommand NavigateCommand { get; }
 
@@ -60,22 +52,6 @@ public class MainViewModel : ObservableObject
     {
         NavigateCommand = new RelayCommand(
             p => { if (p is PageKey k) Navigate(k); });
-        SessionManager.Instance.Changed += OnSessionChanged;
-        // ★ 2026-11-06 用户要求去掉侧边栏「动态」入口的红点提示 ——
-        //   这里不再订阅 DynamicNotifyService(服务本身继续跑, 动态页左栏仍在用它)。
-        _ = RefreshUserAsync();
-    }
-
-    private void OnSessionChanged()
-    {
-        IsLoggedIn = SessionManager.Instance.HasLogin;
-        if (IsLoggedIn) _ = RefreshUserAsync();
-        else
-        {
-            UserName = "";
-            UserFace = "";
-            UserChanged?.Invoke();
-        }
     }
 
     public void Navigate(PageKey key)
@@ -103,42 +79,6 @@ public class MainViewModel : ObservableObject
     {
         PageKey.Home, PageKey.Follow, PageKey.Mine, PageKey.Settings
     };
-
-    /// <summary>刷新登录用户信息(nav 接口)</summary>
-    public async System.Threading.Tasks.Task RefreshUserAsync()
-    {
-        try
-        {
-            var has = SessionManager.Instance.HasLogin;
-            IsLoggedIn = has;
-            if (!has)
-            {
-                UserName = "";
-                UserFace = "";
-                UserChanged?.Invoke();
-                return;
-            }
-
-            var (_, _, user) = await Svc.Api.GetUserStateAsync();
-            if (user is { IsLogin: true })
-            {
-                UserName = user.Name;
-                UserFace = user.Face;
-                UserChanged?.Invoke();
-            }
-            else
-            {
-                // 会话可能已过期, 但不清除(网页端可能仍有效), 仅界面提示
-                IsLoggedIn = false;
-                UserName = "登录状态已过期";
-                UserChanged?.Invoke();
-            }
-        }
-        catch
-        {
-            // 用户信息刷新失败不影响使用
-        }
-    }
 
     /// <summary>打开登录窗口</summary>
     public void OpenLoginWindow()
