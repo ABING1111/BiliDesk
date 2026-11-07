@@ -271,11 +271,17 @@ public partial class VideoCard : UserControl
     ///
     /// ★ 列表没给 OwnerMid 时**先补查一次视频详情**(与 OnAddWatchLater 同款), 而不是直接弹提示:
     ///   提示等于"这条路走不通", 而详情接口几乎总能给出 owner.mid, 用户点一下就进去了。
+    /// ★ async 方法 + Forget: await 期间卡片可能被虚拟化回收, 异常不冒全局弹框。
     /// </summary>
-    private async void OnAuthorClick(object sender, MouseButtonEventArgs e)
+    private void OnAuthorClick(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
         if (!TakePress()) return;
+        OpenAuthorSpaceAsync().Forget();
+    }
+
+    private async System.Threading.Tasks.Task OpenAuthorSpaceAsync()
+    {
         if (DataContext is not VideoItem v) return;
 
         var mid = v.OwnerMid;
@@ -300,11 +306,11 @@ public partial class VideoCard : UserControl
     // "查看封面大图"曾按用户要求移除(2026-09-26), 2026-10-31 预览窗重写后按新要求加回
     // (OnPreviewCover); MediaActions.ShowImage 同时被头像/私信图片预览使用。
 
-    private async void OnDownloadCover(object sender, RoutedEventArgs e)
+    private void OnDownloadCover(object sender, RoutedEventArgs e)
     {
         var v = Current;
         if (v == null) return;
-        await MediaActions.SaveImageAsync(v.Cover, v.Title);
+        MediaActions.SaveImageAsync(v.Cover, v.Title).Forget();
     }
 
     /// <summary>预览封面大图(2026-10-31 加回): 与"下载封面"同一个 Cover URL。</summary>
@@ -315,11 +321,11 @@ public partial class VideoCard : UserControl
         MediaActions.ShowImage(v.Cover, v.Title, Window.GetWindow(this));
     }
 
-    private async void OnDownloadVideo(object sender, RoutedEventArgs e)
+    private void OnDownloadVideo(object sender, RoutedEventArgs e)
     {
         var v = Current;
         if (v == null || string.IsNullOrEmpty(v.Bvid)) return;
-        await VideoDownloader.DownloadAsync(v.Bvid, v.Title, Window.GetWindow(this));
+        VideoDownloader.DownloadAsync(v.Bvid, v.Title, Window.GetWindow(this)).Forget();
     }
 
     /// <summary>
@@ -363,8 +369,13 @@ public partial class VideoCard : UserControl
     /// 接口只认 avid, 而搜索/推荐这类列表不下发 avid(见 VideoItem.Aid 的说明),
     /// 所以先看列表有没有给, 没有就补查一次详情 —— 否则这些页面上右键点了会一直报"缺 avid"。
     /// 服务端对"已经在列表里"再调一次是幂等的(code 0), 所以不需要先去查列表。
+    ///
+    /// ★ 用 async 方法体 + Forget 而不是 async void: await 期间卡片可能已被虚拟化回收
+    ///   (DataContext 换人), 异常也不再冒全局弹框。
     /// </summary>
-    private async void OnAddWatchLater(object sender, RoutedEventArgs e)
+    private void OnAddWatchLater(object sender, RoutedEventArgs e) => AddWatchLaterAsync().Forget();
+
+    private async System.Threading.Tasks.Task AddWatchLaterAsync()
     {
         var v = Current;
         if (v == null || string.IsNullOrEmpty(v.Bvid)) return;

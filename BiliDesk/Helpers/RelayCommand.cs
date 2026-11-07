@@ -27,8 +27,18 @@ public class RelayCommand : ICommand
     public bool CanExecute(object? parameter) => _canExecute?.Invoke() ?? true;
     public void Execute(object? parameter)
     {
-        if (_executeParam != null) _executeParam(parameter);
-        else _execute?.Invoke();
+        // ★ 2026-11-07 补: 同步路径上抛出的异常会沿 WPF 命令管线冒成未处理异常
+        //   (全局处理器记日志 + 弹框)。命令体里自己 try/catch 的调用点不受影响;
+        //   没包的(写的时候以为"这就是同步小操作")在这里兜一层, 记日志不弹框。
+        try
+        {
+            if (_executeParam != null) _executeParam(parameter);
+            else _execute?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+        }
     }
 }
 

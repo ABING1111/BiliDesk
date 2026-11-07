@@ -989,8 +989,12 @@ public class FollowViewModel : ObservableObject
     /// <summary>
     /// 输入防抖 300ms 后调「搜索关注明细」接口。
     /// ★ 不做本地过滤: 2790 个关注全部加载/每次输入刷新 2790 行会直接卡死 UI。
+    /// ★ async 方法 + Forget(2026-11-07): 这里已有完整 try/catch, async void 只剩
+    ///   "异常逃逸进全局弹框"的形态风险 —— 保险起见收敛掉(用户输入路径触发频率最高)。
     /// </summary>
-    private async void StartUserSearch()
+    private void StartUserSearch() => RunUserSearchAsync().Forget();
+
+    private async Task RunUserSearchAsync()
     {
         _userSearchCts?.Cancel();
         _userSearchCts?.Dispose();
