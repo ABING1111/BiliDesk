@@ -180,6 +180,10 @@ public partial class MainWindow : FluentWindow
     /// </summary>
     public void ShowEmbeddedPage(FrameworkElement page, string title)
     {
+        // 切页过渡还在跑时先把状态落定: 内嵌页会把整个 PageLayer 藏起来,
+        // 若此时有页面停在"内容半透明"的中途, 回来时会看到它没完全显示。
+        if (NavTransition.InFlight) NavTransition.FinishNow();
+
         // 先放掉上一个内嵌页: 同一时刻只留一个, 免得旧的 UP 资料被接着显示
         EmbeddedContent.Content = null;
 
@@ -293,8 +297,11 @@ public partial class MainWindow : FluentWindow
     /// ★ 新页一定先在**旧页仍然完整可见**的时候完成布局，然后再播过渡；
     ///   所以无论页面多重建、第一次建页要多久，用户看到的都是旧页，不会出现白底。
     ///
-    /// ★ 过渡只动旧页（淡出 + 上浮），新页始终不透明地待在下面 —— 两页同时做透明度
-    ///   会在中间一拍露出窗口底色（材质模式下是壁纸，纯色下是浅色闪白）。见 PageTransition。
+    /// ★★ 2026-11-07 第四次: 过渡改为 fade-through —— **先淡出旧页内容、再换页、再淡入新页内容**。
+    ///   上一版是交叉淡化(新页不透明待在下面、旧页淡出), 那 200ms 里两页内容按比例叠在
+    ///   同一个位置, 用户看到的就是"第一张页面和第二张页面叠在一起"。现在任何一帧都只有
+    ///   一页的内容可见; 页面底色(半透明)全程不动, 所以也不会露出窗口底色闪白。
+    ///   细节见 <see cref="PageTransition"/>。
     /// </summary>
     private void ShowPage(PageKey key, bool animate)
     {
@@ -328,16 +335,11 @@ public partial class MainWindow : FluentWindow
                 child.Visibility = Visibility.Collapsed;
         }
 
-        page.BeginAnimation(OpacityProperty, null);
-        page.Opacity = 1;
+        // 页面本身与它的内容都复位成不透明 —— 上一次过渡被打断时内容可能停在 0。
+        PageTransition.ResetVisual(page);
         page.Visibility = Visibility.Visible;
         page.IsHitTestVisible = true;
         Panel.SetZIndex(page, 1);
-        if (page.RenderTransform is TranslateTransform tt)
-        {
-            tt.BeginAnimation(TranslateTransform.YProperty, null);
-            tt.Y = 0;
-        }
         _currentPage = page;
         MemoryTrim.RequestTrim();
     }
@@ -362,27 +364,31 @@ public partial class MainWindow : FluentWindow
 
         // 目标页先完成布局: 此刻旧页仍然完整地盖在上面, 这里花多少时间用户都看不到白底。
         // (之前显示过的页面是 Collapsed 回来的, 布局状态还在, 这一句通常只要十几毫秒。)
-        target.BeginAnimation(OpacityProperty, null);
-        target.Opacity = 1;
+        // ★ 必须在 Visible **之前**把它整页置为不可见: 页面底色是半透明的, 以不透明状态
+        //   上屏哪怕一帧, 也会和旧页底色叠成更深的一档(见 PageTransition.PrepareIncoming)。
+        PageTransition.PrepareIncoming(target);
         target.Visibility = Visibility.Visible;
         target.IsHitTestVisible = false;
         target.UpdateLayout();
 
-        // 旧页淡出上浮, 露出的**始终是新页**, 不会露出窗口底色。
+        // 旧页保持可见, 内容淡出; 中点换页; 新页内容再淡入。
         outgoing.Visibility = Visibility.Visible;
         outgoing.IsHitTestVisible = false;
 
-        NavTransition.Run(outgoing, target, () =>
-        {
-            outgoing.BeginAnimation(OpacityProperty, null);
-            outgoing.Opacity = 1;
-            outgoing.Visibility = Visibility.Collapsed;
-            target.IsHitTestVisible = true;
-            Panel.SetZIndex(target, 2);
-            Panel.SetZIndex(outgoing, 0);
-            _currentPage = target;
-            MemoryTrim.RequestTrim();
-        });
+        NavTransition.Run(outgoing, target,
+            swap: () =>
+            {
+                // 中点: 两页内容都是 0, 此刻收起旧页、把新页提到上面, 看不到任何跳变。
+                outgoing.Visibility = Visibility.Collapsed;
+                Panel.SetZIndex(target, 2);
+                Panel.SetZIndex(outgoing, 0);
+                _currentPage = target;
+            },
+            done: () =>
+            {
+                target.IsHitTestVisible = true;
+                MemoryTrim.RequestTrim();
+            });
     }
 
     /// <summary>
