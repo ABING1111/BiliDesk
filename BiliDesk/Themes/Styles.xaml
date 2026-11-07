@@ -1,5 +1,6 @@
 ﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
                     xmlns:sys="clr-namespace:System;assembly=System.Runtime">
 
     <!-- ============ 全局控件样式 (Fluent / Win11 风格) ============
@@ -1993,6 +1994,15 @@
 
     <Style TargetType="ScrollBar">
         <Setter Property="Background" Value="Transparent" />
+        <!-- ★ 2026-11-07 修"滚动条贴在窗口边缘时, 鼠标移上去变成改窗口大小的光标":
+             主窗口/播放器都是 WindowStyle=None + WindowChrome(ResizeBorderThickness=6),
+             而 WM_NCHITTEST 里缩放带的判定**优先于** WPF 元素的命中 —— 首页的滚动条
+             贴着窗口右缘(见 HomePage.xaml 的说明), 整条都落在 6px 缩放带里, 压上去
+             就是 SizeWE 光标, 还拖不动滑块。
+             WindowChromeWorker 的命中测试第一步就查 IsHitTestVisibleInChrome(该附加属性
+             继承到 Thumb / 翻页轨道), 命中即返回 HTCLIENT —— 与 WindowButtons 同一招。
+             滚动条本来只出现在客户区, 窗口其余边缘的缩放不受影响。 -->
+        <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True" />
         <Setter Property="Width" Value="8" />
         <Setter Property="MinWidth" Value="8" />
         <Setter Property="Template" Value="{StaticResource VerticalScrollBarTemplate}" />
