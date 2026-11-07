@@ -1,0 +1,64 @@
+# BiliDesk 代码风格基线
+#
+# 原则:
+#   · 这里只固化"代码库现状"的风格, 不引入会大规模改写的规则 ——
+#     本仓库的历史约定是"注释记录决策", 批量重排格式只会污染 blame。
+#   · 所有规则均为 suggestion 级, 不在构建期强制(TreatWarningsAsErrors 保持关闭)。
+#   · 想加新规则时先跑一遍确认不会产生成片警告, 否则放这里等于没放。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{csproj,props,targets,sln}]
+end_of_line = crlf
+
+[*.{ps1,iss}]
+end_of_line = crlf
+
+# ============================================================ C#
+[*.cs]
+indent_style = space
+indent_size = 4
+
+# ---- 语言习惯(与现有代码保持一致) ----
+csharp_style_namespace_declarations = file_scoped:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_prefer_braces = true:suggestion
+csharp_style_prefer_switch_expression = true:suggestion
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+csharp_style_expression_bodied_properties = true:suggestion
+
+# using 排序交给 IDE, 构建不强制
+dotnet_sort_system_directives_using_first = true:suggestion
+
+# ---- 命名 ----
+dotnet_naming_rule.private_fields_underscore.severity = suggestion
+dotnet_naming_rule.private_fields_underscore.symbols = private_fields
+dotnet_naming_rule.private_fields_underscore.style = underscore_camel
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_style.underscore_camel.required_prefix = _
+dotnet_naming_style.underscore_camel.capitalization = camel_case
+
+# ---- 质量(仅高价值项) ----
+dotnet_diagnostic.CS8600.severity = none   # 可空告警保持默认, 不在本文件重复调节
+dotnet_diagnostic.CA2007.severity = none   # ConfigureAwait 不强制: 本库是 WPF 应用, 已按需手工标注
+dotnet_diagnostic.VSTHRD100.severity = none # async void 检测不启用: WPF 事件处理器大量合法使用
+
+# ============================================================ XAML
+[*.xaml]
+indent_style = space
+indent_size = 4
+
+# ============================================================ 其它
+[*.md]
+trim_trailing_whitespace = false
+
+[*.json]
+indent_style = space
+indent_size = 2

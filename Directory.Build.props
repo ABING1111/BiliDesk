@@ -1,0 +1,22 @@
+<Project>
+
+  <!--
+    全仓库共享的编译设置(被 BiliDesk.csproj 与 BiliDesk.Tests.csproj 同时继承)。
+
+    为什么放这里而不是各 csproj:
+      · 分析器级别这种"仓库级约定"应该只有一份, 放子工程里迟早漂移。
+
+    为什么 AnalysisLevel 是 latest 而不是 latest-recommended / all:
+      · 本仓库处于"补安全网"的初期, 一次性开满分析器会立刻产生成片警告,
+        警告太多 = 没有人再看, 等于没有分析器。
+      · 先用默认集兜住高价值问题, 后续分批把有价值的规则显式调到 warning。
+      · TreatWarningsAsErrors 保持关闭: 现在基线是 0 警告,
+        引入新警告靠 code review 拦, 不靠构建失败拦。
+  -->
+  <PropertyGroup>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+</Project>
