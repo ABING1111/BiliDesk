@@ -559,6 +559,25 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- 降级提示(2026-11-08): 推荐接口失败时会退回「热门」兜底, 以前是**静默**的 ——
+                         页面挂着"推荐"标题却给热门内容, 用户根本看不出发生了什么。
+                         这里如实说明, 并给一个直接重试的入口。 -->
+                    <Border Margin="20,4,20,0" Padding="14,10" CornerRadius="8"
+                            Background="{DynamicResource InfoBarBackgroundBrush}"
+                            BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"
+                            Visibility="{Binding RecommendFallback, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE946;" Foreground="{DynamicResource AccentTextBrush}"
+                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="14" VerticalAlignment="Center" />
+                            <TextBlock Text="个性化推荐暂时不可用，当前显示的是热门内容" Margin="10,0,0,0"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
+                                    Margin="16,0,0,0" Padding="10,4"
+                                    Click="OnRefreshClick" />
+                        </StackPanel>
+                    </Border>
+
                     <ItemsControl x:Name="RecommendList" ItemsSource="{Binding RecommendItems}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -575,7 +594,10 @@
                     <!-- ★ 同「热门」: 底部状态一次只允许出现一条。
                          推荐是**无限流**, 没有"到底"这回事 —— 原先那句「已经到底啦」绑的也是
                          !Loading(整页加载), 只要不在刷新就常驻, 加载更多时和转圈、按钮叠成三条
-                         (2026-11-07 用户报的那个截图)。这里直接删掉, 只保留"加载中 / 加载更多"二选一。 -->
+                         (2026-11-07 用户报的那个截图)。这里直接删掉, 只保留"加载中 / 加载更多"二选一。
+                         ★ 2026-11-08 新增第三种状态「暂时没有更多新内容了」: 服务端开始重复下发时
+                           继续无脑翻页只会空转(列表不增长 → 立刻又判到底 → 再请求)。
+                           这时把按钮换成一句说明 + 刷新入口, 用户知道该怎么办。 -->
                     <StackPanel Margin="0,12,0,28" HorizontalAlignment="Center">
                         <StackPanel Orientation="Horizontal"
                                     Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
@@ -583,9 +605,29 @@
                             <TextBlock Text="加载中…" Margin="8,0,0,0"
                                        VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
                         </StackPanel>
-                        <Button Content="加载更多" Style="{StaticResource SubtleButtonStyle}"
-                                Visibility="{Binding LoadingMore, Converter={StaticResource InvBoolToVis}}"
-                                Command="{Binding LoadMoreCommand}" />
+                        <Button Content="加载更多" Command="{Binding LoadMoreCommand}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SubtleButtonStyle}">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LoadingMore}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding RecommendExhausted}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <StackPanel Orientation="Horizontal"
+                                    Visibility="{Binding RecommendExhausted, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="暂时没有更多新内容了" VerticalAlignment="Center"
+                                       Style="{StaticResource MetaTextStyle}" />
+                            <Button Content="刷新换一批" Style="{StaticResource SubtleButtonStyle}"
+                                    Margin="12,0,0,0" Padding="10,4"
+                                    Click="OnRefreshClick" />
+                        </StackPanel>
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>

@@ -55,7 +55,9 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
     /// <summary>
     /// 稿件 avid。
     /// 收藏相关接口(/x/v3/fav/resource/deal)只认 avid, 不认 bvid, 所以列表解析时
-    /// 顺手把它带上; 为 0 表示这条来源没有提供(例如搜索/推荐接口), 用到时再按 bvid 补查。
+    /// 顺手把它带上; 为 0 表示这条来源没有提供(例如搜索接口), 用到时再按 bvid 补查。
+    /// ★ 2026-11-08: 首页推荐流也有 aid —— 它放在 `id` 字段里(不是 `aid`)。
+    ///   推荐流的翻页游标要用它拼 `last_showlist=av_{aid}`, 缺了就少一层服务端避重。
     /// </summary>
     public long Aid { get; set; }
 

@@ -147,15 +147,40 @@ public partial class ApiClient
     ///   所以那个选项与 access_key 机制已整体删除, 只保留这条真正个性化的网页路。
     ///
     /// 失败时自动重试一次(刷新 WBI 密钥), 仍未成功则降级返回热门, 保证首页不会是空列表。
+    ///
+    /// ★★★ 2026-11-08 补上翻页游标(参数以前全是写死的 `fresh_idx=1 / brush=1`)。
+    ///
+    ///   ★★ 先说**实测事实**, 免得后来人按错误的前提改代码(探针 bd-probe-rcmd 有完整数据):
+    ///     服务端**本身就在轮换推荐池** —— 用写死第 1 页的旧参数连打 20 次(560 条),
+    ///     结果全部唯一、相邻页零重复。所以"加载更多等于没加载"这个现象**不是**参数写死造成的,
+    ///     当初据此做的推断是错的。
+    ///
+    ///   那游标的意义在哪(仍然值得加):
+    ///     · fresh_idx / fetch_row 让服务端知道"读到第几页了", 推荐会沿阅读轨迹往深处推,
+    ///       而不是每次都给一轮"新鲜的随机池"(实测新游标组平均播放量更低、更垂直);
+    ///     · last_showlist 是**唯一**能让服务端主动避开"刚给你看过的"的手段 ——
+    ///       它依赖客户端如实上报上一屏, 这是本次新增的能力。
+    ///
+    ///   现在由 <see cref="RecommendCursor"/> 维护状态机: reset=true 换一批(brush+1),
+    ///   reset=false 带着游标往下翻。**失败不推进游标**, 重试复用同一组参数。
+    ///
+    /// ★ 新增返回值 <c>fallback</c>: true 表示这次是**降级到热门**的结果。
+    ///   以前降级是静默的 —— 界面挂着"推荐"标题却给热门内容, 用户根本看不出发生了什么。
     /// </summary>
-    /// <param name="reset">保留下拉刷新语义(此接口每次请求都返回新一批, 参数不影响)</param>
-    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetRecommendAsync(bool reset = false)
+    /// <param name="reset">true = 刷新(换一批); false = 带着游标继续翻下一页</param>
+    public async Task<(bool ok, string? err, List<VideoItem>? items, bool fallback)> GetRecommendAsync(
+        bool reset = false)
     {
-        _ = reset;
+        // ★ 游标是**单例状态**: ApiClient 是全局单例, 翻页序列必须跨调用连续。
+        //   放在这里而不是 ViewModel, 是因为"请求成功才推进"这件事只有请求方知道。
+        var cursor = _recommendCursor;
+
         try
         {
             await EnsureBuvidAsync();
-            var (ok, err, items) = await GetWebRecommendCoreAsync();
+            if (reset) cursor.Reset();
+
+            var (ok, err, items) = await GetWebRecommendCoreAsync(cursor);
             if (!ok || items == null || items.Count == 0)
             {
                 // 重试一次。
@@ -164,32 +189,53 @@ public partial class ApiClient
                 //   —— 与"让推荐更准"正相反。真正需要刷新的是 WBI 密钥(会过期)。
                 _wbiKeys = null;
                 await EnsureBuvidAsync();
-                (ok, err, items) = await GetWebRecommendCoreAsync();
+                (ok, err, items) = await GetWebRecommendCoreAsync(cursor);
             }
-            if (ok && items != null && items.Count > 0) return (true, null, items);
-            // 失败 -> 降级热门
-            return await GetPopularAsync(1);
+            if (ok && items != null && items.Count > 0) return (true, null, items, false);
+
+            // 失败 -> 降级热门(fallback=true, 界面要如实说明)
+            var (pok, perr, pitems) = await GetPopularAsync(1);
+            return (pok, perr ?? err, pitems, true);
         }
         catch
         {
-            return await GetPopularAsync(1);
+            var (pok, perr, pitems) = await GetPopularAsync(1);
+            return (pok, perr, pitems, true);
         }
     }
 
-    private async Task<(bool ok, string? err, List<VideoItem>? items)> GetWebRecommendCoreAsync()
+    /// <summary>
+    /// 推荐流的翻页游标(单例, 跨调用连续)。
+    /// 退出登录/重新登录后由 <see cref="ResetRecommendCursor"/> 归零 —— 换了账号还用旧游标
+    /// 等于让新账号接着上一个账号的阅读进度往下翻。
+    /// </summary>
+    private readonly RecommendCursor _recommendCursor = new();
+
+    /// <summary>
+    /// 重置推荐游标(登录态变化时调用; 下一次请求重新从第 1 页开始)。
+    /// ★ 用 Rewind 而不是 Reset: 只归位、**不动刷子** —— "换一批"由紧接着那次
+    ///   reset: true 的请求自己完成, 两处都推进刷子会让它一次跳 2。
+    /// </summary>
+    public void ResetRecommendCursor() => _recommendCursor.Rewind();
+
+    /// <summary>
+    /// 推荐游标的当前状态(只读快照, 供探针/诊断使用, 不参与任何业务判断)。
+    ///
+    /// ★ 为什么要把这个状态暴露出来: 游标是否**真的**跟着请求推进, 光看返回内容看不出来 ——
+    ///   实测服务端本身就在轮换推荐池, 即便参数写死成第 1 页, 连续请求也拿不到重复内容。
+    ///   也就是说"内容有变化"**不能**当作"游标生效"的证据。这里给探针一个直接观测点。
+    /// </summary>
+    public (int FreshIdx, int Brush, int FetchRow, string LastShowList) RecommendCursorState
+        => (_recommendCursor.FreshIdx, _recommendCursor.Brush,
+            _recommendCursor.FetchRow, _recommendCursor.LastShowList);
+
+    private async Task<(bool ok, string? err, List<VideoItem>? items)> GetWebRecommendCoreAsync(
+        RecommendCursor cursor)
     {
         try
         {
             // 现行 web 首页推荐接口(top feed), 需要 WBI 签名
-            var ps = new Dictionary<string, string>
-            {
-                ["fresh_type"] = "4",
-                ["ps"] = "30",
-                ["fresh_idx"] = "1",
-                ["fresh_idx_1h"] = "1",
-                ["brush"] = "1",
-                ["web_location"] = "1430650"
-            };
+            var ps = cursor.BuildQuery();
             var (code, msg, data) = await GetJsonAsync(
                 "https://api.bilibili.com/x/web-interface/wbi/index/top/feed/rcmd",
                 ps, sign: true);
@@ -207,12 +253,67 @@ public partial class ApiClient
                     if (item != null) items.Add(item);
                 }
             }
+
+            // ★ 成功才推进游标(失败时不动, 重试复用同一组参数 —— 见 RecommendCursor 的说明)。
+            var aids = new List<long>(items.Count);
+            foreach (var it in items)
+            {
+                if (it.Aid > 0) aids.Add(it.Aid);
+            }
+            ParseUserFeature(data.Value, out var sIdx, out var sIdx1h);
+            cursor.OnLoaded(aids, sIdx, sIdx1h);
+
             return (true, null, items);
         }
         catch (Exception ex)
         {
             return (false, ex.Message, null);
         }
+    }
+
+    /// <summary>
+    /// 从 `data.userfeature` 里取服务端回显的 fresh_idx / fresh_idx_1h。
+    ///
+    /// ★ 这个字段是**字符串里套 JSON**(实测形如
+    ///   `"{\"enter_rank\":1500,\"fresh_idx\":3,\"fresh_idx_1h\":3,...}"`), 不是对象,
+    ///   直接 TryGetProperty 会拿不到。解析失败就返回 0(游标退回本地自增), 不能抛 ——
+    ///   它只是让翻页更准的补充信息, 拿不到不该影响整页。
+    /// </summary>
+    private static void ParseUserFeature(JsonElement data, out int freshIdx, out int freshIdx1h)
+    {
+        freshIdx = 0;
+        freshIdx1h = 0;
+        try
+        {
+            if (!data.TryGetProperty("userfeature", out var uf)) return;
+
+            // 两种形态都认: 字符串(现行) / 对象(以后万一改成对象)
+            JsonElement obj;
+            if (uf.ValueKind == JsonValueKind.String)
+            {
+                var raw = uf.GetString();
+                if (string.IsNullOrWhiteSpace(raw)) return;
+                using var doc = JsonDocument.Parse(raw!);
+                obj = doc.RootElement;
+                ReadCounters(obj, ref freshIdx, ref freshIdx1h);
+                return;
+            }
+            if (uf.ValueKind == JsonValueKind.Object)
+            {
+                obj = uf;
+                ReadCounters(obj, ref freshIdx, ref freshIdx1h);
+            }
+        }
+        catch
+        {
+            // 解析不出来就用本地自增
+        }
+    }
+
+    private static void ReadCounters(JsonElement obj, ref int freshIdx, ref int freshIdx1h)
+    {
+        freshIdx = GetInt(obj, "fresh_idx");
+        freshIdx1h = GetInt(obj, "fresh_idx_1h");
     }
 
     /// <summary>关注列表(关注的 UP 主)。vmid=自己 mid, pn=页码, ps=每页数量(<=50)。</summary>
@@ -346,6 +447,9 @@ public partial class ApiClient
                 OwnerMid = e.TryGetProperty("owner", out var om) ? GetLong(om, "mid") : 0,
                 Duration = VideoItem.FormatSeconds(GetInt(e, "duration")),
                 Pubdate = GetLong(e, "pubdate"),
+                // ★ aid: 推荐接口把它放在 `id` 里(不是 `aid`)。翻页游标的 last_showlist
+                //   要的是 `av_{aid}`, 缺了它那一项就只能留空, 服务端避重效果打折。
+                Aid = GetLong(e, "id"),
             };
             if (string.IsNullOrEmpty(item.Bvid)) return null;
 

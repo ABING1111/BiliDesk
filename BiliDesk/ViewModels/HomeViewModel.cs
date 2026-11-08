@@ -155,6 +155,9 @@ public class HomeViewModel : ObservableObject
 
         // 登录状态变了, 「我的追番」那一栏的可用性也跟着变 —— 已经拉到的列表要清掉,
         // 否则退出登录后首页还挂着上一个账号的追番。切回追番页时会重新拉。
+        // ★ 推荐流也挂在同一个事件上(2026-11-08): 登录/退出后要清空重拉, 见 OnSessionChanged。
+        //   初值取当前登录态: 否则启动时第一次 Session.Changed(补设备指纹那种)会被误判成"刚登录"。
+        _lastRecommendLoggedIn = Svc.Session.HasLogin;
         Svc.Session.Changed += OnSessionChanged;
     }
 
@@ -169,6 +172,32 @@ public class HomeViewModel : ObservableObject
         BangumiHint = "";
         OnPropertyChanged(nameof(HasMyBangumi));
         OnPropertyChanged(nameof(MyBangumiHint));
+
+        // ---------------- 推荐流跟着账号走(2026-11-08) ----------------
+        //
+        // ★ 为什么必须在这里动推荐: 推荐是**唯一强依赖登录身份**的列表 —— 未登录看到的是
+        //   游客池(播放量高的通用内容), 登录后才是"你的"推荐。旧实现登录成功后首页还是
+        //   那份游客列表, 用户得手动刷新或重启才能看到个性化内容。
+        //
+        // ★ 三件事要一起做, 缺一件都会留下"上一个账号的痕迹":
+        //   ① 清空已展示记录 —— "看过什么"不该跨账号继承;
+        //   ② 重置翻页游标 —— 否则新账号接着旧账号的阅读进度往下翻;
+        //   ③ 清空列表并重新拉 —— 让个性化内容立刻出现。
+        //
+        // ★ 只在**登录状态真的变了**时才重拉: Session.Changed 也会被"补设备指纹/风控 Cookie"
+        //   这类写入触发(见 SessionManager.BackfillRiskCookies), 那时账号没变, 重拉推荐
+        //   等于白白打一次接口、还会把用户正在看的列表清空。
+        var loggedIn = Svc.Session.HasLogin;
+        if (loggedIn == _lastRecommendLoggedIn) return;
+        _lastRecommendLoggedIn = loggedIn;
+
+        RecommendSeenStore.Clear();
+        Svc.Api.ResetRecommendCursor();
+        RecommendItems.Clear();
+        RecommendExhausted = false;
+        RecommendFallback = false;
+        OnPropertyChanged(nameof(RecommendCount));
+        if (IsRecommendTab) _ = LoadRecommendAsync(reset: true);
     }
 
     // ----------------- 问候语 -----------------
@@ -744,6 +773,51 @@ public class HomeViewModel : ObservableObject
     private bool _recommendLoading;
 
     /// <summary>
+    /// 推荐流已经"没有更多新内容"了(服务端翻来覆去都是看过的)。
+    ///
+    /// ★ 为什么要有这个闸(2026-11-08): 推荐是**无限流**, 旧实现里滚到底就无条件再拉一页。
+    ///   一旦服务端开始重复下发, 拉回来的批次会被去重全部挡掉 ⇒ 列表高度不增长 ⇒
+    ///   ScrollChanged 立刻又判"到底了" ⇒ 再拉…… 一个用户完全看不见的**请求死循环**,
+    ///   既费流量又加速风控。置位后 <see cref="LoadMoreAsync"/> 直接返回, 直到用户手动刷新。
+    /// </summary>
+    private bool _recommendExhausted;
+
+    /// <summary>
+    /// 上一次推荐加载是不是**降级成了热门**(接口失败时的兜底)。
+    /// 界面据此提示"这是热门不是个性化推荐", 而不是继续挂着"推荐"标题骗人。
+    /// </summary>
+    private bool _recommendFallback;
+
+    /// <summary>上一次见到的登录状态, 用来判断 Session.Changed 是不是"真的换了账号"。</summary>
+    private bool _lastRecommendLoggedIn;
+
+    /// <summary>
+    /// 单次"加载更多"里最多补拉几次。
+    ///
+    /// 为什么需要补拉: 服务端滚动推荐池, 一批 30 条里可能有十几条是看过的。
+    /// 只拉一次的话, 用户点一次「加载更多」只多出几张卡, 手感像"卡住了"。
+    /// 上限 3 次是折中 —— 再多就是在替用户狂刷接口。
+    /// </summary>
+    private const int RecommendMaxRefill = 3;
+
+    /// <summary>一次加载里"新增不足多少条"就认为这批太旧、需要再补一页。</summary>
+    private const int RecommendMinFresh = 12;
+
+    /// <summary>推荐流是否已经到底(界面据此显示"刷新换一批")。</summary>
+    public bool RecommendExhausted
+    {
+        get => _recommendExhausted;
+        private set => SetProperty(ref _recommendExhausted, value);
+    }
+
+    /// <summary>推荐是否降级成了热门(界面据此显示提示条)。</summary>
+    public bool RecommendFallback
+    {
+        get => _recommendFallback;
+        private set => SetProperty(ref _recommendFallback, value);
+    }
+
+    /// <summary>
     /// 按 Bvid 去重追加(实现搬到了 <see cref="VideoList.AppendDistinct"/> —— 搜索结果那边也要用;
     /// 原来是外层遍历 + 内层线性查找的 O(n²) 写法, 推荐流滚动几十页后每追加一批都要全表扫描)。
     /// </summary>
@@ -753,44 +827,139 @@ public class HomeViewModel : ObservableObject
     /// <summary>
     /// 拉取推荐流。
     ///
-    /// ★ <paramref name="reset"/> 必须一路传到 ApiClient(见 GetRecommendAsync 的同名参数):
-    ///   App 端接口是靠 idx 游标翻页的, "刷新"要**清游标从头开始**, "加载更多"要**带着游标往下走**。
-    ///   以前这里只把 reset 用在"清不清本地列表"上, 接口侧永远从头拉 —— 于是「加载更多」
-    ///   反复拿到同一小段内容, 看起来就是"越翻越不准"。
+    /// ★ <paramref name="reset"/> 一路传到 ApiClient(见 GetRecommendAsync 的同名参数):
+    ///   reset=true 是"刷新换一批"(游标 brush+1), reset=false 是"带着游标继续往下翻"。
+    ///   <paramref name="more"/> 只是"用哪个转圈标志"的区别: 加载更多用 LoadingMore(列表底部那个),
+    ///   刷新用 Loading(整页)。两条路共用同一套去重/补页/枯竭逻辑, 不再各写一份。
+    ///
+    /// ★★ 2026-11-08 起多了两层本地过滤(见 <see cref="RecommendSeenStore"/>):
+    ///   1) **跨刷新**的已展示集合: 服务端重复下发的稿件直接丢掉, 刷新也不会把刚看过的又贴一遍;
+    ///   2) **新鲜度不足就自动补页**: 一批 30 条里新增不到 12 条时, 再拉一页(最多 3 次),
+    ///      否则用户点「加载更多」只多出两三张卡, 体感像坏了。
+    ///   补满 3 次仍不足 ⇒ <see cref="RecommendExhausted"/>, 停止自动翻页, 等用户刷新。
+    ///   ★ 注意: 实测服务端的重复率是 0(见 RecommendCursor 的说明), 所以第 1 条平时**不会**
+    ///     命中什么 —— 它是防御性的(服务端策略随时可能变), 不是"修复一个正在发生的 bug"。
+    ///     真正每天起作用的是第 2 条与枯竭判定: 它们保证"一次加载更多真的能多出内容"。
     /// </summary>
-    private async Task LoadRecommendAsync(bool reset = false)
+    private async Task LoadRecommendAsync(bool reset = false, bool more = false)
     {
         if (_recommendLoading) return; // 已有推荐请求在跑, 直接复用它的结果
         _recommendLoading = true;
-        Loading = true;
+        if (more) LoadingMore = true; else Loading = true;
         Error = "";
         try
         {
-            var (ok, err, items) = await Svc.Api.GetRecommendAsync(reset);
+            var fresh = new List<VideoItem>();
+            var fallback = false;
+            string? lastErr = null;
+            // 最近一批"服务端确实给了"的原始条目。刷新时如果全被判成"看过"，
+            // 用它兜底，避免把页面刷成空白（见下面的兜底分支）。
+            List<VideoItem>? lastRaw = null;
+
+            // reset 时先清列表, 但**不清** RecommendSeenStore —— 那正是"刷新后不重播"的关键。
+            if (reset)
+            {
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    RecommendItems.Clear();
+                    RecommendExhausted = false;
+                    OnPropertyChanged(nameof(RecommendCount));
+                });
+            }
+
+            for (var attempt = 0; attempt < RecommendMaxRefill; attempt++)
+            {
+                // ★ 只有第一次带 reset: 补页是"继续往下翻", 不能每次补页都换一批。
+                var (ok, err, items, fb) = await Svc.Api.GetRecommendAsync(reset && attempt == 0);
+                if (fb) fallback = true;
+                if (!ok) { lastErr = err; break; }
+                if (items == null || items.Count == 0) break;
+
+                // 降级成热门时**只按当前列表去重、不看"已展示"记录**:
+                //   热门是一次给完的固定列表, 用跨刷新的已展示记录去筛会把它整页筛空;
+                //   但也不能原样照收 —— 那样第二次「加载更多」会把同一页 30 条再贴一遍
+                //   (AppendDistinct 挡掉后列表零增长, 却又因为"这批有 30 条"而不判枯竭,
+                //   于是无限重试)。只挡当前列表里已有的, 两头都照顾到。
+                var added = FilterFresh(items, ignoreSeen: fb);
+
+                lastRaw = items;
+                fresh.AddRange(added);
+                // 降级热门时**立刻收手**: 热门没有翻页语义, 再拉一次还是同一页,
+                // 循环补页只会白打两次接口(而且会让"到底"判定晚一轮才生效)。
+                if (fb) break;
+                if (added.Count >= RecommendMinFresh) break;
+            }
+
+            // ★ 刷新时的兜底: 服务端这一轮给的**全是看过的**。
+            //   这时宁可把重复内容贴回去(用户点刷新是想看到东西, 不是想看空页面),
+            //   也不能把首页刷成一片空白。加载更多则不同 —— 那种情况应该收敛(见 RecommendExhausted)。
+            //   降级热门不适用这条: 热门页是固定的, 贴回去就是重复, 而且它没有"刷新换一批"的语义。
+            if (reset && !fallback && fresh.Count == 0 && lastRaw != null && lastRaw.Count > 0)
+                fresh = CollectAll(lastRaw);
+
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 Loading = false;
-                if (items != null)
+                LoadingMore = false;
+
+                // ★ 降级热门的条目不写进"已展示"记录: 热门是一个固定列表, 把它们记成
+                //   "看过"会让恢复个性化推荐后这些稿子被永久滤掉 —— 而用户其实没在推荐流里见过它们。
+                if (!fallback)
                 {
-                    if (reset) RecommendItems.Clear();
-                    AppendDistinct(RecommendItems, items);
-                    OnPropertyChanged(nameof(RecommendCount));
+                    foreach (var it in fresh) RecommendSeenStore.Mark(it.Bvid);
                 }
-                else
-                {
-                    Error = err ?? "加载失败";
-                }
+                AppendDistinct(RecommendItems, fresh);
+                OnPropertyChanged(nameof(RecommendCount));
+
+                RecommendFallback = fallback;
+                // 一条新的都没拿到 ⇒ 内容池干涸。刷新(reset)时不置位:
+                // 用户刚点刷新, 应该允许它再试一次, 而不是立刻显示"没内容了"。
+                RecommendExhausted = !reset && fresh.Count == 0;
+
+                if (RecommendItems.Count == 0 && !string.IsNullOrEmpty(lastErr))
+                    Error = lastErr!;
             });
         }
         catch (Exception ex)
         {
             Loading = false;
+            LoadingMore = false;
             Error = ex.Message;
         }
         finally
         {
             _recommendLoading = false;
         }
+    }
+
+    /// <summary>原样收下(不去重)。降级热门时用。</summary>
+    private static List<VideoItem> CollectAll(List<VideoItem> items) => new(items);
+
+    /// <summary>
+    /// 只留"没展示过、且当前列表里也没有"的条目。
+    /// 判定依据是 <see cref="RecommendSeenStore"/> + 当前集合, 不依赖服务端是否老实去重。
+    /// </summary>
+    /// <param name="ignoreSeen">
+    /// true = 只跟**当前列表**比, 不查"已展示"记录。降级热门时用:
+    /// 热门页是一次给完的固定列表, 用跨刷新的记录去筛会把它整页筛空。
+    /// </param>
+    private List<VideoItem> FilterFresh(List<VideoItem> items, bool ignoreSeen = false)
+    {
+        var inList = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var v in RecommendItems)
+            if (!string.IsNullOrEmpty(v.Bvid)) inList.Add(v.Bvid);
+
+        var result = new List<VideoItem>(items.Count);
+        foreach (var v in items)
+        {
+            if (string.IsNullOrEmpty(v.Bvid)) continue;
+            if (inList.Contains(v.Bvid)) continue;
+            if (!ignoreSeen && RecommendSeenStore.Contains(v.Bvid)) continue;
+            // 同一批里也不能出现两次
+            if (!inList.Add(v.Bvid)) continue;
+            result.Add(v);
+        }
+        return result;
     }
 
     // ----------------- 加载更多(按当前 tab) -----------------
@@ -844,37 +1013,24 @@ public class HomeViewModel : ObservableObject
             }
             else if (IsRecommendTab)
             {
-                // ★ 这里**必须**传 reset: false —— 加载更多是"带着游标继续往下翻",
-                //   传 true 会清掉游标从头再来, 表现就是"点了加载更多却出现刚看过的内容"。
-                //
-                // ★★ 还要和 LoadRecommendAsync 抢**同一个**在途哨兵: `Svc.Api` 是单例, 而翻页游标
-                //   (`_appFeedIdx`) 与 pull 标志都挂在它身上 —— 两条路并发跑就会互相覆盖:
-                //   刷新那条把 `_appFeedIdx` 归零、加载更多那条又按旧游标把结果追加回去,
-                //   而且"谁后完成谁写游标", 下一次翻页可能跳回去重取一段。
-                //   只靠 `LoadingMore`/`Loading` 挡不住这种交叠(它们分属两条路, 互不知情)。
-                if (_recommendLoading)
+                // ★ 内容池干涸: 直接返回, 不再发请求。
+                //   没有这道闸的话, 拉回来的批次会被去重全部挡掉 → 列表高度不增长 →
+                //   ScrollChanged 立刻又判"到底了" → 再拉, 形成用户看不见的请求死循环。
+                if (RecommendExhausted)
                 {
                     LoadingMore = false;
                     return;
                 }
-                _recommendLoading = true;
-                try
-                {
-                    var (ok, err, items) = await Svc.Api.GetRecommendAsync(false);
-                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
-                    {
-                        LoadingMore = false;
-                        if (items != null && items.Count > 0)
-                        {
-                            AppendDistinct(RecommendItems, items);
-                            OnPropertyChanged(nameof(RecommendCount));
-                        }
-                    });
-                }
-                finally
-                {
-                    _recommendLoading = false;
-                }
+
+                // ★ 加载更多是"带着游标继续往下翻"(reset: false)。
+                //   去重 / 补页 / 枯竭判定全部复用 LoadRecommendAsync 那一套, 不在这里重复实现 ——
+                //   以前这里另写了一份"只 AppendDistinct"的逻辑, 于是它没有跨刷新去重,
+                //   两条路的语义悄悄分叉。
+                //
+                // ★★ 还要和 LoadRecommendAsync 抢**同一个**在途哨兵: 两条路并发跑会让游标
+                //   "谁后完成谁写", 下一次翻页可能跳回去重取一段。
+                LoadingMore = false;   // 交给 LoadRecommendAsync 自己置位
+                await LoadRecommendAsync(reset: false, more: true);
             }
         }
         catch (Exception ex)
