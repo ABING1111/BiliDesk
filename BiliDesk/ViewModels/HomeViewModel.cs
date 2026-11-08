@@ -51,11 +51,55 @@ public class HomeViewModel : ObservableObject
 
     private bool _liveHasMore = true;
     private int _livePage = 1;
-    private bool _liveLoading;
+
+    // ---------------- 直播分区(2026-11-08) ----------------
+    private int _liveParentAreaId;      // 选中的父分区胶囊(0 = 推荐)
+    private int _liveAreaId;            // 选中的子分区(0 = 全部)
+    private int _liveSubParentId;       // 子分区自带的父分区(推荐行里的热门标签跨分区)
+    private bool _liveAreasLoaded;
+    private bool _liveAreasLoading;
+    private bool _liveSubExpanded;
+    private int _liveGen;               // 直播列表请求代次(快速点分区时只认最后一次)
+
+    /// <summary>父分区胶囊(含"推荐")</summary>
+    public ObservableCollection<LiveAreaGroup> LiveAreaGroups { get; } = new();
+
+    /// <summary>当前父分区下**可见**的子分区(收起时只放前 N 个 + 「全部」)</summary>
+    public ObservableCollection<LiveArea> LiveSubAreas { get; } = new();
+
+    /// <summary>当前父分区的全部子分区(含「全部」; 展开更多时从这里取)</summary>
+    private readonly List<LiveArea> _liveSubAll = new();
+
+    /// <summary>我关注的主播里正在直播的(头像行)</summary>
+    public ObservableCollection<VideoItem> FollowingLive { get; } = new();
+
+    public bool HasFollowingLive => FollowingLive.Count > 0;
+
+    public string FollowingLiveSummary => $"我关注的主播 {FollowingLive.Count} 人正在直播";
+
+    /// <summary>标题右侧的次要文字(与标题分开用两种颜色)</summary>
+    public string FollowingLiveCountText => $"{FollowingLive.Count} 人正在直播";
+
+    /// <summary>子分区超过一行时才显示「展开更多」</summary>
+    public bool HasMoreLiveSubAreas => _liveSubAll.Count > LiveSubCollapsedCount;
+
+    public string LiveSubToggleText => _liveSubExpanded ? "收起" : "展开更多";
+
+    /// <summary>展开/收起的小箭头(Segoe Fluent Icons: E70D 向下 / E70E 向上)</summary>
+    public string LiveSubToggleGlyph => _liveSubExpanded ? "\uE70E" : "\uE70D";
+
+    /// <summary>收起状态下最多显示几个子分区(含「全部」)。
+    /// ★ 2026-11-08 从 16 降到 10: 16 个在常见宽度下已经换到第二行, 「展开更多」看起来
+    ///   只是"多了半行", 失去意义; 10 个 + 右侧按钮正好一行, 展开后才铺开。</summary>
+    private const int LiveSubCollapsedCount = 10;
 
     public ICommand RefreshCommand { get; }
     public ICommand LoadMoreCommand { get; }
     public ICommand OpenRankingWebCommand { get; }
+    public ICommand SelectLiveGroupCommand { get; }
+    public ICommand SelectLiveAreaCommand { get; }
+    public ICommand ToggleLiveSubExpandCommand { get; }
+    public ICommand PlayLiveCommand { get; }
 
     // ★ 原先这里有 OpenMyBangumiWebCommand / OpenBangumiWebCommand(跳 B 站网页版的
     //   「我的追番」「番剧分区」「国创分区」), 已按用户要求删除(2026-10-11):
@@ -70,6 +114,21 @@ public class HomeViewModel : ObservableObject
         OpenRankingWebCommand = new RelayCommand(() =>
             Svc.Navigate?.OpenWebViewWindow(
                 "https://www.bilibili.com/v/popular/rank/all", "排行榜 - 网页版"));
+
+        // ---------------- 直播分区 / 关注主播(2026-11-08) ----------------
+        SelectLiveGroupCommand = new RelayCommand(p =>
+        {
+            if (p is LiveAreaGroup g) SelectLiveGroup(g);
+        });
+        SelectLiveAreaCommand = new RelayCommand(p =>
+        {
+            if (p is LiveArea a) SelectLiveArea(a);
+        });
+        ToggleLiveSubExpandCommand = new RelayCommand(ToggleLiveSubExpand);
+        PlayLiveCommand = new RelayCommand(p =>
+        {
+            if (p is VideoItem v && v.RoomId > 0) Svc.Player.PlayLive(v.RoomId, v.Title);
+        });
 
         // 搜索卡: 回车 / 点历史词条 / 点热搜条目, 三个入口都汇到 RequestSearch 这一个出口
         RunSearchCommand = new RelayCommand(() => RequestSearch(SearchKeyword));
@@ -102,6 +161,11 @@ public class HomeViewModel : ObservableObject
     private void OnSessionChanged()
     {
         MyBangumi.Clear();
+        // 关注主播看板属于账号数据: 退出登录后不能还挂着上一个账号的主播
+        FollowingLive.Clear();
+        OnPropertyChanged(nameof(HasFollowingLive));
+        OnPropertyChanged(nameof(FollowingLiveSummary));
+        OnPropertyChanged(nameof(FollowingLiveCountText));
         BangumiHint = "";
         OnPropertyChanged(nameof(HasMyBangumi));
         OnPropertyChanged(nameof(MyBangumiHint));
@@ -187,6 +251,9 @@ public class HomeViewModel : ObservableObject
         {
             _livePage = 1;
             LiveHasMore = true;
+            // 分区数据只拉一次; 关注主播每次刷新都重新查(谁开播了是实时状态)
+            _ = EnsureLiveAreasAsync();
+            _ = LoadFollowingLiveAsync();
             await LoadLiveAsync(reset: true);
         }
         else if (IsBangumiTab)
@@ -226,9 +293,12 @@ public class HomeViewModel : ObservableObject
     {
         SetTab(PageTab.Live);
         Error = "";
-        // 直播是"实时"内容, 每次切回来都重新拉一页 —— 缓存住一个两小时前的列表没有意义
+        // 直播是"实时"内容, 每次切回来都重新拉一页 —— 缓存住一个两小时前的列表没有意义。
+        // 分区数据不重复拉(EnsureLiveAreasAsync 内部有缓存/闸门), 关注主播每次都刷新。
         _livePage = 1;
         LiveHasMore = true;
+        _ = EnsureLiveAreasAsync();
+        _ = LoadFollowingLiveAsync();
         await LoadLiveAsync(reset: true);
     }
 
@@ -449,17 +519,22 @@ public class HomeViewModel : ObservableObject
 
     private async Task LoadLiveAsync(bool reset = false)
     {
-        // 同推荐流: 这个入口会被"切换 tab"和"滚动加载"两条路径打到, 需要防重入
-        if (_liveLoading) return;
-        _liveLoading = true;
+        // ★ 2026-11-08 分区切换: 用代次而不是"正在加载就直接 return"。
+        //   否则用户从一个分区快速切到另一个时, 第二次点击会被直接丢掉, 界面停在上一个分区。
+        var gen = ++_liveGen;
+        // 「推荐」行里的热门子分区自带父分区 id, 选中它时要按它的父分区去筛
+        var parentArea = _liveAreaId > 0 && _liveSubParentId > 0 ? _liveSubParentId : _liveParentAreaId;
+        var areaId = _liveAreaId;
+
         if (reset) Loading = true;
         else LoadingMore = true;
         Error = "";
         try
         {
-            var (ok, err, items) = await Svc.Api.GetLiveListAsync(_livePage);
+            var (ok, err, items) = await Svc.Api.GetLiveListAsync(_livePage, parentArea, areaId);
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
+                if (gen != _liveGen) return;     // 已有更新的分区请求, 这份结果作废
                 Loading = false;
                 LoadingMore = false;
                 if (items != null)
@@ -474,20 +549,152 @@ public class HomeViewModel : ObservableObject
                 }
                 else
                 {
+                    // 切分区失败时把上一分区的列表清掉, 否则用户看到的还是旧分区的内容
+                    if (reset)
+                    {
+                        LiveItems.Clear();
+                        OnPropertyChanged(nameof(LiveCount));
+                    }
+                    LiveHasMore = false;
                     Error = err ?? "直播列表加载失败";
                 }
             });
         }
         catch (Exception ex)
         {
+            if (gen != _liveGen) return;
             Loading = false;
             LoadingMore = false;
             Error = ex.Message;
         }
+    }
+
+    // ----------------- 直播分区(2026-11-08) -----------------
+
+    /// <summary>拉一次分区数据(父分区 + 推荐行热门子分区); 已加载过就直接返回。</summary>
+    private async Task EnsureLiveAreasAsync()
+    {
+        if (_liveAreasLoaded || _liveAreasLoading) return;
+        _liveAreasLoading = true;
+        try
+        {
+            var areasTask = Svc.Api.GetLiveAreasAsync();
+            var hotTask = Svc.Api.GetLiveHotAreasAsync();
+            var (ok, _, groups) = await areasTask;
+            var (hotOk, _, hot) = await hotTask;
+
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                LiveAreaGroups.Clear();
+
+                // 「推荐」永远存在: 分区接口被风控/为空时, 用户至少还能看全站直播
+                var recommend = new LiveAreaGroup { Id = 0, Name = "推荐" };
+                if (hotOk && hot != null)
+                    foreach (var a in hot) recommend.Children.Add(a);
+                LiveAreaGroups.Add(recommend);
+
+                if (ok && groups != null)
+                    foreach (var g in groups) LiveAreaGroups.Add(g);
+
+                _liveAreasLoaded = ok && groups != null && groups.Count > 0;
+
+                // 切走再回来时保持上一个父分区; 找不到就回推荐
+                var target = LiveAreaGroups.FirstOrDefault(g => g.Id == _liveParentAreaId) ?? recommend;
+                SelectLiveGroupCore(target);
+            });
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+        }
         finally
         {
-            _liveLoading = false;
+            _liveAreasLoading = false;
         }
+    }
+
+    /// <summary>点父分区胶囊: 切父分区 → 子分区复位到「全部」→ 重新拉第一页</summary>
+    private void SelectLiveGroup(LiveAreaGroup group)
+    {
+        if (group == null) return;
+        SelectLiveGroupCore(group);
+        _livePage = 1;
+        LiveHasMore = true;
+        _ = LoadLiveAsync(reset: true);
+    }
+
+    /// <summary>只改选中态与子分区列表, 不触发网络请求(首屏/恢复选中时用)</summary>
+    private void SelectLiveGroupCore(LiveAreaGroup group)
+    {
+        foreach (var g in LiveAreaGroups) g.IsSelected = ReferenceEquals(g, group);
+        _liveParentAreaId = group.Id;
+        _liveAreaId = 0;
+        _liveSubParentId = 0;
+
+        _liveSubAll.Clear();
+        _liveSubAll.Add(new LiveArea { Id = 0, ParentId = group.Id, Name = "全部" });
+        foreach (var c in group.Children) _liveSubAll.Add(c);
+        foreach (var a in _liveSubAll) a.IsSelected = a.Id == 0;
+
+        _liveSubExpanded = false;
+        RebuildVisibleLiveSubAreas();
+    }
+
+    /// <summary>点子分区: 只按这个子分区筛, 父分区胶囊保持不变</summary>
+    private void SelectLiveArea(LiveArea area)
+    {
+        if (area == null) return;
+        foreach (var a in _liveSubAll) a.IsSelected = ReferenceEquals(a, area);
+        _liveAreaId = area.Id;
+        _liveSubParentId = area.Id > 0 ? area.ParentId : 0;
+        _livePage = 1;
+        LiveHasMore = true;
+        _ = LoadLiveAsync(reset: true);
+    }
+
+    private void ToggleLiveSubExpand()
+    {
+        _liveSubExpanded = !_liveSubExpanded;
+        RebuildVisibleLiveSubAreas();
+    }
+
+    private void RebuildVisibleLiveSubAreas()
+    {
+        var limit = _liveSubExpanded
+            ? _liveSubAll.Count
+            : Math.Min(_liveSubAll.Count, LiveSubCollapsedCount);
+        LiveSubAreas.Clear();
+        for (var i = 0; i < limit; i++) LiveSubAreas.Add(_liveSubAll[i]);
+        OnPropertyChanged(nameof(HasMoreLiveSubAreas));
+        OnPropertyChanged(nameof(LiveSubToggleText));
+        OnPropertyChanged(nameof(LiveSubToggleGlyph));
+    }
+
+    /// <summary>
+    /// 「我关注的主播」正在直播列表(参考图顶部头像行)。
+    /// 未登录 / 没人在播都是空列表, 界面整块收起 —— 不显示一个空标题。
+    /// </summary>
+    private async Task LoadFollowingLiveAsync()
+    {
+        if (!Svc.Session.HasLogin)
+        {
+            FollowingLive.Clear();
+            OnPropertyChanged(nameof(HasFollowingLive));
+            OnPropertyChanged(nameof(FollowingLiveSummary));
+            OnPropertyChanged(nameof(FollowingLiveCountText));
+            return;
+        }
+
+        var (ok, _, items) = await Svc.Api.GetFollowingLiveAsync();
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            FollowingLive.Clear();
+            if (ok && items != null)
+                foreach (var it in items) FollowingLive.Add(it);
+            OnPropertyChanged(nameof(HasFollowingLive));
+            OnPropertyChanged(nameof(FollowingLiveSummary));
+            OnPropertyChanged(nameof(FollowingLiveCountText));
+        });
     }
 
     // ----------------- 热门 -----------------

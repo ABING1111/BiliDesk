@@ -33,12 +33,22 @@ public partial class ApiClient
     ///   ★ 为什么要把 total 透出来: 以前调用方拿 <c>list.Count</c> 当总数显示"共 N 条评论",
     ///     而一页只拉 30 条 —— 视频有几千条评论时那句话是**错的**。排序入口就挂在这行文字右边,
     ///     数字不对会让整个入口看着像坏的。
+    ///
+    /// ★★ 2026-11-08 增加翻页(修 issue #55「评论区只能显示有限几条, 滑不下去」):
+    ///   `/x/v2/reply/main` 的分页是**游标式**的, 不是页码式:
+    ///     · 响应 `data.cursor.next` = 下一页游标(第一页就是 2/3/80562 这种值);
+    ///     · 响应 `data.cursor.is_end` = 是否已到最后一页;
+    ///     · 请求把上一页的 `next` 原样带回去即可(实测 mode=2 / mode=3 都可用)。
+    ///   原来的 `pn=1` 是**写死的**, 接口对这个参数实际会忽略 —— 所以永远只有第一页。
+    ///   ★ `next` 的优先级高于已弃用的 `pagination_str`, 也高于 `pn`; 首屏不传 `next` 即可。
     /// </summary>
-    public async Task<(bool ok, string? err, List<CommentItem> items, long total)> GetCommentsAsync(
-        long aid, int count = 20, int mode = 3)
+    public async Task<(bool ok, string? err, List<CommentItem> items, long total, long next, bool isEnd)>
+        GetCommentsAsync(long aid, int count = 20, int mode = 3, long next = 0)
     {
         var result = new List<CommentItem>();
         var total = 0L;
+        var nextCursor = 0L;
+        var isEnd = false;
         try
         {
             var ps = new Dictionary<string, string>
@@ -46,9 +56,11 @@ public partial class ApiClient
                 ["oid"] = aid.ToString(),
                 ["type"] = "1",
                 ["mode"] = mode.ToString(),
-                ["ps"] = count.ToString(),
-                ["pn"] = "1"
+                ["ps"] = count.ToString()
             };
+            // 首屏不带游标; 之后原样带上上一页的 cursor.next。
+            // ★ 不要再带 pn: 这个接口不认页码, 带着只会让人误以为"分页是靠 pn 做的"。
+            if (next > 0) ps["next"] = next.ToString();
             // ★ fingerprint: 按**登录态**决定带不带 Cookie。
             //
             // 实测(2026-09-25, 冷启动单请求, 同一个 aid):
@@ -63,12 +75,19 @@ public partial class ApiClient
                 "https://api.bilibili.com/x/v2/reply/main", ps,
                 fingerprint: SessionManager.Instance.HasLogin);
             if (code != 0 || data == null)
-                return (false, msg ?? $"获取评论失败 (code {code})", result, 0);
+                return (false, msg ?? $"获取评论失败 (code {code})", result, 0, 0, true);
 
             // 根评论总数(不受 ps 分页影响)。缺失时保持 0, 由调用方回落到"本页条数"。
+            // 同一份 cursor 里还带下一页游标与"是否到底", 翻页全靠它们。
             if (data.Value.TryGetProperty("cursor", out var cursor) &&
                 cursor.ValueKind == JsonValueKind.Object)
+            {
                 total = GetLongSafe(cursor, "all_count");
+                nextCursor = GetLongSafe(cursor, "next");
+                isEnd = cursor.TryGetProperty("is_end", out var ie) &&
+                        (ie.ValueKind == JsonValueKind.True ||
+                         (ie.ValueKind == JsonValueKind.Number && ie.GetInt32() == 1));
+            }
 
             // 本稿件的 UP 主 mid: 用来给"UP 主自己的评论"打 [UP] 标
             var upperMid = data.Value.TryGetProperty("upper", out var up) &&
@@ -109,9 +128,10 @@ public partial class ApiClient
             // 堆栈首行一起带出去: "invalid format"这类错误只有堆栈才能定位到具体字段
             var stackTop = (ex.StackTrace ?? "").Split('\n')
                 .FirstOrDefault(l => l.Contains("BiliDesk") && !l.Contains("ThrowHelper")) ?? "";
-            return (false, "解析评论失败: " + ex.Message + (stackTop.Length > 0 ? " @ " + stackTop.Trim() : ""), result, 0);
+            return (false, "解析评论失败: " + ex.Message + (stackTop.Length > 0 ? " @ " + stackTop.Trim() : ""), result, 0, 0, true);
         }
-        return (true, null, result, total);
+        // isEnd 还要兜一层: 游标为 0 时也说明没有下一页了(接口偶尔不给 is_end)。
+        return (true, null, result, total, nextCursor, isEnd || nextCursor <= 0);
     }
 
     /// <summary>取对象里的某个子对象; 不存在或是 null 时返回 null(置顶评论可能只有 upper 或只有 admin)</summary>

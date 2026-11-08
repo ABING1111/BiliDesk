@@ -257,6 +257,16 @@
                            Cursor="Hand" MouseLeftButtonUp="OnAuthorClick"
                            TextTrimming="CharacterEllipsis" MaxWidth="100"
                            ToolTip="{Binding Author, Mode=OneWay}" />
+                <!-- 直播卡片: 「UP 名 · 分区名」(2026-11-08)。
+                     视频稿件的 AreaName 为空, 这里的点与文字都自动隐藏。 -->
+                <TextBlock Text="·" Style="{StaticResource MetaTextStyle}" Margin="4,0"
+                           VerticalAlignment="Center"
+                           Visibility="{Binding AreaName, Converter={StaticResource StrToVis}}" />
+                <TextBlock Text="{Binding AreaName, Mode=OneWay}"
+                           Style="{StaticResource MetaTextStyle}" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" MaxWidth="96"
+                           ToolTip="{Binding AreaName, Mode=OneWay}"
+                           Visibility="{Binding AreaName, Converter={StaticResource StrToVis}}" />
                 <!-- 发布日期(部分接口没给, 空着即可): 前面那个点只在有日期时显示 -->
                 <TextBlock Text="·" Style="{StaticResource MetaTextStyle}" Margin="4,0"
                            VerticalAlignment="Center"

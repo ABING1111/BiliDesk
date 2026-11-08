@@ -22,84 +22,145 @@ public partial class ApiClient
     /// <summary>获取 UP 主空间信息。
     /// acc/info 系列接口风控严格(未带完整设备指纹时返回 -403「访问权限不足」),
     /// 因此采用多接口降级策略:
-    ///   1. WBI 签名的 /x/space/wbi/acc/info (信息最全)
-    ///   2. 公开的 /x/web-interface/card (网页卡片悬浮预览接口, 风控宽松, 附带粉丝/投稿数)
+    ///   1. WBI 签名的 /x/space/wbi/acc/info (昵称/头像/签名/等级, 信息最全)
+    ///   2. 公开的 /x/web-interface/card (网页卡片悬浮预览接口, 风控宽松, 附带粉丝/投稿数/获赞数/大会员)
     ///   3. 旧版 /x/space/acc/info
     /// 全部失败才返回 ok=false。★ 2026-10-01 由裸 <c>Task&lt;SpaceInfo?&gt;</c> 改为 (ok, err, data):
-    /// 三个降级接口的 code 原本全被丢掉了, 调用方只知道"没取到", 排查风控时无从下手。</summary>
+    /// 三个降级接口的 code 原本全被丢掉了, 调用方只知道"没取到", 排查风控时无从下手。
+    ///
+    /// ★★ 2026-11-08 修两处数据问题(与 UP 主主页顶部改版一起):
+    ///   ① 原来走通第 1 条就**直接 return**, 而 acc/info 里没有粉丝/关注/投稿数 ——
+    ///      于是主页经常显示"0 粉丝 0 关注";
+    ///   ② 第 2 条里 `card.following` 实际是**布尔值**(当前登录用户是否关注了 TA),
+    ///      被当成"关注数"取出来只会是 0/1。
+    ///   现在固定并行拉 acc/info + card + /x/relation/stat 后合并:
+    ///     · 关注数/粉丝数 → relation/stat(权威且不需要签名);
+    ///     · 获赞数/投稿数/大会员 → card(archive_count / like_num / vip.label)。
+    /// </summary>
     public async Task<(bool ok, string? err, SpaceInfo? data)> GetSpaceInfoAsync(long mid)
     {
         try
         {
             await EnsureBuvidAsync();
             var referer = $"https://space.bilibili.com/{mid}/";
+            var midParam = new Dictionary<string, string> { ["mid"] = mid.ToString() };
 
-            // 1. WBI 签名接口
-            var (code, _, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/space/wbi/acc/info",
-                new Dictionary<string, string> { ["mid"] = mid.ToString() },
+            // 三路并行: 任一失败都不影响其余信息(每个接口的失败都被 GetJsonAsync 包成返回值)
+            var infoTask = GetJsonAsync(
+                "https://api.bilibili.com/x/space/wbi/acc/info", midParam,
                 sign: true, referer: referer);
-            if (code == 0 && data != null)
+            var cardTask = GetJsonAsync(
+                "https://api.bilibili.com/x/web-interface/card", midParam, referer: referer);
+            var statTask = GetJsonAsync(
+                "https://api.bilibili.com/x/relation/stat",
+                new Dictionary<string, string> { ["vmid"] = mid.ToString() }, referer: referer);
+
+            var (infoRes, cardRes, statRes) = (await infoTask, await cardTask, await statTask);
+
+            // ---------- 名片: 获赞数 / 投稿数 / 大会员 ----------
+            long follower = 0, followingCount = 0, likeCount = 0, videoCount = 0;
+            var vipLabel = "";
+            var vipColor = "";
+            JsonElement? cardEl = null;
+            var cardOk = false;
+            if (cardRes.code == 0 && cardRes.data != null)
             {
-                var d = data.Value;
-                return (true, null, new SpaceInfo
+                var d = cardRes.data.Value;
+                if (d.TryGetProperty("card", out var card) && card.ValueKind == JsonValueKind.Object)
+                {
+                    cardEl = card.Clone();
+                    cardOk = true;
+                    ParseVip(card, ref vipLabel, ref vipColor);
+                }
+                follower = GetLong(d, "follower");
+                videoCount = GetLong(d, "archive_count");
+                likeCount = GetLong(d, "like_num");
+            }
+
+            // ---------- relation/stat: 关注数 / 粉丝数(权威值, 覆盖名片里的) ----------
+            if (statRes.code == 0 && statRes.data != null)
+            {
+                follower = GetLong(statRes.data.Value, "follower");
+                followingCount = GetLong(statRes.data.Value, "following");
+            }
+
+            // ---------- 资料主体: acc/info → card → 旧接口 ----------
+            SpaceInfo? info = null;
+            if (infoRes.code == 0 && infoRes.data != null)
+            {
+                var d = infoRes.data.Value;
+                info = new SpaceInfo
                 {
                     Name = GetStr(d, "name"),
                     Face = UrlUtil.Normalize(GetStr(d, "face")),
                     Sign = GetStr(d, "sign"),
                     Mid = mid,
                     Level = GetInt(d, "level")
-                });
+                };
+                ParseVip(d, ref vipLabel, ref vipColor);
             }
 
-            // 2. 公开名片接口(风控宽松, 含粉丝/关注/投稿数)
-            (code, _, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/web-interface/card",
-                new Dictionary<string, string> { ["mid"] = mid.ToString() },
-                referer: referer);
-            if (code == 0 && data != null)
+            if (info == null && cardOk && cardEl is JsonElement cardData)
             {
-                var d = data.Value;
-                if (d.TryGetProperty("card", out var card) && card.ValueKind == JsonValueKind.Object)
+                info = new SpaceInfo
                 {
-                    return (true, null, new SpaceInfo
+                    Name = GetStr(cardData, "name"),
+                    Face = UrlUtil.Normalize(GetStr(cardData, "face")),
+                    Sign = GetStr(cardData, "sign"),
+                    Mid = mid,
+                    Level = cardData.TryGetProperty("level_info", out var li)
+                        ? GetInt(li, "current_level") : 0
+                };
+            }
+
+            if (info == null)
+            {
+                var (code, _, data) = await GetJsonAsync(
+                    "https://api.bilibili.com/x/space/acc/info", midParam, referer: referer);
+                if (code == 0 && data != null)
+                {
+                    var d = data.Value;
+                    info = new SpaceInfo
                     {
-                        Name = GetStr(card, "name"),
-                        Face = UrlUtil.Normalize(GetStr(card, "face")),
-                        Sign = GetStr(card, "sign"),
+                        Name = GetStr(d, "name"),
+                        Face = UrlUtil.Normalize(GetStr(d, "face")),
+                        Sign = GetStr(d, "sign"),
                         Mid = mid,
-                        Level = card.TryGetProperty("level_info", out var li) ? GetInt(li, "current_level") : 0,
-                        Follower = GetLong(d, "follower"),
-                        Following = GetLong(d, "following"),
-                        VideoCount = GetLong(d, "archive_count")
-                    });
+                        Level = GetInt(d, "level")
+                    };
+                    ParseVip(d, ref vipLabel, ref vipColor);
                 }
             }
 
-            // 3. 旧版接口兜底
-            (code, _, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/space/acc/info",
-                new Dictionary<string, string> { ["mid"] = mid.ToString() },
-                referer: referer);
-            if (code == 0 && data != null)
-            {
-                var d = data.Value;
-                return (true, null, new SpaceInfo
-                {
-                    Name = GetStr(d, "name"),
-                    Face = UrlUtil.Normalize(GetStr(d, "face")),
-                    Sign = GetStr(d, "sign"),
-                    Mid = mid,
-                    Level = GetInt(d, "level")
-                });
-            }
-            return (false, "三个空间接口都取不到该 UP 主的信息(可能是 mid 不存在或被风控)", null);
+            if (info == null)
+                return (false, "三个空间接口都取不到该 UP 主的信息(可能是 mid 不存在或被风控)", null);
+
+            info.Follower = follower;
+            info.Following = followingCount;
+            info.VideoCount = videoCount;
+            info.LikeCount = likeCount;
+            info.VipLabel = vipLabel;
+            info.VipColor = vipColor;
+            return (true, null, info);
         }
         catch (Exception ex)
         {
             App.ReportError(ex);
             return (false, "获取 UP 主信息失败: " + ex.Message, null);
         }
+    }
+
+    /// <summary>从 acc/info 或 card 里解析大会员标签(接口给的文字与底色原样用)。</summary>
+    private static void ParseVip(JsonElement owner, ref string label, ref string color)
+    {
+        if (!owner.TryGetProperty("vip", out var vip) || vip.ValueKind != JsonValueKind.Object)
+            return;
+        if (!vip.TryGetProperty("label", out var lbl) || lbl.ValueKind != JsonValueKind.Object)
+            return;
+        var text = GetStr(lbl, "text");
+        if (text.Length == 0) return;
+        label = text;
+        color = GetStr(lbl, "bg_color");
     }
 
     /// <summary>

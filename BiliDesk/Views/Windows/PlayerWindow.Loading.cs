@@ -203,18 +203,35 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void OnInfoScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (_closing || _relatedShown >= _relatedAll.Count) return;
-        // 换片后 _relatedAll 是空的, 上面的闸门已经挡住; 这里再确认面板是显示的,
-        // 免得在"简介 tab"下也补(相关视频属于简介 tab, 评论 tab 下整块是隐藏的)。
-        if (RelatedPanel == null || RelatedPanel.Visibility != Visibility.Visible) return;
-        // 往上滚不补
+        if (_closing) return;
+        if (sender is not ScrollViewer sv) return;
+        // 往上滚不补(相关视频与评论都是"向下无限加载")
         if (e.VerticalChange < 0) return;
 
-        if (sender is not ScrollViewer sv) return;
-        // 相关视频列表在可视区里的位置: 它的底部距 ScrollViewer 内容底部还有多远
+        MaybeShowMoreRelated(sv);
+        // 评论翻页(issue #55, 2026-11-08): 不在评论 tab / 详情页打开时由内部闸门挡住
+        MaybeLoadMoreComments(sv);
+        // 评论内容窗口: 释放离屏评论的正文/图片, 防止无限加载把内存堆到上百 MB
+        QueueCommentContentWindow();
+    }
+
+    /// <summary>
+    /// 相关视频补页(逻辑与原 OnInfoScrollChanged 完全一致, 只是拆出来给两条加载路径共用入口)。
+    /// ★ 判据是"相关视频列表的**底部**离视口底部还有不到一屏", 不是"滚到底":
+    ///   等用户真的滚到最底才补, 会先出现"列表空了半屏"的空白期, 看着像没有了。
+    /// </summary>
+    private void MaybeShowMoreRelated(ScrollViewer sv)
+    {
+        if (_closing || _relatedShown >= _relatedAll.Count) return;
+        // 评论 tab 下相关视频整块是隐藏的(IntroPanel 被折叠, 但 RelatedPanel 自身的
+        // Visibility 仍是 Visible) —— 这里要显式挡一下, 否则滚评论也会一直给相关视频补页。
+        if (CommentsPanel != null && CommentsPanel.Visibility == Visibility.Visible) return;
+        // 换片后 _relatedAll 是空的, 上面的闸门已经挡住; 这里再确认面板是显示的,
+        // 免得在"评论 tab"下也补(相关视频属于简介 tab, 评论 tab 下整块是隐藏的)。
+        if (RelatedPanel == null || RelatedPanel.Visibility != Visibility.Visible) return;
+
         var targetBottom = RelatedList.TransformToVisual(sv)
             .Transform(new Point(0, RelatedList.ActualHeight)).Y;
-        // 距"还要再滚一屏才看得见"的阈值内就补下一批
         if (targetBottom - (sv.VerticalOffset + sv.ViewportHeight) < sv.ViewportHeight)
             ShowMoreRelated();
     }
@@ -485,6 +502,16 @@ public partial class PlayerWindow : FluentWindow
         CancelRemuxPrefetch();
         _ownerMid = 0;
         _commentsLoaded = false;
+        // 评论翻页状态属于"上一条视频": 游标必须清, 否则新片会拿旧游标去要第二页,
+        // 拿回来的是别人家评论。失败标记/防重入闸也一起复位。
+        _commentNext = 0;
+        _commentHasMore = false;
+        _commentLoadingMore = false;
+        _commentLoadMoreFailed = false;
+        ResetCommentCardParts();
+        _commentItems.Clear();
+        _commentContentWindowTimer?.Stop();
+        _commentContentWindowTimer = null;
         // 下载状态属于"上一条视频"(见 UpdateActionCounts 里那个绿色终态)
         _cacheDownloaded = false;
         // 评论总数属于"上一条视频" —— 不清的话换了片子那句"共 N 条评论"还挂着旧数字,
@@ -500,6 +527,7 @@ public partial class PlayerWindow : FluentWindow
         // 被当成"在推进", 把刚弹出的加载遮罩误收掉。
         _lastLoadingRevealMs = -1;
         UpdateCommentSortUi(visible: false);
+        UpdateCommentMoreUi();
         // 换片时把评论详情也收掉(tab 文案与返回链接一并还原),
         // 否则新片子一进来右侧就挂着上一条视频的评论详情页
         if (CommentDetailPanel != null) CloseCommentDetail();
@@ -700,6 +728,9 @@ public partial class PlayerWindow : FluentWindow
         // 长按快进的目标倍速(2026-11-03): 同属"这一次长按"的瞬时态, 换片必须复位。
         nameof(_fastForwardTarget),
         nameof(_commentTotal),
+        // 评论翻页(2026-11-08, issue #55): 游标/是否还有下一页/在途闸/失败标记都属于"这一片"
+        nameof(_commentNext), nameof(_commentHasMore),
+        nameof(_commentLoadingMore), nameof(_commentLoadMoreFailed),
         nameof(_effectiveCommentSort),
         nameof(_suppressSingleClick), nameof(_controlsHidden), nameof(_isFullscreen),
         // ---- 2026-10-31 补登记(此前 errors.txt 里一直被自检点名) ----

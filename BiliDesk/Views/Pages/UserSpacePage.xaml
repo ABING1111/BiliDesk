@@ -4,24 +4,113 @@
              xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
              Background="{DynamicResource AppBackgroundBrush}">
+    <UserControl.Resources>
+        <!-- ===== 简介: 默认两行, 点「详情」展开 =====
+             ★ 用 MaxHeight 而不是单独维护一份截断文本: 展开/收起只改一个属性,
+               也不会出现"截断位置随窗口宽度变化但缓存文本没更新"的问题。 -->
+        <Style x:Key="SpaceSignStyle" TargetType="TextBlock" BasedOn="{StaticResource MetaTextStyle}">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="MaxHeight" Value="38" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSignExpanded}" Value="True">
+                    <Setter Property="MaxHeight" Value="9999" />
+                    <Setter Property="TextTrimming" Value="None" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- ===== 页码按钮(参考 B 站投稿页) =====
+             数字页 36×36 圆角方块; 当前页强调色实底白字; 省略号单独渲染成不可点的 "…"。
+             ★ 悬停/按压只改 Opacity, 不在模板里换底色 —— 否则当前页的强调色底会被
+               悬停态顶掉(选中页鼠标一放上去就变回浅色, 看起来像没选中)。 -->
+        <Style x:Key="PageNumberButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="36" />
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Margin" Value="3,0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}">
+                                <!-- ★ 必须挡一下全局隐式 TextBlock 样式: 它带 Foreground setter,
+                                     优先级高于这里继承的 TextElement.Foreground —— 不挡的话
+                                     "当前页"的白字会被它改成主文字色(深色), 压在强调色实底上很难看,
+                                     强调色偏深时甚至直接看不见。 (与 Styles.xaml 里多处同款处理一致) -->
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                        <Setter Property="Foreground"
+                                                Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Opacity" Value="0.72" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <!-- 悬停"候选框": 鼠标移上去先出现浅强调底 + 强调色描边, 明确表示"这一格可以点"。
+                     ★ 选中态的 DataTrigger 写在后面: 鼠标停在当前页上时仍保持强调色实底。 -->
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource AccentSoftFillBrush}" />
+                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                </Trigger>
+                <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+                    <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
+                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- 上一页 / 下一页: 与数字页同款外观, 只是更宽 -->
+        <Style x:Key="PageNavButtonStyle" TargetType="Button"
+               BasedOn="{StaticResource PageNumberButtonStyle}">
+            <Setter Property="Width" Value="74" />
+            <Setter Property="Padding" Value="10,0" />
+        </Style>
+    </UserControl.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- ======== 顶部 UP 主信息区 ======== -->
+        <!-- ======== 顶部 UP 主信息区(2026-11-08 按参考图重排) ========
+             从左到右: 头像(带 LV) / 昵称 + 大会员 + UID + 简介 / 关注·粉丝·获赞 / 关注按钮 -->
         <Border Grid.Row="0" Background="{DynamicResource CardBackgroundBrush}"
                 BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1">
-            <Grid Margin="36,22,36,18">
+            <Grid Margin="36,22,36,16">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <!-- 头像(带等级徽章)。右键可看大图 / 保存头像 -->
-                <Grid Grid.Column="0">
+                <Grid Grid.Column="0" VerticalAlignment="Top">
                     <Grid.ContextMenu>
                         <ContextMenu>
                             <MenuItem Header="查看头像大图" Click="OnViewAvatar">
@@ -38,66 +127,82 @@
                             </MenuItem>
                         </ContextMenu>
                     </Grid.ContextMenu>
-                    <Border Width="76" Height="76" CornerRadius="38"
+                    <Border Width="88" Height="88" CornerRadius="44"
                             Background="{DynamicResource AccentSoftFillBrush}"
                             helpers:Cover.Source="{Binding Face}">
                         <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                   FontSize="32" Foreground="{DynamicResource AccentTextBrush}"
+                                   FontSize="36" Foreground="{DynamicResource AccentTextBrush}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
-                    <!-- 等级徽章 -->
+                    <!-- 等级徽章(LV0 = 接口没给, 不显示) -->
                     <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                            Background="#FF9C0A" CornerRadius="8" Padding="6,1">
-                        <Border.Style>
-                            <Style TargetType="Border">
-                                <Setter Property="Visibility" Value="Visible" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Level}" Value="0">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Border.Style>
-                        <TextBlock Text="{Binding Level, StringFormat=LV{0}, Mode=OneWay}"
+                            Background="#FF9C0A" CornerRadius="9" Padding="7,1" Margin="0,0,2,2"
+                            Visibility="{Binding HasLevel, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="{Binding LevelText}"
                                    FontSize="10" FontWeight="Bold" Foreground="White" />
                     </Border>
                 </Grid>
 
-                <!-- 名称 / 签名 / 数据 -->
-                <StackPanel Grid.Column="1" Margin="18,0,0,0" VerticalAlignment="Center">
+                <!-- 名称 / 大会员 / UID / 签名 -->
+                <StackPanel Grid.Column="1" Margin="18,2,24,0" VerticalAlignment="Top">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="{Binding Name}" FontSize="19" FontWeight="SemiBold"
+                        <TextBlock Text="{Binding Name}" FontSize="22" FontWeight="SemiBold"
                                    VerticalAlignment="Center" />
-                        <TextBlock Style="{StaticResource MetaTextStyle}" Margin="12,2,0,0"
-                                   VerticalAlignment="Center">
-                            <Run Text="mid: " /><Run Text="{Binding Mid, Mode=OneWay}" />
-                        </TextBlock>
+                        <!-- 大会员角标: 文字/底色都来自接口(如「年度大会员」+#FB7299);
+                             接口没给就不显示, 不用本地猜。 -->
+                        <Border Margin="10,0,0,0" CornerRadius="4" Padding="6,1"
+                                VerticalAlignment="Center"
+                                Background="{Binding VipColor, Converter={StaticResource HexToBrush}, ConverterParameter=#FB7299}"
+                                Visibility="{Binding HasVip, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding VipLabel}" FontSize="10.5"
+                                       FontWeight="SemiBold" Foreground="White" />
+                        </Border>
                     </StackPanel>
-                    <TextBlock Text="{Binding Sign}" Style="{StaticResource MetaTextStyle}"
-                               Margin="0,6,0,0" MaxWidth="560" TextTrimming="CharacterEllipsis" />
-                    <!-- 数据行 -->
-                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{Binding FollowerText}" FontSize="15" FontWeight="SemiBold" />
-                            <TextBlock Text=" 粉丝" Style="{StaticResource MetaTextStyle}"
-                                       VerticalAlignment="Bottom" Margin="2,0,0,1" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="22,0,0,0">
-                            <TextBlock Text="{Binding FollowingText}" FontSize="15" FontWeight="SemiBold" />
-                            <TextBlock Text=" 关注" Style="{StaticResource MetaTextStyle}"
-                                       VerticalAlignment="Bottom" Margin="2,0,0,1" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="22,0,0,0">
-                            <TextBlock Text="{Binding VideoCountText}" FontSize="15" FontWeight="SemiBold" />
-                            <TextBlock Text=" 投稿" Style="{StaticResource MetaTextStyle}"
-                                       VerticalAlignment="Bottom" Margin="2,0,0,1" />
-                        </StackPanel>
+
+                    <!-- UID(用户要求显示; 替代原先挂在名字右边的 "mid: xxx") -->
+                    <TextBlock Text="{Binding UidText}" Style="{StaticResource MetaTextStyle}"
+                               Margin="0,4,0,0" />
+
+                    <StackPanel Margin="0,8,0,0">
+                        <TextBlock Text="{Binding Sign}" Style="{StaticResource SpaceSignStyle}"
+                                   MaxWidth="620" HorizontalAlignment="Left" />
+                        <Button Content="{Binding SignDetailText}" Command="{Binding ToggleSignCommand}"
+                                Style="{StaticResource LinkButtonStyle}" FontSize="12" Padding="0,2"
+                                HorizontalAlignment="Left" Margin="0,2,0,0"
+                                Visibility="{Binding CanExpandSign, Converter={StaticResource BoolToVis}}" />
                     </StackPanel>
                 </StackPanel>
 
-                <!-- 关注按钮: 未关注 = 强调色实底「+ 关注」; 已关注 = 淡色底「已关注」。
-                     底色切换用样式 DataTrigger(读 VM 的 IsNotFollowed)。 -->
-                <Button Grid.Column="2" Command="{Binding ToggleFollowCommand}" Padding="22,8"
+                <!-- 数据: 关注数 / 粉丝数 / 获赞数(参考图: 数字在上、标签在下、细竖线分隔) -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="0,0,26,0">
+                    <StackPanel MinWidth="64">
+                        <TextBlock Text="{Binding FollowingText}" FontSize="18" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Text="关注数" Style="{StaticResource MetaTextStyle}"
+                                   HorizontalAlignment="Center" Margin="0,2,0,0" />
+                    </StackPanel>
+                    <Border Width="1" Height="30" Background="{DynamicResource DividerBrush}"
+                            Margin="16,0" />
+                    <StackPanel MinWidth="64">
+                        <TextBlock Text="{Binding FollowerText}" FontSize="18" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Text="粉丝数" Style="{StaticResource MetaTextStyle}"
+                                   HorizontalAlignment="Center" Margin="0,2,0,0" />
+                    </StackPanel>
+                    <Border Width="1" Height="30" Background="{DynamicResource DividerBrush}"
+                            Margin="16,0" />
+                    <StackPanel MinWidth="64">
+                        <TextBlock Text="{Binding LikeText}" FontSize="18" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Text="获赞数" Style="{StaticResource MetaTextStyle}"
+                                   HorizontalAlignment="Center" Margin="0,2,0,0" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- 关注按钮: 未关注 = 强调色实底「+ 关注」; 已关注 = 灰色底「已关注」
+                     (颜色切换在 FollowToggleButtonStyle 的 DataTrigger 里, 读 VM.IsFollowed) -->
+                <Button Grid.Column="3" Command="{Binding ToggleFollowCommand}" Padding="22,8"
                         VerticalAlignment="Center" ToolTip="关注 / 取消关注该 UP 主"
                         Style="{StaticResource FollowToggleButtonStyle}">
                     <TextBlock Text="{Binding FollowLabel}" FontSize="12" />
@@ -128,9 +233,12 @@
                         Command="{Binding RefreshCommand}" />
             </StackPanel>
 
-            <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto"
-                          ScrollChanged="Scroll_OnScrollChanged">
+            <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="36,16,36,24">
+                    <!-- 投稿区标题: 让页码栏的"共 N 页"有对照 -->
+                    <TextBlock Text="{Binding PageSummary}" FontSize="15" FontWeight="SemiBold"
+                               Margin="8,0,0,2" />
+
                     <!-- 视频网格 -->
                     <ItemsControl ItemsSource="{Binding Videos}">
                         <ItemsControl.ItemsPanel>
@@ -145,16 +253,47 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- 底部状态 -->
-                    <StackPanel Margin="0,12,0,0" HorizontalAlignment="Center">
-                        <StackPanel Orientation="Horizontal"
-                                    Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
-                            <controls:LoadingRing Width="18" Height="18" />
-                            <TextBlock Text="加载中…" Margin="8,0,0,0"
-                                       VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
-                        </StackPanel>
-                        <TextBlock Text="已经到底啦" Style="{StaticResource MetaTextStyle}"
-                                   Visibility="{Binding ShowEndOfList, Converter={StaticResource BoolToVis}}" />
+                    <!-- 页码栏(2026-11-08): 上一页 | 1 2 3 … 33 | 下一页
+                         ★ 只有一页或没有投稿时整块收起(ShowPager)。
+                         ★ 翻页后由代码把列表滚回顶部(见 UserSpacePage.xaml.cs)。 -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                Margin="0,20,0,6"
+                                Visibility="{Binding ShowPager, Converter={StaticResource BoolToVis}}">
+                        <Button Content="上一页" Style="{StaticResource PageNavButtonStyle}"
+                                Command="{Binding PrevPageCommand}" IsEnabled="{Binding CanGoPrev}"
+                                Margin="0,0,6,0" />
+                        <ItemsControl ItemsSource="{Binding PageItems}" VerticalAlignment="Center">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <!-- 省略号 -->
+                                        <TextBlock Text="…" Style="{StaticResource MetaTextStyle}"
+                                                   FontSize="14" Margin="8,0" VerticalAlignment="Center"
+                                                   Visibility="{Binding IsEllipsis, Converter={StaticResource BoolToVis}}" />
+                                        <!-- 数字页 -->
+                                        <Button Content="{Binding Display}"
+                                                Style="{StaticResource PageNumberButtonStyle}"
+                                                Command="{Binding DataContext.GoToPageCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding Page}"
+                                                IsEnabled="{Binding DataContext.CanChangePage, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                ToolTip="{Binding Display, StringFormat=跳转到第 {0} 页}"
+                                                Visibility="{Binding IsEllipsis, Converter={StaticResource InvBoolToVis}}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Button Content="下一页" Style="{StaticResource PageNavButtonStyle}"
+                                Command="{Binding NextPageCommand}" IsEnabled="{Binding CanGoNext}"
+                                Margin="6,0,0,0" />
+                        <!-- 翻页在途: 页码高亮已先跳到目标页, 这里再给一个"正在加载"的明确反馈 -->
+                        <controls:LoadingRing Width="16" Height="16" Margin="10,0,0,0"
+                                              VerticalAlignment="Center"
+                                              Visibility="{Binding IsPaging, Converter={StaticResource BoolToVis}}" />
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>

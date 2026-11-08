@@ -1,5 +1,7 @@
+using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
@@ -9,14 +11,15 @@ namespace BiliDesk.Views.Pages;
 
 public partial class UserSpacePage : UserControl
 {
+    /// <summary>当前订阅的 VM(DataContext 可能被换掉, 必须自己记一份以便退订事件)</summary>
+    private UserSpaceViewModel? _vm;
+
     public UserSpacePage()
     {
         InitializeComponent();
         Loaded += OnLoaded;
         DataContextChanged += OnDataContextChanged;
-        // ★ 本页每次打开都会 new 一个新实例(见 NavigationDispatcher.OpenUserSpace),
-        //   所以订阅/退订必须成对: 不摘掉的话 FilterService 会一直攥着旧页面不放。
-        Unloaded += (_, _) => FilterService.Instance.Changed -= OnFilterApplied;
+        Unloaded += OnUnloaded;
     }
 
     public UserSpacePage(long mid)
@@ -26,50 +29,43 @@ public partial class UserSpacePage : UserControl
         if (DataContext is UserSpaceViewModel vm) _ = vm.InitAsync(mid);
         Loaded += OnLoaded;
         DataContextChanged += OnDataContextChanged;
-        Unloaded += (_, _) => FilterService.Instance.Changed -= OnFilterApplied;
+        Unloaded += OnUnloaded;
     }
 
-    private async void OnLoaded(object sender, System.Windows.RoutedEventArgs e)
+    private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         if (DataContext is UserSpaceViewModel vm)
         {
-            // 个人空间的投稿列表也纳入全局屏蔽(以前这里怎么屏蔽都不生效)
-            FilterService.Instance.Attach(vm.Videos);
-            FilterService.Instance.Changed -= OnFilterApplied;
-            FilterService.Instance.Changed += OnFilterApplied;
-
+            AttachVm(vm);
             if (vm.Mid > 0) await vm.InitAsync(vm.Mid);
             else if (Tag is long mid) await vm.InitAsync(mid);
         }
     }
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+        => AttachVm(e.NewValue as UserSpaceViewModel);
+
+    private void OnUnloaded(object sender, RoutedEventArgs e) => AttachVm(null);
+
+    /// <summary>
+    /// 订阅 VM 的事件 / 把投稿列表纳入全局屏蔽。
+    /// ★ FilterService 只是在集合的默认视图上装一个 Filter 谓词, 翻页时 Clear+Add
+    ///   会自动重新过滤, 不需要在页面里再做"补页"。
+    /// </summary>
+    private void AttachVm(UserSpaceViewModel? vm)
     {
-        if (e.NewValue is UserSpaceViewModel vm) FilterService.Instance.Attach(vm.Videos);
+        if (_vm == vm) return;
+        if (_vm != null) _vm.ScrollToTopRequested -= OnScrollToTopRequested;
+        _vm = vm;
+        if (vm == null) return;
+        vm.ScrollToTopRequested += OnScrollToTopRequested;
+        FilterService.Instance.Attach(vm.Videos);
     }
 
-    /// <summary>屏蔽筛掉一批投稿后, 等布局量完再补下一页</summary>
-    private void OnFilterApplied()
-    {
-        if (!IsLoaded) return;
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
-        {
-            if (!IsLoaded || DataContext is not UserSpaceViewModel vm) return;
-            var sv = ListScroll;
-            if (sv == null) return;
-            if (sv.ScrollableHeight - sv.VerticalOffset > 240) return;
-            _ = vm.LoadMoreAsync();
-        }));
-    }
-
-    private void Scroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
-    {
-        if (DataContext is not UserSpaceViewModel vm) return;
-        var sv = (ScrollViewer)sender;
-        var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
-        if (distanceToBottom > 240) return;
-        _ = vm.LoadMoreAsync();
-    }
+    /// <summary>翻页成功后把列表滚回顶部 —— 否则用户点了第 2 页, 眼前还停在上一页的底部。</summary>
+    private void OnScrollToTopRequested()
+        => Dispatcher.BeginInvoke(new Action(() => ListScroll?.ScrollToTop()),
+            DispatcherPriority.Loaded);
 
     // ------------------------------------------------------------ 头像右键菜单
 

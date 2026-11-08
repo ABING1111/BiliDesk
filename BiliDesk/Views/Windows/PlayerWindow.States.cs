@@ -173,6 +173,9 @@ public partial class PlayerWindow : FluentWindow
     {
         if (FollowLabel == null) return;
         FollowLabel.Text = _isFollowed ? "已关注" : "+ 关注";
+        // 与 UP 主主页同一套视觉: 已关注 = 浅灰底 + 次要色; 未关注 = 强调色实底白字。
+        // 播放页没有 IsFollowed 绑定, 用 Tag 驱动样式里的 DataTrigger。
+        if (BtnFollow != null) BtnFollow.Tag = _isFollowed ? "followed" : "follow";
     }
 
     private async void OnFollowClick(object sender, RoutedEventArgs e)

@@ -29,7 +29,7 @@ public partial class ApiClient
     private static readonly int[] LiveParentAreas = { 0, 1, 2 };
 
     /// <summary>
-    /// 取直播列表(按人气排序)。
+    /// 取直播列表(默认按人气排序)。
     ///
     /// 用 `room/v1/Area/getRoomList`。**不要**换成 `xlive/web-interface/v1/second/getList` ——
     /// 后者现在必返回 `-352`(风控), 同参数用 curl 直打也是 -352, 加 buvid3、加
@@ -37,24 +37,35 @@ public partial class ApiClient
     /// 这个老接口反而一直可用(实测 page_size=20 稳定给满 20 条, 且 online 严格降序)。
     ///
     /// 它的 `data` 是**裸数组**(不是 second/getList 那种 { list: [...] }), 所以解析走两条路。
+    ///
+    /// ★★ 2026-11-08 增加分区筛选(<paramref name="parentAreaId"/> / <paramref name="areaId"/>):
+    ///   实测 `parent_area_id=16` 返回的全是购物, `parent_area_id=2&area_id=86` 全是英雄联盟。
+    ///   ★ 选定具体分区后**不再走 0→1→2 的父分区兜底**: 否则「购物」没数据时会把「娱乐」
+    ///     的直播间端上来, 用户看到的明明是别的分区 —— 分区筛选等于没做。
+    ///     「推荐」(parent=0) 仍然保留兜底, 那是"整站没有就换个大户"的既有容错。
     /// </summary>
-    public async Task<(bool ok, string? err, List<VideoItem>? items)> GetLiveListAsync(int page = 1)
+    public async Task<(bool ok, string? err, List<VideoItem>? items)>
+        GetLiveListAsync(int page = 1, int parentAreaId = 0, int areaId = 0)
     {
         try
         {
             await EnsureBuvidAsync();
             string? lastErr = null;
 
-            foreach (var parentArea in LiveParentAreas)
+            // 推荐 = 全部(0), 拿不到再退回娱乐(1) / 游戏(2);
+            // 指定分区时只问这一个分区, 绝不串区。
+            var parents = parentAreaId > 0 ? new[] { parentAreaId } : LiveParentAreas;
+
+            foreach (var parent in parents)
             {
                 var (code, msg, data) = await GetJsonAsync(
                     "https://api.live.bilibili.com/room/v1/Area/getRoomList",
                     new Dictionary<string, string>
                     {
                         ["platform"] = "web",
-                        ["parent_area_id"] = parentArea.ToString(),
+                        ["parent_area_id"] = parent.ToString(),
                         ["cate_id"] = "0",
-                        ["area_id"] = "0",
+                        ["area_id"] = (parentAreaId > 0 ? areaId : 0).ToString(),
                         ["sort_type"] = "online",
                         ["page"] = page.ToString(),
                         ["page_size"] = "20"
@@ -81,6 +92,10 @@ public partial class ApiClient
                     if (cover.Length == 0) cover = GetStr(e, "show_cover");
                     if (cover.Length == 0) cover = GetStr(e, "keyframe");
 
+                    // 直播间所属分区(卡片底部显示"UP 名 · 分区")
+                    var areaName = GetStr(e, "area_v2_name");
+                    if (areaName.Length == 0) areaName = GetStr(e, "area_name");
+
                     var item = new VideoItem
                     {
                         RoomId = roomId,
@@ -91,7 +106,8 @@ public partial class ApiClient
                         Cover = UrlUtil.Normalize(cover),
                         // 直播间没有时长, 这里放"直播中"当角标, 复用卡片上那个时长位
                         Duration = "直播中",
-                        ViewCount = Math.Max(0, GetLong(e, "online"))
+                        ViewCount = Math.Max(0, GetLong(e, "online")),
+                        AreaName = areaName
                     };
                     items.Add(item);
                 }
@@ -106,6 +122,158 @@ public partial class ApiClient
         {
             return (false, ex.Message, null);
         }
+    }
+
+    // ------------------------------------------------------------ 直播分区(2026-11-08)
+
+    /// <summary>
+    /// 参考图里父分区胶囊的固定顺序。接口返回的顺序与网页版不一致(而且偶尔会少/多一个),
+    /// 但用户已经看惯了「网游 / 手游 / 单机游戏 / 娱乐 …」, 按这份顺序排,
+    /// 接口新加的分区自动落到末尾, 不会把熟悉的位置打乱。
+    /// </summary>
+    private static readonly int[] LiveAreaOrder = { 2, 3, 6, 1, 5, 9, 14, 10, 11, 13, 15, 16 };
+
+    private List<LiveAreaGroup>? _liveAreaCache;
+    private List<LiveArea>? _liveHotAreaCache;
+
+    /// <summary>
+    /// 取全部直播分区(父分区 + 子分区)。
+    /// 接口: <c>/room/v1/Area/getList?show_pinyin=1</c>(公开, 无需签名)。
+    /// ★ 分区数据几乎不变, 进程内缓存一份; 每次返回**深拷贝** —— 界面会把 IsSelected
+    ///   写在对象上, 直接共享缓存会让下一次打开直播页还带着上一次的选中态。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<LiveAreaGroup>? groups)> GetLiveAreasAsync()
+    {
+        if (_liveAreaCache != null) return (true, null, CloneLiveAreaGroups(_liveAreaCache));
+        try
+        {
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.live.bilibili.com/room/v1/Area/getList",
+                new Dictionary<string, string> { ["show_pinyin"] = "1" },
+                referer: "https://live.bilibili.com/");
+            if (code != 0 || data == null)
+                return (false, msg ?? $"获取直播分区失败 (code {code})", null);
+
+            var groups = new List<LiveAreaGroup>();
+            if (data.Value.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var g in data.Value.EnumerateArray())
+                {
+                    if (g.ValueKind != JsonValueKind.Object) continue;
+                    var gid = (int)GetLongLoose(g, "id");
+                    if (gid <= 0) continue;
+                    var group = new LiveAreaGroup { Id = gid, Name = GetStr(g, "name") };
+                    if (g.TryGetProperty("list", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var s in arr.EnumerateArray())
+                        {
+                            if (s.ValueKind != JsonValueKind.Object) continue;
+                            var sid = (int)GetLongLoose(s, "id");
+                            if (sid <= 0) continue;
+                            var pid = (int)GetLongLoose(s, "parent_id");
+                            group.Children.Add(new LiveArea
+                            {
+                                Id = sid,
+                                ParentId = pid > 0 ? pid : gid,
+                                Name = GetStr(s, "name")
+                            });
+                        }
+                    }
+                    groups.Add(group);
+                }
+            }
+
+            groups = groups
+                .OrderBy(g =>
+                {
+                    var idx = Array.IndexOf(LiveAreaOrder, g.Id);
+                    return idx < 0 ? int.MaxValue : idx;
+                })
+                .ThenBy(g => g.Id)
+                .ToList();
+
+            _liveAreaCache = groups;
+            return (true, null, CloneLiveAreaGroups(groups));
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "获取直播分区失败: " + ex.Message, null);
+        }
+    }
+
+    /// <summary>
+    /// 「推荐」下面那排热门子分区。
+    /// 接口: <c>/xlive/web-interface/v1/index/getList</c> 的 <c>data.area_entrance_v2.list</c>,
+    /// 每项带 id / title / area_v2_parent_id。同样只取一次并缓存。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<LiveArea>? areas)> GetLiveHotAreasAsync()
+    {
+        if (_liveHotAreaCache != null) return (true, null, CloneLiveAreas(_liveHotAreaCache));
+        try
+        {
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.live.bilibili.com/xlive/web-interface/v1/index/getList",
+                new Dictionary<string, string>
+                {
+                    ["platform"] = "web",
+                    ["parent_area_id"] = "0",
+                    ["page"] = "1",
+                    ["page_size"] = "1"
+                },
+                referer: "https://live.bilibili.com/");
+            if (code != 0 || data == null)
+                return (false, msg ?? $"获取热门直播分区失败 (code {code})", null);
+
+            var list = new List<LiveArea>();
+            if (data.Value.TryGetProperty("area_entrance_v2", out var entrance) &&
+                entrance.ValueKind == JsonValueKind.Object &&
+                entrance.TryGetProperty("list", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in arr.EnumerateArray())
+                {
+                    if (e.ValueKind != JsonValueKind.Object) continue;
+                    var id = GetIntSafe(e, "id");
+                    if (id <= 0) continue;
+                    var name = GetStr(e, "title");
+                    if (name.Length == 0) continue;
+                    list.Add(new LiveArea
+                    {
+                        Id = id,
+                        ParentId = GetIntSafe(e, "area_v2_parent_id"),
+                        Name = name
+                    });
+                }
+            }
+            _liveHotAreaCache = list;
+            return (true, null, CloneLiveAreas(list));
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "获取热门直播分区失败: " + ex.Message, null);
+        }
+    }
+
+    private static List<LiveAreaGroup> CloneLiveAreaGroups(List<LiveAreaGroup> src)
+    {
+        var result = new List<LiveAreaGroup>(src.Count);
+        foreach (var g in src)
+        {
+            var group = new LiveAreaGroup { Id = g.Id, Name = g.Name };
+            foreach (var c in g.Children)
+                group.Children.Add(new LiveArea { Id = c.Id, ParentId = c.ParentId, Name = c.Name });
+            result.Add(group);
+        }
+        return result;
+    }
+
+    private static List<LiveArea> CloneLiveAreas(List<LiveArea> src)
+    {
+        var result = new List<LiveArea>(src.Count);
+        foreach (var a in src)
+            result.Add(new LiveArea { Id = a.Id, ParentId = a.ParentId, Name = a.Name });
+        return result;
     }
 
     /// <summary>

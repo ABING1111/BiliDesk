@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -19,6 +20,7 @@ using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
+using BiliDesk.Views.Controls;
 using LibVLCSharp.Shared;
 using LibVLCSharp.WPF;
 using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
@@ -68,6 +70,58 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>当前视频的根评论总数(来自接口 cursor.all_count, 不是本页条数)</summary>
     private long _commentTotal;
 
+    // ------------------------------------------------------------ 评论翻页(2026-11-08, issue #55)
+    //
+    // ★ 为什么不再直接把接口返回的 List 挂到 ItemsSource:
+    //   `CommentList` 在**外层 InfoScroll 的 StackPanel** 里, 没有虚拟化; 翻页时若整份
+    //   ItemsSource 重新赋值, WPF 会重建全部容器, 滚动位置会跳回顶部 —— 用户刚滑到底
+    //   点了"加载更多"结果被弹回第一页, 体验比"没有加载更多"更差。
+    //   改用 ObservableCollection 后只对新增条目生成容器, 已有内容与滚动位置都保留。
+
+    /// <summary>已展示的根评论集合(翻页时只追加, 不重建)</summary>
+    private readonly ObservableCollection<CommentItem> _commentItems = new();
+
+    /// <summary>下一页游标(data.cursor.next); 0 = 没有下一页</summary>
+    private long _commentNext;
+
+    /// <summary>是否还有下一页(接口 is_end 的取反, 并叠加"本页有没有新增"的兜底)</summary>
+    private bool _commentHasMore;
+
+    /// <summary>是否正在补下一页(滚轮会连续触发 ScrollChanged, 必须防重入)</summary>
+    private bool _commentLoadingMore;
+
+    /// <summary>上一次补页是否失败(失败后底部显示"点击重试", 而不是假装到底了)</summary>
+    private bool _commentLoadMoreFailed;
+
+    // ------------------------------------------------------------ 评论内容窗口(2026-11-08)
+    //
+    // ★ 无限加载 + 无虚拟化(容器不销毁)会让每条评论的 RichTextBox/FlowDocument
+    //   永久常驻内存, 滚几十页后能涨到 100~200MB。这里按**滚动位置**释放离屏卡片的
+    //   正文文档与图片, 回到视野附近再重建 —— 效果相当于手动虚拟化内容层。
+    //   容器本身保留(只冻结高度), 所以滚动位置与列表版式都不变。
+
+    private readonly Dictionary<ContentPresenter, CommentCardParts> _commentCardParts = new();
+    private DispatcherTimer? _commentContentWindowTimer;
+
+    /// <summary>一张评论卡片的可释放部件(正文/图片)</summary>
+    private sealed class CommentCardParts
+    {
+        public CommentText[] Texts = Array.Empty<CommentText>();
+        public Border[] Covers = Array.Empty<Border>();
+        public bool Released;
+
+        /// <summary>离屏时被换下来的原模板(换模板 = 销毁整棵卡片视觉树, 比只清文档更省内存)</summary>
+        public DataTemplate? OriginalTemplate;
+        public bool TemplateSwapped;
+    }
+
+    private DataTemplate? _commentPlaceholderTemplate;
+
+    /// <summary>离屏评论用的空模板(见 PlayerWindow.xaml 的 CommentPlaceholderTemplate)</summary>
+    private DataTemplate? CommentPlaceholderTemplate
+        => _commentPlaceholderTemplate ??=
+            TryFindResource("CommentPlaceholderTemplate") as DataTemplate;
+
     private async Task LoadCommentsAsync(bool force = false)
     {
         if (_closing) return;
@@ -103,7 +157,8 @@ public partial class PlayerWindow : FluentWindow
         _effectiveCommentSort = _commentSort;
         try
         {
-            var (cmtOk, cmtErr, list, total) = await Svc.Api.GetCommentsAsync(aidAtStart, 30, _commentSort);
+            var (cmtOk, cmtErr, list, total, nextCursor, isEnd) =
+                await Svc.Api.GetCommentsAsync(aidAtStart, 30, _commentSort);
             // 实际拿到的列表按哪个顺序排(热门的"空列表回退"会把它改成 2)。
             // ★ 不回写 _commentSort: 那是用户跨视频记住的偏好, 不能因为一个视频热门为空
             //   就永久改成时间; 排序入口只按本次实际顺序点亮。
@@ -115,11 +170,15 @@ public partial class PlayerWindow : FluentWindow
             //   否则热门一直亮着、列表却只有置顶, 用户会以为评论区坏了。
             if (cmtOk && _commentSort == 3 && total > 0 && list.Count <= 1)
             {
-                var (fbOk, _, fbList, fbTotal) = await Svc.Api.GetCommentsAsync(aidAtStart, 30, 2);
+                var (fbOk, _, fbList, fbTotal, fbNext, fbEnd) =
+                    await Svc.Api.GetCommentsAsync(aidAtStart, 30, 2);
                 if (fbOk && fbList.Count > list.Count && _commentSort == 3)
                 {
                     list = fbList;
                     if (fbTotal > 0) total = fbTotal;
+                    // 回退成时间后, 翻页游标也必须跟着这一份列表走
+                    nextCursor = fbNext;
+                    isEnd = fbEnd;
                     cmtOk = true;
                     cmtErr = null;
                     displaySort = 2;
@@ -128,7 +187,17 @@ public partial class PlayerWindow : FluentWindow
             await Dispatcher.InvokeAsync(() =>
             {
                 if (_closing || _aid != aidAtStart) return;
-                CommentList.ItemsSource = list;
+                // 首屏/刷新: 整份集合换掉(翻页走 LoadMoreCommentsAsync, 只追加)
+                // 容器会被重新生成/复用: 先把离屏时换掉的模板与冻结高度还原,
+                // 否则新评论会沿用占位模板, 整页变空白。
+                ResetCommentCardParts();
+                _commentItems.Clear();
+                foreach (var c in list) _commentItems.Add(c);
+                if (!ReferenceEquals(CommentList.ItemsSource, _commentItems))
+                    CommentList.ItemsSource = _commentItems;
+                _commentNext = nextCursor;
+                _commentHasMore = !isEnd && nextCursor > 0;
+                _commentLoadMoreFailed = false;
                 _commentsLoaded = true;
                 _commentTotal = total;
                 _effectiveCommentSort = displaySort;
@@ -148,6 +217,11 @@ public partial class PlayerWindow : FluentWindow
                 //   此时把排序入口收起来等于把"切回另一个排序"的退路也一起藏了。
                 // ★ 传 displaySort: 热门回退成时间时, 让「时间」亮起来与列表实际顺序一致
                 UpdateCommentSortUi(visible: cmtOk && (list.Count > 0 || IsCommentDetailOpen), sortOverride: displaySort);
+                UpdateCommentMoreUi();
+                // 内容不足一屏(窗口很高 / 评论很短)时 ScrollChanged 不会触发,
+                // 主动检查一次, 否则用户看到的就是"只有这一页, 也滑不动"。
+                ScheduleCommentAutoLoad();
+                QueueCommentContentWindow();
             });
         }
         catch
@@ -158,6 +232,7 @@ public partial class PlayerWindow : FluentWindow
             // 详情页里切换排序失败时保留两个排序词: 否则用户被卡在详情页,
             // 连"再点一次重试/切回原排序"的入口都没有了。
             UpdateCommentSortUi(visible: IsCommentDetailOpen);
+            UpdateCommentMoreUi();
         }
     }
 
@@ -188,6 +263,320 @@ public partial class PlayerWindow : FluentWindow
     private void OnCommentSortHotClick(object sender, RoutedEventArgs e) => SetCommentSort(3);
 
     private void OnCommentSortTimeClick(object sender, RoutedEventArgs e) => SetCommentSort(2);
+
+    // ------------------------------------------------------------ 评论翻页(2026-11-08, issue #55)
+
+    /// <summary>
+    /// 补下一页根评论(滚动到列表底部附近时自动调, 失败后点底部提示也会调)。
+    ///
+    /// ★ 排序必须用 <see cref="_effectiveCommentSort"/> 而不是 _commentSort:
+    ///   热门返回空、本次按时间回退时, 用户眼前看到的是时间序, 后续翻页也要按时间继续 ——
+    ///   否则第二页会突然按热门序混进来, 列表顺序直接乱掉。
+    /// ★ 不能只看 is_end: 热门模式在深层页码偶尔会重复返回同一页, 若每页都去重后新增 0 条,
+    ///   继续翻只会无限打接口 —— added == 0 时直接收口。
+    /// </summary>
+    private async Task LoadMoreCommentsAsync()
+    {
+        if (_closing || _commentLoadingMore || !_commentsLoaded || !_commentHasMore) return;
+        if (CommentsPanel == null || CommentsPanel.Visibility != Visibility.Visible || IsCommentDetailOpen) return;
+        if (_aid <= 0 || _commentNext <= 0) return;
+
+        var aidAtStart = _aid;
+        var next = _commentNext;
+        _commentLoadingMore = true;
+        _commentLoadMoreFailed = false;
+        UpdateCommentMoreUi();
+        try
+        {
+            var (ok, err, more, total, nextCursor, isEnd) =
+                await Svc.Api.GetCommentsAsync(aidAtStart, 30, _effectiveCommentSort, next);
+            if (_closing || _aid != aidAtStart) return;
+            if (!ok)
+            {
+                // 失败不当作"到底了": 网络抖一下就把「已经到底了」亮出来, 用户会以为评论只有这些。
+                _commentLoadMoreFailed = true;
+                return;
+            }
+
+            var seen = new HashSet<long>(_commentItems.Select(c => c.Rpid));
+            var added = 0;
+            foreach (var c in more)
+                if (c.Rpid > 0 && seen.Add(c.Rpid)) { _commentItems.Add(c); added++; }
+
+            if (total > 0)
+            {
+                _commentTotal = total;
+                CommentHint.Text = $"共 {VideoItem.FormatCount(total)} 条评论";
+            }
+            _commentNext = nextCursor;
+            if (isEnd || nextCursor <= 0 || added == 0) _commentHasMore = false;
+        }
+        catch (Exception ex)
+        {
+            if (_closing || _aid != aidAtStart) return;
+            App.ReportError(ex);
+            _commentLoadMoreFailed = true;
+        }
+        finally
+        {
+            _commentLoadingMore = false;
+            UpdateCommentMoreUi();
+            // 新追加的一页在视口下方, 已滚过的旧评论此刻在视口上方 —— 排一轮离屏释放
+            QueueCommentContentWindow();
+        }
+    }
+
+    private void OnCommentMoreRetryClick(object sender, RoutedEventArgs e) => _ = LoadMoreCommentsAsync();
+
+    /// <summary>
+    /// 同步评论列表底部的翻页状态。
+    ///
+    /// 三种状态互斥: 正在补页(转圈) / 补页失败(点击重试) / 已经到底了。
+    /// 没有评论、详情页打开、不在评论 tab 时整块收起。
+    /// </summary>
+    private void UpdateCommentMoreUi()
+    {
+        if (CommentMorePanel == null || CommentMoreLoading == null ||
+            CommentMoreEnd == null || CommentMoreRetry == null)
+            return;
+
+        var onCommentsTab = CommentsPanel != null && CommentsPanel.Visibility == Visibility.Visible;
+        var show = onCommentsTab && !IsCommentDetailOpen && _commentsLoaded && _commentItems.Count > 0;
+        CommentMorePanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (!show) return;
+
+        CommentMoreLoading.Visibility = _commentLoadingMore ? Visibility.Visible : Visibility.Collapsed;
+        CommentMoreRetry.Visibility = !_commentLoadingMore && _commentLoadMoreFailed
+            ? Visibility.Visible : Visibility.Collapsed;
+        CommentMoreEnd.Visibility = !_commentLoadingMore && !_commentLoadMoreFailed && !_commentHasMore
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// 排到 Loaded 优先级再检查一次"要不要补下一页"。
+    ///
+    /// 为什么需要: 首屏只有 30 条、而窗口很高(或评论都很短)时, 内容可能还没填满一屏,
+    /// 此时 ScrollChanged 根本不会触发 —— 用户看到的就是"只有这一页, 也滑不动"。
+    /// </summary>
+    private void ScheduleCommentAutoLoad()
+    {
+        if (_closing) return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_closing) return;
+            MaybeLoadMoreComments(InfoScroll);
+        }), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    /// <summary>
+    /// 评论列表底部进入(或接近)视口时补下一页。
+    /// 判据与相关视频一致: 列表底边距视口底部不足一屏就开始补, 避免用户真滑到底才看到空白。
+    /// </summary>
+    private void MaybeLoadMoreComments(ScrollViewer? sv)
+    {
+        if (_closing || sv == null || !_commentsLoaded || !_commentHasMore || _commentLoadingMore) return;
+        // 自动加载失败后不再随每次滚动重试: 交给底部的「点击重试」,
+        // 否则网络差时滚一下打一次接口, 只会更糟。
+        if (_commentLoadMoreFailed) return;
+        if (CommentsPanel == null || CommentsPanel.Visibility != Visibility.Visible || IsCommentDetailOpen) return;
+        if (CommentList == null || CommentList.Visibility != Visibility.Visible) return;
+
+        try
+        {
+            var bottom = CommentList.TransformToVisual(sv)
+                .Transform(new Point(0, CommentList.ActualHeight)).Y;
+            if (bottom - (sv.VerticalOffset + sv.ViewportHeight) < sv.ViewportHeight)
+                _ = LoadMoreCommentsAsync();
+        }
+        catch
+        {
+            // 列表还没进可视树/正在切换 tab: 下一帧的 ScrollChanged 会再来
+        }
+    }
+
+    /// <summary>
+    /// 把"更新评论内容窗口"排到 120ms 后。
+    /// 滚动时 ScrollChanged 每帧都发, 每次都全量扫描会把 UI 线程占满; 这里合并成一次。
+    /// </summary>
+    private void QueueCommentContentWindow()
+    {
+        if (_closing) return;
+        if (_commentContentWindowTimer == null)
+        {
+            _commentContentWindowTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(120)
+            };
+            _commentContentWindowTimer.Tick += (_, _) =>
+            {
+                _commentContentWindowTimer?.Stop();
+                UpdateCommentContentWindow();
+            };
+        }
+        // ★ 节流而不是防抖: 持续滚动时也要每 120ms 收一次离屏内容,
+        //   否则"一路滚到底"的整段时间里内存都堆着(与封面窗口同一个教训)。
+        if (_commentContentWindowTimer.IsEnabled) return;
+        _commentContentWindowTimer.Start();
+    }
+
+    /// <summary>
+    /// 按滚动位置释放/恢复评论卡片的正文与图片。
+    ///
+    /// 规则: 离视口上下各 4 屏以外的卡片释放, 进入这个范围的恢复。
+    /// ★ 只释放**内容**, 容器保留并把高度冻结 —— 如果把容器删掉, 列表会重排、
+    ///   用户正在看的位置会跳; 只清 Document 则版式和滚动条都不动。
+    /// ★ 4 屏的余量是为了快滑时来得及恢复; 即使偶尔滑到空白, 120ms 后的下一轮也会补上。
+    /// </summary>
+    private void UpdateCommentContentWindow()
+    {
+        if (_closing || CommentList == null || !_commentsLoaded) return;
+        if (CommentsPanel == null || CommentsPanel.Visibility != Visibility.Visible || IsCommentDetailOpen) return;
+        var sv = InfoScroll;
+        if (sv == null || sv.ViewportHeight <= 0) return;
+
+        var viewport = sv.ViewportHeight;
+        if (viewport <= 0) return;
+        // ★ 坐标必须用**视口坐标**: TransformToAncestor(ScrollViewer) 已经把滚动偏移算进去了,
+        //   可见范围是 0~ViewportHeight(与 CardWallPanel/CoverWindow.InViewport 同一套约定)。
+        //   千万不能再拿 VerticalOffset 去比 —— 那样一往下滚就会把所有卡片(包括眼前这条)都释放。
+        var band = viewport * 4;
+        var releasedAny = false;
+
+        for (var i = 0; i < CommentList.Items.Count; i++)
+        {
+            if (CommentList.ItemContainerGenerator.ContainerFromIndex(i) is not ContentPresenter card) continue;
+            var parts = GetCommentCardParts(card);
+            // 已释放(换模板)的卡片 Texts 是空的, 但仍要按位置判断是否恢复
+            if (!parts.Released && parts.Texts.Length == 0) continue;   // 模板还没应用: 下一轮再收
+
+            double y;
+            try { y = card.TransformToAncestor(sv).Transform(new Point(0, 0)).Y; }
+            catch { continue; }
+
+            var h = card.ActualHeight;
+            if (h <= 0) continue;
+
+            if (y + h < -band || y > viewport + band)
+            {
+                var wasReleased = parts.Released;
+                ReleaseCommentCard(card, parts);
+                if (!wasReleased && parts.Released) releasedAny = true;
+            }
+            else
+            {
+                RestoreCommentCard(card, parts);
+            }
+        }
+
+        // 释放了一批视觉树/位图后请求一次温和回收: 光靠 GC 自己不会马上把工作集交给系统,
+        // 任务管理器里的数字就一直是"只涨不落"。(内部有 96MB 闸门 + 800ms 合并, 不会频繁 GC)
+        if (releasedAny) MemoryTrim.RequestTrim();
+    }
+
+    /// <summary>
+    /// 清空/重建评论列表前调用: 把离屏时冻结的高度与占位模板**就地解除**, 再丢掉缓存。
+    ///
+    /// ★ 这里**不要**把原模板设回去: temp 列表马上要被清空, 设回原模板会一次性重建
+    ///   所有离屏评论的视觉树(RichTextBox/图片), 造成一次巨大的内存与 CPU 尖峰。
+    ///   容器随后会被 ItemsControl 清掉/复用, 生成器会用 ItemTemplate 重新准备新容器。
+    /// ★ 但冻结高度与本地占位模板必须清掉: 它们挂在容器上是本地值, 容器若被复用会带过去。
+    /// </summary>
+    private void ResetCommentCardParts()
+    {
+        foreach (var kv in _commentCardParts)
+        {
+            var card = kv.Key;
+            var parts = kv.Value;
+            if (parts.Released) card.ClearValue(FrameworkElement.HeightProperty);
+            if (parts.TemplateSwapped) card.ClearValue(ContentPresenter.ContentTemplateProperty);
+        }
+        _commentCardParts.Clear();
+    }
+
+    /// <summary>缓存一张卡片里的正文控件与封面图(每张只 BFS 一次)。</summary>
+    private CommentCardParts GetCommentCardParts(ContentPresenter card)
+    {
+        if (_commentCardParts.TryGetValue(card, out var parts)) return parts;
+
+        parts = new CommentCardParts();
+        var texts = new List<CommentText>();
+        CollectCommentTexts(card, texts);
+        parts.Texts = texts.ToArray();
+        parts.Covers = Cover.FindCoverBorders(card);
+        // ★ 模板还没应用时不要缓存"空结果": 否则这张卡会永远被当成"没有可释放部件",
+        //   之后即使模板长出来也不会再收集(与卡墙 CoverBorders 的缓存教训同款)。
+        if (parts.Texts.Length == 0 && parts.Covers.Length == 0) return parts;
+        _commentCardParts[card] = parts;
+        return parts;
+    }
+
+    private static void CollectCommentTexts(DependencyObject root, List<CommentText> list)
+    {
+        var n = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < n; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is CommentText ct) list.Add(ct);
+            CollectCommentTexts(child, list);
+        }
+    }
+
+    /// <summary>
+    /// 释放一张离屏评论卡片。
+    ///
+    /// ★ 优先**换模板**: 把 ContentTemplate 临时换成空模板, 销毁整棵评论卡片视觉树
+    ///   (RichTextBox/FlowDocument/头像/图片), 只保留容器和冻结的高度。
+    ///   这是"无虚拟化列表"里最接近虚拟化的做法, 内存降得比只清文档彻底得多。
+    /// ★ 模板不可用时退化为"只清正文文档 + 释放封面图", 仍然有效。
+    /// </summary>
+    private void ReleaseCommentCard(ContentPresenter card, CommentCardParts parts)
+    {
+        if (parts.Released) return;
+        var h = card.ActualHeight;
+        if (h <= 0) return;
+
+        var placeholder = CommentPlaceholderTemplate;
+        var original = card.ContentTemplate;
+        if (placeholder != null && original != null)
+        {
+            card.Height = h;
+            parts.OriginalTemplate = original;
+            parts.TemplateSwapped = true;
+            // 先把引用清掉再换模板: 旧视觉树马上会被销毁, 留着这些引用没有意义
+            parts.Texts = Array.Empty<CommentText>();
+            parts.Covers = Array.Empty<Border>();
+            card.ContentTemplate = placeholder;
+            parts.Released = true;
+            return;
+        }
+
+        // 退化路径: 模板拿不到时只释放正文与图片
+        if (parts.Texts.Length == 0) return;
+        card.Height = h;
+        foreach (var t in parts.Texts) t.ReleaseContent();
+        foreach (var b in parts.Covers) Cover.Release(b);
+        parts.Released = true;
+    }
+
+    /// <summary>把回到视野附近的评论卡片内容重建回来。</summary>
+    private void RestoreCommentCard(ContentPresenter card, CommentCardParts parts)
+    {
+        if (!parts.Released) return;
+
+        if (parts.TemplateSwapped)
+        {
+            card.ClearValue(FrameworkElement.HeightProperty);
+            card.ContentTemplate = parts.OriginalTemplate;
+            // 模板换回来后视觉树会重新生成; 从缓存里移除, 下一轮重新收集新的控件引用。
+            _commentCardParts.Remove(card);
+            return;
+        }
+
+        card.ClearValue(FrameworkElement.HeightProperty);
+        foreach (var t in parts.Texts) t.RestoreContent();
+        foreach (var b in parts.Covers) Cover.Restore(b, force: true);
+        parts.Released = false;
+    }
 
     /// <summary>
     /// 切换评论排序。已经**实际展示**的就是这个顺序就直接返回 —— 否则点一下会白刷一次接口,
@@ -291,6 +680,8 @@ public partial class PlayerWindow : FluentWindow
         SetReplyTarget(threadRoot, focus: false);
         CommentList.Visibility = Visibility.Collapsed;
         CommentDetailPanel.Visibility = Visibility.Visible;
+        // 详情页打开: 底部的"加载更多评论"属于根评论列表, 先收起
+        UpdateCommentMoreUi();
         // "楼中楼自动展开所有评论": 进来就把这条线程剩下的回复补全, 不再要用户点"展开更多"
         if (threadRoot.HasMoreReplies) _ = AutoCompleteThreadRepliesAsync(threadRoot);
         // 滚动交给外层右面板的 ScrollViewer: 让详情面板滚进视野
@@ -368,6 +759,9 @@ public partial class PlayerWindow : FluentWindow
         TabComments.Content = "评论";
         BtnBackToComments.Visibility = Visibility.Collapsed;
         CommentList.Visibility = Visibility.Visible;
+        // 从详情页回到列表: 底部的翻页状态重新按当前根评论列表显示
+        UpdateCommentMoreUi();
+        QueueCommentContentWindow();
         // ★ 用户报"从某条评论的回复返回后, 列表回到顶部, 得重新下拉找那条评论"
         //   (2026-10-13): 默认回到**刚才那条评论**所在的位置。
         //   ★ 走 Dispatcher 排队: 上面刚把 CommentList 从 Collapsed 恢复成 Visible,

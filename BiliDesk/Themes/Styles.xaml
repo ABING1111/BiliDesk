@@ -1459,13 +1459,12 @@
     </Style>
 
     <!-- 关注/取关切换按钮(UP 主空间页):
-         两个状态**都是**强调色实底白字(AccentBrush + TextOnAccentBrush),
-         只靠文字区分(「+ 关注」/「已关注」)。
-         ★ 2026-10-03 用户要求"把已关注改成和关注按钮一样的颜色" —— 之前已关注态是淡色底
-           (AccentSoftFill) + 深强调色字, 观感偏灰、像被禁用的按钮, 与未关注态差异过猛;
-           现在统一成实底, 与播放器侧边栏那个关注按钮的观感也对齐了。
-         ★ 所以这里**不要**再加 "IsFollowed=True 时换底色" 的 DataTrigger。
-         悬停/按压的过渡与 AccentButtonStyle 保持一致的手感。 -->
+         未关注 = 强调色实底白字「+ 关注」; 已关注 = 浅灰底 + 次要色文字「已关注」。
+         ★ 2026-11-08 按用户给的参考图改回"两态不同色":
+           已关注是**状态展示**(不是主操作), 用浅灰底才不会抢走右侧其它按钮的注意力;
+           未关注才是需要用户行动的主按钮, 保持强调色实底。
+         ★ 悬停/按压用 Opacity 而不是换底色: 换底色会连"已关注"的浅灰底一起顶掉,
+           看起来像状态丢了。 -->
     <Style x:Key="FollowToggleButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
@@ -1480,14 +1479,24 @@
                     <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8"
                             Padding="{TemplateBinding Padding}">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
-                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                                          TextElement.Foreground="{TemplateBinding Foreground}">
+                            <!-- 挡全局隐式 TextBlock 的 Foreground: 否则「已关注」的灰色文字、
+                                 「+ 关注」的白字都会被改成主文字色。 -->
+                            <ContentPresenter.Resources>
+                                <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                    <Setter Property="Foreground"
+                                            Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                    <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                </Style>
+                            </ContentPresenter.Resources>
+                        </ContentPresenter>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentHoverBrush}" />
+                            <Setter Property="Opacity" Value="0.88" />
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentPressedBrush}" />
+                            <Setter Property="Opacity" Value="0.72" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Opacity" Value="0.45" />
@@ -1496,6 +1505,66 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+        <Style.Triggers>
+            <!-- 已关注: 浅灰底 + 次要色文字(参考图) -->
+            <DataTrigger Binding="{Binding IsFollowed}" Value="True">
+                <Setter Property="Background" Value="{DynamicResource ControlFillHoverBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- 播放器「+ 关注 / 已关注」按钮(2026-11-08 与 UP 主主页统一)。
+         播放页没有 IsFollowed 绑定(代码后置字段), 所以用 **Tag** 驱动选中态:
+           Tag="follow"   → 强调色实底白字(+ 关注, 主操作)
+           Tag="followed" → 浅灰底次要色(已关注, 状态展示)
+         悬停/按压只改 Opacity, 不换底色 —— 否则「已关注」的灰底会被悬停的强调色顶掉。 -->
+    <Style x:Key="PlayerFollowButtonStyle" TargetType="Button">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="12,5" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          TextElement.Foreground="{TemplateBinding Foreground}">
+                            <!-- 挡全局隐式 TextBlock 的 Foreground: 否则「已关注」的灰字会被改回主文字色 -->
+                            <ContentPresenter.Resources>
+                                <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                    <Setter Property="Foreground"
+                                            Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                    <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                </Style>
+                            </ContentPresenter.Resources>
+                        </ContentPresenter>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Opacity" Value="0.88" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Opacity" Value="0.72" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="followed">
+                <Setter Property="Background" Value="{DynamicResource ControlFillHoverBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
     </Style>
 
     <!-- 设置页顶部 Tab 的"淡色胶囊"版: 选中 = 强调色柔和底(AccentSoftFill, ~11% 透明度)

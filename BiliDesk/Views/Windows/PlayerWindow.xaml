@@ -354,6 +354,14 @@
                 </ItemsControl>
             </DataTemplate>
 
+            <!-- 离屏评论占位模板(2026-11-08 内存优化):
+                 评论无限加载时, 对离视口很远的卡片把 ContentTemplate 临时换成这个空模板,
+                 直接销毁整棵评论卡片视觉树(RichTextBox/FlowDocument/头像/图片), 只保留
+                 外层容器与冻结的高度, 滚动位置与版式完全不变。回到视野附近再换回原模板。 -->
+            <DataTemplate x:Key="CommentPlaceholderTemplate">
+                <Border Background="Transparent" />
+            </DataTemplate>
+
             <DataTemplate x:Key="CommentCardTemplate">
             <!--
                 ★★★ 2026-10-30 评论区改成 B 站网页版那种"无卡片"布局。
@@ -1613,15 +1621,15 @@
                                         <TextBlock x:Name="UpDescText" Style="{StaticResource MetaTextStyle}" Text="" Margin="0,2,0,0"
                                                    TextTrimming="CharacterEllipsis" />
                                     </StackPanel>
-                                    <Button Grid.Column="2" x:Name="BtnFollow" Style="{StaticResource AccentButtonStyle}"
+                                    <Button Grid.Column="2" x:Name="BtnFollow" Style="{StaticResource PlayerFollowButtonStyle}"
                                             Click="OnFollowClick" Padding="12,5" VerticalAlignment="Center"
-                                            ToolTip="关注/取消关注">
+                                            Tag="follow" ToolTip="关注/取消关注">
                                         <StackPanel Orientation="Horizontal">
                                             <!-- 爱心图标(矢量, 不依赖字体)。
-                                                 Fill 用 DynamicResource 跟随强调色前景色, 不要写死 White:
-                                                 强调色偏浅时白心会糊在浅底上(和文字一样的坑) -->
+                                                 Fill 跟随按钮的 Foreground: 未关注=TextOnAccent(白),
+                                                 已关注=TextSecondary(灰) —— 写死 White 会在灰底上糊成一片。 -->
                                             <Path Width="12" Height="12" Stretch="Uniform"
-                                                  Fill="{DynamicResource TextOnAccentBrush}"
+                                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                                   Data="M 12,21 L 10.55,19.65 C 5.4,15.04 2,12.05 2,8.5 C 2,5.42 4.42,3 7.5,3 C 9.24,3 10.91,3.81 12,5.08 C 13.09,3.81 14.76,3 16.5,3 C 19.58,3 22,5.42 22,8.5 C 22,12.05 18.6,15.04 13.45,19.65 Z" />
                                             <TextBlock x:Name="FollowLabel" Text="+ 关注" FontSize="12" Margin="5,0,0,0" />
                                         </StackPanel>
@@ -2206,6 +2214,30 @@
                                     </DockPanel>
                                     <ItemsControl x:Name="CommentList"
                                                   ItemTemplate="{StaticResource CommentCardTemplate}" />
+
+                                    <!-- ===== 评论翻页状态(2026-11-08, 修 issue #55) =====
+                                         评论是无限向下加载的, 底部必须有三态之一:
+                                         正在补页 / 补页失败可重试 / 已经到底了。
+                                         三者互斥, 由代码 UpdateCommentMoreUi 统一控制可见性;
+                                         详情页打开或不在评论 tab 时整块收起。 -->
+                                    <StackPanel x:Name="CommentMorePanel" Margin="0,12,0,6"
+                                                HorizontalAlignment="Center" Visibility="Collapsed">
+                                        <StackPanel x:Name="CommentMoreLoading" Orientation="Horizontal"
+                                                    Visibility="Collapsed">
+                                            <controls:LoadingRing Width="16" Height="16" />
+                                            <TextBlock Text="正在加载更多评论…" Margin="8,0,0,0"
+                                                       VerticalAlignment="Center"
+                                                       Style="{StaticResource MetaTextStyle}" />
+                                        </StackPanel>
+                                        <TextBlock x:Name="CommentMoreEnd" Text="已经到底了"
+                                                   Style="{StaticResource MetaTextStyle}"
+                                                   HorizontalAlignment="Center" Visibility="Collapsed" />
+                                        <Button x:Name="CommentMoreRetry" Content="加载更多评论失败，点击重试"
+                                                Style="{StaticResource LinkButtonStyle}"
+                                                FontSize="12" Padding="0,2"
+                                                Visibility="Collapsed"
+                                                Click="OnCommentMoreRetryClick" />
+                                    </StackPanel>
 
                                     <!-- ===== 评论详情(点"查看详情"进入) =====
                                          楼主区在上方(头像 + 昵称 + 时间/属地 + 正文 + 点赞),

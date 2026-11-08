@@ -34,9 +34,16 @@ public class SpaceInfo
     public string Sign { get; set; } = "";
     public long Mid { get; set; }
     public int Level { get; set; }
-    public long Follower { get; set; }   // 粉丝数
-    public long Following { get; set; }  // 关注数
-    public long VideoCount { get; set; } // 投稿数
+    public long Follower { get; set; }   // 粉丝数(/x/relation/stat)
+    public long Following { get; set; }  // 关注数(/x/relation/stat)
+    public long VideoCount { get; set; } // 投稿数(名片接口 archive_count)
+    public long LikeCount { get; set; }  // 获赞数(名片接口 like_num)
+
+    /// <summary>大会员标签文字(名片接口 vip.label.text, 如"年度大会员"); 空 = 不是大会员</summary>
+    public string VipLabel { get; set; } = "";
+
+    /// <summary>大会员标签底色(接口原样给 #RRGGBB; 空时界面回落到大会员粉)</summary>
+    public string VipColor { get; set; } = "";
 }
 
 /// <summary>

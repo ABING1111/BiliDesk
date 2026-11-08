@@ -30,6 +30,17 @@ namespace BiliDesk.Views.Controls;
 /// </summary>
 public class CommentText : RichTextBox
 {
+    /// <summary>
+    /// 正文内容是否已被"离屏释放"。
+    ///
+    /// ★ 为什么需要: 评论区是无限加载的, 但没有虚拟化(容器不会销毁)。每条评论的
+    ///   RichTextBox + FlowDocument + 内联表情/图片一旦生成就常驻内存, 滚几十页后
+    ///   能涨到 100~200MB。这里只释放**文档内容**(视觉树和控件本身保留), 由播放器
+    ///   按滚动位置对离屏卡片调用 <see cref="ReleaseContent"/>, 回到视野附近再
+    ///   <see cref="RestoreContent"/> 重建。
+    /// </summary>
+    private bool _contentReleased;
+
     public static readonly DependencyProperty CommentProperty = DependencyProperty.Register(
         nameof(Comment), typeof(CommentItem), typeof(CommentText),
         new PropertyMetadata(null, OnCommentChanged));
@@ -131,11 +142,37 @@ public class CommentText : RichTextBox
             });
     }
 
+    /// <summary>
+    /// 释放正文的文档内容(离屏评论用)。
+    ///
+    /// ★ 只清 <c>Document.Blocks</c>, **不销毁控件**: 清空后 RichTextBox 的高度会塌成 0,
+    ///   所以调用方必须先把外层卡片容器的高度冻结住, 否则下面的评论会整体上移、滚动位置会跳。
+    /// ★ 表情图片、内联图片都随 Blocks 一起被放掉; 文字与表情数据仍在 CommentItem 里,
+    ///   恢复时不需要重新请求评论区接口。
+    /// </summary>
+    public void ReleaseContent()
+    {
+        if (_contentReleased) return;
+        _contentReleased = true;
+        Document.Blocks.Clear();
+    }
+
+    /// <summary>把离屏释放掉的正文重建回来(从 CommentItem 重新排版)。</summary>
+    public void RestoreContent()
+    {
+        if (!_contentReleased) return;
+        _contentReleased = false;
+        Rebuild();
+    }
+
     private static void OnCommentChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         => ((CommentText)d).Rebuild();
 
     private void Rebuild()
     {
+        // 数据变了 / 恢复内容时都算"已加载": 之后可以被再次离屏释放
+        _contentReleased = false;
+
         var p = new Paragraph { Margin = new Thickness(0) };
         Document.Blocks.Clear();
         Document.Blocks.Add(p);

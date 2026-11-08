@@ -70,8 +70,104 @@
                 </Grid>
             </Border>
         </DataTemplate>
-    </UserControl.Resources>
 
+        <!-- ===== 直播父分区胶囊(2026-11-08) =====
+             参考图第一行: 推荐 / 网游 / 手游 … 选中为浅强调底 + 强调色文字。
+             ★ 悬停只改 Opacity, 不在模板里换底色 —— 换底色会盖掉选中态的浅强调底。 -->
+        <Style x:Key="LiveGroupChipStyle" TargetType="Button">
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="Margin" Value="0,0,4,4" />
+            <Setter Property="FontSize" Value="13.5" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}">
+                                <!-- 挡全局隐式 TextBlock 的 Foreground, 否则选中态的强调色文字不会生效 -->
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                        <Setter Property="Foreground"
+                                                Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Opacity" Value="0.84" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Opacity" Value="0.7" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource AccentSoftFillBrush}" />
+                    <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- 直播子分区(参考图第二行): 字号更小, 选中只变强调色文字 + 加粗, 不铺底色。
+             ★ 2026-11-08 收紧内边距: 之前的 10,4 + 每个 2px 外边距在宽屏下显得很散,
+               和参考图的紧凑排布差得远。 -->
+        <Style x:Key="LiveSubChipStyle" TargetType="Button">
+            <Setter Property="Padding" Value="6,3" />
+            <Setter Property="Margin" Value="0,1,3,1" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border CornerRadius="6" Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}">
+                                <!-- 挡全局隐式 TextBlock 的 Foreground, 否则选中态的强调色文字不会生效 -->
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                        <Setter Property="Foreground"
+                                                Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                </Trigger>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
     <Grid helpers:Responsive.Enable="True">
 
         <!-- 响应式: 窄档把左右内边距从 36 收到 20, 卡片区多出 32px 可用宽度。
@@ -538,6 +634,108 @@
                           ScrollChanged="LiveScroll_OnScrollChanged"
                           Visibility="{Binding IsLiveTab, Converter={StaticResource BoolToVis}}">
                 <StackPanel Margin="0,0,0,250">
+                    <!-- ===== 我关注的主播(2026-11-08, 参考图顶部头像行) =====
+                         只展示正在直播的(GetFollowingLiveAsync 已按 live_status=1 过滤)。
+                         未登录 / 没人在播时整块收起。 -->
+                    <StackPanel Margin="20,4,20,0"
+                                Visibility="{Binding HasFollowingLive, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <TextBlock Text="我关注的主播" FontSize="15" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding FollowingLiveCountText}" Margin="8,0,0,0"
+                                       VerticalAlignment="Bottom" Style="{StaticResource MetaTextStyle}" />
+                        </StackPanel>
+                        <ItemsControl ItemsSource="{Binding FollowingLive}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <!-- 整块可点: 直接进直播间(不经过中间页) -->
+                                    <Border Width="78" Margin="0,0,10,0" Background="Transparent"
+                                            Cursor="Hand" ToolTip="{Binding Title}"
+                                            MouseLeftButtonUp="OnFollowingLiveClick">
+                                        <StackPanel>
+                                            <Grid Width="62" Height="62" HorizontalAlignment="Center">
+                                                <Border Width="56" Height="56" CornerRadius="28"
+                                                        Background="{DynamicResource AccentSoftFillBrush}"
+                                                        ClipToBounds="True"
+                                                        helpers:Cover.Source="{Binding Cover}" />
+                                                <Border VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                                                        Background="{DynamicResource AccentBrush}"
+                                                        CornerRadius="3" Padding="4,0">
+                                                    <TextBlock Text="直播中" FontSize="9" Foreground="White" />
+                                                </Border>
+                                            </Grid>
+                                            <TextBlock Text="{Binding Author}" FontSize="11.5"
+                                                       HorizontalAlignment="Center" Margin="0,6,0,0"
+                                                       TextTrimming="CharacterEllipsis" MaxWidth="78" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+
+                    <!-- ===== 直播分区(2026-11-08) =====
+                         第一行父分区(推荐 + 网游/手游/…), 第二行当前父分区的子分区。
+                         「推荐」的子分区是跨区热门标签(接口 area_entrance_v2)。 -->
+                    <StackPanel Margin="20,8,20,2">
+                        <ItemsControl ItemsSource="{Binding LiveAreaGroups}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Content="{Binding Name}"
+                                            Style="{StaticResource LiveGroupChipStyle}"
+                                            Command="{Binding DataContext.SelectLiveGroupCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!-- 子分区 + 展开更多(2026-11-08 重排):
+                             「展开更多」右对齐在**第一行末尾**, 不再单独占第三行 ——
+                             之前它跟在 WrapPanel 下面, 子分区换行后会被挤到下一整行,
+                             看起来像多出来的一块。
+                             ★ DockPanel: 先 Dock=Right 放按钮, ItemsControl 填剩余宽度。
+                             ★ 展开后按钮不会消失, 仍固定在右上角, 方便随时收起。 -->
+                        <DockPanel LastChildFill="True" Margin="0,2,0,0">
+                            <Button DockPanel.Dock="Right" VerticalAlignment="Top"
+                                    Command="{Binding ToggleLiveSubExpandCommand}"
+                                    Style="{StaticResource LinkButtonStyle}"
+                                    Padding="0,2" Margin="10,1,0,0"
+                                    Visibility="{Binding HasMoreLiveSubAreas, Converter={StaticResource BoolToVis}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding LiveSubToggleText}" FontSize="12" />
+                                    <TextBlock Text="{Binding LiveSubToggleGlyph}" FontSize="9"
+                                               Margin="4,0,0,0" VerticalAlignment="Center"
+                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                                </StackPanel>
+                            </Button>
+
+                            <ItemsControl ItemsSource="{Binding LiveSubAreas}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Content="{Binding Name}"
+                                                Style="{StaticResource LiveSubChipStyle}"
+                                                Command="{Binding DataContext.SelectLiveAreaCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </DockPanel>
+                    </StackPanel>
+
                     <Border Margin="20,4,20,0" Padding="14,10" CornerRadius="8"
                             Background="{DynamicResource InfoBarBackgroundBrush}"
                             BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"

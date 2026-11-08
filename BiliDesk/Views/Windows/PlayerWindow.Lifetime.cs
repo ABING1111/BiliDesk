@@ -293,6 +293,12 @@ public partial class PlayerWindow : FluentWindow
         _sponsorActive = Array.Empty<SponsorSegment>();
         _sponsorHandled.Clear();
         if (CommentList != null) CommentList.ItemsSource = null;
+        // 评论集合本身也要放掉: 关闭窗口时 ItemsSource 清空了, 但集合还拎着几十个
+        // CommentItem(含 RichTextBox 用的富文本/图片), 不 clear 等于没松手。
+        ResetCommentCardParts();
+        _commentItems.Clear();
+        _commentContentWindowTimer?.Stop();
+        _commentContentWindowTimer = null;
         // 封面/头像的 ImageBrush 也是"挂着位图"的引用, 一并放掉
         if (UpAvatarBox != null) UpAvatarBox.Background = null;
     }

@@ -605,6 +605,15 @@ public partial class HomePage : UserControl
         _ = TriggerAutoLoad((ScrollViewer)sender, vm);
     }
 
+    /// <summary>点「我关注的主播」头像 → 直接进直播间(与直播卡片同一个入口)</summary>
+    private void OnFollowingLiveClick(object sender, MouseButtonEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not VideoItem v) return;
+        if (v.RoomId <= 0) return;
+        Svc.Player.PlayLive(v.RoomId, v.Title);
+        e.Handled = true;
+    }
+
     /// <summary>排行榜不自动翻页(它是一次给完的), 但仍然要让「回到顶部」跟着滚动位置亮灭</summary>
     private void RankingScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
         => UpdateBackToTop((ScrollViewer)sender);

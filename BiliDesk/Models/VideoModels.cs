@@ -56,6 +56,12 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
     /// </summary>
     public long RoomId { get; set; }
 
+    /// <summary>
+    /// 直播间所属分区名(只有直播列表会填, 如「英雄联盟」「三角洲行动」)。
+    /// 卡片底部显示成 "UP 名 · 分区名"; 视频稿件为空, 界面自动隐藏。
+    /// </summary>
+    public string AreaName { get; set; } = "";
+
     public bool IsLive => RoomId > 0;
 
     private bool _isSelected;
