@@ -1563,7 +1563,7 @@
             <!-- ============ 右: 信息面板 ============ -->
             <!-- x:Name 供全屏退出时做淡入用(400px 的一大块"啪"地出现很跳) -->
             <Grid x:Name="InfoPanel" Grid.Column="1" Background="{DynamicResource AppBackgroundBrush}">
-                <Border BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1,0,0,0">
+                <Border x:Name="InfoContentHost" BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1,0,0,0">
                     <ScrollViewer x:Name="InfoScroll" VerticalScrollBarVisibility="Auto"
                                   ScrollChanged="OnInfoScrollChanged">
                         <StackPanel Margin="20,18,20,24">
@@ -2399,6 +2399,136 @@
                             </Grid>
                         </StackPanel>
                     </ScrollViewer>
+                </Border>
+
+                <!-- ============ 直播弹幕列表(2026-11-13) ============
+                     ★ 只做「看」: 礼物 / 大航海 / 发弹幕按需求不做。
+                     ★ 与滚动弹幕层是**两条独立通道**:
+                       · 这里的聊天记录与「弹幕开关」无关, 关掉滚动弹幕也能看历史;
+                       · 暂停/缓冲时也照常追加(直播没有"补播"语义, 但聊天记录不该断)。
+                     ★ 放在 InfoPanel 里面(而不是另起一列): 全屏 / 铺满窗口时
+                       ApplyInfoPanelState() 只认 InfoPanel 的显隐, 放外面会留在屏幕上。 -->
+                <Border x:Name="LiveChatPanel" Visibility="Collapsed"
+                        BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1,0,0,0">
+                  <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- ===== 主播信息(2026-11-13): 头像/昵称可点进 UP 主主页 ===== -->
+                    <Border Grid.Row="0" BorderBrush="{DynamicResource DividerBrush}"
+                            BorderThickness="0,0,0,1" Padding="14,12">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border x:Name="LiveAnchorAvatarBox" Grid.Column="0" Width="44" Height="44"
+                                    CornerRadius="22" Background="{DynamicResource AccentSoftFillBrush}"
+                                    Cursor="Hand" ToolTip="进入 UP 主主页"
+                                    MouseLeftButtonUp="OnLiveAnchorClick">
+                                <TextBlock x:Name="LiveAnchorAvatarFallback" Text="&#xE77B;"
+                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="20"
+                                           Foreground="{DynamicResource AccentTextBrush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+
+                            <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock x:Name="LiveAnchorNameText" Text="UP 主" FontSize="14"
+                                               FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                               MaxWidth="220" Cursor="Hand" Background="Transparent"
+                                               ToolTip="进入 UP 主主页"
+                                               MouseLeftButtonUp="OnLiveAnchorClick" />
+                                    <Border x:Name="LiveAnchorAreaChip" Margin="8,0,0,0" Padding="6,1"
+                                            CornerRadius="4" Visibility="Collapsed"
+                                            Background="{DynamicResource ControlFillDefaultBrush}">
+                                        <TextBlock x:Name="LiveAnchorAreaText" FontSize="10.5"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    </Border>
+                                </StackPanel>
+                                <!-- 已开播 X · 9.9万人看过(每 30s 刷新一次时长) -->
+                                <TextBlock x:Name="LiveAnchorMetaText" Text="正在获取直播间信息…"
+                                           Style="{StaticResource MetaTextStyle}"
+                                           Margin="0,3,0,0" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" BorderBrush="{DynamicResource DividerBrush}"
+                            BorderThickness="0,0,0,1" Padding="16,10">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="直播弹幕" FontSize="14" FontWeight="SemiBold" />
+                            <TextBlock x:Name="LiveChatHintText" Style="{StaticResource MetaTextStyle}"
+                                       Text="实时" Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+
+                    <ListBox x:Name="LiveChatList" Grid.Row="2"
+                             Background="Transparent" BorderThickness="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling"
+                             ScrollViewer.ScrollChanged="OnLiveChatScrollChanged">
+                        <!-- ★ 自定义容器模板: 聊天记录不是"可选列表", 不要默认的选中高亮/焦点框 -->
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Focusable" Value="False" />
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <ContentPresenter />
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <!-- 胶囊气泡: 与参考图一致, 每条消息独立圆角底衬 -->
+                                <Border CornerRadius="12" Background="{DynamicResource CardBackgroundBrush}"
+                                        BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                                        Padding="10,7" Margin="10,2,10,4">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- 身份徽章: 房管 / 粉丝团N; 没有身份时整块 Collapsed -->
+                                        <Border Grid.Column="0" Visibility="{Binding BadgeVisibility}"
+                                                Background="{Binding BadgeBrush}" CornerRadius="6"
+                                                Padding="6,2" Margin="0,0,6,0" VerticalAlignment="Top"
+                                                ToolTip="{Binding BadgeToolTip}">
+                                            <TextBlock Text="{Binding BadgeText}" FontSize="10.5"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="{Binding BadgeTextBrush}" />
+                                        </Border>
+
+                                        <TextBlock Grid.Column="1" TextWrapping="Wrap" FontSize="12.5"
+                                                   LineHeight="19" VerticalAlignment="Center"
+                                                   Foreground="{Binding TextBrush}">
+                                            <Run Text="{Binding UserName}" FontWeight="SemiBold"
+                                                 Foreground="{DynamicResource TextSecondaryBrush}" />
+                                            <Run Text=": " Foreground="{DynamicResource TextSecondaryBrush}" />
+                                            <Run Text="{Binding Text}" />
+                                        </TextBlock>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <TextBlock x:Name="LiveChatEmptyHint" Grid.Row="2" Text="还没有人发弹幕…"
+                               Foreground="{DynamicResource TextTertiaryBrush}" FontSize="12"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False" />
+                  </Grid>
                 </Border>
 
                 <!-- ============ 合集面板(点 tab 行右侧的「合集」滑出, 2026-10-02 新增) ============

@@ -65,7 +65,18 @@ public class UserSpaceViewModel : ObservableObject
             OnPropertyChanged(nameof(SignDetailText));
         }
     }
-    public int Level { get => _level; private set { if (SetProperty(ref _level, value)) OnPropertyChanged(nameof(HasLevel)); } }
+    public int Level
+    {
+        get => _level;
+        private set
+        {
+            if (!SetProperty(ref _level, value)) return;
+            // ★ 只通知 HasLevel 是不够的: 徽章的 Text 绑的是 LevelText, 它不会跟着刷新,
+            //   于是出现"徽章从 LV0 变可见, 但文字永远停在 LV0"(2026-11-13 用户截图实证)。
+            OnPropertyChanged(nameof(HasLevel));
+            OnPropertyChanged(nameof(LevelText));
+        }
+    }
     public long Follower { get => _follower; private set { if (SetProperty(ref _follower, value)) OnPropertyChanged(nameof(FollowerText)); } }
     public long Following { get => _following; private set { if (SetProperty(ref _following, value)) OnPropertyChanged(nameof(FollowingText)); } }
     public long VideoCount { get => _videoCount; private set { if (SetProperty(ref _videoCount, value)) OnPropertyChanged(nameof(VideoCountText)); } }

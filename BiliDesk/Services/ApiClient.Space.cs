@@ -85,6 +85,13 @@ public partial class ApiClient
             }
 
             // ---------- 资料主体: acc/info → card → 旧接口 ----------
+            // ★ 等级的唯一稳定来源是 card.level_info.current_level:
+            //   wbi/acc/info 经常被风控(-352)或返回的 level 为 0, 而 card 一直带等级。
+            //   先把它单独取出来, 后面无论资料主体来自哪个接口都用它兜底(见 2026-11-13 修"等级一直为 0")。
+            var cardLevel = 0;
+            if (cardEl is JsonElement levelCard && levelCard.TryGetProperty("level_info", out var cardLevelEl))
+                cardLevel = (int)GetLongLoose(cardLevelEl, "current_level");
+
             SpaceInfo? info = null;
             if (infoRes.code == 0 && infoRes.data != null)
             {
@@ -95,7 +102,8 @@ public partial class ApiClient
                     Face = UrlUtil.Normalize(GetStr(d, "face")),
                     Sign = GetStr(d, "sign"),
                     Mid = mid,
-                    Level = GetInt(d, "level")
+                    // ★ 用 Loose: 等级可能是字符串("6"), 只认数字会静默读成 0
+                    Level = (int)GetLongLoose(d, "level")
                 };
                 ParseVip(d, ref vipLabel, ref vipColor);
             }
@@ -108,8 +116,7 @@ public partial class ApiClient
                     Face = UrlUtil.Normalize(GetStr(cardData, "face")),
                     Sign = GetStr(cardData, "sign"),
                     Mid = mid,
-                    Level = cardData.TryGetProperty("level_info", out var li)
-                        ? GetInt(li, "current_level") : 0
+                    Level = cardLevel
                 };
             }
 
@@ -126,7 +133,7 @@ public partial class ApiClient
                         Face = UrlUtil.Normalize(GetStr(d, "face")),
                         Sign = GetStr(d, "sign"),
                         Mid = mid,
-                        Level = GetInt(d, "level")
+                        Level = (int)GetLongLoose(d, "level")
                     };
                     ParseVip(d, ref vipLabel, ref vipColor);
                 }
@@ -134,6 +141,10 @@ public partial class ApiClient
 
             if (info == null)
                 return (false, "三个空间接口都取不到该 UP 主的信息(可能是 mid 不存在或被风控)", null);
+
+            // ★ 等级兜底(2026-11-13 修"UP 主页等级一直为 0"):
+            //   wbi/acc/info 即使 code=0, level 也可能缺失/为 0; card 的等级是稳定的。
+            if (info.Level <= 0 && cardLevel > 0) info.Level = cardLevel;
 
             info.Follower = follower;
             info.Following = followingCount;

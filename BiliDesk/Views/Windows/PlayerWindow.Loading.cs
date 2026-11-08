@@ -311,7 +311,7 @@ public partial class PlayerWindow : FluentWindow
             PubDateText.Text = "直播中";
             UpNameText.Text = "直播间 " + roomId;
             UpDescText.Text = "B 站直播";
-            DescText.Text = "这是一个直播间。直播没有进度条与历史记录, 互动按钮在直播中不可用。";
+            DescText.Text = "这是一个直播间。弹幕实时来自直播间, 没有进度条与历史记录, 互动按钮在直播中不可用。";
             // 直播没有"相关视频"(接口只认视频稿件 bvid), 直接把整块藏掉,
             // 否则会停在上一片残留的推荐列表上 —— 那是**别的视频**的推荐。
             ClearRelatedPanel();
@@ -323,6 +323,8 @@ public partial class PlayerWindow : FluentWindow
             // 所以它本来就不会去覆盖这里显示的文案。
             ProgressSlider.IsEnabled = false;
             TimeText.Text = "直播中";
+            // 直播清晰度: 档位要等取流接口返回才知道(g_qn_desc), 先清空,
+            // 否则按钮/弹层里还挂着上一条点播视频的档位。
             _qualities.Clear();
             FillQualityMenu(0);
             // 直播没有可选音轨: 清掉列表, 按钮写"直播"(与清晰度按钮一致)
@@ -331,50 +333,72 @@ public partial class PlayerWindow : FluentWindow
             FillAudioMenu(0);
             if (AudioText != null) AudioText.Text = "直播";
             if (AudioHintText != null) AudioHintText.Text = "直播的音质由主播推流决定, 不可切换";
-            // ★ 直播没有"可选清晰度"这一说(清晰度由服务端/主播推流决定), 所以按钮上不显示
-            //   用户设置的「默认画质」—— 那会在直播里写成一个用户根本控制不了、甚至拿不到的档位
-            //   (2026-10-04: 新增「默认画质」后 FillQualityMenu(0) 会回落到偏好标签, 这里盖掉)。
+            // 取流成功后会按 g_qn_desc 填入真实档位; 这一句只是"还没拿到时"的占位。
             if (QualityText != null) QualityText.Text = "直播";
             if (CommentHint != null) CommentHint.Text = "直播没有评论区";
             UpdateButtonState();
 
-            var (ok, err, url) = await Svc.Api.GetLivePlayUrlAsync(roomId);
+            var (ok, err, url, actualQn, qualities) = await Svc.Api.GetLivePlayUrlAsync(roomId, _liveQn);
             if (_closing) return;
             if (!ok || string.IsNullOrEmpty(url))
             {
+                StopLiveDanmaku();
                 ShowFail(err ?? "无法获取直播流地址");
                 return;
             }
             _lastPlayUrl = url;
             _lastAudioUrl = null;   // 直播是单流, 没有独立的音轨
 
-            // 直播流地址同样要带 Referer / UA —— 直播 CDN 比点播校验得更严:
-            // 不带 Referer 时常见表现就是"能拿到地址但播不出来"(403/直接 EOF)。
-            // 之前这里只加了 :no-video-title-show, 于是直播一直播不动。
-            // ★ 2026-11-01: 缓冲值不再硬编码 2000 —— 走 BufferPolicy 统一决策
-            //   (手动档取 max(用户值, 1000), 自动档 2000, 规则见 Services/BufferPolicy.cs)。
-            var liveCaching = BufferPolicy.Resolve(BufferMediaKind.Live, url, shortVideo: false,
-                Svc.Settings.NetworkCachingMs, Svc.Settings.AutoBufferPolicy);
-            var liveOptions = new List<string>
-            {
-                ":no-video-title-show",
-                ":http-referrer=https://live.bilibili.com/" + roomId,
-                ":http-user-agent=" + PlayerUserAgent,
-                // 直播是持续流: 加大缓存, 别让 LibVLC 因为"看起来卡住"就早早判定结束
-                ":network-caching=" + liveCaching,
-                ":live-caching=" + liveCaching
-            };
+            // 直播清晰度菜单: 以接口给的 g_qn_desc 为准(直播 qn 与点播不是同一套)
+            _qualities.Clear();
+            _qualities.AddRange(qualities);
+            if (actualQn > 0) { _currentQn = actualQn; _liveQn = actualQn; }
+            FillQualityMenu(actualQn);
 
-            var media = new Media(_libVLC, new Uri(url), liveOptions.ToArray());
-            // 直播是持续流, 没有可 seek 的时间轴; 标成"可靠源"让看门狗别去重建它
-            _isReliableSeekSource = true;
-            if (!PlayMedia(media))
+            // ★ 直播弹幕(2026-11-13): 与取流并行启动, 失败也不影响播放。
+            //   先清掉上一次直播留在画布上的弹幕 —— 重连会把媒体时间归零, 旧弹幕的时间轴对不上。
+            ResetLiveDanmakuLayer();
+            StartLiveDanmaku(roomId);
+            // 主播信息面板: 与取流并行, 晚一点回填不影响播放
+            _ = LoadLiveRoomInfoAsync(roomId);
+
+            if (!PlayLiveStream(url, roomId))
+            {
+                StopLiveDanmaku();
                 ShowFail("直播流播放失败, 可能已经下播");
+            }
         }
         catch (Exception ex)
         {
             ShowFail("打开直播间失败: " + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 用直播流地址起播(初次连接与"切换清晰度"共用)。
+    ///
+    /// ★ 直播流地址必须带 Referer / UA —— 直播 CDN 比点播校验得更严:
+    ///   不带 Referer 时常见表现就是"能拿到地址但播不出来"(403/直接 EOF)。
+    /// ★ 缓冲值走 BufferPolicy 统一决策(手动档取 max(用户值,1000), 自动档 2000)。
+    /// </summary>
+    private bool PlayLiveStream(string url, long roomId)
+    {
+        var liveCaching = BufferPolicy.Resolve(BufferMediaKind.Live, url, shortVideo: false,
+            Svc.Settings.NetworkCachingMs, Svc.Settings.AutoBufferPolicy);
+        var liveOptions = new List<string>
+        {
+            ":no-video-title-show",
+            ":http-referrer=https://live.bilibili.com/" + roomId,
+            ":http-user-agent=" + PlayerUserAgent,
+            // 直播是持续流: 加大缓存, 别让 LibVLC 因为"看起来卡住"就早早判定结束
+            ":network-caching=" + liveCaching,
+            ":live-caching=" + liveCaching
+        };
+
+        var media = new Media(_libVLC, new Uri(url), liveOptions.ToArray());
+        // 直播是持续流, 没有可 seek 的时间轴; 标成"可靠源"让看门狗别去重建它
+        _isReliableSeekSource = true;
+        return PlayMedia(media);
     }
 
     /// <summary>
@@ -496,6 +520,8 @@ public partial class PlayerWindow : FluentWindow
         // 不主动刷新的话上一条视频的色块会一直挂在进度条上。
         RenderSponsorMarks();
         _totalMs = 0;
+        // 新的直播/视频都从服务端默认清晰度开始; 同一直播的重连/重播不经过这里, 会沿用上次选的档。
+        _liveQn = 0;
         _currentCid = 0;
         _aid = 0;
         // 换片源: 上一片的合流任务立刻作废(否则会白下几十兆, 也可能把结果写进新片的键)
@@ -539,6 +565,10 @@ public partial class PlayerWindow : FluentWindow
         _postingComment = false;
         // 进度上报的节流状态也要重置, 让新视频的第一条云端历史能立刻落地
         Svc.HistorySync.Reset();
+        // 直播弹幕连接属于"上一条片源": 换片/换直播间必须立即停。
+        // ★ 渲染层虽然会按 _isLive 判断, 但不主动断开就会白占一条 WS 连接,
+        //   切走之后还在持续收别人的弹幕。
+        StopLiveDanmaku();
         // 清掉屏幕上残留的弹幕(防泄漏)并重置泳道占用
         DanmakuCanvas.Children.Clear();
         ResetLanes();
@@ -591,6 +621,8 @@ public partial class PlayerWindow : FluentWindow
         if (ProgressSlider != null) ProgressSlider.IsEnabled = true;
         // 弹幕按钮的可用性取决于 _isLive / _isLocalPlayback, 调用方都已在这之前设好这两个标志
         UpdateDanmakuButton();
+        // 直播看聊天列表, 点播看信息面板 —— 切换点就是换片源(调用方已设好 _isLive)
+        UpdateLiveLayout();
         // 「听视频」的可用性同样取决于那两个标志(直播/本地文件没有独立音轨)。
         // ★ 必须在 _isListenMode 已经确定之后调: 它内部会在"不支持聆听"时顺手退出聆听态,
         //   否则聆听遮罩会盖在一个根本没有音轨的本地文件上。
@@ -680,7 +712,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_isInWatchLater), nameof(_watchLaterBusy), nameof(_isCoined),
         nameof(_likeCount), nameof(_coinCount), nameof(_favCount), nameof(_cacheDownloaded),
         // 播放源标识
-        nameof(_isLocalPlayback), nameof(_isLive), nameof(_liveRoomId), nameof(_currentCid),
+        nameof(_isLocalPlayback), nameof(_isLive), nameof(_liveRoomId), nameof(_liveQn), nameof(_currentCid),
         nameof(_aid), nameof(_ownerMid), nameof(_ownerName), nameof(_ownerFace),
         nameof(_videoTitle), nameof(_currentQn), nameof(_currentBvid),
         nameof(_coverUrl),           // 封面属于"这一片"(聆听态的画面锚点)
@@ -709,6 +741,8 @@ public partial class PlayerWindow : FluentWindow
         // 弹幕
         nameof(_indexInLib), nameof(_audioStateLogged), nameof(_lastLaneCalcWidth),
         nameof(_lastLaneCalcHeight),
+        // 直播聊天列表的"跟随底部"开关: 每次换片源/换直播间都重新开始跟随
+        nameof(_liveChatAutoScroll),
         // 音质(2026-11-06): 可选音轨/当前音轨/切换闸都属于"这一片" ——
         // 换片后必须重取, 留着上一条视频的会让弹层列着别人家的无损档。
         nameof(_audioIds), nameof(_currentAudioId),

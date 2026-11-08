@@ -51,14 +51,7 @@ public partial class ApiClient
     /// </summary>
     private const string Ua = HttpDefaults.UserAgent;
 
-    // bilibili 官方 JS 中的 mixinKey 置换表
-    private static readonly int[] MixinKeyEncTab =
-    {
-        46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
-        33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61,
-        26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36,
-        20, 34, 44, 52
-    };
+    // bilibili 官方 JS 中的 mixinKey 置换表已移到 Helpers/Wbi.cs(纯函数, 可单测)
 
     private readonly HttpClient _http;
     private (string img, string sub)? _wbiKeys;
@@ -204,9 +197,15 @@ public partial class ApiClient
         if (_wbiKeys == null) return null;
 
         var (img, sub) = _wbiKeys!.Value;
-        var mixin = new StringBuilder(32);
-        foreach (var i in MixinKeyEncTab) mixin.Append((img + sub)[i]);
-        return mixin.ToString();
+
+        // ★★★ 2026-11-13 修正: mixin 只取置换后的**前 32 位**(算法本体见 Helpers/Wbi)。
+        //
+        //   原实现返回了全部 64 位, 而官方 JS 是 "按表取 64 个字符, 再截前 32"。
+        //   为什么之前一直没暴露: 大多数 wbi 接口对 w_rid 只是**软校验**(签错也返回数据),
+        //   所以 64 位签名"看起来一切正常"; 直到直播弹幕的 getDanmuInfo 才严格校验 ——
+        //   实测(探针 bd-probe-livedm) 同一份参数: 64 位 mixin → code -352, 32 位 → code 0。
+        //   ⇒ 别改回不截断的版本; 其它接口用 32 位同样能过(它们校验的就是这个官方值)。
+        return Wbi.MixinKey(img, sub);
     }
 
     private async Task RefreshWbiKeysAsync()

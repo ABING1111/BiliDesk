@@ -401,20 +401,27 @@ public partial class ApiClient
     }
 
     /// <summary>
-    /// 取某个直播间的播放地址(单条可直接喂给 LibVLC 的 URL)。
+    /// 取某个直播间的播放地址(单条可直接喂给 LibVLC 的 URL)与**可选清晰度列表**。
     ///
     /// 接口: /xlive/web-room/v2/index/getRoomPlayInfo —— 返回的是一棵树:
+    ///   data.playurl_info.playurl.g_qn_desc[]  (清晰度档位: qn + desc)
     ///   data.playurl_info.playurl.stream[]  (按协议分: http_stream / http_hls)
     ///     └ format[]  (按封装分: flv / ts / fmp4)
-    ///         └ codec[]  (AVC / HEVC)
+    ///         └ codec[]  (AVC / HEVC; current_qn = 实际给到的档位)
     ///             └ url_info[]  → host + base_url 拼出完整地址
     /// 优先选 http_stream + flv: 延迟最低, LibVLC 也最稳; 拿不到再退回列表里第一个。
+    ///
+    /// ★ 直播清晰度与点播**不是同一套 qn**(直播: 80/150/250/400/10000/20000…,
+    ///   点播: 16/32/64/80/112/116/120…), 所以档位名一律以接口的 g_qn_desc 为准,
+    ///   不能套 <see cref="QnToLabel"/>。
     /// </summary>
-    public async Task<(bool ok, string? err, string? url)> GetLivePlayUrlAsync(long roomId)
+    /// <param name="qn">0 = 让服务端给默认档位; &gt;0 = 请求该档, 实际可能被降级</param>
+    public async Task<(bool ok, string? err, string? url, int actualQn,
+        List<(int qn, string label)> qualities)> GetLivePlayUrlAsync(long roomId, int qn = 0)
     {
         try
         {
-            if (roomId <= 0) return (false, "缺少直播间号", null);
+            if (roomId <= 0) return (false, "缺少直播间号", null, 0, new List<(int, string)>());
             await EnsureBuvidAsync();
 
             var (code, msg, data) = await GetJsonAsync(
@@ -424,7 +431,7 @@ public partial class ApiClient
                     ["room_id"] = roomId.ToString(),
                     ["no_playurl"] = "0",
                     ["mask"] = "1",
-                    ["qn"] = "0",              // 0 = 让服务端给默认清晰度(原画由登录态决定)
+                    ["qn"] = Math.Max(0, qn).ToString(),  // 0 = 服务端默认(原画由登录态决定)
                     ["platform"] = "web",
                     ["protocol"] = "0,1",
                     ["format"] = "0,1,2",
@@ -433,73 +440,345 @@ public partial class ApiClient
                     ["panorama"] = "1"
                 },
                 referer: $"https://live.bilibili.com/{roomId}");
-            if (code != 0 || data == null) return (false, msg ?? $"请求失败 (code {code})", null);
+            if (code != 0 || data == null)
+                return (false, msg ?? $"请求失败 (code {code})", null, 0, new List<(int, string)>());
 
             // live_status: 0 未开播 / 1 直播中 / 2 轮播。没开播的话后面拿不到流, 直接说清楚。
             if (data.Value.TryGetProperty("live_status", out var ls) &&
                 ls.ValueKind == JsonValueKind.Number && ls.GetInt32() == 0)
-                return (false, "主播还没有开播", null);
+                return (false, "主播还没有开播", null, 0, new List<(int, string)>());
 
-            var url = PickLiveUrl(data.Value);
-            return url == null ? (false, "没有取到可用的直播流地址", null) : (true, null, url);
+            var (url, actualQn, qualities) = PickLiveUrl(data.Value);
+            if (url == null)
+                return (false, "没有取到可用的直播流地址", null, 0, qualities);
+            return (true, null, url, actualQn, qualities);
         }
         catch (Exception ex)
         {
-            return (false, ex.Message, null);
+            return (false, ex.Message, null, 0, new List<(int, string)>());
         }
     }
 
-    /// <summary>从 getRoomPlayInfo 的响应里挑一个播放地址</summary>
-    private static string? PickLiveUrl(JsonElement data)
+    // ------------------------------------------------------------ 直播弹幕(2026-11-13)
+
+    /// <summary>
+    /// 取直播弹幕的连接参数: 真实房间号 + 鉴权 token + 候选弹幕服务器。
+    ///
+    /// 两段接口:
+    ///   ① <c>room/v1/Room/room_init?id=</c> —— 短号换真实长号。
+    ///      ★ 必须换: 弹幕服务器只认长号, 短号会连到错误的房间(或直接鉴权失败)。
+    ///   ② <c>xlive/web-room/v1/index/getDanmuInfo?id=</c> —— token + host_list。
+    ///      ★ 这一步必须带**登录 Cookie**: 拿到的 token 与请求时的登录态绑定,
+    ///        未登录时虽然也能拿到 token, 但连上后会被服务端踢掉(见 LiveDanmakuService)。
+    ///      ★ 还必须带 WBI 签名 + web_location(2026-11-13 实测, 否则稳定 -352)。
+    ///
+    /// 失败不抛异常: 直播弹幕是附加功能, 调用方(播放器)只需要"没有弹幕"而不是崩溃。
+    /// </summary>
+    public async Task<(bool ok, string? err, LiveDanmakuEndpoint? endpoint)>
+        GetLiveDanmakuEndpointAsync(long roomId)
     {
-        if (!data.TryGetProperty("playurl_info", out var pi) || pi.ValueKind != JsonValueKind.Object)
-            return null;
-        if (!pi.TryGetProperty("playurl", out var pu) || pu.ValueKind != JsonValueKind.Object)
-            return null;
-        if (!pu.TryGetProperty("stream", out var streams) || streams.ValueKind != JsonValueKind.Array)
-            return null;
-
-        string? first = null;
-        foreach (var st in streams.EnumerateArray())
+        try
         {
-            var protocol = GetStr(st, "protocol_name");
-            if (!st.TryGetProperty("format", out var formats) || formats.ValueKind != JsonValueKind.Array)
-                continue;
+            if (roomId <= 0) return (false, "缺少直播间号", null);
+            await EnsureBuvidAsync();
 
-            foreach (var f in formats.EnumerateArray())
+            // ① 真实房间号
+            var (initCode, initMsg, initData) = await GetJsonAsync(
+                "https://api.live.bilibili.com/room/v1/Room/room_init",
+                new Dictionary<string, string> { ["id"] = roomId.ToString() },
+                referer: "https://live.bilibili.com/");
+            if (initCode != 0 || initData == null)
+                return (false, initMsg ?? $"获取直播间信息失败 (code {initCode})", null);
+
+            var realRoomId = GetLongLoose(initData.Value, "room_id");
+            if (realRoomId <= 0) realRoomId = roomId;
+            var anchorUid = GetLongLoose(initData.Value, "uid");
+
+            // 0 = 未开播, 1 = 直播中, 2 = 轮播。轮播房间仍有弹幕, 只有 0 不必连。
+            if (GetIntSafe(initData.Value, "live_status") == 0)
+                return (false, "主播还没有开播", null);
+
+            // ② 弹幕服务器与密钥
+            // ★★ 2026-11-13 实测: 这个接口现在**必须带 WBI 签名 + web_location**,
+            //   否则稳定返回 -352(风控)。只带 id/type 时同一 IP 也一样被拦 ——
+            //   不是"偶尔抽风", 是接口本身收紧了(见探针 bd-probe-livedm)。
+            //   仍然保留一次不带签名的兜底: WBI 密钥有时取不到(-400), 那时签名路直接不可用。
+            var ps = new Dictionary<string, string>
             {
-                var format = GetStr(f, "format_name");
-                if (!f.TryGetProperty("codec", out var codecs) || codecs.ValueKind != JsonValueKind.Array)
-                    continue;
+                ["id"] = realRoomId.ToString(),
+                ["type"] = "0",
+                ["web_location"] = "444.8"
+            };
+            var referer = $"https://live.bilibili.com/{realRoomId}";
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo",
+                ps, sign: true, referer: referer);
+            if (code != 0 || data == null)
+            {
+                // 签名不可用(密钥获取失败/接口临时拒绝)时退回公开请求再试一次
+                (code, msg, data) = await GetJsonAsync(
+                    "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo",
+                    ps, referer: referer);
+            }
+            if (code != 0 || data == null)
+                return (false, msg ?? $"获取弹幕服务器失败 (code {code})", null);
 
-                foreach (var cd in codecs.EnumerateArray())
+            var token = GetStr(data.Value, "token");
+            if (token.Length == 0) return (false, "弹幕密钥为空", null);
+
+            var endpoint = new LiveDanmakuEndpoint
+            {
+                RealRoomId = realRoomId,
+                AnchorUid = anchorUid,
+                Token = token
+            };
+
+            if (data.Value.TryGetProperty("host_list", out var hosts) &&
+                hosts.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var h in hosts.EnumerateArray())
                 {
-                    if (!cd.TryGetProperty("url_info", out var infos) ||
-                        infos.ValueKind != JsonValueKind.Array || infos.GetArrayLength() == 0)
+                    if (h.ValueKind != JsonValueKind.Object) continue;
+                    var host = GetStr(h, "host");
+                    if (host.Length == 0) continue;
+                    // ★ 只用 wss_port: 明文 ws 在现在的服务端上基本连不通, 也没必要降级。
+                    var port = GetIntSafe(h, "wss_port");
+                    endpoint.Hosts.Add(new LiveDanmakuHost(host, port > 0 ? port : 2245));
+                }
+            }
+
+            // 接口偶尔给空列表: 用官方两个固定入口兜底, 总比"直接没弹幕"好。
+            if (endpoint.Hosts.Count == 0)
+            {
+                endpoint.Hosts.Add(new LiveDanmakuHost("live.chat.bilibili.com", 2245));
+                endpoint.Hosts.Add(new LiveDanmakuHost("broadcastlv.chat.bilibili.com", 2245));
+            }
+
+            return (true, null, endpoint);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "获取直播弹幕服务器失败: " + ex.Message, null);
+        }
+    }
+
+    /// <summary>
+    /// 取直播间概览(2026-11-13 新增): 主播昵称/头像、开播时间、看过人数/人气、分区、标题。
+    ///
+    /// 接口: <c>xlive/web-room/v1/index/getInfoByRoom?room_id=</c>(公开, 无需 WBI)。
+    ///   · room_info: title / uid / live_status / live_start_time / online / area_name
+    ///   · anchor_info.base_info: uname / face
+    ///   · watched_show: num / text_large(服务端已按房间类型给出"人看过"或"人气"文案)
+    ///
+    /// ★ 失败不抛异常、也不影响播放: 播放器只是少一块"主播信息", 视频该播还得播。
+    /// </summary>
+    public async Task<(bool ok, string? err, LiveRoomInfo? info)> GetLiveRoomInfoAsync(long roomId)
+    {
+        try
+        {
+            if (roomId <= 0) return (false, "缺少直播间号", null);
+            await EnsureBuvidAsync();
+
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom",
+                new Dictionary<string, string> { ["room_id"] = roomId.ToString() },
+                referer: $"https://live.bilibili.com/{roomId}");
+            if (code != 0 || data == null)
+                return (false, msg ?? $"获取直播间信息失败 (code {code})", null);
+
+            var info = new LiveRoomInfo { RoomId = roomId };
+            var root = data.Value;
+            if (root.ValueKind != JsonValueKind.Object)
+                return (false, "直播间信息格式异常", null);
+
+            if (root.TryGetProperty("room_info", out var room) && room.ValueKind == JsonValueKind.Object)
+            {
+                var id = GetLongLoose(room, "room_id");
+                if (id > 0) info.RoomId = id;
+                info.AnchorUid = GetLongLoose(room, "uid");
+                info.Title = GetStr(room, "title");
+                info.AreaName = GetStr(room, "area_name");
+                info.LiveStatus = GetIntSafe(room, "live_status");
+                info.LiveStartTime = GetLongSafe(room, "live_start_time");
+                info.Online = GetLongSafe(room, "online");
+            }
+
+            if (root.TryGetProperty("anchor_info", out var anchor) &&
+                anchor.ValueKind == JsonValueKind.Object &&
+                anchor.TryGetProperty("base_info", out var baseInfo) &&
+                baseInfo.ValueKind == JsonValueKind.Object)
+            {
+                info.AnchorName = GetStr(baseInfo, "uname");
+                info.AnchorFace = UrlUtil.Normalize(GetStr(baseInfo, "face"));
+            }
+
+            if (root.TryGetProperty("watched_show", out var watched) &&
+                watched.ValueKind == JsonValueKind.Object)
+            {
+                info.Watched = GetLongSafe(watched, "num");
+                info.WatchedText = GetStr(watched, "text_large");
+                if (info.WatchedText.Length == 0) info.WatchedText = GetStr(watched, "text_small");
+            }
+
+            return (true, null, info);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "获取直播间信息失败: " + ex.Message, null);
+        }
+    }
+
+    /// <summary>
+    /// 从 getRoomPlayInfo 的响应里挑一个播放地址, 同时带出**实际档位**与**可选档位列表**。
+    /// </summary>
+    private static (string? url, int actualQn, List<(int qn, string label)> qualities)
+        PickLiveUrl(JsonElement data)
+    {
+        var qualities = new List<(int qn, string label)>();
+        if (!data.TryGetProperty("playurl_info", out var pi) || pi.ValueKind != JsonValueKind.Object)
+            return (null, 0, qualities);
+        if (!pi.TryGetProperty("playurl", out var pu) || pu.ValueKind != JsonValueKind.Object)
+            return (null, 0, qualities);
+
+        // 清晰度描述: 直播的 qn/desc(例如 10000=原画 / 400=蓝光 / 250=超清 / 150=高清 / 80=流畅)
+        if (pu.TryGetProperty("g_qn_desc", out var descs) && descs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var d in descs.EnumerateArray())
+            {
+                if (d.ValueKind != JsonValueKind.Object) continue;
+                var qn = GetIntSafe(d, "qn");
+                if (qn <= 0) continue;
+                var label = GetStr(d, "desc");
+                qualities.Add((qn, label.Length > 0 ? label : LiveQnLabel(qn)));
+            }
+        }
+
+        // ★ 先收集**全部** codec 的 accept_qn: 下面挑 URL 会在第一个 http_stream/flv 处提前返回,
+        //   边挑边收集会漏掉后面 codec 的档位。accept_qn 才是"这个房间真正能给的档位",
+        //   g_qn_desc 只是全站档位表 —— 原样列出来就会出现"每个直播间都是全部画质"(2026-11-13 修)。
+        var accepted = new HashSet<int>();
+        if (pu.TryGetProperty("stream", out var allStreams) && allStreams.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var st in allStreams.EnumerateArray())
+            {
+                if (!st.TryGetProperty("format", out var allFormats) || allFormats.ValueKind != JsonValueKind.Array)
+                    continue;
+                foreach (var f in allFormats.EnumerateArray())
+                {
+                    if (!f.TryGetProperty("codec", out var allCodecs) || allCodecs.ValueKind != JsonValueKind.Array)
                         continue;
-
-                    var host = GetStr(infos[0], "host");
-                    // base_url 自带一串 query(过期时间/签名), 但**必须去掉**:
-                    // 真正要保留的是 url_info[0].extra, 它才是配套的参数。直接拼 base_url 的
-                    // 原始 query 在多数 CDN 上也能用, 但遇到需要 extra 的节点会 403 —— 统一只取路径。
-                    var path = GetStr(cd, "base_url");
-                    var q = path.IndexOf('?');
-                    if (q >= 0) path = path[..q];
-                    if (host.Length == 0 || path.Length == 0) continue;
-
-                    var extra = GetStr(infos[0], "extra");
-                    // extra 实测有不带 '?' 的(直接就是 "expires=..."), 直接拼会变成 ".flvexpires=...",
-                    // 整条 CDN 全部 403/404 —— 表现就是"视频播放出错, 请检查网络或尝试其他清晰度"。
-                    if (extra.Length > 0 && !extra.StartsWith('?')) extra = "?" + extra;
-                    var full = host + path + extra;
-
-                    // http_stream(原流) + flv 是最优解: 延迟低、LibVLC 支持最成熟
-                    if (protocol == "http_stream" && format == "flv") return full;
-                    first ??= full;
+                    foreach (var cd in allCodecs.EnumerateArray())
+                    {
+                        if (!cd.TryGetProperty("accept_qn", out var aq) || aq.ValueKind != JsonValueKind.Array)
+                            continue;
+                        foreach (var qnNode in aq.EnumerateArray())
+                            if (qnNode.ValueKind == JsonValueKind.Number && qnNode.TryGetInt32(out var qv) && qv > 0)
+                                accepted.Add(qv);
+                    }
                 }
             }
         }
-        return first;
+
+        string? first = null;
+        var firstQn = 0;
+
+        if (pu.TryGetProperty("stream", out var streams) && streams.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var st in streams.EnumerateArray())
+            {
+                var protocol = GetStr(st, "protocol_name");
+                if (!st.TryGetProperty("format", out var formats) || formats.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                foreach (var f in formats.EnumerateArray())
+                {
+                    var format = GetStr(f, "format_name");
+                    if (!f.TryGetProperty("codec", out var codecs) || codecs.ValueKind != JsonValueKind.Array)
+                        continue;
+
+                    foreach (var cd in codecs.EnumerateArray())
+                    {
+                        if (!cd.TryGetProperty("url_info", out var infos) ||
+                            infos.ValueKind != JsonValueKind.Array || infos.GetArrayLength() == 0)
+                            continue;
+
+                        var host = GetStr(infos[0], "host");
+                        // base_url 自带一串 query(过期时间/签名), 但**必须去掉**:
+                        // 真正要保留的是 url_info[0].extra, 它才是配套的参数。直接拼 base_url 的
+                        // 原始 query 在多数 CDN 上也能用, 但遇到需要 extra 的节点会 403 —— 统一只取路径。
+                        var path = GetStr(cd, "base_url");
+                        var q = path.IndexOf('?');
+                        if (q >= 0) path = path[..q];
+                        if (host.Length == 0 || path.Length == 0) continue;
+
+                        var extra = GetStr(infos[0], "extra");
+                        // extra 实测有不带 '?' 的(直接就是 "expires=..."), 直接拼会变成 ".flvexpires=...",
+                        // 整条 CDN 全部 403/404 —— 表现就是"视频播放出错, 请检查网络或尝试其他清晰度"。
+                        if (extra.Length > 0 && !extra.StartsWith('?')) extra = "?" + extra;
+                        var full = host + path + extra;
+                        var currentQn = GetIntSafe(cd, "current_qn");
+
+                        // http_stream(原流) + flv 是最优解: 延迟低、LibVLC 支持最成熟
+                        if (protocol == "http_stream" && format == "flv")
+                            return (full, currentQn, FinishLiveQualities(qualities, accepted, currentQn));
+
+                        if (first == null)
+                        {
+                            first = full;
+                            firstQn = currentQn;
+                        }
+                    }
+                }
+            }
+        }
+
+        return (first, firstQn, FinishLiveQualities(qualities, accepted, firstQn));
     }
+
+    /// <summary>
+    /// 补齐并排序清晰度列表:
+    ///   · g_qn_desc 缺失时用 accept_qn 兜底;
+    ///   · **有 accept_qn 时只保留真正支持的档位**(全站档位表里杜比/4K/2K/高清/流畅不一定
+    ///     每个房间都有, 原样列出来用户点了会没反应);
+    ///   · 保证"当前实际档位"在列表里(否则菜单没有可高亮项, 用户会以为按钮坏了)。
+    /// </summary>
+    private static List<(int qn, string label)> FinishLiveQualities(
+        List<(int qn, string label)> qualities, HashSet<int> accepted, int actualQn)
+    {
+        if (qualities.Count == 0)
+        {
+            foreach (var qn in accepted)
+                qualities.Add((qn, LiveQnLabel(qn)));
+        }
+        else if (accepted.Count > 0)
+        {
+            qualities.RemoveAll(x => !accepted.Contains(x.qn));
+        }
+
+        if (actualQn > 0 && qualities.All(x => x.qn != actualQn))
+            qualities.Add((actualQn, LiveQnLabel(actualQn)));
+
+        return qualities
+            .GroupBy(x => x.qn)
+            .Select(g => (g.Key, g.First().label))
+            .OrderByDescending(x => x.Key)
+            .ToList();
+    }
+
+    /// <summary>直播清晰度的中文名。★ 直播 qn 与点播不是同一套, 不能套 QnToLabel。</summary>
+    private static string LiveQnLabel(int qn) => qn switch
+    {
+        30000 => "杜比",
+        20000 => "4K",
+        15000 => "2K",
+        10000 => "原画",
+        400 => "蓝光",
+        250 => "超清",
+        150 => "高清",
+        80 => "流畅",
+        _ => qn.ToString()
+    };
 
 }

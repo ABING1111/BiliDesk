@@ -1487,8 +1487,8 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 刷新弹幕按钮的文案与可用状态。
     ///
-    /// 直播和本地文件没有弹幕可放(前者不加载弹幕, 后者没有弹幕文件), 按钮置灰 ——
-    /// 留一个按了没反应的按钮比没有按钮更糟。
+    /// ★ 2026-11-13 起**直播也可用**(接了直播间 WebSocket 弹幕), 只剩本地文件没有弹幕可放
+    ///   (离线缓存里没有弹幕文件), 按钮置灰 —— 留一个按了没反应的按钮比没有按钮更糟。
     /// 注意这里给 TextBlock 设的是**局部值** Foreground: 全局那个隐式 TextBlock 样式会压过继承值,
     /// 所以"关"态的灰字必须显式写在元素上(见 MEMORY 里那条隐式样式的坑)。
     /// </summary>
@@ -1496,7 +1496,10 @@ public partial class PlayerWindow : FluentWindow
     {
         if (DanmakuBtnText == null || BtnDanmaku == null) return;
 
-        var usable = !_isLive && !_isLocalPlayback;
+        // ★ 必须是 `_isLive || !_isLocalPlayback`, 不能写成 `!_isLocalPlayback`:
+        //   直播入口 PlayLive() 会把 _isLocalPlayback 也置 true(为了跳过互动/上报),
+        //   只判它会把刚接好的直播弹幕按钮又置灰。
+        var usable = _isLive || !_isLocalPlayback;
         BtnDanmaku.IsEnabled = usable;
         BtnDanmaku.Opacity = usable ? 1.0 : 0.4;
 

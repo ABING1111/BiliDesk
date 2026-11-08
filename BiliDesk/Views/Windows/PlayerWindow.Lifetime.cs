@@ -69,6 +69,10 @@ public partial class PlayerWindow : FluentWindow
 
             _closing = true;
 
+            // 直播弹幕: 立刻取消 WS 并退订事件 —— 关窗后后台线程不能再往队列/UI 里塞东西。
+            // ★ Dispose 只发取消信号、不等待, 不会拖慢关闭。
+            StopLiveDanmaku();
+
             // 弹幕逐帧推进器订阅的是 CompositionTarget.Rendering —— 它是**静态**事件、
             // 不随窗口销毁, 所以必须显式解绑, 否则窗口关了渲染回调还在,
             // 回调里又摸 DanmakuCanvas —— 轻则空转, 重则已释放对象。

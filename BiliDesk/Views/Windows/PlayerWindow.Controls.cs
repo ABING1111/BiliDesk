@@ -602,12 +602,19 @@ public partial class PlayerWindow : FluentWindow
             //   **绝不能**对 _currentQn 直接调 QnToLabel(2026-10-04 修):
             //   「默认画质 = 自动」时 _currentQn 是发给接口的请求上界(现在是 120/4K,
             //   见 QualityPreference.HighestQn), 而 QnToLabel 只认**真实流**里的档位名。
-            //   于是本地文件/直播/起播失败(actualQn == 0)
+            //   于是本地文件/起播失败(actualQn == 0)
             //   这些"没有实际档位可显示"的路径上, 按钮会写成一个用户根本没有的档位。
-            //   这里只显示**确实在播的那一档**: 有实际档位就说它, 没有(本地/直播)就说用户的偏好,
+            //   这里只显示**确实在播的那一档**: 有实际档位就说它, 没有(本地文件)就说用户的偏好,
             //   两者都不会把"请求用的内部值"当成画质名报给用户。
+            // ★ 优先用 _qualities 里的标签: 直播的档位名来自 g_qn_desc(原画/蓝光/超清…),
+            //   与点播的 QnToLabel 不是同一套 qn; 查不到才回落到点播的映射。
+            string? actualLabel = null;
+            foreach (var (q, l) in _qualities)
+            {
+                if (q == actualQn && l.Length > 0) { actualLabel = l; break; }
+            }
             var label2 = actualQn > 0
-                ? ApiClient.QnToLabel(actualQn)
+                ? (actualLabel ?? ApiClient.QnToLabel(actualQn))
                 : QualityPreference.LabelOf(Svc.Settings.PreferredQualityQn);
             if (QualityText != null) QualityText.Text = label2;
             // 高亮与实际清晰度匹配的项
@@ -682,6 +689,12 @@ public partial class PlayerWindow : FluentWindow
         if (QualityList.SelectedItem is not ListBoxItem li || li.Tag is not int qn) return;
         QualityPopup.IsOpen = false;
         if (qn == _currentQn || _switchingQuality) return;
+        // ★ 直播与点播是两条完全不同的切流路径: 直播没有 cid/进度, 也不能走 DASH 重建。
+        if (_isLive)
+        {
+            _ = SwitchLiveQualityAsync(qn);
+            return;
+        }
         _ = SwitchQualityAsync(qn);
     }
 
@@ -939,6 +952,65 @@ public partial class PlayerWindow : FluentWindow
                 PlayMedia(BuildMedia(_listenAudioUrl!, null));
             else
                 PlayMedia(BuildMedia(url!, _lastAudioUrl));
+            UpdatePlayButton();
+        }
+        catch (Exception ex)
+        {
+            if (_closing) return;
+            Svc.Toast.Show("切换清晰度失败: " + ex.Message);
+            HideLoading();
+        }
+        finally
+        {
+            _switchingQuality = false;
+        }
+    }
+
+    /// <summary>
+    /// 直播切换清晰度(2026-11-13)。
+    ///
+    /// ★ 与点播 <see cref="SwitchQualityAsync"/> 的区别:
+    ///   · 直播没有 cid/总时长/进度, 重新取流后直接从当前直播位置播(服务端给的就是实时流);
+    ///   · **不能停弹幕连接** —— 右侧聊天记录要连续; 只清画面上在飞的滚动弹幕(媒体时间会归零);
+    ///   · 直播只有一路流(没有 DASH 音轨/合流缓存), 不碰点播那套状态。
+    /// </summary>
+    private async Task SwitchLiveQualityAsync(int qn)
+    {
+        if (_closing || _switchingQuality || _liveRoomId <= 0 || !_isLive) return;
+
+        _switchingQuality = true;
+        try
+        {
+            ShowLoading("正在切换清晰度…");
+            var (ok, err, url, actualQn, qualities) =
+                await Svc.Api.GetLivePlayUrlAsync(_liveRoomId, qn);
+            if (_closing || !_isLive) return;
+
+            if (!ok || string.IsNullOrEmpty(url))
+            {
+                Svc.Toast.Show(string.IsNullOrEmpty(err) ? "该清晰度暂时不可用" : err);
+                HideLoading();
+                return;
+            }
+
+            _qualities.Clear();
+            _qualities.AddRange(qualities);
+            FillQualityMenu(actualQn > 0 ? actualQn : qn);
+            if (actualQn > 0) _liveQn = actualQn; else _liveQn = qn;
+
+            _lastPlayUrl = url;
+            _lastAudioUrl = null;
+
+            // 新 input 的媒体时间从 0 开始: 在飞的弹幕时间轴对不上, 清掉(右侧聊天列表保留)。
+            ResetLiveDanmakuLayer();
+
+            // ★ LibVLC 3 里已有 input 在播时 play() 会被忽略, 必须先 Stop(与点播切清晰度同款)。
+            try { _mp.Stop(); } catch { }
+            if (!PlayLiveStream(url, _liveRoomId))
+            {
+                ShowFail("直播流播放失败, 可能已经下播");
+                return;
+            }
             UpdatePlayButton();
         }
         catch (Exception ex)

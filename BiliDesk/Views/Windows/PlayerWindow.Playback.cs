@@ -210,6 +210,21 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing || _mp == null) return;
 
+        // ★ 直播弹幕时钟(2026-11-13): 直播没有 Length, DispatchDanmaku 第一句就 return,
+        //   点播那条 "TimeChanged → DispatchDanmaku → CalibrateDanmakuClock" 的校准链
+        //   根本不会跑 —— 弹幕会在上屏后一动不动。这里用进度心跳(500ms)补上。
+        //   ★ 只在直播里做: 点播的校准归 DispatchDanmaku, 两处都写会互相抢基准。
+        //   ★ 暂停时冻结在"此刻所见"(见 SetDanmakuClockRunning 的说明), 恢复后下一跳再校准。
+        if (_isLive)
+        {
+            try
+            {
+                if (_mp.IsPlaying) CalibrateDanmakuClock(_mp.Time / 1000.0);
+                else SetDanmakuClockRunning(false);
+            }
+            catch { /* 原生对象可能已失效 */ }
+        }
+
         // 宽限期(SeekGraceMs): 这段时间内不回写进度条。等待期已由下面的看门狗分支挡住,
         // 这里只作为"看门狗提前放行"时的兜底 —— 见 SeekGraceMs 的说明。
         var inSeekGrace = Environment.TickCount64 < _seekGraceUntil;

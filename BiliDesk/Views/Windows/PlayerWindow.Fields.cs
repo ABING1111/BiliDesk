@@ -74,6 +74,13 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool _isLive;
     private long _liveRoomId;
+
+    /// <summary>
+    /// 直播清晰度 qn(0 = 服务端默认档位)。
+    /// ★ 与 <see cref="_currentQn"/> 分开: 后者是"点播清晰度", 直播的 qn 是另一套编码
+    ///   (80/150/250/400/10000/20000…)。直播重连/重播时沿用这里选过的档, 换片源归零。
+    /// </summary>
+    private int _liveQn;
     private long _currentCid;
     private long _ownerMid;
     private string _ownerName = "";
