@@ -348,6 +348,16 @@ public partial class ApiClient
                 Pubdate = GetLong(e, "pubdate"),
             };
             if (string.IsNullOrEmpty(item.Bvid)) return null;
+
+            // 是否已关注该 UP 主(卡片 UP 名右边的「已关注」标签)。
+            // ★ 主字段 is_followed(0/1); rcmd_reason.reason_type == 1 是同义的推荐理由,
+            //   两处实测不一定同时给, 任一命中即算已关注 —— 少一个就漏标签, 多判成"未关注"则无害。
+            item.IsAuthorFollowed = GetInt(e, "is_followed") == 1;
+            if (!item.IsAuthorFollowed && e.TryGetProperty("rcmd_reason", out var reason)
+                && reason.ValueKind == JsonValueKind.Object)
+            {
+                item.IsAuthorFollowed = GetInt(reason, "reason_type") == 1;
+            }
             if (e.TryGetProperty("stat", out var st))
             {
                 if (st.TryGetProperty("view", out var v) && v.ValueKind == JsonValueKind.Number)

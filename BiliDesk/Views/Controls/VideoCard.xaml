@@ -67,6 +67,27 @@
             </Style.Triggers>
         </Style>
 
+        <!-- 「已关注」小标签(2026-11-08): 首页推荐页里, 该视频的 UP 主是当前账号已关注的。
+             ★ 位置: 文字区第二行的**行首**(UP 名左边), 与 B 站网页版一致 ——
+               用户给了参考图: 「[已关注] 差评君 · 10-24」。放在 UP 名右边会被当成
+               昵称的一部分, 行首才是"这是一条状态"的读法。
+             ★ 颜色用**实底强调粉 + 白字**(用户 2026-11-08 第二次反馈"颜色用明显一点的")。
+               前两版(浅灰底灰字 / 半透明粉底压深粉字)在 236px 卡片上都不够跳,
+               尤其压在封面下方那一片浅底上; 实底粉是 B 站"关注"最醒目的表达。
+               ★ 不要换回 AccentSoftFillStrongBrush: 它是 0x2E 透明度, 实际渲染几乎看不出底色。
+             ★ IsHitTestVisible=False: 它紧贴可点击的 UP 名, 不能截走点击(否则点标签没反应,
+               还挡住了"点 UP 名进主页"的那一小块命中区域)。
+             ★ 显隐由绑定 IsAuthorFollowed 决定 —— 该属性只有推荐流会置 true, 所以
+               热门/排行/搜索/收藏/动态等页面的卡片天然不显示这枚标签。 -->
+        <Style x:Key="FollowedBadgeStyle" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Padding" Value="5,1" />
+            <Setter Property="Margin" Value="0,0,5,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="IsHitTestVisible" Value="False" />
+        </Style>
+
         <!-- 封面角标(播放量/弹幕/时长): 卡片一悬停就淡出, 取消悬停再淡回。
              放大的是封面, 角标压在上面会挡住画面 —— 这也是 B 站网页版的行为。 -->
         <Style x:Key="CoverBadgeFadeStyle" TargetType="FrameworkElement">
@@ -252,6 +273,14 @@
                        Cursor="Hand" MouseLeftButtonUp="OnTitleClick"
                        ToolTip="{Binding Title, Mode=OneWay}" />
             <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                <!-- 「已关注」标签(2026-11-08): 放在第二行**行首**, 即 UP 主名左边 ——
+                     与 B 站网页版/用户给的参考图一致(「[已关注] 差评君 · 10-24」)。
+                     只有首页推荐流会给 IsAuthorFollowed=true, 其它列表恒为 false 自动隐藏。 -->
+                <Border Style="{StaticResource FollowedBadgeStyle}"
+                        Visibility="{Binding IsAuthorFollowed, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="已关注" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextOnAccentBrush}" />
+                </Border>
                 <TextBlock x:Name="AuthorText" Text="{Binding Author}"
                            Style="{StaticResource CardAuthorStyle}"
                            Cursor="Hand" MouseLeftButtonUp="OnAuthorClick"

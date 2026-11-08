@@ -37,6 +37,16 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
     public long OwnerMid { get; set; }
 
     /// <summary>
+    /// 当前登录用户**是否已关注**该 UP 主。
+    ///
+    /// ★ 只有首页推荐流会填: `wbi/index/top/feed/rcmd` 的每条 item 自带 `is_followed`
+    ///   (0 未关注 / 1 已关注), 推荐理由 `rcmd_reason.reason_type == 1` 也是同一个含义。
+    ///   其它列表(热门/排行/搜索/收藏/动态/空间)不下发这个信息, 保持 false ——
+    ///   所以卡片上那枚「已关注」标签只会出现在推荐页, 不需要页面再传标志。
+    /// </summary>
+    public bool IsAuthorFollowed { get; set; }
+
+    /// <summary>
     /// 点赞数。**当前卡片上不显示**(用户要求把"N点赞"从卡片撤掉), 但解析照旧保留 ——
     /// 将来要恢复显示或做按赞排序时, 不必再回头改一遍所有列表解析。
     /// </summary>
