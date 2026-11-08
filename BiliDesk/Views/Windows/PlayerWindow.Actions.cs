@@ -243,14 +243,21 @@ public partial class PlayerWindow : FluentWindow
     private void ApplyActionVisual(Button? btn, bool on, Color? accent)
     {
         if (btn == null) return;
-        btn.Foreground = on && accent.HasValue
-            ? new SolidColorBrush(accent.Value)
-            : (Brush)FindResource("TextSecondaryBrush");
+        if (on && accent.HasValue)
+        {
+            var own = new SolidColorBrush(accent.Value);
+            // 冻结笔刷: 这个色相是常量, 冻结后 WPF 渲染时可以少走一次可变检查。
+            // ★ 只冻结**自己新建**的这一个(2026-11-08): 主题笔刷是共享的可变实例,
+            //   冻结它会让后续换肤的 ColorAnimation 直接抛异常(实测 TextSecondaryBrush 被冻死)。
+            if (own.CanFreeze) own.Freeze();
+            btn.Foreground = own;
+        }
+        else
+        {
+            btn.Foreground = (Brush)FindResource("TextSecondaryBrush");
+        }
         // Tag 驱动模板里的常驻浅底(见 PlayerActionBtn 的 DataTrigger)
         btn.Tag = on ? "on" : "off";
-        if (!on) return;
-        // 冻结笔刷: 这几个色相是常量, 冻结后 WPF 渲染时可以少走一次可变检查
-        if (btn.Foreground is SolidColorBrush scb && scb.CanFreeze) scb.Freeze();
     }
 
     /// <summary>该动作的色相(按名字取, 点亮/hover 预览共用一套来源)</summary>

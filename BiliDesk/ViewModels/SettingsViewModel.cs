@@ -210,9 +210,9 @@ public class SettingsViewModel : ObservableObject
     /// 拖动时每帧都要序列化一次; 更要紧的是拖到纯黑时 `#000000` 反推不出色相, 游标会自己跳
     /// (见 <see cref="Views.Controls.ColorPalette"/> 的类注释)。这里让调色盘直接持有 Color。
     ///
-    /// ★ 拖动中传 settle: false 跳过那次全窗口可视树重解析 —— 拖动每秒来几十次, 每次都遍历
-    ///   一遍可视树是白烧的帧(笔刷本身换了, 眼前这一屏立刻就变色), 松手时再补一次
-    ///   (见 <see cref="EndAccentDrag"/> 与控件的 drag 结束回调)。
+    /// ★ 拖动中不需要任何特殊处理(2026-11-08): 强调色笔刷是**共享实例**, 改 Color 后所有
+    ///   引用它的元素在下一帧就变色, 没有"缓存页面还拿着旧色"这回事 —— 旧的
+    ///   `settle: false` / `Settle()` 那一套全树 InvalidateProperty 已经随换字典方案一起删除。
     /// </summary>
     public Color AccentPickerColor
     {
@@ -220,23 +220,23 @@ public class SettingsViewModel : ObservableObject
         set
         {
             if (value == Svc.Theme.Accent) return;
-            Svc.Theme.SetAccent(ThemeService.ToHex(value), settle: !_draggingAccent);
+            Svc.Theme.SetAccent(ThemeService.ToHex(value));
             RaiseAccentChanged();
         }
     }
 
-    /// <summary>调色盘是否正在被拖动(决定换色要不要立刻做全量重解析, 见 AccentPickerColor)</summary>
-    private bool _draggingAccent;
+    /// <summary>
+    /// 调色盘开始 / 结束拖动。
+    ///
+    /// ★ 2026-11-08 起这两个回调**什么都不用做**: 强调色笔刷是共享可变实例, 拖动过程中每次
+    ///   `SetAccent` 改 Color, 所有引用它的元素下一帧就跟着变, 不存在"要等松手才全量刷新"
+    ///   的问题。旧的 `settle: false` + 松手补一次全树 InvalidateProperty 已随换字典方案删除。
+    ///   保留这两个方法是因为 SettingsPage 已经把它们挂到调色盘的 DragStarted/DragEnded 上 ——
+    ///   删掉签名会牵动 UI 代码, 而这里本来就没有副作用需要执行。
+    /// </summary>
+    public void BeginAccentDrag() { }
 
-    /// <summary>调色盘开始 / 结束拖动。结束时补做一次被拖期间省掉的重解析。</summary>
-    public void BeginAccentDrag() => _draggingAccent = true;
-
-    public void EndAccentDrag()
-    {
-        if (!_draggingAccent) return;
-        _draggingAccent = false;
-        Svc.Theme.Settle();
-    }
+    public void EndAccentDrag() { }
 
     /// <summary>主题色用默认的 B 站粉(单选之一, 默认选中)</summary>
     public bool IsAccentDefault
