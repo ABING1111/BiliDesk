@@ -1,0 +1,152 @@
+<views:FluentWindow x:Class="BiliDesk.Views.DownloadWindow"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:BiliDesk.Views"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             Title="下载视频" Width="520" SizeToContent="Height"
+             ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+
+    <views:FluentWindow.Resources>
+        <!--
+            清晰度卡片(单选)。沿用投币窗的"虚线框 → 选中变实线 + 强调色浅底"这套语言,
+            但这里是**横向一行**: 左边档位名(大), 右边编码/大小(小)。
+            列表项数量可能到 8~10 行, 所以卡片高度压到 54, 一屏放得下。
+        -->
+        <Style x:Key="QualityCardStyle" TargetType="RadioButton">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid>
+                            <Border x:Name="Card" CornerRadius="8" Background="Transparent"
+                                    BorderBrush="{DynamicResource InputBorderBrush}" BorderThickness="1.4"
+                                    MinHeight="54" />
+                            <ContentPresenter Margin="14,8" VerticalAlignment="Center" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Card" Property="BorderBrush"
+                                        Value="{DynamicResource AccentBorderFillBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Card" Property="BorderBrush"
+                                        Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Card" Property="Background"
+                                        Value="{DynamicResource AccentSoftFillBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.6" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </views:FluentWindow.Resources>
+
+    <!--
+        ★★★ 版式必须是"标题(自动) + 正文(可滚动) + 按钮(固定)"三行, 不能是一整根 StackPanel。
+        原因(2026-11-14 用户报"下载窗位置不对、底部按钮看不见"):
+          SizeToContent=Height 的窗口在**内容变高**时只会向下长。而它是按"加载中"那一小段
+          高度居中的, 内容一多就整体顶出屏幕下沿 —— 表现是勾选框和"开始下载"被裁掉。
+          现在正文放进 ScrollViewer(占 * 行), 窗口高度由 MaxHeight 夹在工作区内,
+          超出的部分在正文里滚动, 底部按钮永远看得见。
+    -->
+    <Grid Background="{DynamicResource AppBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 标题 -->
+        <TextBlock x:Name="TitleText" Grid.Row="0" Text="下载视频" FontSize="16" FontWeight="SemiBold"
+                   Margin="24,20,24,0" TextTrimming="CharacterEllipsis"
+                   Foreground="{DynamicResource TextPrimaryBrush}" />
+
+        <!-- 正文(内容多时在这里滚动, 不撑破窗口) -->
+        <ScrollViewer Grid.Row="1" Margin="24,0,24,0" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+
+                <!-- 加载态 -->
+                <StackPanel x:Name="LoadingPanel" Orientation="Horizontal" Margin="0,18,0,0"
+                            HorizontalAlignment="Center">
+                    <controls:LoadingRing Width="18" Height="18" VerticalAlignment="Center" />
+                    <TextBlock Text="正在读取可用清晰度…" FontSize="13" Margin="10,0,0,0"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                </StackPanel>
+
+                <!-- 失败态 -->
+                <StackPanel x:Name="ErrorPanel" Margin="0,16,0,0" Visibility="Collapsed">
+                    <TextBlock x:Name="ErrorText" FontSize="13" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
+                            Padding="18,6" Margin="0,12,0,0" HorizontalAlignment="Left"
+                            Click="OnRetryClick" />
+                </StackPanel>
+
+                <!-- 内容态 -->
+                <StackPanel x:Name="ContentPanel" Visibility="Collapsed">
+
+                    <TextBlock Text="清晰度" FontSize="12.5" Margin="0,18,0,8"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+
+                    <!-- 清晰度列表: 由代码后置按接口真实返回的档位生成 -->
+                    <StackPanel x:Name="QualityPanel" />
+
+                    <!-- 音轨 + 单流提示 -->
+                    <TextBlock x:Name="AudioText" FontSize="12" Margin="0,2,0,0"
+                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                    <TextBlock x:Name="FallbackHint" FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"
+                               Visibility="Collapsed"
+                               Foreground="{DynamicResource TextTertiaryBrush}" />
+
+                    <!-- 保存位置(用户要求: 明确提示下载到哪) -->
+                    <Border Margin="0,16,0,0" Padding="14,11" CornerRadius="8"
+                            Background="{DynamicResource ControlFillDefaultBrush}">
+                        <StackPanel>
+                            <TextBlock Text="保存到" FontSize="12"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Grid Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="PathText" Grid.Column="0" FontSize="12.5"
+                                           TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <Button Grid.Column="1" Content="更改…" Style="{StaticResource SubtleButtonStyle}"
+                                        Padding="12,4" Margin="8,0,0,0" Click="OnChangeFolderClick" />
+                                <Button Grid.Column="2" Content="打开" Style="{StaticResource SubtleButtonStyle}"
+                                        Padding="12,4" Margin="6,0,0,0" Click="OnOpenFolderClick" />
+                            </Grid>
+                            <TextBlock x:Name="FileNameText" FontSize="11.5" Margin="0,6,0,0"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <CheckBox x:Name="OpenFolderCheck" Style="{StaticResource LabeledCheckBoxStyle}"
+                              Content="完成后打开所在文件夹" Margin="0,14,0,0" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- 底部按钮: 固定在窗口底, 不随正文滚动 -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                    Margin="24,14,24,20">
+            <Button Content="取消" Style="{StaticResource SubtleButtonStyle}"
+                    Padding="22,7" Click="OnCancelClick" />
+            <Button x:Name="StartButton" Content="开始下载" Style="{StaticResource AccentButtonStyle}"
+                    Padding="22,7" Margin="10,0,0,0" IsEnabled="False" Click="OnStartClick" />
+        </StackPanel>
+    </Grid>
+</views:FluentWindow>

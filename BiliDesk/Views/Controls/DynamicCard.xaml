@@ -40,7 +40,7 @@
                 </MenuItem.Icon>
             </MenuItem>
             <Separator />
-            <MenuItem Header="下载视频到本地" Click="OnDownloadVideo">
+            <MenuItem Header="下载视频到本地" Click="OnDownloadVideo" ToolTip="可选清晰度与保存位置">
                 <MenuItem.Icon>
                     <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                FontSize="13" VerticalAlignment="Center" />

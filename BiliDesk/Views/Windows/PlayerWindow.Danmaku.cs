@@ -572,7 +572,7 @@ public partial class PlayerWindow : FluentWindow
     private void OnCacheClick(object sender, RoutedEventArgs e)
     {
         if (_closing || string.IsNullOrEmpty(_currentBvid)) return;
-        // 与卡片右键"下载视频"同一条链路: 弹独立的下载进度对话框。
+        // 与卡片右键"下载视频"同一条链路: 弹选择窗(清晰度 + 保存位置) → 后台下载。
         // ★ 下载是**一次性**动作(不像点赞可来回切), 所以这里等结果、成功后把按钮染成绿色
         //   并换成"已下载" —— 设计稿 v4 第 07 节把下载归为"拿走"这一组, 色相是绿。
         //   失败/取消不动按钮(保持中性), 有对话框自己的提示兜底。
@@ -585,7 +585,10 @@ public partial class PlayerWindow : FluentWindow
     {
         try
         {
-            var saved = await VideoDownloader.DownloadAsync(bvid, VideoTitleText.Text, this);
+            // ★ 传当前实际清晰度做默认档、传当前 cid(播放器手里就有, 不用再查详情),
+            //   这样用户"看着 1080P 点下载"时菜单里默认就是 1080P。
+            var saved = await DownloadActions.ShowAndDownloadAsync(
+                bvid, _currentCid, VideoTitleText.Text, _currentQn, this);
             if (_closing) return;
             // 期间用户可能已经换片: 只给"还是当前这条"的按钮点绿
             if (saved != null && string.Equals(bvid, _currentBvid, StringComparison.Ordinal))

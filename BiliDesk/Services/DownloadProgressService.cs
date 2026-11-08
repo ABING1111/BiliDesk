@@ -92,7 +92,7 @@ public sealed class DownloadProgressService
                 total += job.Total;
             }
             return total > 0
-                ? $"下载中 {_jobs.Count} 个 · 总进度 {done * 100 / total}%"
+                ? $"下载中 {_jobs.Count} 个 · 总进度 {Math.Min(100, done * 100 / total)}%"
                 : $"下载中 {_jobs.Count} 个…";
         }
 
@@ -136,11 +136,11 @@ public sealed class DownloadProgressService
         public void Dispose() => _owner.Remove(this);
 
         internal string Text => Total > 0
-            ? $"下载中 {Done * 100 / Total}%"
+            ? $"下载中 {Math.Min(100, Done * 100 / Total)}%"
             : Done > 0 ? $"下载中 {Done / 1024 / 1024} MB" : "准备下载…";
 
         internal string ShortText => Total > 0
-            ? $"{Done * 100 / Total}%"
+            ? $"{Math.Min(100, Done * 100 / Total)}%"
             : Done > 0 ? $"{Done / 1024 / 1024} MB" : "准备中";
     }
 }

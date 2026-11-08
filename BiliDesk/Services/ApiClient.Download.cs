@@ -71,6 +71,233 @@ public partial class ApiClient
         }
     }
 
+    /// <summary>
+    /// 读取**下载**可用的清晰度列表(下载选择窗的数据源)。
+    ///
+    /// 为什么不再用 <see cref="GetDownloadUrlAsync"/> 那一套:
+    /// 那条路走 durl 单流, 音视频已封装在一起、下载完就能播, 但**清晰度封顶 720P**。
+    /// 既然工程里已经有 <see cref="DashRemuxer"/>(短视频缓存用, 纯拷贝合流), 下载也可以
+    /// 走 DASH 双流 → 本地合成 MP4, 于是 1080P / 4K / 8K 都能下。
+    ///
+    /// 与播放取流的差别:
+    ///   · **不按用户设置降级** —— 菜单要列出接口这次给的全部档位, 让用户自己挑;
+    ///   · 每一档都预先选好线路(CdnService), 下载时直接按候选顺序重试;
+    ///   · 音轨只选一份(下载是"拿走成品", 不该因为当时播放用 64K 就只下 64K 的声音)。
+    ///
+    /// 返回的 <see cref="DownloadOptions.UseMuxed"/> 为 true 表示没有 DASH 可用,
+    /// 已回退到 durl 单流(上限 720P, 只有一档)。
+    /// </summary>
+    public async Task<(bool ok, string? err, DownloadOptions? data)> GetDownloadOptionsAsync(
+        string bvid, long cid, string? title = null)
+    {
+        if (string.IsNullOrEmpty(bvid) || cid <= 0) return (false, "参数不完整", null);
+        try
+        {
+            await EnsureBuvidAsync();
+
+            // ★ fnval 固定 4048: 下载要尽可能拿到全部档位(含 4K/8K/HDR/杜比视界),
+            //   与"优先高音质音轨"设置无关 —— 那是播放侧为了兼容性做的取舍, 下载侧不该继承。
+            //   (GetPlayUrlAsync 里用 16 是为了避免改变视频流集合, 见那里的说明。)
+            // ★ qn 用 127(8K) 而不是 QualityPreference.HighestQn(120): 下载是用户**显式挑档**,
+            //   不该像"自动"那样把 8K 挡在外面。实测同一视频 120 与 127 返回的 dash.video
+            //   完全一致(这个上限只影响服务端给不给 8K 那条, 不会额外塞进 DV/HDR)。
+            var ps = new Dictionary<string, string>
+            {
+                ["bvid"] = bvid,
+                ["cid"] = cid.ToString(),
+                ["qn"] = "127",
+                ["fnval"] = "4048",
+                ["fnver"] = "0",
+                ["fourk"] = "1"
+            };
+            ApplyTryLook(ps);
+
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/player/wbi/playurl", ps, sign: true);
+
+            if (code != 0 || data == null)
+                return (false, msg ?? $"获取下载地址失败 (code {code})", null);
+
+            var root = data.Value;
+            var durationMs = root.TryGetProperty("timelength", out var tl) &&
+                             tl.ValueKind == JsonValueKind.Number
+                ? tl.GetInt64() : 0;
+
+            // ---- 音轨: 与播放同一套候选收集, 但固定取"最高可用" ----
+            var audioCandidates = new List<AudioCandidate>();
+            if (root.TryGetProperty("dash", out var dash) && dash.ValueKind == JsonValueKind.Object)
+            {
+                if (dash.TryGetProperty("audio", out var audios))
+                    CollectAudioCandidates(audioCandidates, audios, fromFlac: false, fromDolby: false);
+                if (dash.TryGetProperty("dolby", out var dolby) &&
+                    dolby.ValueKind == JsonValueKind.Object &&
+                    dolby.TryGetProperty("audio", out var dolbyAudio))
+                    CollectAudioCandidates(audioCandidates, dolbyAudio, fromFlac: false, fromDolby: true);
+                if (dash.TryGetProperty("flac", out var flac) &&
+                    flac.ValueKind == JsonValueKind.Object &&
+                    (!flac.TryGetProperty("display", out var flacDisplay) ||
+                     flacDisplay.ValueKind != JsonValueKind.False) &&
+                    flac.TryGetProperty("audio", out var flacAudio))
+                    CollectAudioCandidates(audioCandidates, flacAudio, fromFlac: true, fromDolby: false);
+            }
+
+            AudioCandidate? bestAudio = null;
+            foreach (var a in audioCandidates)
+                if (bestAudio == null || AudioRank(a) > AudioRank(bestAudio) ||
+                    (AudioRank(a) == AudioRank(bestAudio) && a.Bandwidth > bestAudio.Bandwidth))
+                    bestAudio = a;
+
+            var audioUrls = new List<string>();
+            var audioLabel = "";
+            if (bestAudio != null && bestAudio.Urls.Count > 0)
+            {
+                var picked = CdnService.Instance.SelectSecondaryUrl(bestAudio.Urls[0], bestAudio.Urls);
+                audioUrls.Add(picked);
+                foreach (var u in bestAudio.Urls)
+                    if (!string.Equals(u, picked, StringComparison.Ordinal) && !audioUrls.Contains(u))
+                        audioUrls.Add(u);
+                audioLabel = AudioPreference.ShortLabelOfId(bestAudio.Id);
+            }
+
+            var audioBandwidth = bestAudio?.Bandwidth ?? 0;
+
+            // ---- 视频: 按清晰度分组, 每组内优先 HEVC ----
+            var qualities = new List<DownloadQualityOption>();
+            if (dash.ValueKind == JsonValueKind.Object &&
+                dash.TryGetProperty("video", out var videos) &&
+                videos.ValueKind == JsonValueKind.Array)
+            {
+                // 同一档可能出现多条(不同编码): 保留"编码优先级最高"的那条
+                var best = new Dictionary<int, JsonElement>();
+                foreach (var v in videos.EnumerateArray())
+                {
+                    if (v.ValueKind != JsonValueKind.Object) continue;
+                    var id = GetInt(v, "id");
+                    if (id <= 0) continue;
+                    if (!best.TryGetValue(id, out var cur) ||
+                        CodecRank(GetStr(v, "codecs")) > CodecRank(GetStr(cur, "codecs")))
+                        best[id] = v;
+                }
+
+                var ordered = new List<int>(best.Keys);
+                ordered.Sort((a, b) => b.CompareTo(a));   // 从高到低
+
+                foreach (var qn in ordered)
+                {
+                    var v = best[qn];
+                    var cands = new List<string>();
+                    var baseUrl = GetStr(v, "baseUrl");
+                    if (baseUrl.Length == 0) baseUrl = GetStr(v, "base_url");
+                    if (baseUrl.Length > 0) cands.Add(baseUrl);
+                    var backup = v.TryGetProperty("backupUrl", out var bu) ? bu : default;
+                    if (backup.ValueKind != JsonValueKind.Array &&
+                        v.TryGetProperty("backup_url", out var bu2)) backup = bu2;
+                    if (backup.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var u in backup.EnumerateArray())
+                        {
+                            var s = u.GetString();
+                            if (!string.IsNullOrEmpty(s) && !cands.Contains(s)) cands.Add(s);
+                        }
+                    }
+                    if (cands.Count == 0) continue;
+
+                    var picked = await CdnService.Instance.SelectUrlAsync(cands[0], cands);
+                    var urls = new List<string> { picked };
+                    foreach (var c in cands)
+                        if (!string.Equals(c, picked, StringComparison.Ordinal) && !urls.Contains(c))
+                            urls.Add(c);
+
+                    var bw = GetLong(v, "bandwidth");
+                    var videoBytes = durationMs > 0 && bw > 0
+                        ? (long)(bw / 8.0 * (durationMs / 1000.0))
+                        : 0;
+                    var audioBytes = durationMs > 0 && audioBandwidth > 0
+                        ? (long)(audioBandwidth / 8.0 * (durationMs / 1000.0))
+                        : 0;
+
+                    qualities.Add(new DownloadQualityOption
+                    {
+                        Qn = qn,
+                        Label = QnToLabel(qn),
+                        CodecLabel = CodecLabelOf(GetStr(v, "codecs")),
+                        Bandwidth = bw,
+                        EstimatedBytes = videoBytes + audioBytes,
+                        EstimatedVideoBytes = videoBytes,
+                        EstimatedAudioBytes = audioBytes,
+                        VideoUrls = urls
+                    });
+                }
+            }
+
+            if (qualities.Count > 0 && audioUrls.Count > 0)
+            {
+                return (true, null, new DownloadOptions
+                {
+                    Bvid = bvid,
+                    Cid = cid,
+                    Title = title ?? "",
+                    DurationMs = durationMs,
+                    Qualities = qualities,
+                    AudioUrls = audioUrls,
+                    AudioLabel = audioLabel,
+                    UseMuxed = false
+                });
+            }
+
+            // ---- 回退: durl 单流(音视频已合并, 上限 720P) ----
+            // ★ 这条路径不传 qn 上限, 让服务端给它能给的最高单流档(常见 720P)。
+            var (mUrl, mBackups, mQn, mQualities, dur, _, _) =
+                await FetchMuxedAsync(bvid, cid, QualityPreference.HighestQn);
+            if (string.IsNullOrEmpty(mUrl))
+                return (false, "这个视频没有可用的下载地址(可能是付费/大会员专属)", null);
+
+            var muxedUrls = new List<string> { mUrl };
+            foreach (var b in mBackups)
+                if (!string.Equals(b, mUrl, StringComparison.Ordinal) && !muxedUrls.Contains(b))
+                    muxedUrls.Add(b);
+
+            var muxedQn = mQn > 0 ? mQn : (mQualities.Count > 0 ? mQualities[0].qn : 64);
+            var muxedQuality = new DownloadQualityOption
+            {
+                Qn = muxedQn,
+                Label = QnToLabel(muxedQn),
+                CodecLabel = "单流",
+                Bandwidth = 0,
+                EstimatedBytes = 0,
+                VideoUrls = muxedUrls
+            };
+
+            return (true, null, new DownloadOptions
+            {
+                Bvid = bvid,
+                Cid = cid,
+                Title = title ?? "",
+                DurationMs = dur > 0 ? dur : durationMs,
+                Qualities = new List<DownloadQualityOption> { muxedQuality },
+                UseMuxed = true,
+                MuxedUrls = muxedUrls
+            });
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "获取下载选项失败: " + ex.Message, null);
+        }
+    }
+
+    /// <summary>编码串 → 给用户看的短名(HEVC / AVC / AV1)。未知编码原样截短显示。</summary>
+    private static string CodecLabelOf(string codecs)
+    {
+        if (string.IsNullOrEmpty(codecs)) return "";
+        if (codecs.StartsWith("hev", StringComparison.OrdinalIgnoreCase) ||
+            codecs.StartsWith("hvc", StringComparison.OrdinalIgnoreCase)) return "HEVC";
+        if (codecs.StartsWith("avc", StringComparison.OrdinalIgnoreCase)) return "AVC";
+        if (codecs.StartsWith("av01", StringComparison.OrdinalIgnoreCase)) return "AV1";
+        var comma = codecs.IndexOf(',');
+        return comma > 0 ? codecs[..comma] : codecs;
+    }
+
     // ---------------------------------------------------------------- 观看进度上报
 
     /// <summary>

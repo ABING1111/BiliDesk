@@ -325,7 +325,11 @@ public partial class VideoCard : UserControl
     {
         var v = Current;
         if (v == null || string.IsNullOrEmpty(v.Bvid)) return;
-        VideoDownloader.DownloadAsync(v.Bvid, v.Title, Window.GetWindow(this)).Forget();
+        // 列表页的卡片没有 cid, 由 DownloadActions 补查详情后弹选择窗
+        // (清晰度 + 保存位置, 用户 2026-11-14 要求)
+        DownloadActions.ShowAndDownloadAsync(
+            v.Bvid, 0, v.Title, QualityPreference.RequestQn(Svc.Settings.PreferredQualityQn),
+            Window.GetWindow(this)).Forget();
     }
 
     /// <summary>

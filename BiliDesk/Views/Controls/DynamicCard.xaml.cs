@@ -95,7 +95,10 @@ public partial class DynamicCard : UserControl
     {
         var v = Current;
         if (v == null || string.IsNullOrEmpty(v.Bvid)) return;
-        await VideoDownloader.DownloadAsync(v.Bvid, v.Title, Window.GetWindow(this));
+        // 与 VideoCard 同款: 弹清晰度/保存位置选择窗, 再后台下载
+        await DownloadActions.ShowAndDownloadAsync(
+            v.Bvid, 0, v.Title, QualityPreference.RequestQn(Svc.Settings.PreferredQualityQn),
+            Window.GetWindow(this));
     }
 
     /// <summary>一键屏蔽这个 UP 主(精确同名 + UID, 与 VideoCard 同款)</summary>

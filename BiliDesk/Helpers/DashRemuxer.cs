@@ -53,6 +53,16 @@ public static class DashRemuxer
 {
     private const int CopyBufSize = 256 * 1024;
 
+    /// <summary>
+    /// 32 位 mdat 头放不下载荷时, 需要换成 16 字节的 largesize 头。
+    /// 单独抽成方法是为了可单测 —— 这段逻辑只在 >4GB 的输出上生效, 手工造一个 4GB 文件不现实。
+    /// </summary>
+    public static bool NeedsLargeMdat(long payloadBytes) => payloadBytes + 8 > uint.MaxValue;
+
+    /// <summary>mdat 起点 + 载荷超过 32 位偏移上限时, stco 必须换成 co64。</summary>
+    public static bool NeedsCo64(long mdatStart, long payloadBytes)
+        => mdatStart + payloadBytes > uint.MaxValue;
+
     /// <summary>合流。失败返回 false 并给出原因(调用方会当作"没这个优化", 照旧远端播放)</summary>
     public static bool TryMerge(string videoPath, string audioPath, string outPath, out string? error)
     {
@@ -89,16 +99,39 @@ public static class DashRemuxer
             }
             var mdatPayload = offset;
 
-            // 2) 占位偏移组一遍 moov, 只为拿长度
-            var moovProbe = BuildMoov(v, a, 0);
-            var mdatStart = v.Ftyp.Length + moovProbe.Length + 8;   // +8 是 mdat 自己的头
+            // ★ 2026-11-14: 支持 >4GB 的输出(4K 长视频整段下载)。
+            //   ISO 14496-12 里 mdat 的 32 位 size 放不下时要改成 largesize(16 字节头);
+            //   同理 stco 里的绝对偏移超过 uint.MaxValue 时要换成 co64(8 字节/条)。
+            //   这两件事必须**成对**判断: 只换 mdat 不换 co64, 解复用器会读到截断的偏移。
+            var largeMdat = NeedsLargeMdat(mdatPayload);
 
-            // 3) 填真实偏移重建(moov 里没有长度依赖偏移值的东西, 两次长度必须相等)
-            var moov = BuildMoov(v, a, mdatStart);
-            if (moov.Length != moovProbe.Length)
+            // 2) 占位偏移组一遍 moov, 只为拿长度
+            var moovProbe = BuildMoov(v, a, 0, useCo64: false);
+            var mdatStart = v.Ftyp.Length + moovProbe.Length + (largeMdat ? 16 : 8);
+
+            // co64 的条目比 stco 宽, 会改变 moov 长度 ⇒ 需要重算一次长度, 否则偏移会整体错位
+            var useCo64 = NeedsCo64(mdatStart, mdatPayload);
+            byte[] moov;
+            if (useCo64)
             {
-                error = "内部错误: moov 两次构建长度不一致";
-                return false;
+                var probe64 = BuildMoov(v, a, 0, useCo64: true);
+                mdatStart = v.Ftyp.Length + probe64.Length + (largeMdat ? 16 : 8);
+                moov = BuildMoov(v, a, mdatStart, useCo64: true);
+                if (moov.Length != probe64.Length)
+                {
+                    error = "内部错误: moov 两次构建长度不一致(co64)";
+                    return false;
+                }
+            }
+            else
+            {
+                // 3) 填真实偏移重建(moov 里没有长度依赖偏移值的东西, 两次长度必须相等)
+                moov = BuildMoov(v, a, mdatStart, useCo64: false);
+                if (moov.Length != moovProbe.Length)
+                {
+                    error = "内部错误: moov 两次构建长度不一致";
+                    return false;
+                }
             }
 
             using (var dst = new FileStream(tmp, FileMode.Create, FileAccess.Write,
@@ -107,11 +140,23 @@ public static class DashRemuxer
                 dst.Write(v.Ftyp, 0, v.Ftyp.Length);
                 dst.Write(moov, 0, moov.Length);
 
-                // mdat: 先写头(用 total - 8 反推实际大小, 保证与实际写入一致)
-                var hdr = new byte[8];
-                WriteU32(hdr, 0, (uint)(mdatPayload + 8));
-                Encoding.ASCII.GetBytes("mdat").CopyTo(hdr, 4);
-                dst.Write(hdr, 0, 8);
+                // mdat 头: 32 位放得下就用 8 字节头; 放不下改成 size=1 + largesize 的 16 字节头
+                if (largeMdat)
+                {
+                    var bigHdr = new byte[16];
+                    WriteU32(bigHdr, 0, 1);
+                    Encoding.ASCII.GetBytes("mdat").CopyTo(bigHdr, 4);
+                    WriteU64(bigHdr, 8, (ulong)(mdatPayload + 16));
+                    dst.Write(bigHdr, 0, 16);
+                }
+                else
+                {
+                    // 用 total - 8 反推实际大小, 保证与实际写入一致
+                    var hdr = new byte[8];
+                    WriteU32(hdr, 0, (uint)(mdatPayload + 8));
+                    Encoding.ASCII.GetBytes("mdat").CopyTo(hdr, 4);
+                    dst.Write(hdr, 0, 8);
+                }
 
                 foreach (var f in all) CopyBytes(f.Track.Fs, f.SrcDataStart, dst, f.TotalSize);
             }
@@ -447,7 +492,7 @@ public static class DashRemuxer
     /// 每条 trak 都是**原样搬过来**再替换掉 stbl、打几个补丁 —— 这样 hdlr/stsd/编解码参数
     /// 全部保持 B 站原样, 只把我们能算准的表换成新的。
     /// </summary>
-    private static byte[] BuildMoov(SourceTrack v, SourceTrack a, long mdatStart)
+    private static byte[] BuildMoov(SourceTrack v, SourceTrack a, long mdatStart, bool useCo64)
     {
         var vDurMovie = ToMovieScale(v, v.MediaDuration);
         var aDurMovie = ToMovieScale(a, a.MediaDuration);
@@ -457,8 +502,8 @@ public static class DashRemuxer
         if (v.MvhdVersion == 0) WriteU32(mvhd, v.MvhdDurationOffset, (uint)maxDur);
         else WriteU64(mvhd, v.MvhdDurationOffset, (ulong)maxDur);
 
-        var vtrak = BuildTrak(v, v.MediaDuration, vDurMovie, trackId: 1, mdatStart);
-        var atrak = BuildTrak(a, a.MediaDuration, aDurMovie, trackId: 2, mdatStart);
+        var vtrak = BuildTrak(v, v.MediaDuration, vDurMovie, trackId: 1, mdatStart, useCo64);
+        var atrak = BuildTrak(a, a.MediaDuration, aDurMovie, trackId: 2, mdatStart, useCo64);
 
         return MakeBox("moov", Concat(mvhd, vtrak, atrak, v.Udta));
     }
@@ -468,9 +513,9 @@ public static class DashRemuxer
             : (long)Math.Round(mediaDuration / (double)t.MdhdTimescale * t.MvhdTimescale);
 
     private static byte[] BuildTrak(SourceTrack t, long mediaDuration, long movieDuration,
-        int trackId, long mdatStart)
+        int trackId, long mdatStart, bool useCo64)
     {
-        var stbl = BuildStbl(t, mdatStart);
+        var stbl = BuildStbl(t, mdatStart, useCo64);
 
         var (stblOff, stblSize) = FindStblInTrak(t);
         var trak = new byte[t.Trak.Length - stblSize + stbl.Length];
@@ -535,8 +580,8 @@ public static class DashRemuxer
         throw new InvalidOperationException("trak 里找不到 stbl");
     }
 
-    /// <summary>新 stbl: stsd(原样) + stts + [ctts] + [stss] + stsc + stsz + stco</summary>
-    private static byte[] BuildStbl(SourceTrack t, long mdatStart)
+    /// <summary>新 stbl: stsd(原样) + stts + [ctts] + [stss] + stsc + stsz + stco(或 co64)</summary>
+    private static byte[] BuildStbl(SourceTrack t, long mdatStart, bool useCo64)
     {
         var sampleCount = 0;
         foreach (var f in t.Frags) sampleCount += f.Samples.Count;
@@ -546,7 +591,7 @@ public static class DashRemuxer
         var needCtts = false;
         var stss = new List<uint>();
         var sizes = new uint[sampleCount];
-        var chunkOffsets = new List<uint>();
+        var chunkOffsets = new List<long>();
         var stsc = new List<(uint FirstChunk, uint SamplesPerChunk)>();
 
         var idx = 0;
@@ -557,7 +602,7 @@ public static class DashRemuxer
             if (stsc.Count == 0 || stsc[^1].SamplesPerChunk != (uint)f.Samples.Count)
                 stsc.Add((chunkNo, (uint)f.Samples.Count));
 
-            chunkOffsets.Add((uint)(mdatStart + f.OutOffset));
+            chunkOffsets.Add(f.OutOffset);
 
             foreach (var s in f.Samples)
             {
@@ -634,10 +679,16 @@ public static class DashRemuxer
         for (var i = 0; i < sampleCount; i++) WriteU32(sz, 8 + i * 4, sizes[i]);
         parts.Add(MakeFullBox("stsz", 0, sz));
 
-        var co = new byte[4 + chunkOffsets.Count * 4];
+        var co = useCo64
+            ? new byte[4 + chunkOffsets.Count * 8]
+            : new byte[4 + chunkOffsets.Count * 4];
         WriteU32(co, 0, (uint)chunkOffsets.Count);
-        for (var i = 0; i < chunkOffsets.Count; i++) WriteU32(co, 4 + i * 4, chunkOffsets[i]);
-        parts.Add(MakeFullBox("stco", 0, co));
+        for (var i = 0; i < chunkOffsets.Count; i++)
+        {
+            if (useCo64) WriteU64(co, 4 + i * 8, (ulong)(mdatStart + chunkOffsets[i]));
+            else WriteU32(co, 4 + i * 4, (uint)(mdatStart + chunkOffsets[i]));
+        }
+        parts.Add(MakeFullBox(useCo64 ? "co64" : "stco", 0, co));
 
         return MakeBox("stbl", Concat(parts.ToArray()));
     }

@@ -1798,7 +1798,7 @@
 
                                     <!-- 离线缓存(下载) -->
                                     <Button x:Name="BtnCache" Style="{StaticResource PlayerActionBtn}"  Grid.Column="2"
-                                            Click="OnCacheClick" ToolTip="离线缓存当前视频">
+                                            Click="OnCacheClick" ToolTip="下载视频（可选清晰度与保存位置）">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                             <!-- ★★★ 图标格必须与其它五个按钮**同为 20×20**(ActionIconBox),
                                                  否则整颗按钮的图文会被压低 —— 这是用户报"6 个按钮没有上下对齐"的根因。

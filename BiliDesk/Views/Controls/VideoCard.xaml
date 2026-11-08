@@ -139,6 +139,7 @@
             <Separator />
             <!-- 直播间不能下载(下载器要的是视频稿件地址, 直播流是另一回事), 直接在直播卡片上藏掉 -->
             <MenuItem Header="下载视频到本地" Click="OnDownloadVideo"
+                      ToolTip="可选清晰度与保存位置"
                       Visibility="{Binding IsLive, Converter={StaticResource InvBoolToVis}}">
                 <MenuItem.Icon>
                     <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
