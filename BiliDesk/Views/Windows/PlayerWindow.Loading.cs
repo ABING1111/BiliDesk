@@ -205,6 +205,8 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing) return;
         if (sender is not ScrollViewer sv) return;
+        // 回到顶部要先于"往上滚就返回"判定: 往上滚回阈值以内时它也要熄灭
+        UpdateCommentBackToTop(sv);
         // 往上滚不补(相关视频与评论都是"向下无限加载")
         if (e.VerticalChange < 0) return;
 

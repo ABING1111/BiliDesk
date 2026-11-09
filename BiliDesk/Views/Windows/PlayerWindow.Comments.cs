@@ -38,6 +38,8 @@ public partial class PlayerWindow : FluentWindow
         CloseCommentDetail();
         // 切走评论 tab: FAB 与展开的输入面板一起收掉(它们只属于评论区)
         UpdateCommentComposer();
+        // 「回到顶部」只属于评论列表, 切走时一并熄灭
+        UpdateCommentBackToTop(null);
     }
 
     private async void TabComments_Checked(object sender, RoutedEventArgs e)
@@ -47,7 +49,58 @@ public partial class PlayerWindow : FluentWindow
         // 切到评论页时顺手校准一次输入框状态(FAB 显隐跟着 tab 走):
         // 用户可能是先登录/换号再回来发的
         UpdateCommentComposer();
+        // 从简介切过来时外层 ScrollViewer 可能停在下滑位置: 按当前偏移重新判定一次,
+        // 避免"已经滚过阈值、回到顶部却不亮"。
+        UpdateCommentBackToTop(InfoScroll);
         await LoadCommentsAsync();
+    }
+
+    // ------------------------------------------------------------ 回到顶部(2026-11-09)
+
+    /// <summary>
+    /// 评论列表向下滚过这个距离才把「回到顶部」亮出来(与首页同值)。
+    /// ★ 阈值别太小: 轻轻滚一下按钮就闪出来、回滚一点又消失, 看着像故障。
+    /// </summary>
+    private const double CommentBackToTopThreshold = 400;
+
+    /// <summary>「回到顶部」当前是否亮着(避免每次滚动都重复起动画)</summary>
+    private bool _commentBackToTopShown;
+
+    /// <summary>
+    /// 按当前滚动位置点亮/熄灭评论区右下角的「回到顶部」。
+    ///
+    /// ★ 只动 <c>Opacity</c> 与命中测试, **不用 Visibility**:
+    ///   它和「返回评论列表」共用 FAB 上方 54px 那一格, 用 Collapsed 会让另一颗按钮
+    ///   在显隐切换时上下跳(用户正要点就点空)。常驻占位、淡入淡出最稳。
+    /// ★ 判据里的 <see cref="IsCommentDetailOpen"/>: 详情页有自己的一整页内容与
+    ///   「返回评论列表」, 两颗按钮不能同时压在同一格上。
+    /// </summary>
+    private void UpdateCommentBackToTop(ScrollViewer? sv)
+    {
+        if (_closing || BtnCommentBackToTop == null) return;
+
+        var onCommentsTab = CommentsPanel != null &&
+                            CommentsPanel.Visibility == Visibility.Visible;
+        // 直播/本地文件没有评论区, 即使外层 ScrollViewer 停在下滑位置也不该亮
+        var usable = onCommentsTab && !IsCommentDetailOpen && !_isLive && !_isLocalPlayback;
+        var show = usable && sv is { VerticalOffset: > CommentBackToTopThreshold };
+        if (show == _commentBackToTopShown) return;
+        _commentBackToTopShown = show;
+
+        BtnCommentBackToTop.IsHitTestVisible = show;
+        BtnCommentBackToTop.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(BtnCommentBackToTop.Opacity, show ? 1 : 0,
+                TimeSpan.FromMilliseconds(160))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
+    }
+
+    /// <summary>点击「回到顶部」: 把右侧信息栏(评论列表所在的那一层)滚回顶部。</summary>
+    private void OnCommentBackToTopClick(object sender, RoutedEventArgs e)
+    {
+        if (_closing) return;
+        InfoScroll?.ScrollToTop();
     }
 
     private bool _commentsLoaded;
@@ -682,6 +735,8 @@ public partial class PlayerWindow : FluentWindow
         CommentDetailPanel.Visibility = Visibility.Visible;
         // 详情页打开: 底部的"加载更多评论"属于根评论列表, 先收起
         UpdateCommentMoreUi();
+        // 「回到顶部」只属于评论列表: 详情页这一格让给「返回评论列表」
+        UpdateCommentBackToTop(InfoScroll);
         // "楼中楼自动展开所有评论": 进来就把这条线程剩下的回复补全, 不再要用户点"展开更多"
         if (threadRoot.HasMoreReplies) _ = AutoCompleteThreadRepliesAsync(threadRoot);
         // 滚动交给外层右面板的 ScrollViewer: 让详情面板滚进视野
@@ -761,6 +816,8 @@ public partial class PlayerWindow : FluentWindow
         CommentList.Visibility = Visibility.Visible;
         // 从详情页回到列表: 底部的翻页状态重新按当前根评论列表显示
         UpdateCommentMoreUi();
+        // 返回列表后「回到顶部」重新按当前滚动位置决定亮不亮
+        UpdateCommentBackToTop(InfoScroll);
         QueueCommentContentWindow();
         // ★ 用户报"从某条评论的回复返回后, 列表回到顶部, 得重新下拉找那条评论"
         //   (2026-10-13): 默认回到**刚才那条评论**所在的位置。

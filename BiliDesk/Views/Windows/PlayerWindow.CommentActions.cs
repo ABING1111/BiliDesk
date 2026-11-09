@@ -395,6 +395,8 @@ public partial class PlayerWindow : FluentWindow
         CommentFab.Visibility = usable ? Visibility.Visible : Visibility.Collapsed;
         // 前提没了(切到直播/本地文件)时把展开的面板一起收掉
         if (!usable && _composerOpen) CloseComposer();
+        // 回到顶部与 FAB 同一套前提: 不可评论时整颗熄灭, 可评论时按当前滚动位置重算
+        UpdateCommentBackToTop(usable ? InfoScroll : null);
     }
 
     /// <summary>FAB 点击: 展开 ↔ 收起。未登录等"不能评论"的情形给 Toast 说明, 不展开空面板</summary>

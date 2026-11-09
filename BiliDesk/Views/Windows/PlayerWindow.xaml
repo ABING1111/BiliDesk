@@ -1568,8 +1568,24 @@
                                   ScrollChanged="OnInfoScrollChanged">
                         <StackPanel Margin="20,18,20,24">
                             <!-- 标题 + 数据 -->
-                            <TextBlock x:Name="VideoTitleText" FontSize="17" FontWeight="SemiBold"
-                                       TextWrapping="Wrap" Text="视频标题" LineHeight="24" />
+                            <!-- ★ 2026-11-09 用户要求"评论区标题自由复制": 原来用 TextBlock,
+                                 整段标题只能看、不能选。改成**只读 TextBox** —— 视觉上仍是
+                                 透明底/无边框/同样的字号字重, 但支持鼠标拖选 + Ctrl+C,
+                                 右键也有系统自带的复制菜单(与简介的 DescText 同一套做法)。
+                                 ★ IsTabStop=False: 不参与 Tab 键遍历, 免得用户按 Tab 时焦点
+                                   莫名停到标题上; 鼠标点选仍然可以(需要焦点才能拖选)。
+                                 ★ 键盘快捷键不受影响: OnPreviewKeyDown 只对
+                                   `IsReadOnly=false` 的 TextBox 放行, 只读框不会吞掉
+                                   空格/方向键(见 PlayerWindow.Keyboard.cs 的闸门)。 -->
+                            <TextBox x:Name="VideoTitleText" FontSize="17" FontWeight="SemiBold"
+                                     TextWrapping="Wrap" Text="视频标题"
+                                     IsReadOnly="True" IsReadOnlyCaretVisible="False"
+                                     IsTabStop="False" Cursor="IBeam"
+                                     Background="Transparent" BorderThickness="0" Padding="0"
+                                     Foreground="{DynamicResource TextPrimaryBrush}"
+                                     TextOptions.TextFormattingMode="Ideal"
+                                     VerticalScrollBarVisibility="Disabled"
+                                     HorizontalScrollBarVisibility="Disabled" />
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBlock x:Name="ViewCountText" Style="{StaticResource MetaTextStyle}" Text="--" />
                                 <TextBlock Text=" 播放" Style="{StaticResource MetaTextStyle}" />
@@ -2725,17 +2741,22 @@
                         </StackPanel>
                     </Border>
                 </Grid>
-                <!-- ============ 右下角悬浮工具列(写评论 FAB + 返回评论列表, 2026-11-05) ============
-                     ★ 结构: 信息栏右下角一组悬浮按钮, 两个**同尺寸同圆角**(46×46 / 圆角 14):
-                        · 上: 「返回评论列表」(中性灰, 只在评论详情页出现)
+                <!-- ============ 右下角悬浮工具列(写评论 FAB + 返回评论列表 + 回到顶部, 2026-11-05) ============
+                     ★ 结构: 信息栏右下角一组悬浮按钮, **同尺寸同圆角**(46×46 / 圆角 14):
+                        · 上(54px): 「返回评论列表」(中性灰, 只在评论详情页出现)
+                                   或「回到顶部」(中性灰, 评论列表滚过阈值时点亮)
                         · 下: 「写评论」(强调色粉, 点开底部输入面板)
                         只靠底色区分主次 —— 形状完全一样, 并排看是一套。
+                     ★ 「回到顶部」与「返回评论列表」**共用 54 这一格**(2026-11-09 新增):
+                        前者只在评论列表页出现, 后者只在评论详情页出现, 两者互斥,
+                        所以不需要再往上堆第三行; 两种状态下按钮都正好悬在 FAB 上方 8px,
+                        也就是用户要的"向上的三角放在评论图标上面"。
                      ★ 为什么用 Grid 而不是竖排 StackPanel:
-                        StackPanel 里两个按钮一前一后, 返回按钮一显示, 下面的 FAB 就被**顶上去 46px**
+                        StackPanel 里按钮一前一后, 返回按钮一显示, 下面的 FAB 就被**顶上去 46px**
                         (用户正要点"写评论"时按钮跑了)。HomePage 的浮动工具列也踩过同样的坑,
                         那里写明「回到顶部」**始终占位、只切透明度与命中测试**, 免得下面几个按钮上下跳。
-                        这里用 Grid + 两个按钮各自 Bottom 对齐: FAB 的位置**永远不变**,
-                        返回按钮靠 Margin(0,0,0,54) 固定悬在它上方(46 + 8 间距), 两者不会互相挤。
+                        这里用 Grid + 按钮各自 Bottom 对齐: FAB 的位置**永远不变**,
+                        上方按钮靠 Margin(0,0,0,54) 固定悬在它上方(46 + 8 间距), 两者不会互相挤。
                         ★ 固定 54 这个数字 = 按钮高 46 + 间距 8。改按钮尺寸时这两个数要一起改。
                      ★ 为什么「返回评论列表」要从 tab 行搬过来(用户截图报的问题):
                         它原来贴在「评论详情」tab 右边, 宽度一大就**压在「热门 / 时间」排序按钮上**,
@@ -2745,27 +2766,55 @@
                        CommentsPanel 里: 浮层要悬浮在列表**之上**, 且滚动列表时它不跟着走;
                        不用 Popup(独立 HWND 会盖过 airspace, 与合集面板同款理由用 Grid)。
                      ★ 显隐规则:
-                        · 两个按钮**各自**控制显隐(容器不 Collapsed —— 父级不可见时子级不渲染);
+                        · 三个按钮**各自**控制显隐(容器不 Collapsed —— 父级不可见时子级不渲染);
                         · 写评论 FAB: 只在「评论」tab 且非直播/本地文件时出现(代码 UpdateCommentFabVisibility);
                         · 返回按钮: 只在进了「评论详情」时出现(代码 ShowCommentDetail / CloseCommentDetail);
+                        · 回到顶部: 只在「评论」tab 的列表页、且向下滚过阈值时点亮
+                          (代码 UpdateCommentBackToTop; 用 Opacity 淡入淡出, 不用 Visibility,
+                          否则同格的返回按钮一出现就会和它抢位置);
                         · 面板展开时 FAB 变成"收起"图标, 面板收起时是"笔"图标;
                         · 未登录/直播/本地文件点 FAB → Toast 说明原因, 不展开。 -->
                 <Grid x:Name="CommentFabBar" Grid.Row="0"
                       Panel.ZIndex="2"
                       HorizontalAlignment="Right" VerticalAlignment="Bottom"
                       Margin="0,0,16,16">
+                    <!-- 回到顶部(2026-11-09 用户要求"一键返回顶部, 向上三角放在评论图标上面"):
+                         ★ 尺寸/圆角/阴影与 FAB 完全一致(46×46 / 圆角 14), 只是底色用中性灰
+                           —— 它是次要动作, 不能抢写评论那颗强调色 FAB 的视觉焦点。
+                         ★ 图标用**实心向上三角**(矢量 Path), 不用 Segoe 的 ChevronUp:
+                           用户明确要"三角形", 箭头字形和三角形不是一个观感; 矢量还不依赖字体。
+                         ★ 初始 Opacity=0 + 不命中: 列表在顶部时它不该出现(见 UpdateCommentBackToTop)。
+                           始终占位但只切透明度, 与 HomePage 的「回到顶部」同一套做法。
+                         ★ 与下面的 BtnBackToComments 共用 54 这一格: 列表页只亮这颗,
+                           详情页只亮返回, 互斥, 不会叠在一起。 -->
+                    <Button x:Name="BtnCommentBackToTop"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                            Margin="0,0,0,54"
+                            Width="46" Height="46"
+                            Style="{StaticResource CommentFabNeutralStyle}"
+                            Opacity="0" IsHitTestVisible="False" Focusable="False"
+                            Click="OnCommentBackToTopClick"
+                            ToolTip="回到顶部">
+                        <Path Data="M 8,2 L 15,13 L 1,13 Z"
+                              Width="13" Height="13" Stretch="Uniform"
+                              Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </Button>
+
                     <!-- 返回评论列表(2026-11-05 从 tab 行搬来):
                          ★ 尺寸/圆角/阴影与下面的 FAB **完全一致**(46×46 / 圆角 14),
-                           两个按钮并排是一套 —— 只靠底色分主次:
-                           强调色 = 主动作(写评论), 中性灰 = 次动作(返回)。
-                           之前它用的是 FloatingIconButtonStyle(38×38 / 圆角 8 / 浅灰),
-                           与 46px 的粉 FAB 放在一起大小、圆角、颜色三处都不一样, 很割裂。
+                            三个按钮是一套 —— 只靠底色分主次:
+                            强调色 = 主动作(写评论), 中性灰 = 次动作(返回 / 回到顶部)。
+                            之前它用的是 FloatingIconButtonStyle(38×38 / 圆角 8 / 浅灰),
+                            与 46px 的粉 FAB 放在一起大小、圆角、颜色三处都不一样, 很割裂。
                          ★ 底色用 OverlaySurfaceBrush 这一组(恒为不透明):
-                           按钮悬在评论列表**文字**上方, 若用亚克力下会被改成半透明的
-                           FloatingFillBrush, 底下的字会透上来糊成一片。
+                            按钮悬在评论列表**文字**上方, 若用亚克力下会被改成半透明的
+                            FloatingFillBrush, 底下的字会透上来糊成一片。
                          ★ 图标 E72B = Back(向左箭头), 与 MainWindow / 收藏页的"返回"图标一致。
                          ★ Bottom 对齐 + Margin 下 54 = 悬在 FAB(46px)正上方 8px 处:
-                           不与 FAB 抢位置, FAB 也因此纹丝不动。
+                            不与 FAB 抢位置, FAB 也因此纹丝不动。
+                         ★ 这一格与「回到顶部」**共用**(见上面 BtnCommentBackToTop):
+                            列表页只亮回到顶部, 详情页只亮本按钮, 两者互斥,
+                            所以「回到顶部」不会把返回按钮挤到别的高度。
                          ★ 事件仍是 OnCommentDetailBack —— 与搬走之前完全一致, 只是位置换了。 -->
                     <Button x:Name="BtnBackToComments" Visibility="Collapsed"
                             HorizontalAlignment="Right" VerticalAlignment="Bottom"
