@@ -85,6 +85,19 @@ public partial class PlayerWindow : FluentWindow
                 // 否则用户看到的永远是列表顶部, 以为没选中。
                 if (SpeedList.SelectedItem != null) SpeedList.ScrollIntoView(SpeedList.SelectedItem);
             }));
+        // 字幕弹层(评审意见第 4 条): 原来只有它没挂右对齐, Placement="Top" 默认居中,
+        // 按钮在控制栏右侧、弹层宽 240, 窄窗口下右半边直接出画面。与上面四个完全同款。
+        if (SubtitlePopup != null && BtnSubtitle != null)
+        {
+            SubtitlePopup.PlacementTarget = BtnSubtitle;
+            SubtitlePopup.Opened += (_, _) => Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+                {
+                    RightAlignPopup(SubtitlePopup, BtnSubtitle);
+                    // 打开后才回来轨列表的情况(取轨是异步的): 高亮项可能在列表下方
+                    if (SubtitleList.SelectedItem != null) SubtitleList.ScrollIntoView(SubtitleList.SelectedItem);
+                }));
+        }
         // ★ 两个弹层的"开着"状态本身就是判据(见 AnyPlayerPopupOpen), 不需要订阅 Closed。
         //   2026-10-13 第一版在这里订阅过 Closed 记时间窗, 实测证明 Closed 晚于视频区的
         //   Up(70ms), 时间窗一次都没生效过 —— 已删除。
@@ -96,6 +109,11 @@ public partial class PlayerWindow : FluentWindow
         _danmakuColorful = Svc.Settings.DanmakuColorful;
         _danmakuAreaRatio = Svc.Settings.DanmakuAreaPercent / 100.0;
         Svc.Settings.DanmakuSettingsChanged += OnDanmakuSettingsChanged;
+        // 字幕外观(字号/底衬/底距)同样要双向同步(评审意见第 5 条):
+        // 设置页拖滑杆时这个窗口可能正放着片且**处于暂停**, 那时 TimeChanged 不跑,
+        // ApplySubtitleLook 没人调 → 改了设置画面上的字幕毫无反应。
+        // 挂了这条事件后,"播放器改"和"设置页改"都会走到同一段 ApplySubtitleLook。
+        Svc.Settings.SubtitleSettingsChanged += OnSubtitleSettingsChanged;
         // 外观三项(不透明度/字号/速度)在此**首次**从设置里读出来。
         // 构造函数里字段还是编译期默认值(80% / 100% / 适中), 不走这一步的话,
         // 那些把旧值存进配置的用户(比如不透明度存的是 40%)开播放器会先按默认值起播,
@@ -121,6 +139,15 @@ public partial class PlayerWindow : FluentWindow
         //   Value(25/80/100/2)会在 InitializeComponent() 时把用户设置整个覆写成默认。
         _syncingDanmakuLook = false;
         UpdateDanmakuButton();
+
+        // 字幕(2026-11-04): 先把设置里的字号灌进滑杆(**闸门还关着**, 不回写设置),
+        // 再落到显示层 —— 顺序反了就会用 XAML 的初值 200% 建字号。
+        if (SubtitleFontSlider != null) SubtitleFontSlider.Value = Svc.Settings.SubtitleFontScalePercent;
+        if (SubtitleFontValue != null) SubtitleFontValue.Text = Svc.Settings.SubtitleFontScalePercent + "%";
+        // 字号 / 底衬不透明度 / 底部距离三项一起落层(设置页里调过的值, 开窗就是那个样子)
+        ApplySubtitleLook();
+        _syncingSubtitleFont = false;   // 到这里滑杆已是"用户的真实字号", 才允许用户改它落库
+        UpdateSubtitleButton();
 
         // LibVLC 走进程级共享单例(见 VlcCore): 初始化全进程只做一次, 且永不在这里释放。
         // 反复 new/Dispose 原生库会引发 Windows 级访问违例弹窗:

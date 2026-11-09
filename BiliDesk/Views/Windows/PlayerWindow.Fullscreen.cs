@@ -360,10 +360,15 @@ public partial class PlayerWindow : FluentWindow
     /// ★ 背景(issue #31): 竖屏副屏 864 DIP, 右栏占 400 后视频只剩 464 DIP;
     ///   而操作行的固定项(播放/时间/音量/倍速/清晰度/弹幕/全屏)加起来约 530 DIP,
     ///   不收起就会挤成一团甚至被裁掉。只收这两项后约 390 DIP, 常规窄窗仍可用。
+    /// ★ 阈值 560 → 620(评审意见第 2 条): 加了字幕按钮后固定项又多了约 60~70 DIP
+    ///   (按钮文案固定为"字幕", 异常态的"字幕重试"/"字幕失败" 是最宽的一档), 沿用 560 会让
+    ///   560~620 这段宽度里控制栏正好卡在临界点 —— 不收起次要项也放不下, 于是整体被裁一截。
+    ///   这里刻意**不**把字幕按钮纳入 compact 收起范围: 它是本功能唯一的入口,
+    ///   收起来等于在这段宽度里彻底没有字幕开关, 比起让后面的次要项先让位, 用户更可能想点字幕。
     /// ★ 用 VideoAreaRoot 的实际宽度判断而不是窗口宽度: 信息栏一收/一展、
     ///   窗口一拖, 视频列宽度都会变, 这个信号最直接。
     /// </summary>
-    private const double CompactControlBarWidth = 560;
+    private const double CompactControlBarWidth = 620;
 
     private void OnVideoAreaSizeChanged(object sender, SizeChangedEventArgs e)
     {

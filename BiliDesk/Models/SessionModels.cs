@@ -271,6 +271,37 @@ public class AppSettings
     /// <summary>弹幕速度档位(0 最慢 ~ 4 最快)。与 SettingsStore 同名属性是读写契约。</summary>
     public int DanmakuSpeedLevel { get; set; } = 2;
 
+    // ------------------------------------------------------------ 字幕(播放器)
+
+    /// <summary>
+    /// 字幕字号(缩放百分比, 50~300, 默认 200)。作用于播放器字幕层的 FontSize,
+    /// 基准字号见 PlayerWindow.SubtitleBaseFontSize。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public int SubtitleFontScalePercent { get; set; } = 200;
+
+    /// <summary>
+    /// 默认显示字幕(设置页「默认显示字幕」)。关掉后播放器取到人工字幕轨也不自动开。
+    /// ★ 只作用于人工上传的外挂字幕; AI 字幕按 B 站 web 端习惯默认不自动打开。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool SubtitleEnabled { get; set; } = true;
+
+    /// <summary>字幕底衬不透明度(0~100, 默认 45)。0 = 完全透明。</summary>
+    public int SubtitleBackgroundOpacityPercent { get; set; } = 45;
+
+    /// <summary>
+    /// 字幕距画面底部距离(px, 0~300, 默认 70)。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public int SubtitleBottomMargin { get; set; } = 70;
+
+    /// <summary>
+    /// 字幕默认值一次性迁移标记: 旧版默认(字号 100 / 底距 24)升级后迁到新默认(200 / 70)。
+    /// 迁移完成即置 true 并落盘, 之后用户手动改回旧值不会被再改。见 SettingsStore.ApplySanitized。
+    /// </summary>
+    public bool SubtitleDefaultsMigrated { get; set; }
+
     // ------------------------------------------------------------ 列表屏蔽(FilterService)
 
     /// <summary>

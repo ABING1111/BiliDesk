@@ -1219,6 +1219,65 @@ public class SettingsViewModel : ObservableObject
 
     public string DanmakuSpeedText => BiliDesk.Helpers.DanmakuMotion.SpeedLabel(DanmakuSpeedLevel);
 
+    // ---- 字幕: 四项设置 ----
+    // ★ 语义与播放器一一对应: 默认显示字幕 / 字幕字号 / 底衬不透明度 / 距画面底部距离。
+
+    /// <summary>
+    /// 默认显示字幕。关掉后播放器取到人工字幕轨也不自动开。
+    /// ★ 只作用于作者自制上传的外挂字幕; AI 字幕按 B 站 web 端习惯永远默认不打开。
+    /// </summary>
+    public bool SubtitleEnabled
+    {
+        get => Svc.Settings.SubtitleEnabled;
+        set
+        {
+            Svc.Settings.SetSubtitleEnabled(value);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>字幕字号倍率(50~300)</summary>
+    public int SubtitleFontScalePercent
+    {
+        get => Svc.Settings.SubtitleFontScalePercent;
+        set
+        {
+            Svc.Settings.SetSubtitleFontScalePercent(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SubtitleFontScaleText));
+        }
+    }
+
+    public string SubtitleFontScaleText => $"{SubtitleFontScalePercent}%";
+
+    /// <summary>字幕底衬不透明度(0~100)。0 = 只有文字, 没有黑底。</summary>
+    public int SubtitleBackgroundOpacityPercent
+    {
+        get => Svc.Settings.SubtitleBackgroundOpacityPercent;
+        set
+        {
+            Svc.Settings.SetSubtitleBackgroundOpacityPercent(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SubtitleBackgroundOpacityText));
+        }
+    }
+
+    public string SubtitleBackgroundOpacityText => $"{SubtitleBackgroundOpacityPercent}%";
+
+    /// <summary>字幕距画面底部距离(px)</summary>
+    public int SubtitleBottomMargin
+    {
+        get => Svc.Settings.SubtitleBottomMargin;
+        set
+        {
+            Svc.Settings.SetSubtitleBottomMargin(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SubtitleBottomMarginText));
+        }
+    }
+
+    public string SubtitleBottomMarginText => $"{SubtitleBottomMargin} px";
+
     /// <summary>
     /// 弹幕是否带半透明圆角胶囊底衬(2026-11-05 新增)。
     ///

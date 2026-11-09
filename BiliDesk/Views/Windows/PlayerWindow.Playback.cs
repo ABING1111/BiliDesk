@@ -1152,6 +1152,9 @@ public partial class PlayerWindow : FluentWindow
             //   后果是 seek 静音提前解除、缓冲提示提前消失(画面没回来声音先到)。
             //   定时器全程在跑(构造里 Start, 等待期 100ms / 平时 500ms), 少这一个调用不丢刷新。
             DispatchDanmaku();
+            // 字幕同频刷新: 与弹幕共用这一个 4Hz 心跳, 不为它单开定时器
+            // (多一个时钟就多一处要停/要还原的地方, 见上面"双时钟"那段教训)
+            UpdateSubtitleCue();
             MaybeSyncProgress();
         }));
 
