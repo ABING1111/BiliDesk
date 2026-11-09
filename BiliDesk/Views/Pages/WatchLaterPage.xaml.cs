@@ -40,9 +40,14 @@ public partial class WatchLaterPage : UserControl
     /// </summary>
     private int _autoFillCount;
 
+    /// <summary>自动加载的公共闸门: 缩放/布局变化时不立即翻页(见 <see cref="AutoLoadThrottle"/>)。</summary>
+    private readonly AutoLoadThrottle _autoLoadThrottle = new();
+
     private void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (sender is ScrollViewer sv) MaybeAutoLoad(sv);
+        if (sender is not ScrollViewer sv) return;
+        if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => MaybeAutoLoad(sv))) return;
+        MaybeAutoLoad(sv);
     }
 
     /// <summary>内容接近底部 / 不足一屏就补下一页。滚动与"屏蔽后补内容"共用这一份判断。</summary>
@@ -56,6 +61,8 @@ public partial class WatchLaterPage : UserControl
         var nearBottom = sv.ScrollableHeight - sv.VerticalOffset < 400;
         var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;
         if (!nearBottom && !contentShort) return;
+
+        if (!_autoLoadThrottle.TryEnter()) return;
 
         _autoFillCount++;
         try { vm.ShowNextPage(); }

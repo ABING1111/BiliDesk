@@ -57,6 +57,94 @@ public partial class MainWindow : FluentWindow
         PartitionCol2.ItemsSource = PartitionCatalog.Columns[2];
 
         Loaded += OnLoaded;
+
+        // ★★ 失焦后的空闲回收(2026-11-09 内存优化): 用户切到别的窗口/最小化后,
+        //   等 5 秒确认不是"快速 Alt-Tab 回来", 再做一次阻塞式 GC + 交还工作集。
+        //   为什么需要: 任务管理器里的"内存"是工作集, .NET 回收对象后不会主动把空闲页
+        //   还给系统 —— 不显式 EmptyWorkingSet, 数字会一直停在峰值附近, 这就是用户看到的
+        //   "不看视频也 200~300MB、滑几下 400MB 不回落"。
+        //   为什么是失焦而不是前台空闲: 前台时阻塞 GC 会让界面卡一下, 不值当; 后台时
+        //   用户看不见, 代价为零。
+        Deactivated += OnDeactivatedTrim;
+        Activated += OnActivatedCancelTrim;
+
+        // ★★ 前台长时间无输入也回收一次(2026-11-09): 用户开着窗口但不操作(看标题/离开座位),
+        //   工作集同样会停在 200~300MB。这里按"最后一次鼠标/滚轮/键盘输入"计时, 45 秒没动
+        //   就做一次与失焦相同的空闲回收。
+        //   · 有输入就重置 ⇒ 正常浏览时永远不会触发;
+        //   · 播放器开着时 RequestIdleRelease 内部会避让(见 VlcCore.HasLivePlayers);
+        //   · 回收只是把空闲页交还系统, 不丢数据 —— 下次操作最多多一次软缺页。
+        PreviewMouseDown += OnUserActivity;
+        PreviewMouseWheel += OnUserActivity;
+        PreviewKeyDown += OnUserActivity;
+        Loaded += (_, _) => StartForegroundIdleTimer();
+        Closed += (_, _) => _foregroundIdleTimer?.Stop();
+    }
+
+    // ------------------------------------------------------------ 前台空闲回收
+
+    /// <summary>最后一次用户输入的时刻(<see cref="Environment.TickCount64"/>)。</summary>
+    private long _lastInputTick = Environment.TickCount64;
+
+    /// <summary>前台无输入多久之后回收。见构造函数里的说明。</summary>
+    private const int ForegroundIdleMs = 45_000;
+
+    private DispatcherTimer? _foregroundIdleTimer;
+
+    private void OnUserActivity(object sender, InputEventArgs e)
+        => _lastInputTick = Environment.TickCount64;
+
+    private void StartForegroundIdleTimer()
+    {
+        if (_foregroundIdleTimer != null) return;
+        _foregroundIdleTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(15),
+        };
+        _foregroundIdleTimer.Tick += (_, _) =>
+        {
+            // 后台/最小化由 Deactivated 那条路负责, 这里只处理"窗口在前台但没人动"
+            if (!IsActive || !IsVisible || WindowState != WindowState.Normal) return;
+            if (Environment.TickCount64 - _lastInputTick < ForegroundIdleMs) return;
+            if (VlcCore.HasLivePlayers) return;
+            MemoryTrim.RequestIdleRelease();
+        };
+        _foregroundIdleTimer.Start();
+    }
+
+    /// <summary>失焦多久之后回收。见构造函数里的说明。</summary>
+    private const int IdleTrimDelayMs = 5000;
+
+    private DispatcherTimer? _idleTrimTimer;
+
+    private void OnDeactivatedTrim(object? sender, EventArgs e)
+    {
+        _idleTrimTimer ??= CreateIdleTrimTimer();
+        _idleTrimTimer.Stop();
+        _idleTrimTimer.Start();
+    }
+
+    private void OnActivatedCancelTrim(object? sender, EventArgs e) => _idleTrimTimer?.Stop();
+
+    private DispatcherTimer CreateIdleTrimTimer()
+    {
+        var t = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(IdleTrimDelayMs),
+        };
+        t.Tick += (_, _) =>
+        {
+            t.Stop();
+            // 期间可能又激活了(Alt-Tab 回来), 那就不要动
+            if (IsActive) return;
+            // 收进托盘(Hide(), 非最小化)时由 OnClosing 那条路负责; 最小化要继续往下面走 ——
+            // 最小化窗口的 IsVisible 是 false, 不能把它当成"隐藏到托盘"跳过。
+            if (!IsVisible && WindowState != WindowState.Minimized) return;
+            // 正在看视频时不要做阻塞式 GC/交还工作集 —— 会打断播放/渲染。
+            if (VlcCore.HasLivePlayers) return;
+            MemoryTrim.RequestIdleRelease();
+        };
+        return t;
     }
 
     /// <summary>
@@ -143,6 +231,11 @@ public partial class MainWindow : FluentWindow
         {
             e.Cancel = true;
             Hide();
+            // ★ 收进托盘 = 用户明确不看了: 立刻做一次"GC + 交还工作集"。
+            //   窗口已经隐藏, 阻塞几十毫秒不会被看到; 否则托盘里的进程会一直占着
+            //   一屏封面/卡片的工作集, 任务管理器里显得"关不掉"。
+            //   正在播放视频时跳过 —— 阻塞式 GC 会让画面/声音抖一下。
+            if (!VlcCore.HasLivePlayers) MemoryTrim.RequestIdleRelease();
             // 第一次收起时给个托盘气泡, 让用户知道程序没被关掉
             TrayService.Instance.NotifyMinimizedToTray();
             return;

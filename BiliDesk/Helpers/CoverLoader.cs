@@ -137,8 +137,13 @@ public static class CoverLoader
     /// 2026-09-24 从 48MB 收到 32MB: 配合"解码宽度跟着 DPI 走"(见 Cover.LoadAsync),
     /// 单张封面的开销已经降到原来的一半左右, 32MB 仍能装下 120 张以上大封面,
     /// 足够覆盖"来回滚一屏"的复用; 而首页四个 tab 全点一遍时的峰值内存明显下降。
+    ///
+    /// 2026-11-09 32MB → 24MB: 用户实测空闲 200~300MB、多滑几下突破 400MB。
+    /// 配合"卡片墙封面懒加载"(见 Cover.OnSourceChanged)之后, 真正常驻的可见封面已经
+    /// 由每面墙的 ResidentCap 管住, 这个字典更多是"滚回来时少解码一次"的加速层;
+    /// 24MB 仍能覆盖一两屏, 降下来的是纯冗余。
     /// </summary>
-    private const long MaxCacheBytes = 32L * 1024 * 1024;
+    private const long MaxCacheBytes = 24L * 1024 * 1024;
 
     /// <summary>条数上限作为第二道保险(极端情况下大量小图也不至于让字典无限增长)</summary>
     private const int MaxCacheCount = 400;
@@ -155,8 +160,13 @@ public static class CoverLoader
     /// 2560/4096 两档只有图片预览窗用(它传 4096 当"解码上限"): 不加这两档的话
     /// Quantize 会把 4096 砍回 1280, 预览大图时清晰度白白回退一截。
     /// 列表/头像的请求永远 ≤1280, 落在低档, 不受影响。
+    ///
+    /// ★ 2026-11-09 增加 256 / 384 / 576 三档(内存优化): 125% DPI + 236 DIP 卡宽算出
+    ///   ≈369px, 旧档位会直接跳到 **480**(每张 0.52MB); 有 384 档之后落在 384
+    ///   (每张 0.33MB, 省 36%), 而 384 仍比实际显示宽(295px)大 30%, 配 Fant 重采样
+    ///   不会肉眼变糊。256/576 同理收掉窄窗口、175% 缩放下的大台阶。
     /// </summary>
-    private static readonly int[] WidthSteps = { 64, 128, 192, 320, 480, 720, 960, 1280, 2560, 4096 };
+    private static readonly int[] WidthSteps = { 64, 128, 192, 256, 320, 384, 480, 576, 720, 960, 1280, 2560, 4096 };
 
     static CoverLoader()
     {
@@ -726,7 +736,7 @@ public static class Cover
     ///
     /// ★★ 为什么必须由卡片墙统一驱动, 而不是靠 LRU: 卡片墙是零虚拟化 ItemsControl,
     ///   卡片容器**永远不销毁**, 它自己的 <c>ImageBrush</c> 对位图是**强引用** ——
-    ///   <see cref="CoverLoader"/> 那 32MB 上限只能把字典里的条目挤掉, 挤不掉卡片手里的这份。
+    ///   <see cref="CoverLoader"/> 那 24MB 上限只能把字典里的条目挤掉, 挤不掉卡片手里的这份。
     ///   于是"滚过多少张"就等于"常驻多少张位图", 内存随滚动线性上涨。
     ///
     /// ★ 只松引用, **不动** <see cref="SourceProperty"/>、不动 SizeChanged 订阅、不改布局:
@@ -885,9 +895,51 @@ public static class Cover
         border.SizeChanged -= OnCoverSizeChanged;
         border.Unloaded -= OnCoverUnloaded;
         border.Unloaded += OnCoverUnloaded;
+        border.Loaded -= OnCoverLoadedDeferred;
         if (string.IsNullOrWhiteSpace(url)) return;
         border.SizeChanged += OnCoverSizeChanged;
 
+        // ★★★ 卡片墙里的封面**不在这里加载**(2026-11-09 内存优化)。
+        //
+        //   旧行为: 绑定一设上就 LoadAsync —— 而卡片墙是零虚拟化 + DeferredFill 每帧生成
+        //   24 张卡, 一页几百条就是**几百张封面同时在下载/解码**, 其中绝大多数在视口外,
+        //   用户根本看不到。CoverLoader 的 24MB LRU 只能约束字典, 约束不了每张卡片自己
+        //   ImageBrush 持有的那份位图 —— 这正是"多滑几下内存突破 400MB"的主要来源。
+        //
+        //   现在: 卡片墙里的封面只登记 Source, 由 CardWallPanel 的可见带扫描
+        //   (<see cref="Cover.Restore"/>)按需加载; 离屏卡片一张图都不解码。
+        //   ★ 卡片墙里也没人会在"未加载"时贴图, 所以这里不加载不会留下半截状态。
+        //
+        //   ★ 为什么还要区分 IsLoaded: 模板应用的那一刻 Border 可能还没挂进可视树,
+        //     此时 GetInCardWall 找不到祖先 —— 不能据此就判定"不在墙里"而提前加载。
+        //     未加载时挂一次 Loaded 回调, 等它真的进树后再判断。
+        if (CoverWindow.Enabled)
+        {
+            if (!border.IsLoaded)
+            {
+                border.Loaded += OnCoverLoadedDeferred;
+                return;
+            }
+            if (GetInCardWall(border)) return;
+        }
+
+        _ = LoadAsync(border, url);
+    }
+
+    /// <summary>
+    /// 延迟到元素真正进入可视树时再决定要不要加载(见 <see cref="OnSourceChanged"/> 末尾)。
+    /// </summary>
+    private static void OnCoverLoadedDeferred(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Border border) return;
+        border.Loaded -= OnCoverLoadedDeferred;
+
+        var url = GetSource(border);
+        if (string.IsNullOrWhiteSpace(url)) return;
+
+        // 卡片墙统一由 CardWallPanel 按可见带补图, 这里不抢
+        if (CoverWindow.Enabled && GetInCardWall(border)) return;
+        if (HasImage(border)) return;
         _ = LoadAsync(border, url);
     }
 
@@ -955,7 +1007,7 @@ public static class Cover
         // ★ 宽度还量不出来时**等一等**, 而不是退化成固定 480(2026-09-28 改):
         //   DataTemplate 一实例化绑定就生效, 那一刻 ActualWidth 必然还是 0 —— 于是
         //   "一屏几百张卡片全部按 480 解码", 而按真实宽度(VideoCard 236px → 320 档)其实
-        //   只要 1/2.25 的内存。更要命的是 CoverLoader 那 32MB 的缓存上限**管不到它**:
+        //   只要 1/2.25 的内存。更要命的是 CoverLoader 那 24MB 的缓存上限**管不到它**:
         //   卡片自己攥着 ImageBrush/BitmapImage 的引用, 缓存把条目挤掉位图也释放不掉。
         //   这正是「稍后再看」两三百条一打开内存爆掉、加载也卡的直接原因。
         //   等到 SizeChanged 报出真实宽度再解码; 元素中途被卸载就放弃, 不留挂起的等待。

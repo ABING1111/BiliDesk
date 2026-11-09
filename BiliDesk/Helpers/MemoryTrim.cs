@@ -79,6 +79,53 @@ public static class MemoryTrim
     /// </summary>
     public static void RequestTrimAndRelease() => Request(releaseWorkingSet: true, heavy: true);
 
+    /// <summary>
+    /// **空闲时**交还工作集(2026-11-09 内存优化)。
+    ///
+    /// 与 <see cref="RequestTrimAndRelease"/> 完全同一条重载路径, 只是语义更明确:
+    /// 它只应该在"用户没在看这个窗口"的时刻调用(失焦一段时间 / 最小化 / 收进托盘),
+    /// 这样阻塞式 GC 的几十到上百毫秒不会被用户感知。
+    ///
+    /// ★ 为什么必须有这一条: 用户看的是任务管理器里的"内存"(工作集)。.NET 的 GC 会
+    ///   释放托管/原生对象, 但**不会主动把已经空闲的物理页还给系统** —— 所以即使封面
+    ///   位图都被回收了, 数字也会停在峰值附近。只有 <see cref="ReleaseWorkingSet"/> 能把
+    ///   那部分让出去。
+    ///
+    /// ★ 省掉"无意义的重载": 工作集低于 <see cref="IdleReleaseMinWorkingSetBytes"/>、
+    ///   或距上次空闲回收不到 <see cref="IdleReleaseCooldownMs"/> 时直接跳过。
+    ///   否则用户每次 Alt-Tab 都会跑一遍 gen2 + LOH 压缩 + 交还工作集,
+    ///   白白烧 CPU(而且会让切回来的第一下变涩)。
+    /// </summary>
+    public static void RequestIdleRelease()
+    {
+        var ws = WorkingSetBytes();
+        // 工作集已经不高就没必要再压一次(任务管理器里看到的正是这个数字)。
+        if (ws > 0 && ws < IdleReleaseMinWorkingSetBytes) return;
+
+        // 冷却: 防止用户反复 Alt-Tab 时每次都跑一遍阻塞式 GC。
+        var now = Environment.TickCount64;
+        var last = Interlocked.Read(ref _lastIdleReleaseTick);
+        if (last != 0 && now - last < IdleReleaseCooldownMs) return;
+        Interlocked.Exchange(ref _lastIdleReleaseTick, now);
+
+        Request(releaseWorkingSet: true, heavy: true);
+    }
+
+    /// <summary>工作集低于这个值就不必再"交还"了。见 <see cref="RequestIdleRelease"/>。</summary>
+    private const long IdleReleaseMinWorkingSetBytes = 180L * 1024 * 1024;
+
+    /// <summary>两次空闲回收之间至少隔这么久。见 <see cref="RequestIdleRelease"/>。</summary>
+    private const int IdleReleaseCooldownMs = 60_000;
+
+    private static long _lastIdleReleaseTick;
+
+    /// <summary>当前进程工作集(拿不到就返回 0 = 视为"不知道", 调用方按放行处理)。</summary>
+    private static long WorkingSetBytes()
+    {
+        try { return System.Diagnostics.Process.GetCurrentProcess().WorkingSet64; }
+        catch { return 0; }
+    }
+
     private static void Request(bool releaseWorkingSet, bool heavy)
     {
         lock (Gate)

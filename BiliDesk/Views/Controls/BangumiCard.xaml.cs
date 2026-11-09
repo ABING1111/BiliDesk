@@ -71,6 +71,19 @@ public partial class BangumiCard : UserControl
 
     private void OnMouseEnter(object sender, MouseEventArgs e) => AnimateCoverScale(1.04);
 
+    /// <summary>
+    /// 鼠标在卡片上真实移动过之后再预热 LibVLC(与 VideoCard.OnHoverMove 同款)。
+    /// 不用 MouseEnter: 窗口出现在鼠标下方时 WPF 会补发 MouseEnter, 那会误触发 28MB 预热。
+    /// </summary>
+    private void OnHoverMove(object sender, MouseEventArgs e)
+    {
+        if (_prewarmRequested) return;
+        _prewarmRequested = true;
+        VlcCore.PrewarmOnDemand();
+    }
+
+    private bool _prewarmRequested;
+
     private void OnMouseLeave(object sender, MouseEventArgs e) => AnimateCoverScale(1);
 
     private void AnimateCoverScale(double zoom)

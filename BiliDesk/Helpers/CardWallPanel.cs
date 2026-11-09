@@ -49,6 +49,12 @@ public class CardWallPanel : Panel
 
     private bool _pumpQueued;
 
+    /// <summary>
+    /// 这一轮缩放期间宽度变过、但还没在"尺寸稳定"后收敛。
+    /// 见 <see cref="CardWall.IsResizing"/> / <see cref="OnResizeSettled"/>。
+    /// </summary>
+    private bool _resizePending;
+
     /// <summary>上次 Arrange 时每个孩子的 Y 坐标(与 InternalChildren 对齐), 供"可见区优先"排序。</summary>
     private readonly List<double> _arrangeY = new();
 
@@ -64,16 +70,34 @@ public class CardWallPanel : Panel
         // 挂上 CardWall.Enable 之后, SizeChanged 会驱动 CardWall.Update 写 ItemWidth ——
         // 那正是本面板要监听的"目标变化"信号, 见 OnPropertyChanged。
         //
-        // ★ 这里还要做两件事(拖窗口边缘 / 最大化时每帧都走这条路):
-        //   ① **当帧**把可见带的孩子切到"按本次宽度算出的目标宽度" —— 见 OnWallResized;
-        //   ② 按锚点把滚动偏移补回来 —— 见 Reanchor。
-        SizeChanged += (_, _) => OnWallResized();
+        // ★ 尺寸变化分两条路(2026-11-09):
+        //   · 普通宽度变化(不是连续缩放): 当帧收敛可见带 + 补锚点, 见 OnWallResized;
+        //   · 缩放进行中(CardWall.IsResizing): 只登记 _resizePending, 等 ResizeSettled
+        //     后一次性收敛 —— 逐帧重排正是"缩放时卡片抽搐"的来源。
+        SizeChanged += (_, e) =>
+        {
+            // ★ 先登记"宽度变了"再走重排逻辑: 两者都挂在 SizeChanged 上时, 处理器顺序
+            //   取决于订阅先后 —— 在这里先置位, OnWallResized 才能可靠地看到"缩放中"
+            //   而暂缓逐帧收敛(见 CardWall.IsResizing)。
+            //   ★ 0 → 实际宽度是首次布局, 不是用户缩放(见 CardWall.OnWallSizeChanged)。
+            if (e.WidthChanged && e.PreviousSize.Width > 0.5) CardWall.NotifyLayoutResize();
+            OnWallResized();
+        };
 
         // 封面内存窗口(2026-11-07 P1): 卡片是零虚拟化的, 容器永不销毁, 于是"滚过多少张"
         // 就等于"常驻多少张解码后的封面位图"。滚出视口足够远之后必须把引用放开,
         // 否则内存随滚动线性上涨。挂 Loaded/Unloaded 而不是构造: 那时才拿得到 ScrollViewer。
-        Loaded += (_, _) => AttachCoverWindow();
-        Unloaded += (_, _) => DetachCoverWindow();
+        Loaded += (_, _) =>
+        {
+            CardWall.ResizeSettled -= OnResizeSettled;
+            CardWall.ResizeSettled += OnResizeSettled;
+            AttachCoverWindow();
+        };
+        Unloaded += (_, _) =>
+        {
+            CardWall.ResizeSettled -= OnResizeSettled;
+            DetachCoverWindow();
+        };
         // 切页时页面只是 Visibility.Collapsed(见 MainWindow.ShowPage): 墙没被卸载,
         // 但用户看不见它了 —— 回到这一页时必须重扫一次, 把这一屏的封面贴回来。
         //
@@ -88,6 +112,13 @@ public class CardWallPanel : Panel
         {
             if (e.NewValue is true)
             {
+                // ★ 缩放期间在别的 tab / 别的页面上攒下的宽度变化, 回到这一屏时补一次收敛。
+                //   放在 UpdateLayout 之前: ConvergeForResize 自己会付清布局并补锚点。
+                if (_resizePending && !CardWall.IsResizing)
+                {
+                    _resizePending = false;
+                    ConvergeForResize();
+                }
                 // ★★ 先把布局付清再扫(2026-11-07 修"排行榜在小窗口下部分封面永久灰"):
                 //   页面从 Collapsed 变 Visible 的这一刻, `ArrangeTop` 可能还是**上一次可见时**
                 //   的旧值(折叠期间从不参与布局), 甚至还没被赋过。直接扫会拿到过期坐标,
@@ -99,10 +130,15 @@ public class CardWallPanel : Panel
                 // ★ 顺便重试"发现 ScrollViewer": 挂载时可能还没进可视树(见 AttachCoverWindow)。
                 TryAttachScroll();
                 UpdateCoverWindow();
+                // 回到这一屏: 取消"隐藏后延迟全放"的等待(详见 ScheduleFullReleaseWhenHidden)。
+                _hiddenReleaseGeneration++;
             }
             else
             {
                 ReleaseOffscreenCovers();
+                // 隐藏超过一小会儿后, 把**视口那一屏**也放掉 —— 隐藏页/隐藏 tab 不需要
+                // 常驻任何封面(内存优先, 回来时再按可见带补, 见 Cover.Restore)。
+                ScheduleFullReleaseWhenHidden();
             }
         };
     }
@@ -121,6 +157,17 @@ public class CardWallPanel : Panel
     /// </summary>
     private void OnWallResized()
     {
+        // ★★ 缩放进行中(拖边 / 最大化还原的系统动画 / 滚动条出现消失): **只登记, 不重排**。
+        //   旧写法每帧都在这里 RefreshNow + ConvergeBand, 而 CardWallPanel 的渐进泵与
+        //   Reanchor 也在同时跑 —— 一次拖动里可见带被重测几十次、偏移被补来补去,
+        //   用户看到的就是"卡片抽搐乱动"。现在统一等 CardWall.ResizeSettled, 由
+        //   ConvergeForResize 一次性收敛(见 OnResizeSettled)。
+        if (CardWall.IsResizing)
+        {
+            _resizePending = true;
+            return;
+        }
+
         // 补偿要等这次重排落地之后再算 —— 此刻 _arrangeY 还是"翻过一行"的旧版式。
         // 派到 Loaded 优先级 = 排在本次布局之后、渲染之前(渲染在 Render, 优先级更高)。
         QueueReanchor();
@@ -145,6 +192,16 @@ public class CardWallPanel : Panel
         // 目标值一个都没变(拖动幅度小到取整后还是同一个卡宽): 整屏重测可以省掉
         if (Math.Abs(TargetWidth - beforeW) < 0.01 && Math.Abs(TargetCover - beforeCover) < 0.01) return;
         ConvergeBand();
+    }
+
+    /// <summary>尺寸稳定后由 <see cref="CardWall.ResizeSettled"/> 调用: 一次性收敛整墙。</summary>
+    private void OnResizeSettled()
+    {
+        if (!_resizePending) return;
+        // 不可见(别的 tab / 别的页面)时不付这笔钱: 等它重新可见时再收敛(见 IsVisibleChanged)。
+        if (!IsVisible) return;
+        _resizePending = false;
+        ConvergeForResize();
     }
 
     /// <summary>
@@ -256,6 +313,7 @@ public class CardWallPanel : Panel
     public void ConvergeForResize()
     {
         _pumpQueued = false;    // 撤掉已排队的渐进帧, 防止它和这次收敛交错
+        _resizePending = false;
 
         // ★★ 先把目标尺寸按**当前**宽度算出来: Wall 的 SizeChanged 要等布局走完才发, 不强制这一下
         //   这里读到的还是旧窗口算出来的旧目标 ⇒ 下面一个孩子都不会被收敛(探针实测 收敛=0)。
@@ -485,7 +543,12 @@ public class CardWallPanel : Panel
         if (index < 0 || index >= _arrangeY.Count) return;
         var target = Math.Clamp(_arrangeY[index] - _anchorScreenY, 0, Math.Max(0, sv.ScrollableHeight));
         var before = sv.VerticalOffset;
-        if (Math.Abs(target - before) >= 0.5) sv.ScrollToVerticalOffset(target);
+        if (Math.Abs(target - before) >= 0.5)
+        {
+            // 记一笔"这是卡片墙自己的滚动": 各页面的自动加载要忽略它(见 WasProgrammaticScroll)。
+            CardWall.MarkProgrammaticScroll();
+            sv.ScrollToVerticalOffset(target);
+        }
         // 两个值都记账: "要求落到的"和"要求之前读到的" —— 延迟生效时读回来的就是后者
         // (见 IsOurOffset 的说明)。不记账的话下一次 Reanchor 会把自己的请求当成"用户滚了"。
         RememberOffset(target);
@@ -621,6 +684,27 @@ public class CardWallPanel : Panel
         _coverWindowTimer.Start();
     }
 
+    private bool _coverImmediateQueued;
+
+    /// <summary>
+    /// 排版刚变化后**尽快**扫一次(不等 150ms 防抖)。
+    ///
+    /// ★ 为什么需要: 封面改成懒加载后(见 <see cref="Cover.OnSourceChanged"/>), 首屏卡片
+    ///   要等这一轮扫描才会去取图。用 150ms 防抖会让用户先看到一屏占位色再淡入;
+    ///   排到 Loaded 优先级(本次布局之后、渲染之前)扫一次, 看起来就是"卡片出来即有图"。
+    /// ★ 同一时刻只排一次: 分帧填充连续排版的十几帧里, 前一轮还没跑完就合并掉。
+    /// </summary>
+    private void QueueCoverWindowImmediate()
+    {
+        if (_coverImmediateQueued || CardWall.IsResizing) return;
+        _coverImmediateQueued = true;
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            _coverImmediateQueued = false;
+            UpdateCoverWindow();
+        });
+    }
+
     private DispatcherTimer CreateCoverWindowTimer()
     {
         var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(CoverWindowDebounceMs) };
@@ -657,8 +741,16 @@ public class CardWallPanel : Panel
         if (!CoverWindow.Enabled) return;
 
         var sv = _coverScroll ??= VisualTreeUtil.FindAncestor<ScrollViewer>(this);
-        if (sv == null || InternalChildren.Count == 0) return;
+        if (InternalChildren.Count == 0) return;
         if (!IsVisible) return;
+
+        // ★ 兜底: 这面墙不在任何 ScrollViewer 里(正常页面都有, 但模板/测试宿主可能没有)。
+        //   没有滚动区就没有"可见带"可算 —— 直接把缺图的补上, 总比永远灰着好。
+        if (sv == null)
+        {
+            RestoreAllMissingCovers();
+            return;
+        }
 
         var viewport = sv.ViewportHeight;
         // ★★★ 视口还量不出来(切回来/首次上屏的那一拍)时**必须安排重试**:
@@ -676,23 +768,22 @@ public class CardWallPanel : Panel
         if (bands == null) return;
         var b = bands.Value;
 
-        // ★★★ 先把布局付清(2026-11-07 第六次, 修"卡片墙首屏最前面几张永远灰"):
-        //   `TransformToAncestor` 给的是**渲染位置**, 它可能滞后于 `VerticalOffset`。
-        //   首次上屏/跳滚那一拍尤其明显: 布局还没结算, 前几张卡拿到的位置是错的,
-        //   于是被判定为"不在视口内" —— 第 1 趟(pass 0)不会加载它们, 只能等第 2 趟
-        //   的限量预取, 而预取每轮只发 PrefetchBurst 个, 前几张就排在很后面。
-        //   探针实测: 首屏 24 张里稳定缺 4~12 张, 而且**总是最前面那几张**。
-        //   代价: 一次同步布局。扫描只有 150ms 防抖 + 1.5s 心跳, 完全付得起。
-        try { sv.UpdateLayout(); } catch { /* 布局异常: 按现有位置继续(总比不扫好) */ }
+        // ★★ 只在**确实需要**时付一次同步布局: 孩子数变了(分帧填充)或上一轮布局还没结算。
+        //   旧版每轮扫描都无条件 UpdateLayout 两次 —— 扫描本身是 150ms 防抖 + 1.5s 心跳,
+        //   但切 tab/首屏那几拍会连着来, 两次全量布局叠起来就是肉眼可见的顿。
+        if (!IsArrangeValid || _arrangeY.Count != InternalChildren.Count)
+        {
+            try { sv.UpdateLayout(); } catch { /* 布局异常: 按现有位置继续(总比不扫好) */ }
+        }
 
-        // ★★★ 先把布局付清(2026-11-07 第五次): `TransformToAncestor` 给的是**渲染位置**,
-        //   而它可能滞后于 `VerticalOffset` —— 尤其是 `ScrollToTop()`/跳滚这种"偏移一次跳很远"
-        //   的场景: 偏移已经变成 0, 渲染位置还是底部那一屏。
-        //   后果不是"慢", 而是**补错对象**: 扫描以为视口在底部, 于是去补底部的 24 张,
-        //   真正在顶部的 24 张一张都没发起加载 —— 探针实测要等 1.5s 心跳才纠正
-        //   (回顶后 0~1600ms 视口缺图数一直停在 24, 而全墙有图在涨)。
-        //   代价: 一次同步布局, 而扫描本身只有 150ms 防抖 + 1.5s 心跳, 完全付得起。
-        try { sv.UpdateLayout(); } catch { /* 布局异常: 按现有位置继续(总比不扫好) */ }
+        // ★★ 面板在滚动区里的位置只量一次, 之后每个孩子的纵向坐标 = panelTop + _arrangeY[i]。
+        //   旧写法对**每个孩子**做一次 TransformToAncestor(几百张卡 = 几百次可视树遍历),
+        //   而且拿的是渲染位置, 在布局刚变化时可能滞后。_arrangeY 是 ArrangeOverride 里
+        //   亲手下发的坐标, 更准也更便宜(见 ArrangeOverride)。
+        double panelTop;
+        try { panelTop = TransformToAncestor(sv).Transform(new Point(0, 0)).Y; }
+        catch { return; }
+        if (double.IsNaN(panelTop)) return;
 
         var tick = Environment.TickCount64;
         var missingInViewport = 0;
@@ -717,10 +808,16 @@ public class CardWallPanel : Panel
                 var child = InternalChildren[i];
                 if (child is not FrameworkElement fe) continue;
 
+                // 优先用 ArrangeOverride 记下的坐标(见上面 panelTop 的说明);
+                // 极少数还没排过版的孩子才退回一次 TransformToAncestor。
                 double top;
-                try { top = fe.TransformToAncestor(sv).Transform(new Point(0, 0)).Y; }
-                catch { continue; }
-                var bottom = top + fe.ActualHeight;
+                if (i < _arrangeY.Count) top = panelTop + _arrangeY[i];
+                else
+                {
+                    try { top = fe.TransformToAncestor(sv).Transform(new Point(0, 0)).Y; }
+                    catch { continue; }
+                }
+                var bottom = i < _arrangeBottom.Count ? panelTop + _arrangeBottom[i] : top + fe.ActualHeight;
                 if (double.IsNaN(top) || double.IsNaN(bottom)) continue;
 
                 var inViewport = CoverWindow.InViewport(top, bottom, viewport);
@@ -957,8 +1054,10 @@ public class CardWallPanel : Panel
     ///   而不是在这里重新算 `TransformToAncestor`: 这一刻布局正在失效(Visibility 刚变),
     ///   位置信息不可靠; 而"上一次可见时的视口"正是用户最后看到的画面。
     ///
-    /// ★ 内存上界: 每个页面常驻"它自己视口那一屏"的封面(≈24 张 ≈ 6MB),
-    ///   页面总数是固定的几个 ⇒ 总量有上界, 与"滚过多少张"无关。
+    /// ★ 内存上界: 这里先只放"视口外", 让 2 秒内快速切回来的操作为零等待;
+    ///   真的停在不看的页面由 <see cref="ScheduleFullReleaseWhenHidden"/> 在
+    ///   <see cref="HiddenReleaseDelayMs"/> 后把视口那一屏也放掉。
+    ///   ⇒ 隐藏页面的封面不会长期常驻, 与"滚过多少张"无关(2026-11-09 内存优化)。
     /// </summary>
     private void ReleaseOffscreenCovers()
     {
@@ -973,6 +1072,73 @@ public class CardWallPanel : Panel
 
             foreach (var border in CacheCoverBorders(child))
             {
+                Cover.Release(border);
+                released++;
+            }
+        }
+        if (released > 0) MemoryTrim.RequestTrim();
+    }
+
+    // ------------------------------------------------------------ 隐藏后的延迟全放
+
+    /// <summary>
+    /// "隐藏后延迟全放"的代数。每次隐藏/显示都 +1, 用来让之前排队的释放自然作废
+    /// (用户在 2 秒内切回来就不该放)。
+    /// </summary>
+    private int _hiddenReleaseGeneration;
+
+    /// <summary>隐藏多久后连视口那一屏也放掉。</summary>
+    private const int HiddenReleaseDelayMs = 2000;
+
+    /// <summary>
+    /// 卡片墙不可见(切 tab / 切页面 / 最小化到托盘)后, 延迟把**所有**封面放掉。
+    ///
+    /// ★ 为什么不在隐藏那一刻立刻全放: 用户经常在 tab 之间快速来回点, 2 秒的宽限期
+    ///   让这种操作仍然是"零等待"; 真的停在那儿不看的墙才会被清空。
+    /// ★ 为什么必须连视口那一屏也放(2026-11-09 内存优化): 首页有 4 个常驻 tab 墙,
+    ///   每面墙都留着"上次可见时那一屏"(≈24 张 ≈ 12MB) ⇒ 光隐藏 tab 就常驻几十 MB。
+    ///   释放后回到这一屏时, <see cref="UpdateCoverWindow"/> 会按可见带无条件补回来
+    ///   (MemCache 命中则同步贴图; 没命中就多一次解码, 这是内存换观感的刻意取舍)。
+    /// </summary>
+    private void ScheduleFullReleaseWhenHidden()
+    {
+        if (!CoverWindow.Enabled) return;
+        var gen = ++_hiddenReleaseGeneration;
+        _ = ReleaseAllCoversWhenStillHiddenAsync(gen);
+    }
+
+    private async System.Threading.Tasks.Task ReleaseAllCoversWhenStillHiddenAsync(int gen)
+    {
+        await System.Threading.Tasks.Task.Delay(HiddenReleaseDelayMs);
+        // await 之后正常会回到 UI 线程(WPF 的 DispatcherSynchronizationContext); 万一没有,
+        // 不要跨线程碰视觉树 —— 直接放弃这一轮(下一轮隐藏/心跳还会再排)。
+        if (!Dispatcher.CheckAccess()) return;
+        if (gen != _hiddenReleaseGeneration) return;   // 期间又显示/隐藏过, 这一轮作废
+        if (IsVisible) return;
+        ReleaseAllCovers();
+    }
+
+    /// <summary>把这一面墙所有缺图的封面都补上(只在"找不到 ScrollViewer、无法按可见带判断"时用)。</summary>
+    private void RestoreAllMissingCovers()
+    {
+        for (var i = 0; i < InternalChildren.Count; i++)
+        {
+            foreach (var border in CacheCoverBorders(InternalChildren[i]))
+            {
+                if (!Cover.HasImage(border)) Cover.Restore(border, force: true);
+            }
+        }
+    }
+
+    /// <summary>把这一面墙所有卡片的封面引用都放开(不管在不在视口), 并解钉。</summary>
+    private void ReleaseAllCovers()
+    {
+        var released = 0;
+        for (var i = 0; i < InternalChildren.Count; i++)
+        {
+            foreach (var border in CacheCoverBorders(InternalChildren[i]))
+            {
+                if (!Cover.HasImage(border)) continue;
                 Cover.Release(border);
                 released++;
             }
@@ -1098,6 +1264,10 @@ public class CardWallPanel : Panel
         // 分帧填充会一批批地把新卡片塞进来(不会发 ScrollChanged), 首屏也可能一次排完
         // 却从没滚过 —— 每次排列之后都排一次封面窗口扫描(内部有 150ms 合并)。
         QueueCoverWindow();
+        // ★ 再排一次"布局稳定后立刻扫": 封面现在改成**按可见带懒加载**(见 Cover.OnSourceChanged),
+        //   首次上屏不能等 150ms 防抖, 否则会看到一屏占位色再淡入。扫描本身已经改成
+        //   O(N) 的坐标比较(不再逐孩子 TransformToAncestor), 每次排列付得起。
+        QueueCoverWindowImmediate();
 
         return finalSize;
     }
@@ -1117,6 +1287,13 @@ public class CardWallPanel : Panel
 
     private void QueuePump()
     {
+        // 缩放进行中不排渐进帧: 等 ResizeSettled 后由 ConvergeForResize 一次性收敛整墙。
+        // 否则拖动/最大化的每一帧都会排一轮"改 16 张 + 补偏移", 与 OnWallResized 叠成抽搐。
+        if (CardWall.IsResizing)
+        {
+            _resizePending = true;
+            return;
+        }
         if (_pumpQueued) return;
         _pumpQueued = true;
         // Background 优先级 = DeferredFill 同款: 输入和渲染先走, 重活插在空闲间隙里。
@@ -1127,6 +1304,13 @@ public class CardWallPanel : Panel
     private void PumpStep()
     {
         _pumpQueued = false;
+
+        // 缩放期间不收敛(见 QueuePump): 已经排上的那一跳也要在这里让路。
+        if (CardWall.IsResizing)
+        {
+            _resizePending = true;
+            return;
+        }
 
         var targetW = TargetWidth;
         var targetCover = TargetCover;

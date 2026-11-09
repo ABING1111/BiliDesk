@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
@@ -27,7 +28,64 @@ public partial class DynamicCard : UserControl
     public DynamicCard()
     {
         InitializeComponent();
+        // 右键菜单第一次弹出时才建(与 VideoCard 同款: 动态流默认排版也是几百张卡,
+        // 每张预建一套菜单纯属浪费 —— 见 VideoCard._menu 的说明)。
+        ContextMenuOpening += OnContextMenuOpening;
         DataContextChanged += (_, _) => _pressInside = false;
+        // 鼠标在卡片上真实移动 = 可能要看视频: 预热 LibVLC(见 VlcCore.PrewarmOnDemand)。
+        // 不用 MouseEnter —— 窗口出现在鼠标下方时 WPF 也会补发 MouseEnter, 那会误触发预热。
+        MouseMove += (_, _) =>
+        {
+            if (_prewarmRequested) return;
+            _prewarmRequested = true;
+            VlcCore.PrewarmOnDemand();
+        };
+    }
+
+    private bool _prewarmRequested;
+
+    // ------------------------------------------------------------ 懒建的右键菜单
+
+    private ContextMenu? _menu;
+
+    private void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        _menu ??= BuildMenu();
+        // 在事件里挂上, 由 WPF 的 ContextMenuService 打开(见 VideoCard 同款说明)。
+        ContextMenu = _menu;
+    }
+
+    private ContextMenu BuildMenu()
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(MakeMenuItem("预览封面", "\uE8B9", OnPreviewCover));
+        menu.Items.Add(MakeMenuItem("下载封面到本地", "\uE896", OnDownloadCover));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeMenuItem("下载视频到本地", "\uE896", OnDownloadVideo,
+            "可选清晰度与保存位置"));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeMenuItem("加入稍后再看", "\uE7C1", OnAddWatchLater));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeMenuItem("屏蔽此 UP 主", "\uE77B", OnBlockUp,
+            "所有列表里都不再显示这个 UP 主"));
+        menu.Items.Add(MakeMenuItem("屏蔽此标题", "\uE7BA", OnBlockTitle,
+            "只隐藏标题完全相同的这一条"));
+        return menu;
+    }
+
+    private static MenuItem MakeMenuItem(string header, string glyph, RoutedEventHandler onClick, string? toolTip = null)
+    {
+        var item = new MenuItem { Header = header };
+        if (!string.IsNullOrEmpty(toolTip)) item.ToolTip = toolTip;
+        item.Icon = new TextBlock
+        {
+            Text = glyph,
+            FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+            FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        item.Click += onClick;
+        return item;
     }
 
     private void OnCardPress(object sender, MouseButtonEventArgs e)

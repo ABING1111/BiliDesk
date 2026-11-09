@@ -24,6 +24,9 @@ public partial class HomePage : UserControl
     // 防止连续自动填充死循环
     private int _autoFillCount;
 
+    /// <summary>自动加载的公共闸门: 缩放/布局变化时不立即翻页(见 <see cref="AutoLoadThrottle"/>)。</summary>
+    private readonly AutoLoadThrottle _autoLoadThrottle = new();
+
     /// <summary>
     /// 点深浅色按钮时的鼠标位置(相对本页坐标系)。
     /// 圆形扩散动画需要它当圆心; Click 事件本身不带坐标, 所以在这里提前记下来。
@@ -570,6 +573,12 @@ public partial class HomePage : UserControl
     {
         if (_autoFillCount > 5) return; // 防止死循环
         if (vm.LoadingMore || vm.Loading) return;
+
+        // ★ 防"延迟检查跑到别的 tab 上"(2026-11-09): AutoLoadThrottle 会把布局变化的判断
+        //   推迟 300ms, 这期间用户可能已经切了 tab。那种情况下不能用**旧 tab 的滚动位置**
+        //   去决定要不要给**新 tab** 加载。
+        if (CurrentTabFromVm() is { } activeTab && !ReferenceEquals(ScrollOf(activeTab), sv)) return;
+
         // 分帧填充进行中: 每补一批 ScrollableHeight 都在长, 这时判"内容不够一屏"是错的,
         // 会带着空列表去拉下一页; 等填充完(补帧引发的 ScrollChanged 会再来)再判。
         // ★ 四个 tab 各有各的 fill, 这里要判"当前 tab 那个"还在不在补帧(不是某个全局的)。
@@ -578,6 +587,10 @@ public partial class HomePage : UserControl
         var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
         var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;
         if (distanceToBottom > AutoLoadThreshold && !contentShort) return;
+
+        // ★ 冷却闸门: 缩放/布局变化会连着发很多 ScrollChanged, 稳定后也可能连续判中。
+        //   没有它的话一次拖窗口能触发好几页(见 AutoLoadThrottle)。
+        if (!_autoLoadThrottle.TryEnter()) return;
 
         _autoFillCount++;
         try { await vm.LoadMoreAsync(); }
@@ -588,21 +601,27 @@ public partial class HomePage : UserControl
     {
         UpdateBackToTop((ScrollViewer)sender);
         if (DataContext is not HomeViewModel vm) return;
-        _ = TriggerAutoLoad((ScrollViewer)sender, vm);
+        var sv = (ScrollViewer)sender;
+        if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = TriggerAutoLoad(sv, vm))) return;
+        _ = TriggerAutoLoad(sv, vm);
     }
 
     private void RecommendScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         UpdateBackToTop((ScrollViewer)sender);
         if (DataContext is not HomeViewModel vm) return;
-        _ = TriggerAutoLoad((ScrollViewer)sender, vm);
+        var sv = (ScrollViewer)sender;
+        if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = TriggerAutoLoad(sv, vm))) return;
+        _ = TriggerAutoLoad(sv, vm);
     }
 
     private void LiveScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         UpdateBackToTop((ScrollViewer)sender);
         if (DataContext is not HomeViewModel vm) return;
-        _ = TriggerAutoLoad((ScrollViewer)sender, vm);
+        var sv = (ScrollViewer)sender;
+        if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = TriggerAutoLoad(sv, vm))) return;
+        _ = TriggerAutoLoad(sv, vm);
     }
 
     /// <summary>点「我关注的主播」头像 → 直接进直播间(与直播卡片同一个入口)</summary>
@@ -631,8 +650,10 @@ public partial class HomePage : UserControl
     {
         UpdateBackToTop((ScrollViewer)sender);
         if (DataContext is not HomeViewModel vm) return;
-        SyncBangumiActiveSection((ScrollViewer)sender, vm);
-        _ = TriggerAutoLoad((ScrollViewer)sender, vm);
+        var sv = (ScrollViewer)sender;
+        SyncBangumiActiveSection(sv, vm);
+        if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = TriggerAutoLoad(sv, vm))) return;
+        _ = TriggerAutoLoad(sv, vm);
     }
 
     /// <summary>

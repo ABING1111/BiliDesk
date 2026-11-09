@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -178,7 +180,148 @@ public static class CardWall
 
     private static void OnWallSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (sender is FrameworkElement el) Update(el);
+        if (sender is not FrameworkElement el) return;
+
+        // ★★ 宽度变化 = "窗口在缩放"的可靠信号(高度变化不算 —— 滚动加载会让内容一变高,
+        //   那是正常的列表增长, 不是 resize)。所有墙共用一个"缩放进行中"状态,
+        //   供卡片墙面板暂缓收敛、供各页面的自动加载闸门暂缓补页 —— 见 IsResizing 的说明。
+        //   ★ 0 → 实际宽度是**首次布局**, 不是用户缩放: 不能置位, 否则首屏卡片会在
+        //     236 的设计宽度上停 220ms 再"啪"地跳到目标宽度。
+        if (e.WidthChanged && e.PreviousSize.Width > 0.5) NotifyLayoutResize();
+
+        Update(el);
+    }
+
+    // ------------------------------------------------------------ 缩放状态(全局)
+
+    /// <summary>
+    /// 现在是不是"窗口正在改大小"。
+    ///
+    /// ★★★ 为什么需要它(2026-11-09 修"缩放窗口时卡片抽搐 + 自动下滑加载"):
+    ///   窗口一改尺寸, WPF 会连续发 SizeChanged/ScrollChanged。原来的两条路径都会**逐帧**
+    ///   干活:
+    ///     · <see cref="CardWallPanel"/> 每帧刷新可见带 + 排一批卡片收敛 + 调锚点补偏移;
+    ///     · 各页面的 <c>ScrollChanged</c> 只要看到"离底很近 / 内容不满一屏"就拉下一页 ——
+    ///       而 resize 的中间态里 ScrollableHeight 是按新宽度重算的, 旧 VerticalOffset 会让
+    ///       这两个判据临时为真 ⇒ 连续自动加载。
+    ///   现在统一用一个"缩放进行中"的闸: 面板暂停重排, 页面暂停自动加载; 尺寸稳定
+    ///   <see cref="ResizeSettleMs"/> 毫秒后发一次 <see cref="ResizeSettled"/>, 由面板
+    ///   **一次性**收敛。用户看到的才是"松手后重排一次", 而不是每帧抽一下。
+    ///
+    /// ★ 只认**宽度**变化: 卡片墙的高度会随滚动加载不断长, 把高度也当 resize 的话,
+    ///   用户在正常翻页时会一直被当成"正在缩放", 收敛和自动加载都被冻结。
+    /// </summary>
+    public static bool IsResizing { get; private set; }
+
+    /// <summary>尺寸稳定(距最后一次宽度变化超过 <see cref="ResizeSettleMs"/>)时触发一次。</summary>
+    public static event Action? ResizeSettled;
+
+    /// <summary>距最后一次宽度变化多久算"稳定"。见 <see cref="IsResizing"/>。</summary>
+    private const int ResizeSettleMs = 220;
+
+    private static DispatcherTimer? _settleTimer;
+
+    /// <summary>
+    /// 最近一次"由卡片墙自己发起的滚动"的时刻(<see cref="Environment.TickCount64"/>)。
+    ///
+    /// ★ 用途: 各页面的自动加载闸门要忽略这种滚动。它只是 <see cref="CardWallPanel"/>
+    ///   为了在重排后把可见区钉回原位, 不是用户想往下翻 —— 如果按它判"到底了",
+    ///   缩放窗口/收敛卡片时会莫名其妙多加载一页(2026-11-09 用户报的"自己下滑加载")。
+    /// </summary>
+    private static long _lastProgrammaticScrollTick;
+
+    /// <summary>最近 <paramref name="windowMs"/> 毫秒内有没有卡片墙发起的滚动。</summary>
+    public static bool WasProgrammaticScroll(int windowMs = 250)
+    {
+        var t = Interlocked.Read(ref _lastProgrammaticScrollTick);
+        return t != 0 && Environment.TickCount64 - t < windowMs;
+    }
+
+    /// <summary>卡片墙在调用 ScrollToVerticalOffset 之前调一次(见 EndAnchor)。</summary>
+    internal static void MarkProgrammaticScroll()
+        => Interlocked.Exchange(ref _lastProgrammaticScrollTick, Environment.TickCount64);
+
+    /// <summary>
+    /// 墙的宽度变了(窗口缩放 / 系统最大化动画 / 滚动条出现消失)。
+    /// 由 <see cref="OnWallSizeChanged"/> 与 <see cref="CardWallPanel"/> 的 SizeChanged 调用。
+    /// </summary>
+    internal static void NotifyLayoutResize()
+    {
+        IsResizing = true;
+        // 拖动边缘时由 WM_EXITSIZEMOVE 明确结束(见 NotifyModalResize), 不能靠计时器 ——
+        // 否则用户拖到一半停住 220ms, 卡片会在拖动过程中突然收敛一次, 反而更抽。
+        if (_modalResizing)
+        {
+            // ★ 兜底: 万一拖动的窗口在拖动中途被关掉(EXITSIZEMOVE 永远不会来),
+            //   不能让 _modalResizing 永久为 true —— 那会把所有卡片墙和自动加载一起冻住。
+            //   每次宽度变化都续期, 连续拖动不会误触发; 真的停手 5 秒才强制收尾。
+            StartModalSafetyTimer();
+            return;
+        }
+        RestartSettleTimer();
+    }
+
+    /// <summary>拖动中途窗口被销毁时的安全收尾(见 <see cref="NotifyLayoutResize"/>)。</summary>
+    private static void StartModalSafetyTimer()
+    {
+        _modalSafetyTimer ??= CreateModalSafetyTimer();
+        _modalSafetyTimer.Stop();
+        _modalSafetyTimer.Start();
+    }
+
+    private static void StopModalSafetyTimer() => _modalSafetyTimer?.Stop();
+
+    private static DispatcherTimer? _modalSafetyTimer;
+
+    private static DispatcherTimer CreateModalSafetyTimer()
+    {
+        var t = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(5),
+        };
+        t.Tick += (_, _) =>
+        {
+            t.Stop();
+            if (!_modalResizing) return;
+            _modalResizing = false;
+            SettleResize();
+        };
+        return t;
+    }
+
+    private static void RestartSettleTimer()
+    {
+        _settleTimer ??= CreateSettleTimer();
+        _settleTimer.Stop();
+        _settleTimer.Start();
+    }
+
+    private static void StopSettleTimer()
+    {
+        _settleTimer?.Stop();
+    }
+
+    private static DispatcherTimer CreateSettleTimer()
+    {
+        var t = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(ResizeSettleMs),
+        };
+        t.Tick += (_, _) =>
+        {
+            t.Stop();
+            SettleResize();
+        };
+        return t;
+    }
+
+    /// <summary>结束这一轮缩放, 并通知所有卡片墙"可以一次性收敛了"。</summary>
+    private static void SettleResize()
+    {
+        if (!IsResizing) return;
+        IsResizing = false;
+        try { ResizeSettled?.Invoke(); }
+        catch (Exception ex) { App.ReportError(ex); }
     }
 
     /// <summary>
@@ -217,7 +360,6 @@ public static class CardWall
         //    而拖动期间 WM_SIZE 每帧都来 —— 那就是"拖边缘一卡一卡"的来源。
         if (_modalResizing)
         {
-            _pendingWall = wall;
             EnsureThrottleTimer();
             return;
         }
@@ -232,7 +374,6 @@ public static class CardWall
     {
         var cols = ColumnsFor(avail, (int)wall.GetValue(ColumnsProperty));
         wall.SetValue(ColumnsProperty, cols);
-
         // ★ 槽位宽必须**向下取整**, 而且还要留出**取整余量**。
         //
         // 两个都是"每行少一张"的直接原因, 实测踩过(用户截图: 窗口缩到最小宽度后只排 3 张,
@@ -265,9 +406,7 @@ public static class CardWall
     /// <summary>用户是否正拖着窗口边缘(Win32 的模态缩放循环)</summary>
     private static bool _modalResizing;
 
-    /// <summary>节流期间攒下的"最后那个要算的墙"</summary>
-    private static FrameworkElement? _pendingWall;
-
+    /// <summary>拖动期间的合流计时器(到点后把所有墙的目标值补算一遍)</summary>
     private static DispatcherTimer? _throttleTimer;
 
     /// <summary>
@@ -280,11 +419,22 @@ public static class CardWall
     public static void NotifyModalResize(bool entering)
     {
         _modalResizing = entering;
-        if (entering) return;
 
-        // 松手: 先收掉定时器, 再立刻把攒下的那次算掉(不靠定时器, 免得最后一下要等 120ms)
+        if (entering)
+        {
+            // 拖动期间所有墙都进入"缩放中": 面板暂停收敛, 页面暂停自动加载。
+            IsResizing = true;
+            StopSettleTimer();
+            StartModalSafetyTimer();
+            return;
+        }
+
+        // 松手: 先收掉定时器, 再立刻把所有墙的目标值补算一遍(不靠定时器, 免得最后一下要等 120ms),
+        // 然后结束缩放状态 —— 面板收到 ResizeSettled 后一次性收敛可见带。
+        StopModalSafetyTimer();
         StopThrottleTimer();
         FlushPending();
+        SettleResize();
     }
 
     private static void EnsureThrottleTimer()
@@ -308,13 +458,26 @@ public static class CardWall
     /// <summary>把攒下的最后一次算掉。攒着的墙可能已经不在可视树上了(切页), 那就读不到宽度、直接跳过。</summary>
     private static void FlushPending()
     {
-        var wall = _pendingWall;
-        _pendingWall = null;
-        if (wall == null) return;
+        // ★ 遍历**所有**墙, 不能只补最后那面(2026-11-09): 拖动时每面墙的 SizeChanged 都会
+        //   走进 Update, 但 _modalResizing 让它们只登记不计算, 只记住最后一个的话,
+        //   其余墙的目标尺寸会停在旧值, 切回那些 tab 时宽度是错的。这里统一补算。
+        List<FrameworkElement> walls;
+        lock (_walls)
+        {
+            _walls.RemoveAll(w => !w.TryGetTarget(out _));
+            walls = _walls
+                .Select(w => w.TryGetTarget(out var t) ? t : null)
+                .Where(t => t != null)
+                .Select(t => t!)
+                .ToList();
+        }
 
-        var avail = wall.ActualWidth;
-        if (double.IsNaN(avail) || avail <= 0) return;
-        ApplyTo(wall, avail);
+        foreach (var wall in walls)
+        {
+            var avail = wall.ActualWidth;
+            if (double.IsNaN(avail) || avail <= 0) continue;
+            ApplyTo(wall, avail);
+        }
     }
 
     /// <summary>

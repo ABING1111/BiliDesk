@@ -131,15 +131,21 @@ public partial class SearchPage : UserControl
     /// </summary>
     private int _autoFillCount;
 
+    /// <summary>自动加载的公共闸门: 缩放/布局变化时不立即翻页(见 <see cref="AutoLoadThrottle"/>)。</summary>
+    private readonly AutoLoadThrottle _autoLoadThrottle = new();
+
     /// <summary>
     /// 结果区滚到接近底部(或内容不足一屏)就自动翻下一页 —— 与首页/稍后再看页同一套写法。
     ///
     /// 用 async void + await 是**故意的**: _autoFillCount 计数跨 await 必须还有效, 否则
     /// 几次请求同时在飞, 闸门等于没有(首页那边也是这么写的, 见 HomePage.TriggerAutoLoad)。
     /// </summary>
-    private async void OnResultScrollChanged(object sender, ScrollChangedEventArgs e)
+    private void OnResultScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (sender is ScrollViewer sv) await MaybeAutoLoadAsync(sv);
+        if (sender is not ScrollViewer sv) return;
+        // 缩放/布局变化会连续发 ScrollChanged, 不能立即判(见 AutoLoadThrottle)。
+        if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = MaybeAutoLoadAsync(sv))) return;
+        _ = MaybeAutoLoadAsync(sv);
     }
 
     /// <summary>内容接近底部 / 不足一屏就补下一页。滚动和"屏蔽后补内容"共用这一份判断。</summary>
@@ -153,6 +159,8 @@ public partial class SearchPage : UserControl
         var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
         var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;
         if (distanceToBottom > AutoLoadThreshold && !contentShort) return;
+
+        if (!_autoLoadThrottle.TryEnter()) return;
 
         _autoFillCount++;
         try { await vm.LoadMoreAsync(); }

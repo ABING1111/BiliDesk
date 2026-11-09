@@ -113,13 +113,13 @@ public class CoverWindowTests
     // ---------------------------------------------------------------- 常驻上限
 
     [Fact]
-    public void 常驻上限是视口张数的3倍()
+    public void 常驻上限是视口张数的2点5倍()
     {
-        // 视口 24 张 ⇒ 上限 72 张。这是"内存有上界"与"不会刚补上就被挤掉"的折中,
+        // 视口 24 张 ⇒ 上限 60 张。这是"内存有上界"与"不会刚补上就被挤掉"的折中,
         // 见 CoverWindow.ResidentScreens 的说明。
-        Assert.Equal(72, CoverWindow.ResidentCap(24));
-        Assert.Equal(36, CoverWindow.ResidentCap(12));
-        Assert.Equal(120, CoverWindow.ResidentCap(40));
+        Assert.Equal(60, CoverWindow.ResidentCap(24));
+        Assert.Equal(30, CoverWindow.ResidentCap(12));
+        Assert.Equal(100, CoverWindow.ResidentCap(40));
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class CoverWindowTests
     {
         // 补图区间 = 视口 ± 半屏 = 2 屏。上限若 ≤ 2 屏, 就会出现
         // "刚补上 → 名额不够 → 立刻被放掉 → 下一轮又补"的循环。
-        // 这里钉住"至少留一整屏的余量"。
+        // 这里钉住"至少留半屏的余量"。
         Assert.True(CoverWindow.ResidentScreens >= 1 + 2 * CoverWindow.PrefetchScreens,
             $"ResidentScreens={CoverWindow.ResidentScreens} 必须 >= " +
             $"{1 + 2 * CoverWindow.PrefetchScreens}(补图区间) + 余量");

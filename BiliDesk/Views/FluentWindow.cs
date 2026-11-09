@@ -4,7 +4,6 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
@@ -407,9 +406,10 @@ public class FluentWindow : Window
     /// ★ 注意:`DwmInterop.DisableWindowTransitions` 的删除方向与上面相反 —— 播放器全屏以前是
     ///   "秒切"(主动关掉系统动画), 现在正是要靠系统动画, 所以那里已改为**不再关**。
     ///
-    /// ★ 唯一保留的动作是"把卡片墙按新宽度**一次性收敛**"(见 <see cref="CardWallPanel.ConvergeForResize"/>):
-    ///   那不是动画, 是布局结算 —— 系统动画期间卡片若还按 16 张一批渐进重排, 就会在缩放动画里
-    ///   一批批顶走可见区(历史上"抽动"的根)。先收敛好, 系统动画的每一帧才是静止的内容。
+    /// ★ 2026-11-09: 最大化/还原**不在状态变化那一刻收敛**了。系统现在会播一段窗口动画,
+    ///   期间 WPF 每帧都会发 SizeChanged; 当场收敛 + 逐帧收敛叠在一起正是用户报的"抽搐"。
+    ///   改为只登记"缩放中"(CardWall.IsResizing), 由卡片墙的宽度 SizeChanged 不断续期,
+    ///   尺寸稳定 220ms 后再一次性收敛(CardWall.ResizeSettled → ConvergeForResize)。
     /// </summary>
     protected override void OnStateChanged(EventArgs e)
     {
@@ -420,31 +420,9 @@ public class FluentWindow : Window
         if (WindowState == WindowState.Minimized) return;
         if (Content is not FrameworkElement) return;
 
-        // ★★ 必须等这次状态变化引发的**真实窗口尺寸**落到布局上再动手(2026-10-01 定位):
-        //   `StateChanged` 是在窗口真正被 resize **之前**发的 —— 此刻即使 `UpdateLayout()`, 拿到的
-        //   还是**旧客户区**尺寸, 于是卡片墙按旧宽度算出的"目标卡宽"与现状相同 ⇒ 收敛一个孩子都动不了
-        //   (探针实测 `收敛=0`), 之后渐进的 PumpStep 才把**整墙含视野上方**按 16 张一批地收敛
-        //   (150 张要 10 批、约 600ms), 而卡片高度随宽度变 ⇒ 可见区被一批批顶走。
-        //   放到 Background 优先级(= 这批消息处理完、resize 与布局/渲染已经跑过)再收敛, 目标值才是新的。
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
-        {
-            if (!IsLoaded) return;
-            if (WindowState == WindowState.Minimized) return;
-            if (Content is not FrameworkElement root) return;
-
-            WalkCardWallPanels(root, p => p.ConvergeForResize());
-        }));
-    }
-
-    /// <summary>
-    /// 遍历可视树里的卡片墙面板(首页那种零虚拟化墙), 供状态变化做"一次性收敛"协作。
-    /// 只有挂了卡片墙的页面有实例 —— 设置页/"我的"页走这里等于空操作。
-    /// </summary>
-    private static void WalkCardWallPanels(DependencyObject d, Action<CardWallPanel> visit)
-    {
-        if (d is CardWallPanel panel) visit(panel);
-        int n = VisualTreeHelper.GetChildrenCount(d);
-        for (int i = 0; i < n; i++) WalkCardWallPanels(VisualTreeHelper.GetChild(d, i), visit);
+        // 只需置位"缩放中": 真正的收敛由稳定后的 ResizeSettled 触发。
+        // 系统动画期间每帧的 SizeChanged 会继续把这个状态续期(见 CardWall.OnWallSizeChanged)。
+        CardWall.NotifyLayoutResize();
     }
 
     // ------------------------------------------------------------ 拖动缩放: 让重活先让路

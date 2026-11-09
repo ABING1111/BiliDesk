@@ -93,18 +93,34 @@ public static class VlcCore
     }
 
     /// <summary>
-    /// 后台预热: 把原生库初始化 + 插件扫描的开销提前到应用启动阶段,
-    /// 这样用户第一次点开视频时不用再等这几百毫秒。
+    /// 后台预热: 把原生库初始化 + 插件扫描的开销提前到"用户已经表现出要看的意图"时,
+    /// 这样第一次点开视频通常不用再等那几百毫秒。
+    ///
+    /// ★★★ 2026-11-09: 不再在**启动**时预热。实测(本机 1080p/125%)LibVLC 的插件扫描
+    ///   会让进程常驻多约 **28MB 私有内存 / 31MB 工作集** —— 而绝大多数启动会话
+    ///   用户根本没点视频。现在改为**第一次悬停视频卡片时**再预热(见 VideoCard.OnMouseEnter),
+    ///   既保住了"悬停→点击"这段通常有几百毫秒的准备时间, 又不让只看列表的用户白付这笔内存。
+    ///   真的一启动就点视频(没经过悬停)也不会坏, 只是首次打开多等一次初始化。
+    ///
+    /// ★ 设环境变量 <c>BILIDESK_NO_VLC_PREWARM=1</c> 可完全关闭预热(内存敏感时用)。
     /// 失败只写日志, 不影响启动(真正的错误会在用户点开视频时暴露)。
     /// </summary>
-    public static void Prewarm()
+    public static void PrewarmOnDemand()
     {
+        if (Environment.GetEnvironmentVariable("BILIDESK_NO_VLC_PREWARM") == "1") return;
+        if (Interlocked.Exchange(ref _prewarmStarted, 1) != 0) return;
+
         _ = Task.Run(() =>
         {
             try { Get(); }
             catch (Exception ex) { App.ReportError(ex); }
         });
     }
+
+    private static int _prewarmStarted;
+
+    /// <summary>当前有没有存活的播放器窗口(供"空闲回收"避让正在播放/暂停的视频)。</summary>
+    public static bool HasLivePlayers => Volatile.Read(ref _livePlayers) > 0;
 
     /// <summary>登记一个窗口级 MediaPlayer(PlayerWindow 构造成功后调用)</summary>
     public static void RegisterPlayer() => Interlocked.Increment(ref _livePlayers);

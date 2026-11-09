@@ -63,11 +63,24 @@ public partial class HistoryPage : UserControl
 
     // ------------------------------------------------------------ 滚动: 自动翻页
 
+    /// <summary>自动加载的公共闸门: 缩放/布局变化时不立即翻页(见 <see cref="AutoLoadThrottle"/>)。</summary>
+    private readonly AutoLoadThrottle _autoLoadThrottle = new();
+
     /// <summary>滚动到接近底部就自动加载下一页</summary>
-    private async void OnScrollChanged(object sender, ScrollChangedEventArgs e)
+    private void OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (e.ExtentHeight <= 0 || e.ViewportHeight <= 0) return;
-        if (e.VerticalOffset < e.ExtentHeight - e.ViewportHeight - 240) return;
+        if (sender is not ScrollViewer sv) return;
+        // ★ 缩放/布局变化会连续发 ScrollChanged, 这一拍的高度不是稳定版式 —— 不能立即翻页。
+        //   交给 AutoLoadThrottle 在布局稳定后补一次判断(短列表也能在稳定后补上下一页)。
+        if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = MaybeLoadMoreAsync(sv))) return;
+        _ = MaybeLoadMoreAsync(sv);
+    }
+
+    private async Task MaybeLoadMoreAsync(ScrollViewer sv)
+    {
+        if (sv.ExtentHeight <= 0 || sv.ViewportHeight <= 0) return;
+        if (sv.VerticalOffset < sv.ExtentHeight - sv.ViewportHeight - 240) return;
+        if (!_autoLoadThrottle.TryEnter()) return;
         if (Vm is { HasMore: true, Loading: false, LoadingMore: false } vm)
             await vm.LoadAsync(reset: false);
     }

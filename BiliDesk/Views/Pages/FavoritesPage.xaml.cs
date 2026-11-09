@@ -202,12 +202,24 @@ public partial class FavoritesPage : UserControl
     private void OnBackToMineClick(object sender, RoutedEventArgs e)
         => App.MainVm.Navigate(PageKey.Mine);
 
+    /// <summary>自动加载的公共闸门: 缩放/布局变化时不立即翻页(见 <see cref="AutoLoadThrottle"/>)。</summary>
+    private readonly AutoLoadThrottle _autoLoadThrottle = new();
+
     /// <summary>列表滚动到底部自动加载下一页</summary>
-    private async void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
+    private void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (e.ExtentHeight > 0 && e.VerticalOffset >= e.ExtentHeight - e.ViewportHeight - 120
+        if (sender is not ScrollViewer sv) return;
+        // ★ 缩放/布局变化期间不要立即判; 交给 AutoLoadThrottle 在稳定后补一次(短列表也能补上)。
+        if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = MaybeLoadMoreAsync(sv))) return;
+        _ = MaybeLoadMoreAsync(sv);
+    }
+
+    private async Task MaybeLoadMoreAsync(ScrollViewer sv)
+    {
+        if (sv.ExtentHeight > 0 && sv.VerticalOffset >= sv.ExtentHeight - sv.ViewportHeight - 120
             && Vm is { HasMore: true } vm)
         {
+            if (!_autoLoadThrottle.TryEnter()) return;
             await vm.LoadMoreAsync();
         }
     }

@@ -2246,4 +2246,111 @@
         <Setter Property="BorderThickness" Value="1.6" />
     </Style>
 
+    <!-- ================================================================
+         视频卡片样式(2026-11-09 从 VideoCard.xaml 的 UserControl.Resources 搬到这里)
+
+         ★ 为什么要搬: VideoCard 的实例数 = 列表里累积的卡片数(零虚拟化 + 无限滚动,
+           滚几百条就是几百个实例)。写在 UserControl.Resources 里的 Style 是**每个实例
+           各解析一份**, 而这几条样式完全不随实例变化 —— 放到应用级资源里只解析一次,
+           几百张卡就少几百份 Style/Setter/Trigger 对象。这是"滑动越多内存越高"的
+           一部分固定开销(见 2026-11-09 的内存优化)。
+         ================================================================ -->
+
+    <!--
+        卡片本体: 封面 + 文字区。用户指定"标题文字直接以软件背景衬托",
+        所以 Border 的 Background 是透明的(旧版是 CardBackgroundBrush, 文字区多出一条底色带);
+        保留 1px 描边 + 圆角, 让每张卡片在列表里仍然互相独立。
+        悬停反馈走代码里的整卡缩放动画(见 VideoCard.xaml.cs)。
+    -->
+    <Style x:Key="CardSurfaceStyle" TargetType="Border">
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+    </Style>
+
+    <!--
+        编辑模式下的选中圆标。基于 SelectionBubbleStyle, 只加一条"选中就换成强调色"的触发器。
+        依赖卡片 DataContext(= VideoItem)上的 IsSelected —— 只有 VideoCard 用这个键。
+    -->
+    <Style x:Key="CardSelectBubble" TargetType="Border"
+           BasedOn="{StaticResource SelectionBubbleStyle}">
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- ===== 封面下方文字区 =====
+         用户要求: 鼠标**停在标题/UP 主名上**时才变 B 站粉(不是整卡悬停就变), 所以
+         DataTrigger 绑的是 TextBlock 自己的 IsMouseOver(RelativeSource Self)。
+         Background=Transparent 是必需的: TextBlock 没有背景时不参与命中测试,
+         鼠标停在文字右侧的空白处就不会触发悬停态。 -->
+    <Style x:Key="CardTitleStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="MaxHeight" Value="40" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True">
+                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+    <Style x:Key="CardAuthorStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True">
+                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- 「已关注」小标签(2026-11-08): 首页推荐页里, 该视频的 UP 主是当前账号已关注的。
+         ★ 位置: 文字区第二行的**行首**(UP 名左边), 与 B 站网页版一致。
+         ★ 颜色用**实底强调粉 + 白字**(用户第二次反馈"颜色用明显一点的")。
+         ★ IsHitTestVisible=False: 它紧贴可点击的 UP 名, 不能截走点击。 -->
+    <Style x:Key="FollowedBadgeStyle" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="CornerRadius" Value="3" />
+        <Setter Property="Padding" Value="5,1" />
+        <Setter Property="Margin" Value="0,0,5,0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+    </Style>
+
+    <!-- 封面角标(播放量/弹幕/时长): 卡片一悬停就淡出, 取消悬停再淡回。
+         放大的是封面, 角标压在上面会挡住画面 —— 这也是 B 站网页版的行为。 -->
+    <Style x:Key="CoverBadgeFadeStyle" TargetType="FrameworkElement">
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                         Value="True">
+                <DataTrigger.EnterActions>
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                             To="0" Duration="0:0:0.12" />
+                        </Storyboard>
+                    </BeginStoryboard>
+                </DataTrigger.EnterActions>
+                <DataTrigger.ExitActions>
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                             To="1" Duration="0:0:0.18" />
+                        </Storyboard>
+                    </BeginStoryboard>
+                </DataTrigger.ExitActions>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
 </ResourceDictionary>

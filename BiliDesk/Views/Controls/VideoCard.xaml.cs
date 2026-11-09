@@ -80,6 +80,21 @@ public partial class VideoCard : UserControl
     private System.Collections.Specialized.INotifyCollectionChanged? _extraSource;
 
     /// <summary>
+    /// 卡片右键菜单。**第一次右键时才创建**(2026-11-09 内存优化)。
+    ///
+    /// ★ 为什么改成懒建: 以前菜单写在 XAML 的 &lt;UserControl.ContextMenu&gt; 里, 每张卡片
+    ///   实例化时就把整棵菜单树(约 10 个 MenuItem + 图标 TextBlock + 分隔线)一起建好。
+    ///   卡片墙零虚拟化 + 无限滚动, 滚几百条就是几百套完整菜单 —— 而其中绝大多数卡片
+    ///   用户**一次右键都不会点**。这笔常驻内存完全是浪费。
+    ///   现在只在真的弹出右键菜单时建一次, 之后复用。
+    /// </summary>
+    private ContextMenu? _menu;
+
+    private Separator? _extraSeparator;
+    private MenuItem? _downloadVideoMenu;
+    private MenuItem? _watchLaterMenu;
+
+    /// <summary>
     /// 把页面给的菜单项定义插进卡片右键菜单。
     /// ★ 必须在 code-behind 里动态插, 不能用 XAML 里嵌 ItemsControl + ItemTemplate 的写法:
     ///   ContextMenu 是 MenuBase, 会把 ItemsControl **本身**当做一个 item 包进 MenuItem 壳,
@@ -89,25 +104,40 @@ public partial class VideoCard : UserControl
     /// </summary>
     private void RebuildExtraMenuItems(System.Collections.ObjectModel.ObservableCollection<BiliDesk.Models.CardMenuItem>? items)
     {
-        var menu = ContextMenu;
-        if (menu == null) return;
-
         if (_extraSource != null)
             _extraSource.CollectionChanged -= OnExtraSourceChanged;
         _extraSource = items;
+
+        // 菜单还没建(这张卡从没被右键过): 只记住来源, 第一次弹菜单时会按它建。
+        if (_menu == null) return;
+
+        ApplyExtraMenuItems(items);
+    }
+
+    /// <summary>把 <paramref name="items"/> 对应的菜单壳插到已建好的菜单末尾。</summary>
+    private void ApplyExtraMenuItems(System.Collections.ObjectModel.ObservableCollection<BiliDesk.Models.CardMenuItem>? items)
+    {
+        var menu = _menu;
+        if (menu == null) return;
 
         foreach (var shell in _extraMenuShells)
             menu.Items.Remove(shell);
         _extraMenuShells.Clear();
 
+        if (_extraSeparator == null)
+        {
+            _extraSeparator = new Separator { Visibility = Visibility.Collapsed };
+            menu.Items.Add(_extraSeparator);
+        }
+
         if (items == null || items.Count == 0)
         {
             // 没有额外项时藏起分隔线, 否则菜单底部会多出一条悬空的分隔
-            ExtraSeparator.Visibility = Visibility.Collapsed;
+            _extraSeparator.Visibility = Visibility.Collapsed;
             return;
         }
 
-        ExtraSeparator.Visibility = Visibility.Visible;
+        _extraSeparator.Visibility = Visibility.Visible;
         foreach (var def in items)
         {
             var shell = new MenuItem();
@@ -128,6 +158,64 @@ public partial class VideoCard : UserControl
 
         // 定义集合运行时增删也要跟着刷新 —— 增删频率低, 整组重建最简单可靠
         items.CollectionChanged += OnExtraSourceChanged;
+    }
+
+    /// <summary>第一次需要右键菜单时构造一次(见 <see cref="_menu"/> 的说明)。</summary>
+    private ContextMenu BuildMenu()
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(MakeMenuItem("预览封面", "\uE8B9", OnPreviewCover));
+        menu.Items.Add(MakeMenuItem("下载封面到本地", "\uE896", OnDownloadCover));
+        menu.Items.Add(new Separator());
+        _downloadVideoMenu = MakeMenuItem("下载视频到本地", "\uE896", OnDownloadVideo,
+            "可选清晰度与保存位置");
+        menu.Items.Add(_downloadVideoMenu);
+        menu.Items.Add(new Separator());
+        _watchLaterMenu = MakeMenuItem("加入稍后再看", "\uE7C1", OnAddWatchLater);
+        menu.Items.Add(_watchLaterMenu);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeMenuItem("屏蔽此 UP 主", "\uE77B", OnBlockUp,
+            "所有列表里都不再显示这个 UP 主"));
+        menu.Items.Add(MakeMenuItem("屏蔽此标题", "\uE7BA", OnBlockTitle,
+            "只隐藏标题完全相同的这一条"));
+        _extraSeparator = new Separator { Visibility = Visibility.Collapsed };
+        menu.Items.Add(_extraSeparator);
+
+        ApplyExtraMenuItems(_extraSource as System.Collections.ObjectModel.ObservableCollection<BiliDesk.Models.CardMenuItem>);
+        return menu;
+    }
+
+    private static MenuItem MakeMenuItem(string header, string glyph, RoutedEventHandler onClick, string? toolTip = null)
+    {
+        var item = new MenuItem { Header = header };
+        if (!string.IsNullOrEmpty(toolTip)) item.ToolTip = toolTip;
+        item.Icon = new TextBlock
+        {
+            Text = glyph,
+            FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+            FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        item.Click += onClick;
+        return item;
+    }
+
+    /// <summary>
+    /// 右键菜单即将弹出: 首次建菜单, 并按当前这条视频(直播/普通)修正两个条目的显隐。
+    /// ★ 在事件里把 ContextMenu 挂上, 让 WPF 自己打开 —— 不要 e.Handled + 手动 IsOpen:
+    ///   后者会被 ContextMenuService 的打开流程覆盖, 表现为"右键没反应"。
+    /// </summary>
+    private void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        _menu ??= BuildMenu();
+
+        var isLive = DataContext is VideoItem { IsLive: true };
+        if (_downloadVideoMenu != null)
+            _downloadVideoMenu.Visibility = isLive ? Visibility.Collapsed : Visibility.Visible;
+        if (_watchLaterMenu != null)
+            _watchLaterMenu.Visibility = isLive ? Visibility.Collapsed : Visibility.Visible;
+
+        ContextMenu = _menu;
     }
 
     private void OnExtraSourceChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
@@ -153,6 +241,8 @@ public partial class VideoCard : UserControl
     {
         InitializeComponent();
         Loaded += OnLoaded;
+        // 右键菜单改成"第一次右键时才建"(见 _menu 的说明)。
+        ContextMenuOpening += OnContextMenuOpening;
         // 卡片被复用/换数据时清掉手势标记: 列表容器回收时旧的一次 Down 可能没有配对的 Up,
         // 不清的话下一条视频会带着上一张卡片的"已按下"状态, 一个漏进来的 Up 就能误播。
         DataContextChanged += (_, _) => _pressInside = false;
@@ -191,6 +281,22 @@ public partial class VideoCard : UserControl
     }
 
     private void OnMouseEnter(object sender, MouseEventArgs e) => AnimateCoverScale(1.04);
+
+    /// <summary>
+    /// 鼠标在卡片上**真的移动**过之后再预热 LibVLC(见 VlcCore.PrewarmOnDemand)。
+    ///
+    /// ★ 为什么不用 MouseEnter: 窗口刚出现时如果鼠标正好停在某张卡上, WPF 会补一个
+    ///   MouseEnter —— 那不是用户想看的信号, 却会立刻把 LibVLC 的 ~28MB 常驻内存拉起来。
+    ///   MouseMove 只由真实移动触发, 是更可靠的"意图"判据。
+    /// </summary>
+    private void OnHoverMove(object sender, MouseEventArgs e)
+    {
+        if (_prewarmRequested) return;
+        _prewarmRequested = true;
+        VlcCore.PrewarmOnDemand();
+    }
+
+    private bool _prewarmRequested;
 
     private void OnMouseLeave(object sender, MouseEventArgs e)
     {

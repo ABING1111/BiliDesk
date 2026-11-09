@@ -438,6 +438,13 @@ public partial class FollowPage : UserControl
         // 用户自己滚动过 ⇒「内容不足一屏」的连续补页额度重新开始。
         if (Math.Abs(e.VerticalChange) > 0.5) _shortContentFills = 0;
 
+        // ★★★ 2026-11-09 修"改变窗口大小时页面自己下滑加载更多":
+        //   缩放/分帧填充会连续发 ScrollChanged, 其中 Extent/Viewport 是变的 ——
+        //   这一拍的高度不是用户看着的稳定版式, 立即判"离底很近"必然误触发。
+        //   稳定后的补页由 Fill/OnLoaded/OnFilterApplied 那些显式回调负责, 这里直接让路。
+        if (CardWall.IsResizing) return;
+        if (e.ExtentHeightChange != 0 || e.ViewportHeightChange != 0) return;
+
         // ★★ 触底对齐中的重入必须立刻返回(2026-11-07 修连续下滑崩溃):
         //   ScrollIntoView 会同步引发 ScrollChanged; 若此时仍在"离底 ≤ 4px"，
         //   下面又会调一次 ScrollIntoView —— 自己调自己, 栈溢出直接杀进程。
@@ -494,6 +501,8 @@ public partial class FollowPage : UserControl
     private void TryAutoFillShortContent()
     {
         if (!IsLoaded || !IsPageActive()) return;
+        // 缩放中不补: 这时的高度不可信, 而且会与卡片墙的收敛抢布局(见 CardWall.IsResizing)。
+        if (CardWall.IsResizing) return;
         if (DataContext is not FollowViewModel vm) return;
         if (_shortContentFills >= MaxShortContentFills) return;
         if (vm.Loading || vm.LoadingMore || vm.LoadMoreError || !vm.HasMore) return;

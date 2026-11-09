@@ -5,7 +5,7 @@
              Width="{Binding (behaviors:CardWall.ItemWidth), RelativeSource={RelativeSource Self}}"
              Margin="8,10"
              Background="Transparent" Focusable="False"
-             MouseEnter="OnMouseEnter" MouseLeave="OnMouseLeave">
+             MouseEnter="OnMouseEnter" MouseLeave="OnMouseLeave" MouseMove="OnHoverMove">
     <!--
         番剧海报卡(竖版 3:4), 与 VideoCard 是两个独立控件而不是同一个的变体:
         两者除了比例不同, 角标语义也不同 —— 视频卡角标是播放量/时长, 番剧卡是
