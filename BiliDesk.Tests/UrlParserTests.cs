@@ -29,6 +29,44 @@ public class UrlParserTests
         Assert.Null(url is null ? null : UrlParser.ExtractBvid(url));
     }
 
+    // ------------------------------------------------------------ av ↔ bv
+
+    [Theory]
+    [InlineData(170001, "BV17x411w7KC")]
+    [InlineData(2, "BV1xx411c7mD")]
+    public void AvToBv_已知样例(long aid, string expected)
+    {
+        Assert.Equal(expected, UrlParser.AvToBv(aid));
+    }
+
+    [Fact]
+    public void AvToBv_非法aid返回空串()
+    {
+        Assert.Equal("", UrlParser.AvToBv(0));
+        Assert.Equal("", UrlParser.AvToBv(-1));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(170001)]
+    [InlineData(123456789)]
+    public void AvBv_双向换算(long aid)
+    {
+        var bvid = UrlParser.AvToBv(aid);
+        Assert.Equal(aid, UrlParser.BvToAv(bvid));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("BV")]
+    [InlineData("not-a-bvid")]
+    public void BvToAv_非法输入返回0(string? bvid)
+    {
+        Assert.Equal(0, UrlParser.BvToAv(bvid));
+    }
+
     // ------------------------------------------------------------ ExtractUid
 
     [Fact]

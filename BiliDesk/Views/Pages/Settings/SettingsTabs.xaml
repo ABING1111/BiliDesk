@@ -44,6 +44,34 @@
     <DataTemplate x:Key="GeneralTabTemplate">
         <StackPanel>
 
+            <!-- ============ 首页推荐 ============
+                 2026-11 恢复「网页版 / App 端」二选一(2026-10-03 曾因 App 端接口
+                 对第三方客户端可能返回通用池而删除)。默认网页版; 切换后首页会
+                 立即清空并按新来源重新加载(见 SettingsStore.SetRecommendSource)。 -->
+            <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
+                            Content="首页推荐" />
+
+            <Border Style="{StaticResource SettingsCardStyle}">
+                <Grid Style="{StaticResource SettingsRowStyle}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                        <TextBlock Text="推荐来源" Style="{StaticResource SettingsRowTitleStyle}" />
+                        <TextBlock Text="{Binding RecommendSourceHint}"
+                                   Style="{StaticResource SettingsRowDescStyle}" />
+                        <TextBlock Text="切换后首页推荐会立即清空并重新加载"
+                                   Style="{StaticResource SettingsRowDescStyle}"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </StackPanel>
+                    <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
+                              Width="170" VerticalAlignment="Center"
+                              ItemsSource="{Binding RecommendOptions}"
+                              SelectedItem="{Binding RecommendSelected, Mode=TwoWay}" />
+                </Grid>
+            </Border>
+
             <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
                             Content="外观" />
 
@@ -340,11 +368,6 @@
     <!-- ==================== 播放 ==================== -->
     <DataTemplate x:Key="PlaybackTabTemplate">
         <StackPanel>
-
-            <!-- 推荐算法这一块整体删除了(2026-10-03): 原本有「B 站官方 App / 浏览器网页版」
-                 二选一, 但实测 App 端接口对第三方客户端不提供个性化(返回全站通用热门池,
-                 平均播放量 66~103 万; 网页 rcmd 只有 17 万且明显更贴口味)。留着只会误导,
-                 所以连"算法"这个概念一起撤掉, 首页推荐固定走网页版。详见 ApiClient.GetRecommendAsync。 -->
 
             <!-- ★★★ 2026-11-05 排版重整: 「跳过赞助片段」提到**最上面**。
                  理由: 它是整个播放页里唯一一个**用户会主动去开的功能**(其余都是"调参数")，

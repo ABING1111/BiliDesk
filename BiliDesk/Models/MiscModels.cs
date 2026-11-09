@@ -186,15 +186,17 @@ public enum BackdropMaterial
 }
 
 /// <summary>
-/// 首页「推荐」tab 的算法来源。★ 2026-10-03 起这个选择**已取消**, 固定用网页版。
+/// 首页「推荐」tab 的算法来源。
 ///
-/// 保留枚举只是为了让老 settings.json 里存着的值仍能反序列化(删掉枚举会让老配置解析失败,
-/// 那会连带把整个设置文件清空)。实际读取处一律强制 Web —— 原因见 ApiClient.GetRecommendAsync:
-/// App 端接口对第三方客户端不提供个性化, 返回的是全站通用热门池。
+/// 两边是**两套不同的服务端模型**, 不是同一个接口换参数:
+///   · <see cref="App"/> —— B 站手机客户端首页推荐流(app.bilibili.com/x/v2/feed/index)。
+///     每次 10 条, 用 `idx` 游标 + `pull` 往下翻(见 Helpers/AppRecommendCursor)。
+///     第三方客户端拿到的是 App 首页流; 按历史实测, 内容可能比网页版更通用。
+///   · <see cref="Web"/> —— 浏览器网页版「为你推荐」(wbi/index/top/feed/rcmd)。
+///     单次最多 30 条, 通常更贴网页端口味。
 ///
-/// 两个值的差别(历史记录, 供以后参考):
-///   · App —— app.bilibili.com/x/v2/feed/index, 每次 10 条;
-///   · Web —— wbi/index/top/feed/rcmd, 单次最多 30 条, **实测更贴口味**。
+/// ★ 2026-10-03 曾因 App 端接口对第三方客户端不提供个性化而删除该选择;
+///   现在按用户要求恢复, 默认仍为 Web, 并在设置页如实说明差异。
 /// </summary>
 public enum RecommendSource
 {

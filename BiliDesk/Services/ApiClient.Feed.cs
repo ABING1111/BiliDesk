@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -134,21 +134,18 @@ public partial class ApiClient
     }
 
     /// <summary>
-    /// 首页个性化推荐(浏览器网页版「为你推荐」, wbi/index/top/feed/rcmd)。
+    /// 首页个性化推荐。按设置里的「推荐来源」走两套**不同的服务端模型**:
+    ///   · Web —— 浏览器网页版「为你推荐」(wbi/index/top/feed/rcmd), 单次最多 30 条;
+    ///   · App —— B 站手机客户端首页推荐流(app.bilibili.com/x/v2/feed/index), 每次 10 条。
     ///
-    /// ★ 为什么只剩网页这一条路(2026-10-03 定):
-    ///   以前还有个"B 站官方 App 算法"选项(app.bilibili.com/x/v2/feed/index)。
-    ///   实测它对第三方客户端**不提供个性化** —— 即便拿到了有效的 access_key
-    ///   (电视端扫码, myinfo 能返回真实昵称), 该接口返回的仍是全站通用热门池:
-    ///   100 条里命中用户关注的 UP 只有 1~2 个、不重复 UP 达 90/100、平均播放量 66~103 万;
-    ///   而网页 rcmd 的平均播放量只有 17 万、内容明显更垂直。参数层面穷举过 20 多种组合
-    ///   (UA / buvid / session_id / recsys_mode / idx 游标接力 / fnval 变体)都无改善 ——
-    ///   服务端按"手机端登录身份 + 手机端设备指纹"才给个性化, 第三方拿不到那个身份组合。
-    ///   所以那个选项与 access_key 机制已整体删除, 只保留这条真正个性化的网页路。
+    /// ★ 历史提醒(别丢掉): 2026-10-03 曾把 App 选项整体删除, 因为实测它对第三方客户端
+    ///   可能返回全站通用热门池(100 条里命中关注的 UP 只有 1~2 个、平均播放量 66~103 万;
+    ///   网页 rcmd 平均只有 17 万、内容明显更垂直)。现在按用户要求恢复, 默认仍是 Web,
+    ///   设置页也如实写明 "App 端可能更通用" —— 不宣称 App 更准。
     ///
-    /// 失败时自动重试一次(刷新 WBI 密钥), 仍未成功则降级返回热门, 保证首页不会是空列表。
+    /// 失败时自动重试一次; 仍不成功则降级返回热门, 保证首页不会是空列表。
     ///
-    /// ★★★ 2026-11-08 补上翻页游标(参数以前全是写死的 `fresh_idx=1 / brush=1`)。
+    /// ★★★ 2026-11-08 补上网页版翻页游标(参数以前全是写死的 `fresh_idx=1 / brush=1`)。
     ///
     ///   ★★ 先说**实测事实**, 免得后来人按错误的前提改代码(探针 bd-probe-rcmd 有完整数据):
     ///     服务端**本身就在轮换推荐池** —— 用写死第 1 页的旧参数连打 20 次(560 条),
@@ -164,20 +161,24 @@ public partial class ApiClient
     ///   现在由 <see cref="RecommendCursor"/> 维护状态机: reset=true 换一批(brush+1),
     ///   reset=false 带着游标往下翻。**失败不推进游标**, 重试复用同一组参数。
     ///
-    /// ★ 新增返回值 <c>fallback</c>: true 表示这次是**降级到热门**的结果。
+    /// ★ 返回值 <c>fallback</c>: true 表示这次是**降级到热门**的结果。
     ///   以前降级是静默的 —— 界面挂着"推荐"标题却给热门内容, 用户根本看不出发生了什么。
     /// </summary>
     /// <param name="reset">true = 刷新(换一批); false = 带着游标继续翻下一页</param>
     public async Task<(bool ok, string? err, List<VideoItem>? items, bool fallback)> GetRecommendAsync(
         bool reset = false)
     {
-        // ★ 游标是**单例状态**: ApiClient 是全局单例, 翻页序列必须跨调用连续。
-        //   放在这里而不是 ViewModel, 是因为"请求成功才推进"这件事只有请求方知道。
-        var cursor = _recommendCursor;
-
         try
         {
             await EnsureBuvidAsync();
+
+            // App 端是另一套完全不同的服务端模型(索引游标 + 每次 10 条), 单独走一条路。
+            if (Svc.Settings.RecommendSource == RecommendSource.App)
+                return await GetAppRecommendAsync(reset);
+
+            // ★ 游标是**单例状态**: ApiClient 是全局单例, 翻页序列必须跨调用连续。
+            //   放在这里而不是 ViewModel, 是因为"请求成功才推进"这件事只有请求方知道。
+            var cursor = _recommendCursor;
             if (reset) cursor.Reset();
 
             var (ok, err, items) = await GetWebRecommendCoreAsync(cursor);
@@ -205,6 +206,41 @@ public partial class ApiClient
     }
 
     /// <summary>
+    /// App 端推荐的失败/重试/降级包装。
+    /// 与网页版一样: 失败不推进游标; 带 idx 的翻页失败时先退回"刷新"再试一次
+    /// (idx 过期是 App 接口最常见的失败原因), 仍失败才降级热门。
+    /// </summary>
+    private async Task<(bool ok, string? err, List<VideoItem>? items, bool fallback)> GetAppRecommendAsync(
+        bool reset)
+    {
+        var cursor = _appRecommendCursor;
+        if (reset) cursor.BeginRefresh();
+        else cursor.BeginLoadMore();
+
+        string? lastErr = null;
+        try
+        {
+            var (ok, err, items) = await GetAppRecommendCoreAsync(cursor);
+            lastErr = err;
+            if (!ok || items == null || items.Count == 0)
+            {
+                // 翻页失败时 idx 可能已经过期: 退回刷新语义重来一次。
+                if (cursor.Idx > 0) cursor.BeginRefresh();
+                (ok, err, items) = await GetAppRecommendCoreAsync(cursor);
+                lastErr = err;
+            }
+            if (ok && items != null && items.Count > 0) return (true, null, items, false);
+        }
+        catch
+        {
+            // 落到下面的热门兜底
+        }
+
+        var (pok, perr, pitems) = await GetPopularAsync(1);
+        return (pok, perr ?? lastErr, pitems, true);
+    }
+
+    /// <summary>
     /// 推荐流的翻页游标(单例, 跨调用连续)。
     /// 退出登录/重新登录后由 <see cref="ResetRecommendCursor"/> 归零 —— 换了账号还用旧游标
     /// 等于让新账号接着上一个账号的阅读进度往下翻。
@@ -212,11 +248,22 @@ public partial class ApiClient
     private readonly RecommendCursor _recommendCursor = new();
 
     /// <summary>
-    /// 重置推荐游标(登录态变化时调用; 下一次请求重新从第 1 页开始)。
-    /// ★ 用 Rewind 而不是 Reset: 只归位、**不动刷子** —— "换一批"由紧接着那次
-    ///   reset: true 的请求自己完成, 两处都推进刷子会让它一次跳 2。
+    /// App 端推荐流的翻页游标(单例, 跨调用连续)。与网页游标互不影响 ——
+    /// 两套接口的游标语义完全不同, 共用一份会让切换来源后从错误的位置开始。
     /// </summary>
-    public void ResetRecommendCursor() => _recommendCursor.Rewind();
+    private readonly AppRecommendCursor _appRecommendCursor = new();
+
+    /// <summary>
+    /// 重置推荐游标(登录态变化 / 推荐来源切换时调用; 下一次请求重新从开头开始)。
+    /// ★ Web 用 Rewind 而不是 Reset: 只归位、**不动刷子** —— "换一批"由紧接着那次
+    ///   reset: true 的请求自己完成, 两处都推进刷子会让它一次跳 2。
+    /// ★ App 同步归零 idx: 旧来源的游标对新来源没有意义。
+    /// </summary>
+    public void ResetRecommendCursor()
+    {
+        _recommendCursor.Rewind();
+        _appRecommendCursor.Rewind();
+    }
 
     /// <summary>
     /// 推荐游标的当前状态(只读快照, 供探针/诊断使用, 不参与任何业务判断)。
@@ -268,6 +315,208 @@ public partial class ApiClient
         catch (Exception ex)
         {
             return (false, ex.Message, null);
+        }
+    }
+
+    // ---------------------------------------------------------------- App 端推荐流
+
+    /// <summary>App 端签名用的 appkey / appsec(粉版 android, "获取资源通用" 那一对)</summary>
+    private const string AppKey = "1d8b6e7d45233436";
+    private const string AppSec = "560c52ccd288fed045859ed18bffd973";
+
+    /// <summary>
+    /// App 端接口签名: 加 appkey → 按 key 升序 → 拼 query → 末尾接 appsec → MD5。
+    /// 与 WBI 签名是两套独立机制(WBI 是网页端每日轮换密钥), 别混用。
+    /// </summary>
+    private static void AppSign(Dictionary<string, string> ps)
+    {
+        ps["appkey"] = AppKey;
+        var query = string.Join("&",
+            ps.OrderBy(kv => kv.Key, StringComparer.Ordinal)
+              .Select(kv => $"{kv.Key}={Enc(kv.Value)}"));
+        ps["sign"] = Hashing.Md5Hex(query + AppSec);
+    }
+
+    /// <summary>
+    /// B 站官方 App 首页推荐流(app.bilibili.com/x/v2/feed/index)。
+    ///
+    /// ★ 与网页端那套完全不是一个模型:
+    ///   1. **靠 idx 游标翻页**(见 <see cref="AppRecommendCursor"/>): 把上一批最小的 idx
+    ///      带回去才拿得到"下一段"; 不带游标时服务端窗口几乎不动。
+    ///      `pull` 要和 idx 配套(刷新 = pull=true 且不带 idx; 翻页 = pull=false 带 idx)。
+    ///   2. **只给 avid 不给 bvid**(items[].param / player_args.aid), bvid 由
+    ///      UrlParser.AvToBv 本地换算, 省掉"每条一次 view 接口"的开销。
+    ///   3. 播放量/弹幕数给的是**已格式化好的文本**("149.1万"), 只能反解回近似数值 ——
+    ///      够用来排序和显示, 但没有网页端那么精确。
+    ///
+    /// 参数坑(实测): 参数表里出现过的 `appver` 会让服务端直接 -400(整套参数被拒),
+    /// 而 build/mobi_app/platform/fnval/fourk 这些是安全的。appkey+sign 必须带。
+    /// </summary>
+    private async Task<(bool ok, string? err, List<VideoItem>? items)> GetAppRecommendCoreAsync(
+        AppRecommendCursor cursor)
+    {
+        try
+        {
+            var loggedIn = SessionManager.Instance.HasLogin;
+            var ps = new Dictionary<string, string>
+            {
+                ["build"] = "8130300",
+                ["mobi_app"] = "android",
+                ["platform"] = "android",
+                ["device"] = "phone",
+                ["c_locale"] = "zh_CN",
+                ["s_locale"] = "zh_CN",
+                ["fnval"] = "272",
+                ["fnver"] = "1",
+                ["fourk"] = "1",
+                ["video_mode"] = "1",
+                ["network"] = "wifi",
+                ["qn"] = "32",
+                ["recsys_mode"] = "0",
+                ["guidance"] = "0",
+                ["https_url_req"] = "0",
+                ["inline_danmu"] = "2",
+                ["inline_sound"] = "1",
+                ["interest_id"] = "0",
+                // 刷新 = pull=true(从池子最前面取); 加载更多 = pull=false(配合 idx 往下翻)
+                // 0 = 已登录, 1 = 未登录(接口自己的约定)。
+                ["login_event"] = loggedIn ? "0" : "1"
+            };
+            cursor.ApplyTo(ps);
+            AppSign(ps);
+
+            var (code, msg, data) = await GetJsonAsync(
+                "https://app.bilibili.com/x/v2/feed/index", ps);
+            if (code != 0 || data == null)
+                return (false, msg ?? $"请求失败 (code {code})", null);
+
+            var items = new List<VideoItem>();
+            var indices = new List<long>();
+            JsonElement arr = default;
+            var hasArray = data.Value.ValueKind == JsonValueKind.Array;
+            if (hasArray) arr = data.Value;
+            else if (data.Value.TryGetProperty("items", out var list)) arr = list;
+
+            if (arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in arr.EnumerateArray())
+                {
+                    // ★ 游标要取**最小**的 idx(= 这一批读到推荐池最深处的位置), 而不是最大的。
+                    //   idx 在一批里是从大到小排的; 服务端的语义是"给我 idx 小于这个值的内容",
+                    //   所以带回去的必须是**最深**的那个, 下一批才真的往下走 10 条。
+                    //   (实测: 记录最大 idx 时, 每批只前进 1, 等于反复重读同一小段;
+                    //    记录最小 idx 时, 每批稳定前进 10。)
+                    //   注意要遍历**全部**条目: 直播/横幅这些非 av 项同样占着流里的位置,
+                    //   跳过它们会让游标偏浅, 下一批又从那段中间重来。
+                    var idx = GetLongLoose(e, "idx");
+                    if (idx > 0) indices.Add(idx);
+
+                    var item = ParseAppFeedItem(e);
+                    if (item != null) items.Add(item);
+                }
+            }
+
+            // ★ 成功才推进游标(失败时不动, 重试复用同一组参数 —— 见 AppRecommendCursor 的说明)。
+            cursor.OnLoaded(indices);
+            return (true, null, items);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null);
+        }
+    }
+
+    /// <summary>解析 App 推荐流的一条。非视频卡片(直播/横幅/广告)返回 null, 由调用方跳过</summary>
+    private static VideoItem? ParseAppFeedItem(JsonElement e)
+    {
+        try
+        {
+            // card_goto/goto: av = 普通视频, live = 直播, banner = 横幅。
+            // 只收 av —— 与网页端推荐的处理保持一致(直播另有专门的 tab)。
+            var kind = GetStr(e, "card_goto");
+            if (kind.Length == 0) kind = GetStr(e, "goto");
+            if (kind != "av") return null;
+
+            // param 是**字符串**型的 avid(不是数字); 有些版本会带 "av" 前缀。
+            var param = GetStr(e, "param");
+            if (param.StartsWith("av", StringComparison.OrdinalIgnoreCase)) param = param[2..];
+            long.TryParse(param, out var aid);
+            if (aid <= 0) aid = GetNestedLong(e, "player_args", "aid");
+            if (aid <= 0) aid = GetNestedLong(e, "args", "aid");
+            if (aid <= 0) aid = GetLongLoose(e, "aid");
+            if (aid <= 0) return null;
+
+            // 接口有时直接给 bvid, 有时只给 aid。只给 aid 时本地换算(见 UrlParser.AvToBv)。
+            var bvid = GetStr(e, "bvid");
+            if (bvid.Length == 0) bvid = BiliDesk.Utils.UrlParser.AvToBv(aid);
+            if (bvid.Length == 0) return null;
+
+            // UP 主: 名字在 desc_button.text, mid 要从 desc_button.uri(bilibili://space/{mid}) 里抠
+            var upName = "";
+            long ownerMid = 0;
+            if (e.TryGetProperty("desc_button", out var db) && db.ValueKind == JsonValueKind.Object)
+            {
+                upName = GetStr(db, "text");
+                var upUri = GetStr(db, "uri");
+                var slash = upUri.LastIndexOf('/');
+                if (slash >= 0 && slash + 1 < upUri.Length)
+                    long.TryParse(upUri[(slash + 1)..], out ownerMid);
+            }
+            if (upName.Length == 0 && e.TryGetProperty("args", out var args) &&
+                args.ValueKind == JsonValueKind.Object)
+            {
+                upName = GetStr(args, "up_name");
+                if (ownerMid <= 0) ownerMid = GetLongLoose(args, "up_id");
+            }
+
+            var cover = GetStr(e, "cover");
+            if (cover.Length == 0) cover = GetStr(e, "pic");
+
+            // 时长只在 player_args.duration 里是秒数; cover_right_text 是 "7:51" 这种给人看的串
+            var durationSec = (int)GetNestedLong(e, "player_args", "duration");
+            if (durationSec <= 0) durationSec = GetIntSafe(e, "duration");
+
+            return new VideoItem
+            {
+                Bvid = bvid,
+                Aid = aid,
+                Title = GetStr(e, "title").StripHtml(),
+                Cover = UrlUtil.Normalize(cover),
+                Author = upName,
+                OwnerMid = ownerMid,
+                Duration = VideoItem.FormatSeconds(durationSec),
+                ViewCount = ParseFormattedCount(GetStr(e, "cover_left_text_1")),
+                DanmakuCount = ParseFormattedCount(GetStr(e, "cover_left_text_2"))
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 把接口给的**已格式化**计数文本反解回数字("149.1万" → 1491000, "2.9万" → 29000)。
+    /// App 端推荐流不给数值型 stat, 只有这种给人看的串; 解析失败一律返回 0,
+    /// 界面按"0 = 未知"处理(不显示那个胶囊), 不会显示成错误的 0。
+    /// </summary>
+    private static long ParseFormattedCount(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+        var s = text.Trim();
+        try
+        {
+            double mul = 1;
+            if (s.EndsWith("亿", StringComparison.Ordinal)) { mul = 100_000_000; s = s[..^1]; }
+            else if (s.EndsWith("万", StringComparison.Ordinal)) { mul = 10_000; s = s[..^1]; }
+            return double.TryParse(s, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var v)
+                ? (long)(v * mul)
+                : 0;
+        }
+        catch
+        {
+            return 0;
         }
     }
 
@@ -623,7 +872,7 @@ public partial class ApiClient
                 detail.ShareCount = GetLong(st, "share");
             }
             // ★★ 这里以前写的是 `GetInt(d, "coin") == 1`, 而 view 接口**没有**这个字段
-            //   (data.stat.coin 是全站投币总数, 不是本人的状态) ⇒ 恒为 false,
+            //   (data.stat.coin 是全站投币总数, 不是本人的状态) ? 恒为 false,
             //   于是"投过币、重开视频后投币键还是灰的"(2026-10-13)。
             //   真实状态改由 <see cref="GetCoinCountAsync"/> 单独查询, 调用方在拿到 aid 后拉一次。
             detail.Aid = GetLong(d, "aid");

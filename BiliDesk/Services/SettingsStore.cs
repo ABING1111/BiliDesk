@@ -229,14 +229,11 @@ public class SettingsStore
     public int PreferredQualityQn { get; set; } = QualityPreference.DefaultQn;
 
     /// <summary>
-    /// 首页「推荐」用哪套算法。★ 2026-10-03 起**固定为网页版**, 该字段仅为兼容老配置保留 ——
-    /// 读取时丢弃、写入时固定写 Web, 代码里没有任何地方按它分支。
+    /// 首页「推荐」用哪套算法: 网页版(wbi/index/top/feed/rcmd) 或
+    /// App 端(app.bilibili.com/x/v2/feed/index)。
     ///
-    /// 历史: 这里原来是"App 官方 / 浏览器网页版"二选一, 默认 App。
-    ///   但实测 App 端接口(app.bilibili.com/x/v2/feed/index)对第三方客户端**不提供个性化** ——
-    ///   即使拿到有效 access_key, 返回的仍是全站通用热门池(100 条里命中关注的 UP 只有 1~2 个,
-    ///   平均播放量 66~103 万); 网页 rcmd 平均只有 17 万、内容明显更垂直。
-    ///   所以选择项与 App 令牌机制整体删除(原因详见 ApiClient.GetRecommendAsync)。
+    /// ★ 默认网页版: App 端接口按历史实测对第三方客户端可能返回更通用的内容,
+    ///   保持 Web 为默认不会让老用户升级后突然换一套推荐池。用户可在设置页切换。
     /// </summary>
     public RecommendSource RecommendSource { get; set; } = RecommendSource.Web;
 
@@ -433,6 +430,19 @@ public class SettingsStore
     }
 
     /// <summary>
+    /// 改"首页推荐用哪套算法"并落盘。
+    /// 变了才广播 <see cref="RecommendSourceChanged"/> —— 重复选中同一项不该触发首页重拉。
+    /// </summary>
+    public void SetRecommendSource(RecommendSource source)
+    {
+        if (!Enum.IsDefined(typeof(RecommendSource), source)) source = RecommendSource.Web;
+        if (RecommendSource == source) return;
+        RecommendSource = source;
+        Save();
+        RecommendSourceChanged?.Invoke();
+    }
+
+    /// <summary>
     /// 设置播放器音量并落盘。0~100 之外的值被夹回范围内(老配置可能存着越界值)。
     /// </summary>
     public void SetPlayerVolume(int volume)
@@ -523,6 +533,12 @@ public class SettingsStore
 
     /// <summary>设置变更通知(播放器等运行中的界面据此同步)</summary>
     public event Action? DanmakuSettingsChanged;
+
+    /// <summary>
+    /// 推荐来源变更。首页据此清掉旧列表、重置游标并按新来源重新拉一次 ——
+    /// 不通知的话用户切完算法还得自己点刷新才生效, 看起来像"改了没用"。
+    /// </summary>
+    public event Action? RecommendSourceChanged;
 
     /// <summary>全局亚克力开关变化。所有已打开的窗口据此重设背景(见 FluentWindow.ApplyChrome)</summary>
     public event Action? AcrylicChanged;
@@ -652,10 +668,11 @@ public class SettingsStore
         //   的值, 直接流进取流请求会变成一个谁也不认识的 qn(表现为画质莫名其妙)。
         PreferredQualityQn = QualityPreference.Normalize(s.PreferredQualityQn);
 
-        // ★ 算法选择已删除(2026-10-03): 固定网页版, 不再从配置读 ——
-        //   老配置里存着 App 的会被纠正(那一档实测对第三方客户端不提供个性化),
-        //   继续"尊重"旧值就是让用户看一屏通用热门。
-        RecommendSource = RecommendSource.Web;
+        // 推荐来源: 老配置缺字段 ⇒ 初始化值 Web。只接受合法枚举值 ——
+        // 手改配置塞进未定义数字时回落 Web, 不让它流到接口分支里变成"既不 Web 也不 App"。
+        RecommendSource = Enum.IsDefined(typeof(RecommendSource), s.RecommendSource)
+            ? s.RecommendSource
+            : RecommendSource.Web;
 
         // 主题色: 老配置没有这个字段(空串) → 保持默认的 B 站粉
         AccentColor = s.AccentColor ?? "";

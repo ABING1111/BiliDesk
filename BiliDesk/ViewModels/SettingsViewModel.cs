@@ -557,16 +557,50 @@ public class SettingsViewModel : ObservableObject
     /// <summary>列数滑杆上限(取自 Helpers.CardWall, 单一来源)</summary>
     public double CardColumnsMax => Helpers.CardWall.FixedColumnsMax;
 
-    // ----------------- 推荐算法(已固定为网页版, 不再提供选择) -----------------
-    //
-    // ★ 2026-10-03 删除了"算法选择"(原来可在 App 官方 / 浏览器网页版之间切换)与整套
-    //   App 令牌机制, 原因见 ApiClient.GetRecommendAsync 的说明:
-    //   App 端接口(app.bilibili.com/x/v2/feed/index)对第三方客户端**不提供个性化** ——
-    //   即便拿到有效 access_key, 返回的仍是全站通用热门池(实测 100 条里命中关注的 UP
-    //   只有 1~2 个、平均播放量 66~103 万), 而网页 rcmd 平均只有 17 万、明显更贴口味。
-    //   留着那个选项只会让用户以为"App 算法"能更准, 是误导。
-    //   RecommendSource 枚举与 SettingsStore 字段保留(老配置反序列化不会炸), 但读取处
-    //   一律走网页路。
+    // ----------------- 首页推荐来源(网页版 / App 端) -----------------
+
+    /// <summary>推荐来源下拉框的显示项</summary>
+    private static readonly (string Label, RecommendSource Value)[] RecommendChoices =
+    {
+        ("网页版推荐", RecommendSource.Web),
+        ("App 端推荐", RecommendSource.App),
+    };
+
+    /// <summary>下拉框数据源(顺序即界面顺序)</summary>
+    public string[] RecommendOptions { get; } =
+        RecommendChoices.Select(c => c.Label).ToArray();
+
+    /// <summary>
+    /// 当前推荐来源(字符串投影, 理由同 ThemeSelected —— SettingsStore 没有变化通知)。
+    /// setter 里落盘 + 推自己的通知: 下拉框的 SelectedItem 靠 getter 读回显示文字。
+    /// </summary>
+    public string RecommendSelected
+    {
+        get
+        {
+            foreach (var c in RecommendChoices)
+                if (c.Value == Svc.Settings.RecommendSource) return c.Label;
+            return RecommendChoices[0].Label;
+        }
+        set
+        {
+            var hit = RecommendChoices.FirstOrDefault(c => c.Label == value);
+            if (hit.Label == null) return;
+            if (hit.Value == Svc.Settings.RecommendSource) return;
+            Svc.Settings.SetRecommendSource(hit.Value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(RecommendSourceHint));
+        }
+    }
+
+    /// <summary>
+    /// 当前来源的一句话说明。
+    /// ★ 不强推 App "更准": 历史实测它对第三方客户端可能返回更通用的内容,
+    ///   文案要如实说明差异, 由用户自己选。
+    /// </summary>
+    public string RecommendSourceHint => Svc.Settings.RecommendSource == RecommendSource.App
+        ? "使用 B 站手机客户端首页推荐流, 每次 10 条; 第三方客户端拿到的内容可能比网页版更通用"
+        : "使用网页版「为你推荐」流, 每次最多 30 条, 通常更贴近网页端口味";
 
     // ----------------- 跳过赞助片段(SponsorBlock) -----------------
 

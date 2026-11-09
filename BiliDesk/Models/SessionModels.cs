@@ -301,8 +301,8 @@ public class AppSettings
     public int PreferredQualityQn { get; set; } = QualityPreference.DefaultQn;
 
     /// <summary>
-    /// 首页「推荐」tab 的算法来源。★ 2026-10-03 起固定为网页版(字段仅为兼容老配置保留,
-    /// 读取时一律强制 Web, 见 SettingsStore.Load)。
+    /// 首页「推荐」tab 的算法来源(网页版 / App 端)。默认网页版。
+    /// 老配置缺这个字段时保持初始化值, 自动落到 Web。
     /// </summary>
     public RecommendSource RecommendSource { get; set; } = RecommendSource.Web;
 

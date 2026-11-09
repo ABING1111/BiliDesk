@@ -148,8 +148,9 @@ public class HomeViewModel : ObservableObject
         Svc.SearchHistory.Changed += RebuildHistoryShown;
         RebuildHistoryShown();
 
-        // (2026-10-03 删除) 这里原来订阅 RecommendSourceChanged —— 设置页切换"App 官方 /
-        // 网页版"算法时清空重拉。算法选择已整体删除(固定网页版), 订阅自然也没了意义。
+        // 设置页切换「网页版 / App 端」推荐: 手里这份列表是**上一套模型**给的,
+        // 留着不换用户会以为"改了没用" —— 清空、重置游标并重新拉一次。
+        Svc.Settings.RecommendSourceChanged += OnRecommendSourceChanged;
 
         RefreshGreeting();
 
@@ -191,13 +192,43 @@ public class HomeViewModel : ObservableObject
         if (loggedIn == _lastRecommendLoggedIn) return;
         _lastRecommendLoggedIn = loggedIn;
 
+        ResetRecommendAndReload();
+    }
+
+    /// <summary>
+    /// 设置页切换「网页版 / App 端」推荐来源。
+    /// 旧列表是上一套模型给的, 必须清空并按新来源重拉 —— 否则用户会以为"改了没用"。
+    /// </summary>
+    private void OnRecommendSourceChanged() => ResetRecommendAndReload();
+
+    /// <summary>
+    /// 清空推荐并重新加载(账号变化 / 推荐来源切换共用)。
+    ///
+    /// ★ 三件事要一起做, 缺一件都会留下"上一套推荐"的痕迹:
+    ///   ① 清空已展示记录 —— 看过什么不该跨账号/跨算法继承;
+    ///   ② 重置翻页游标 —— App 和 Web 是两套游标, 都要归零;
+    ///   ③ 清空列表并重新拉 —— 让新来源的内容立刻出现。
+    ///
+    /// ★ 切换来源时可能正好有旧请求在跑: 代次 +1 让它回来时作废, 并记录
+    ///   "结束后还要再拉一次"; 否则新来源的请求会被 _recommendLoading 闸门挡掉。
+    /// </summary>
+    private void ResetRecommendAndReload()
+    {
+        _recommendGen++;
         RecommendSeenStore.Clear();
         Svc.Api.ResetRecommendCursor();
         RecommendItems.Clear();
         RecommendExhausted = false;
         RecommendFallback = false;
         OnPropertyChanged(nameof(RecommendCount));
-        if (IsRecommendTab) _ = LoadRecommendAsync(reset: true);
+
+        if (!IsRecommendTab) return;
+        if (_recommendLoading)
+        {
+            _recommendReloadPending = true;
+            return;
+        }
+        _ = LoadRecommendAsync(reset: true);
     }
 
     // ----------------- 问候语 -----------------
@@ -773,6 +804,15 @@ public class HomeViewModel : ObservableObject
     private bool _recommendLoading;
 
     /// <summary>
+    /// 推荐请求代次。账号/来源切换时 +1, 让在途的旧请求回来时**作废** ——
+    /// 否则切换来源后旧模型的结果会贴到新列表上(用户看到的是两套算法的混合)。
+    /// </summary>
+    private int _recommendGen;
+
+    /// <summary>请求在跑时又收到"来源已切换": 等它结束后自动再拉一次, 不并发打接口。</summary>
+    private bool _recommendReloadPending;
+
+    /// <summary>
     /// 推荐流已经"没有更多新内容"了(服务端翻来覆去都是看过的)。
     ///
     /// ★ 为什么要有这个闸(2026-11-08): 推荐是**无限流**, 旧实现里滚到底就无条件再拉一页。
@@ -800,8 +840,11 @@ public class HomeViewModel : ObservableObject
     /// </summary>
     private const int RecommendMaxRefill = 3;
 
-    /// <summary>一次加载里"新增不足多少条"就认为这批太旧、需要再补一页。</summary>
+    /// <summary>一次加载里"新增不足多少条"就认为这批太旧、需要再补一页(网页版 30 条/批)。</summary>
     private const int RecommendMinFresh = 12;
+
+    /// <summary>App 端的新鲜度门槛: 一批只有 10 条, 门槛取半批, 避免每次都补满 3 页。</summary>
+    private const int RecommendMinFreshApp = 6;
 
     /// <summary>推荐流是否已经到底(界面据此显示"刷新换一批")。</summary>
     public bool RecommendExhausted
@@ -834,8 +877,9 @@ public class HomeViewModel : ObservableObject
     ///
     /// ★★ 2026-11-08 起多了两层本地过滤(见 <see cref="RecommendSeenStore"/>):
     ///   1) **跨刷新**的已展示集合: 服务端重复下发的稿件直接丢掉, 刷新也不会把刚看过的又贴一遍;
-    ///   2) **新鲜度不足就自动补页**: 一批 30 条里新增不到 12 条时, 再拉一页(最多 3 次),
+    ///   2) **新鲜度不足就自动补页**: 一批里新增不到"半批"时, 再拉一页(最多 3 次),
     ///      否则用户点「加载更多」只多出两三张卡, 体感像坏了。
+    ///      Web 一批 30 条(门槛 12), App 一批 10 条(门槛 6) —— 门槛跟着来源走。
     ///   补满 3 次仍不足 ⇒ <see cref="RecommendExhausted"/>, 停止自动翻页, 等用户刷新。
     ///   ★ 注意: 实测服务端的重复率是 0(见 RecommendCursor 的说明), 所以第 1 条平时**不会**
     ///     命中什么 —— 它是防御性的(服务端策略随时可能变), 不是"修复一个正在发生的 bug"。
@@ -845,6 +889,7 @@ public class HomeViewModel : ObservableObject
     {
         if (_recommendLoading) return; // 已有推荐请求在跑, 直接复用它的结果
         _recommendLoading = true;
+        var gen = ++_recommendGen;
         if (more) LoadingMore = true; else Loading = true;
         Error = "";
         try
@@ -856,21 +901,30 @@ public class HomeViewModel : ObservableObject
             // 用它兜底，避免把页面刷成空白（见下面的兜底分支）。
             List<VideoItem>? lastRaw = null;
 
+            // ★ 新鲜度门槛要跟着来源的每批条数走: Web 一批 30 条, 12 条新内容算够;
+            //   App 一批只有 10 条, 沿用 12 会让每次「加载更多」都补满 3 次(白打两次接口)。
+            var minFresh = Svc.Settings.RecommendSource == RecommendSource.App
+                ? RecommendMinFreshApp
+                : RecommendMinFresh;
+
             // reset 时先清列表, 但**不清** RecommendSeenStore —— 那正是"刷新后不重播"的关键。
             if (reset)
             {
                 await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
                 {
+                    if (gen != _recommendGen) return;   // 来源已切换, 这份结果作废
                     RecommendItems.Clear();
                     RecommendExhausted = false;
                     OnPropertyChanged(nameof(RecommendCount));
                 });
+                if (gen != _recommendGen) return;
             }
 
             for (var attempt = 0; attempt < RecommendMaxRefill; attempt++)
             {
                 // ★ 只有第一次带 reset: 补页是"继续往下翻", 不能每次补页都换一批。
                 var (ok, err, items, fb) = await Svc.Api.GetRecommendAsync(reset && attempt == 0);
+                if (gen != _recommendGen) return;       // 来源已切换, 不再继续补页
                 if (fb) fallback = true;
                 if (!ok) { lastErr = err; break; }
                 if (items == null || items.Count == 0) break;
@@ -887,7 +941,7 @@ public class HomeViewModel : ObservableObject
                 // 降级热门时**立刻收手**: 热门没有翻页语义, 再拉一次还是同一页,
                 // 循环补页只会白打两次接口(而且会让"到底"判定晚一轮才生效)。
                 if (fb) break;
-                if (added.Count >= RecommendMinFresh) break;
+                if (added.Count >= minFresh) break;
             }
 
             // ★ 刷新时的兜底: 服务端这一轮给的**全是看过的**。
@@ -899,6 +953,7 @@ public class HomeViewModel : ObservableObject
 
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
+                if (gen != _recommendGen) return;   // 来源已切换, 旧模型的结果不许贴上去
                 Loading = false;
                 LoadingMore = false;
 
@@ -922,13 +977,38 @@ public class HomeViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            Loading = false;
-            LoadingMore = false;
-            Error = ex.Message;
+            // 来源切换后旧请求抛异常也不该污染新列表的错误提示。
+            if (gen == _recommendGen)
+            {
+                Loading = false;
+                LoadingMore = false;
+                Error = ex.Message;
+            }
         }
         finally
         {
             _recommendLoading = false;
+
+            // ★ 来源在请求途中被切换: 旧请求作废, 等它结束后再拉新来源。
+            //   不能在切换那一刻并发再打一次接口 —— 两套游标会互相踩, 且白费一次请求。
+            if (gen != _recommendGen)
+            {
+                var reload = false;
+                if (_recommendReloadPending)
+                {
+                    _recommendReloadPending = false;
+                    reload = IsRecommendTab;
+                }
+                if (!reload)
+                {
+                    Loading = false;
+                    LoadingMore = false;
+                }
+                else
+                {
+                    _ = LoadRecommendAsync(reset: true);
+                }
+            }
         }
     }
 
