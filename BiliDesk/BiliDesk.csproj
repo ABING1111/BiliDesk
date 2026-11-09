@@ -13,7 +13,7 @@
     <AssemblyName>BiliDesk</AssemblyName>
     <AssemblyTitle>BiliDesk</AssemblyTitle>
     <Product>BiliDesk</Product>
-    <Version>1.7.1</Version>
+    <Version>1.7.2</Version>
     <PlatformTarget>x64</PlatformTarget>
     <!--
       RollForward=Major: 框架依赖版(安装器)在机器上没有 .NET 10 桌面运行时、
