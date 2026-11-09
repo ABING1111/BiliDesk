@@ -73,7 +73,11 @@
 
         <!-- ===== 直播父分区胶囊(2026-11-08) =====
              参考图第一行: 推荐 / 网游 / 手游 … 选中为浅强调底 + 强调色文字。
-             ★ 悬停只改 Opacity, 不在模板里换底色 —— 换底色会盖掉选中态的浅强调底。 -->
+             ★ 悬停只改 Opacity, 不在模板里换底色 —— 换底色会盖掉选中态的浅强调底。
+             ★★ 2026-11-09 深色模式选中态看不清: 原来用 AccentSoftFillBrush(11% 透明强调色)
+                + AccentTextStrongBrush(强调色压黑), 深色下是"暗底 + 暗字"(蓝色强调色实测
+                只有 1.18:1)。改用给选中胶囊准备的 AccentSoftFillStrongBrush —— 深色下是
+                强调色混白 30% 的提亮实底(浅色下是 18% 淡强调底), 与设置页胶囊同一套观感。 -->
         <Style x:Key="LiveGroupChipStyle" TargetType="Button">
             <Setter Property="Padding" Value="12,6" />
             <Setter Property="Margin" Value="0,0,4,4" />
@@ -116,7 +120,7 @@
             </Setter>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource AccentSoftFillBrush}" />
+                    <Setter Property="Background" Value="{DynamicResource AccentSoftFillStrongBrush}" />
                     <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
                     <Setter Property="FontWeight" Value="SemiBold" />
                 </DataTrigger>
@@ -125,7 +129,11 @@
 
         <!-- 直播子分区(参考图第二行): 字号更小, 选中只变强调色文字 + 加粗, 不铺底色。
              ★ 2026-11-08 收紧内边距: 之前的 10,4 + 每个 2px 外边距在宽屏下显得很散,
-               和参考图的紧凑排布差得远。 -->
+               和参考图的紧凑排布差得远。
+             ★★ 2026-11-09 深色模式选中文字发暗: 这里没有底色, 文字直接压在页面背景上,
+               而 AccentTextStrongBrush 是按"提亮的强调色实底"配的(深色下压黑 55%),
+               压在深灰底上几乎看不见(蓝色强调色实测 1.31:1)。改用 AccentTextOnCardBrush:
+               深色下是原色强调色(亮), 浅色下是压深的强调色 —— 与纯文字选中 Tab 同一套。 -->
         <Style x:Key="LiveSubChipStyle" TargetType="Button">
             <Setter Property="Padding" Value="6,3" />
             <Setter Property="Margin" Value="0,1,3,1" />
@@ -162,7 +170,7 @@
                     <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
                 </Trigger>
                 <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                    <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
+                    <Setter Property="Foreground" Value="{DynamicResource AccentTextOnCardBrush}" />
                     <Setter Property="FontWeight" Value="SemiBold" />
                 </DataTrigger>
             </Style.Triggers>
