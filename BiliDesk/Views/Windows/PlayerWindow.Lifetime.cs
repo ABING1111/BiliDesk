@@ -303,6 +303,8 @@ public partial class PlayerWindow : FluentWindow
         _commentItems.Clear();
         _commentContentWindowTimer?.Stop();
         _commentContentWindowTimer = null;
+        _commentCooldownTimer?.Stop();
+        _commentCooldownTimer = null;
         // 封面/头像的 ImageBrush 也是"挂着位图"的引用, 一并放掉
         if (UpAvatarBox != null) UpAvatarBox.Background = null;
     }

@@ -207,14 +207,22 @@ public partial class PlayerWindow : FluentWindow
         if (sender is not ScrollViewer sv) return;
         // 回到顶部要先于"往上滚就返回"判定: 往上滚回阈值以内时它也要熄灭
         UpdateCommentBackToTop(sv);
-        // 往上滚不补(相关视频与评论都是"向下无限加载")
+
+        // ★★ 评论内容窗口必须**两个方向都处理**(2026-11-09):
+        //   旧实现 `VerticalChange < 0` 直接 return, 向上滚动时既不恢复也不释放 ——
+        //   用户按住滚动条拖回已经看过的内容, 看到的先是空模板, 要等别的时机才刷出来。
+        //   视口内同步恢复(拖到哪一帧, 那一屏就得有内容); 大跨度跳滚先结清布局再量坐标。
+        var viewport = sv.ViewportHeight;
+        var jumped = viewport > 0 && Math.Abs(e.VerticalChange) >= Math.Max(48, viewport * 0.35);
+        RestoreVisibleCommentCardsNow(forceLayout: jumped);
+        QueueCommentContentWindow();
+
+        // 往上滚不补**新内容**(相关视频与评论都是"向下无限加载")
         if (e.VerticalChange < 0) return;
 
         MaybeShowMoreRelated(sv);
         // 评论翻页(issue #55, 2026-11-08): 不在评论 tab / 详情页打开时由内部闸门挡住
         MaybeLoadMoreComments(sv);
-        // 评论内容窗口: 释放离屏评论的正文/图片, 防止无限加载把内存堆到上百 MB
-        QueueCommentContentWindow();
     }
 
     /// <summary>
@@ -532,6 +540,8 @@ public partial class PlayerWindow : FluentWindow
         _commentsLoaded = false;
         // 评论翻页状态属于"上一条视频": 游标必须清, 否则新片会拿旧游标去要第二页,
         // 拿回来的是别人家评论。失败标记/防重入闸也一起复位。
+        // ★ 代次 +1: 上一条视频在途的首屏/翻页请求回来时必须被丢弃。
+        _commentListVersion++;
         _commentNext = 0;
         _commentHasMore = false;
         _commentLoadingMore = false;

@@ -350,5 +350,31 @@ public class CommentItem : System.ComponentModel.INotifyPropertyChanged
         PreviewReplies.Clear();
         foreach (var r in Replies.Take(max)) PreviewReplies.Add(r);
     }
+
+    /// <summary>
+    /// 关掉详情页时把楼中楼收回到"列表预览"的量, 释放自动补全堆出来的回复。
+    ///
+    /// ★ 为什么需要(2026-11-09 评论区内存优化): 热门视频一条线程动不动几十上百条回复,
+    ///   自动补全最多拉 3 页(约 60 条)。用户点了很多条线程之后, 这些回复对象会一直
+    ///   挂在根评论上, 即使详情页早就关了 —— 每条回复都带正文/表情/图片元数据,
+    ///   累计能占几十 MB。列表页只展示 <see cref="PreviewReplies"/>(最多 3 条),
+    ///   所以完全可以只留下这几条。
+    /// ★ 把 <see cref="RepliesNextPage"/> 复位成 1: 下次再点进详情页时,
+    ///   <see cref="HasMoreReplies"/> 会让自动补全重新拉第一页(去重逻辑会跳过已留下的预览)。
+    /// ★ 只动 Replies, 不动 PreviewReplies: 列表里的楼中楼方框不能因为关闭详情而消失。
+    /// </summary>
+    public void TrimRepliesToPreview()
+    {
+        if (Replies.Count <= PreviewReplies.Count) return;
+
+        var keep = PreviewReplies.Count > 0
+            ? PreviewReplies.ToList()
+            : Replies.Take(3).ToList();
+
+        Replies.Clear();
+        foreach (var r in keep) Replies.Add(r);
+        RepliesNextPage = 1;
+        NotifyRepliesChanged();
+    }
 }
 

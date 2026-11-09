@@ -183,6 +183,9 @@ public partial class PlayerWindow : FluentWindow
             var (_, _, more) = await Svc.Api.GetReplyRepliesAsync(_aid, item.Rpid, pn: item.RepliesNextPage, ps: 20);
             item.RepliesNextPage++;
             if (_closing) return;
+            // 详情页已经关了(或换了一条线程): 不能再往这条线程里加回复 ——
+            // 关闭时 TrimRepliesToPreview 已经把内存收回到预览量了。
+            if (!IsCommentDetailOpen || !ReferenceEquals(_detailThreadRoot, item)) return;
 
             // 内联的那几条也在返回结果里, 用 rpid 去重再追加
             var seen = new HashSet<long>(item.Replies.Select(x => x.Rpid));
