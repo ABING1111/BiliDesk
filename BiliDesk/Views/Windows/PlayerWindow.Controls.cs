@@ -658,7 +658,10 @@ public partial class PlayerWindow : FluentWindow
         => (QualityPopup != null && QualityPopup.IsOpen)
         || (AudioPopup != null && AudioPopup.IsOpen)
         || (DanmakuAreaPopup != null && DanmakuAreaPopup.IsOpen)
-        || (SpeedPopup != null && SpeedPopup.IsOpen);
+        || (SpeedPopup != null && SpeedPopup.IsOpen)
+        // ★ 字幕弹层(2026-11-04)必须一并算进来: 漏了它, 用户在弹层里选一条字幕就会被
+        //   漏进来的 Up 当成"视频区单击"—— 表现为"选字幕顺手把视频暂停了"。
+        || (SubtitlePopup != null && SubtitlePopup.IsOpen);
 
     /// <summary>
     /// 视频区手势是否已经由一次 **Down** 正式起步。

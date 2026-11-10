@@ -901,6 +901,104 @@
                     </StackPanel>
                 </StackPanel>
             </Border>
+
+            <!-- ===== 字幕(2026-11-04 新增) =====
+                 ★ 四项: 默认显示字幕 / 字号 / 底衬不透明度 / 底部距离。
+                   播放器那边不是"读一次就完", 而是每帧按设置值比对后再落控件(见 ApplySubtitleLook),
+                   所以这里拖动滑杆视频里的字幕会立刻跟着变。
+                 ★ 不放在「弹幕」那张卡里: 字幕和弹幕是两条独立链路(字幕是单条 + 时间区间命中,
+                   弹幕是多条 + 追尾游标), 混在一张卡里读起来会以为是弹幕的子功能。 -->
+            <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
+                            Content="字幕" />
+
+            <Border Style="{StaticResource SettingsCardStyle}">
+                <StackPanel>
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="默认显示字幕" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="作者外挂字幕自动打开；AI 字幕需在播放器「字幕」里手动选"
+                                       TextWrapping="Wrap"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding SubtitleEnabled, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <StackPanel Style="{StaticResource SettingsRowStyle}">
+                        <TextBlock Text="字幕外观" Style="{StaticResource SettingsRowTitleStyle}" />
+                        <TextBlock Text="即时生效，正在播放的字幕会立刻变化"
+                                   Style="{StaticResource SettingsRowDescStyle}" />
+
+                        <!-- 字号 -->
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="字幕字号" FontSize="12.5" Width="80"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                    Margin="10,0,10,0" VerticalAlignment="Center"
+                                    Minimum="50" Maximum="300" TickFrequency="25"
+                                    IsSnapToTickEnabled="True"
+                                    Value="{Binding SubtitleFontScalePercent, Mode=TwoWay}" />
+                            <TextBlock Grid.Column="2" Text="{Binding SubtitleFontScaleText}" FontSize="12.5"
+                                       MinWidth="48" TextAlignment="Right" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </Grid>
+
+                        <!-- 底衬不透明度 -->
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="底衬不透明度" FontSize="12.5" Width="80"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                    Margin="10,0,10,0" VerticalAlignment="Center"
+                                    Minimum="0" Maximum="100" TickFrequency="5"
+                                    IsSnapToTickEnabled="True"
+                                    Value="{Binding SubtitleBackgroundOpacityPercent, Mode=TwoWay}" />
+                            <TextBlock Grid.Column="2" Text="{Binding SubtitleBackgroundOpacityText}" FontSize="12.5"
+                                       MinWidth="48" TextAlignment="Right" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </Grid>
+
+                        <!-- 底部距离 -->
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="底部距离" FontSize="12.5" Width="80"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                    Margin="10,0,10,0" VerticalAlignment="Center"
+                                    Minimum="0" Maximum="300" TickFrequency="10"
+                                    IsSnapToTickEnabled="True"
+                                    Value="{Binding SubtitleBottomMargin, Mode=TwoWay}" />
+                            <TextBlock Grid.Column="2" Text="{Binding SubtitleBottomMarginText}" FontSize="12.5"
+                                       MinWidth="48" TextAlignment="Right" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </Grid>
+                        <TextBlock Text="建议不低于 60 px，避免被底部控制栏压住"
+                                   Style="{StaticResource SettingsRowDescStyle}" Margin="0,10,0,0" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
         </StackPanel>
     </DataTemplate>
 

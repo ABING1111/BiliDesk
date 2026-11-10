@@ -633,6 +633,9 @@ public partial class PlayerWindow : FluentWindow
         if (ProgressSlider != null) ProgressSlider.IsEnabled = true;
         // 弹幕按钮的可用性取决于 _isLive / _isLocalPlayback, 调用方都已在这之前设好这两个标志
         UpdateDanmakuButton();
+        // 字幕: 轨列表与 cue 都是**按 cid 取的**, 属于上一条视频 —— 换片必须整个丢掉,
+        // 并把显示层收起(新片字幕回来前挂着上一条的字幕是最刺眼的那种残留)。
+        ResetSubtitleState();
         // 直播看聊天列表, 点播看信息面板 —— 切换点就是换片源(调用方已设好 _isLive)
         UpdateLiveLayout();
         // 「听视频」的可用性同样取决于那两个标志(直播/本地文件没有独立音轨)。
@@ -753,6 +756,11 @@ public partial class PlayerWindow : FluentWindow
         // 弹幕
         nameof(_indexInLib), nameof(_audioStateLogged), nameof(_lastLaneCalcWidth),
         nameof(_lastLaneCalcHeight),
+        // 字幕(2026-11-04): 开关、选中轨、命中 cue 与失败标记都描述"这一片", 换片必须复位 ——
+        // 留着上一条的字幕轨道下标, 新片会拿它去读一个属于别的视频的 cue 列表。
+        nameof(_subtitleOn), nameof(_subtitleSelectedIndex),
+        nameof(_subtitleShownText), nameof(_subtitleTracksFailed), nameof(_subtitleCueFailed),
+        nameof(_subtitleTracks), nameof(_subtitleCues),
         // 直播聊天列表的"跟随底部"开关: 每次换片源/换直播间都重新开始跟随
         nameof(_liveChatAutoScroll),
         // 音质(2026-11-06): 可选音轨/当前音轨/切换闸都属于"这一片" ——
@@ -863,6 +871,12 @@ public partial class PlayerWindow : FluentWindow
         // 弹幕滑杆的回灌闸门(2026-10-30): 构造期间必须保持 true 挡住 XAML 初始 Value 的写回;
         //   换片不该碰它 —— 它是窗口级初始化状态, 不是"这一片"的弹幕设置。
         nameof(_syncingDanmakuLook),
+        // 字幕的两个 UI 闸门(2026-11-04): 同属"窗口级初始化/填充期"的瞬时值,
+        // 与片源无关 —— 登记在这里只是表明它们不需要在换片时复位。
+        nameof(_fillingSubtitleMenu), nameof(_syncingSubtitleFont),
+        // 字幕外观三项(字号 / 不透明度 / 底距, 2026-11-04): 与弹幕外观三项同理是**用户偏好**,
+        // 换片必须保持 —— 清了就等于"换个视频字幕又变回默认大小", 用户马上会报上来。
+        nameof(_subtitleLookFont), nameof(_subtitleLookOpacity), nameof(_subtitleLookMargin),
         // 评论输入面板的展开态(2026-11-01): 窗口级 UI 瞬态 ——
         //   用户开着面板换片是常态(草稿都不清, 面板更不能收), 保持原样即可。
         nameof(_composerOpen),
@@ -1236,6 +1250,8 @@ public partial class PlayerWindow : FluentWindow
             UpdateListenButtonState();
             // 加载弹幕 + 查询点赞/关注/收藏状态(用于按钮状态切换)
             _ = LoadDanmakuAsync(_currentCid);
+            // 字幕与弹幕并行取: 两者互不依赖, 串起来只会让字幕更晚出现
+            _ = LoadSubtitleAsync(_currentBvid, _currentCid);
             _ = RefreshLikeStateAsync();
             _ = RefreshFollowStateAsync();
             _ = RefreshFavStateAsync();
