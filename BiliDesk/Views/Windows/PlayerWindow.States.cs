@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -110,6 +110,9 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private async void OnFavoriteClick(object sender, RoutedEventArgs e)
     {
+        // 长按触发/取消过三连时, 松开这一刻的 Click 不能再去弹收藏夹窗
+        if (_tripleComboAt != 0 && Environment.TickCount64 - _tripleComboAt < 1500) return;
+        if (_likePressCancelled) { _likePressCancelled = false; return; }
         if (!Svc.Session.HasLogin) { Svc.Toast.Show("收藏需要先登录"); return; }
         if (_aid <= 0 || _favBusy) return;
 

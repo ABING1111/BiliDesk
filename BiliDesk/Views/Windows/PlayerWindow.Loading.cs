@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -613,6 +613,15 @@ public partial class PlayerWindow : FluentWindow
         //   顺带把 _longPressFired 清掉 —— 否则新片的第一次 Up 会走进"结束快进"分支。
         StopFastForward();
         _longPressFired = false;
+        // 长按点赞三连的"抑制窗口"与在途闸属于上一片: 不清的话换片后 1.5 秒内的第一次
+        // 点赞会被 OnLikeClick 当成"长按三连松手那次 Click"吞掉(见 OnLikeClick)。
+        _tripleComboAt = 0;
+        _tripleComboBusy = false;
+        // 进度条立即归零(不走淡出): 新片子的第一次长按必须从 0 开始画(含确认阶段复位)。
+        ResetLikePressProgress();
+        // 激活点击补偿同理: 轮询计时器与按压起点都属于"这一次点击", 换片一律收掉。
+        StopActivationClickCompensation();
+        _activationClickStartTick = 0;
         // 复位"该恢复到几倍速"的记录: 它只描述**本片**那次长按, 不该带到下一片
         // (下一片起播速率由 _mp.Rate 自己决定, 这里只是清掉上一个手势的账)。
         _rateBeforeFastForward = 1.0f;
@@ -795,6 +804,22 @@ public partial class PlayerWindow : FluentWindow
         nameof(_hasSeason), nameof(_switchingSeasonEpisode),
         // 分P 与合集是一对: 同样是"每片重算 + 换片闸门"。别只加一个漏一个。
         nameof(_hasPages), nameof(_switchingPage),
+        // ---- 2026-11-12 补登记 ----
+        // 评论区四个 UI/代次状态(此前一直漏登记, errors.txt 每开一个播放器就点一次名):
+        // 回到顶部按钮显隐、分批展示调度闸、列表代次、内容窗口扫描闸, 全部是"这一片"的。
+        nameof(_commentBackToTopShown), nameof(_commentRevealScheduled),
+        nameof(_commentListVersion), nameof(_commentWindowUpdating),
+        // 长按点赞三连: "最近一次长按触发时刻"与在途闸都属于这一片 ——
+        // 换片后必须复位, 否则上一片留下的 1.5 秒抑制窗口会吞掉新片的第一次点赞。
+        nameof(_tripleComboAt), nameof(_tripleComboBusy),
+        // 长按进度条的两个量(2026-11-12): 按压起点与"已提交给三连"标记都是这一次点击的瞬时态。
+        nameof(_likePressStartTick), nameof(_likePressCommitted),
+        // 点击/长按取消判定: 按下时刻、"本次松手算取消"标记、是否通过 0.5 秒确认,
+        // 同属"这一次点击"的瞬时态。
+        nameof(_likeDownTick), nameof(_likePressCancelled), nameof(_likeConfirmed),
+        // 激活点击补偿(覆盖层第一次点击被吞, 见 PlayerWindow.VideoArea.cs): 三个量都是
+        // "这一次点击"的瞬时态, 换片时鼠标多半早已抬起, 复位成初值即可。
+        nameof(_activationClickPending), nameof(_activationLongPress), nameof(_activationClickStartTick),
     };
 
     /// <summary>
@@ -869,6 +894,10 @@ public partial class PlayerWindow : FluentWindow
         // 输入框的"展开高度"态(2026-11-01): 同样是窗口级 UI 偏好 ——
         //   用户展开了写长文, 换片/收面板再回来不该被打回 66px。发成功才归位(见 PostCommentAsync)。
         nameof(_composerExpanded),
+        // ---- 2026-11-12 补登记 ----
+        // 评论限流冷却是 **IP 级**的(见 Comments.cs 的说明): 换一个视频照样被拦,
+        // 所以必须跨片保持 —— 清了会让用户"换个视频又立刻撞一轮限流"。
+        nameof(_commentCooldownUntilUtc), nameof(_commentCooldownSeconds),
     };
 
     /// <summary>

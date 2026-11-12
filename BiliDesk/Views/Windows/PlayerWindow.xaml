@@ -142,8 +142,8 @@
                长得不一样会像是两种东西。 -->
         <Style x:Key="DanmakuPillToggleStyle" TargetType="Border">
             <Setter Property="Background" Value="#40000000" />
-            <Setter Property="BorderBrush" Value="#22FFFFFF" />
-            <Setter Property="BorderThickness" Value="1" />
+            <!-- 与控制栏按钮保持一致: 去描边 -->
+            <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="5" />
             <Setter Property="Padding" Value="10,4" />
             <Setter Property="Cursor" Value="Hand" />
@@ -188,8 +188,10 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
+                        <!-- ★ 2026-11-12 去掉 1px 描边(用户反馈控制栏按钮有边框影响观感):
+                             只保留半透明底衬 + 圆角, 悬停/按下只加深底色。 -->
                         <Border x:Name="Bd" Background="#40000000" CornerRadius="5"
-                                BorderBrush="#22FFFFFF" BorderThickness="1"
+                                BorderThickness="0"
                                 Padding="{TemplateBinding Padding}">
                             <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Center" />
                         </Border>
@@ -1704,17 +1706,43 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <!-- 点赞: 点过 = 图标和数字一起变红 -->
-                                    <Button x:Name="BtnLike" Style="{StaticResource PlayerActionBtn}"  Grid.Column="0"
-                                            Click="OnLikeClick" ToolTip="点赞 (L)">
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Grid x:Name="LikeIconBox" Style="{StaticResource ActionIconBox}">
-                                                <Path Data="{StaticResource LikeIconGeometry}"
-                                                      Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                                      Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center" />
-                                            </Grid>
-                                            <TextBlock x:Name="LikeLabel" Text="--"
-                                                       Style="{StaticResource ActionCountText}" />
-                                        </StackPanel>
+                                    <!-- ★ 2026-11-12: 长按 = 一键三连(点赞 + 投币 + 收藏), 见 OnLikeButtonPreviewMouseDown。
+                                         短按仍然只是点赞/取消点赞。
+                                         ★ 按钮外框那圈描边是长按反馈(见 StartLikePressProgress):
+                                           按住前 0.5 秒只做"长按确认"(不显示动画), 确认后环才开始扫,
+                                           1.5 秒扫满(合计约 2 秒)触发三连; 三连演出中三个按钮依次弹跳、
+                                           环按「点赞(红) → 投币(金) → 收藏(蓝)」换色, 随后徽章浮现并淡出。 -->
+                                    <!-- ★ 进度条必须放在 Button 的 Content **里面**: 作为 Grid 的兄弟放在按钮外面时
+                                         实测被按钮覆盖(位置/尺寸/Opacity 全对, 就是画不出来)。
+                                         放进 Content 后由 ContentPresenter 内部渲染, 层级稳定。 -->
+                                    <Button x:Name="BtnLike" Style="{StaticResource PlayerActionBtn}" Grid.Column="0"
+                                            Click="OnLikeClick" ToolTip="点赞 (L)；长按一键三连"
+                                            PreviewMouseLeftButtonDown="OnTripleButtonPreviewMouseDown"
+                                            PreviewMouseLeftButtonUp="OnTripleButtonPreviewMouseUp"
+                                            MouseLeave="OnTripleButtonMouseLeave">
+                                        <Grid>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Grid x:Name="LikeIconBox" Style="{StaticResource ActionIconBox}">
+                                                    <Path Data="{StaticResource LikeIconGeometry}"
+                                                          Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                          Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center" />
+                                                </Grid>
+                                                <TextBlock x:Name="LikeLabel" Text="--"
+                                                           Style="{StaticResource ActionCountText}" />
+                                            </StackPanel>
+                                            <!-- 长按进度环由 PressRingAdorner 绘制在按钮外框上(不参与布局, 不会撑大按钮)。 -->
+                                            <!-- 「一键三连」徽章: 三连演出最后约 1 秒浮现在按钮上方, 之后随演出淡出。 -->
+                                            <Border x:Name="TripleComboBadge"
+                                                    HorizontalAlignment="Center" VerticalAlignment="Top"
+                                                    Margin="0,-24,0,0" Padding="8,2" CornerRadius="9"
+                                                    Background="#F43F5E" Opacity="0" IsHitTestVisible="False"
+                                                    RenderTransformOrigin="0.5,0.5">
+                                                <Border.RenderTransform>
+                                                    <ScaleTransform x:Name="TripleComboBadgeScale" ScaleX="0.8" ScaleY="0.8" />
+                                                </Border.RenderTransform>
+                                                <TextBlock Text="一键三连" FontSize="10" Foreground="White" />
+                                            </Border>
+                                        </Grid>
                                     </Button>
                                     <!-- 投币 -->
                                     <Button x:Name="BtnCoin" Style="{StaticResource PlayerActionBtn}"  Grid.Column="1"

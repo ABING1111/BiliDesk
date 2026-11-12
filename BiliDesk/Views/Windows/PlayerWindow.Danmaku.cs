@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -308,6 +308,8 @@ public partial class PlayerWindow : FluentWindow
         //   这是整套防护的地基(见 _videoGestureActive 的说明): 不起步, 随后漏进来的
         //   那个孤立 Up 才会因为"没有配对 Down"而被丢掉。
         if (AnyPlayerPopupOpen) { _videoGestureActive = false; return; }
+        // 正常手势起步 ⇒ 撤掉"激活点击补偿"(见 PlayerWindow.VideoArea.cs 的 OnOverlayActivated)
+        StopActivationClickCompensation();
         // 记下"这一下是我起的" —— Up 里靠它识别弹层余波
         _videoGestureActive = true;
 
@@ -466,6 +468,8 @@ public partial class PlayerWindow : FluentWindow
         // ★ 手势状态一并复位: 鼠标移出去了, 这一次按下就不再属于视频区,
         //   之后即使漏一个 Up 进来也会因为"没有配对 Down"被正确丢掉。
         _videoGestureActive = false;
+        // 激活点击补偿也一并撤掉: 指针已经离开视频区, 这一下不再属于它
+        StopActivationClickCompensation();
         // 右键那一路同样复位: 按下后拖到视频区外再松手, Up 不会再来 ——
         // 不复位的话下一次孤立的 Up 会被误当成"配对成功"而切一次铺满。
         _rightGestureActive = false;
