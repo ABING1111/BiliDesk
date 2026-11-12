@@ -126,7 +126,7 @@
                    滚回顶部(那 500 条内容是从头换的), 那是"视图"的事, VM 不该管(与首页同款写法)。
                  翻页是滚动自动触发的, 所以这里只有"刷新"没有"加载更多"按钮。 -->
             <Button x:Name="BtnRefresh" Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
-                    Click="OnRefreshClick" ToolTip="刷新本分区">
+                    Click="OnRefreshClick" ToolTip="刷新本分区（F5）">
                 <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
             </Button>
         </StackPanel>

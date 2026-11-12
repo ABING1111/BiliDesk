@@ -40,7 +40,7 @@
             </StackPanel>
             <Button HorizontalAlignment="Right" VerticalAlignment="Bottom"
                     Style="{StaticResource IconButtonStyle}"
-                    Command="{Binding RefreshCommand}" ToolTip="刷新">
+                    Command="{Binding RefreshCommand}" ToolTip="刷新（F5）">
                 <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
             </Button>
         </Grid>

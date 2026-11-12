@@ -20,7 +20,7 @@ namespace BiliDesk.Views.Pages;
 ///   · 左右加载状态分开, 左栏翻页不再让右栏转圈;
 ///   · 滚动到底的自动翻页统一用 ScrollChanged 的 Extent/Viewport 像素值。
 /// </summary>
-public partial class FollowPage : UserControl
+public partial class FollowPage : UserControl, IRefreshable
 {
     /// <summary>
     /// 左栏 UP 列表的自动翻页阈值(单位 = **条目**, 不是像素)。
@@ -392,6 +392,9 @@ public partial class FollowPage : UserControl
         // 右栏会一直停在这一页(用户感受就是"刷新之后滑不动了")。
         _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(TryAutoFillShortContent));
     }
+
+    /// <summary>F5: 刷新关注动态(与右下角刷新按钮同一条路径, 含滚回顶部与短内容补页)。</summary>
+    public void Refresh() => OnRefreshClick(this, new RoutedEventArgs());
 
     // ------------------------------------------------------------ 关注直播看板
 

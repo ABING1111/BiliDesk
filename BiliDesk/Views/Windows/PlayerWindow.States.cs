@@ -93,6 +93,8 @@ public partial class PlayerWindow : FluentWindow
                 return;
             }
             SetInWatchLater(target);
+            // 同步全局集合: 列表页卡片上的悬浮按钮也要跟着变(对勾 ↔ 旗帜)
+            WatchLaterState.Set(_aid, target);
             PlayActionPop(LaterIconBox);
             if (!target) LockActionHoverPreview();   // 移出后锁 hover 预览(同点赞的坑)
             Svc.Toast.Show(target ? "已加入稍后再看" : "已从稍后再看移出");

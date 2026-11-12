@@ -776,7 +776,7 @@
             </Button>
             <!-- 刷新 -->
             <Button x:Name="BtnRefresh" Style="{StaticResource FloatingIconButtonStyle}"
-                    Margin="0,6,0,0" Click="OnRefreshClick" ToolTip="刷新">
+                    Margin="0,6,0,0" Click="OnRefreshClick" ToolTip="刷新（F5）">
                 <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
             </Button>
         </StackPanel>

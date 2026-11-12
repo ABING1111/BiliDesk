@@ -253,6 +253,11 @@ public partial class VideoCard : UserControl
         if (_entered) return;
         _entered = true;
 
+        // 「稍后再看」按钮状态: 订阅全局集合 + 首次需要时拉一次服务端列表
+        HookLaterState();
+        _ = WatchLaterState.EnsureLoadedAsync();
+        RefreshLaterState();
+
         // 入场位移挂最外层(封面与文字一起上浮); 悬停缩放单独挂封面, 两者互不覆盖
         _trans = new TranslateTransform(0, 18);
         _coverScale = new ScaleTransform(1, 1);
@@ -280,7 +285,11 @@ public partial class VideoCard : UserControl
         _trans.Y = 0;
     }
 
-    private void OnMouseEnter(object sender, MouseEventArgs e) => AnimateCoverScale(1.04);
+    private void OnMouseEnter(object sender, MouseEventArgs e)
+    {
+        AnimateCoverScale(1.04);
+        ShowLaterBar(true);
+    }
 
     /// <summary>
     /// 鼠标在卡片上**真的移动**过之后再预热 LibVLC(见 VlcCore.PrewarmOnDemand)。
@@ -303,7 +312,54 @@ public partial class VideoCard : UserControl
         // 按下后拖出卡片, 这一次抬起不再算点击(否则松手时如果恰好又滑回封面会误播)
         _pressInside = false;
         AnimateCoverScale(1);
+        ShowLaterBar(false);
     }
+
+    // ------------------------------------------------------------ 「稍后再看」状态
+
+    private bool _laterHooked;
+
+    /// <summary>订阅全局「稍后再看」集合(卡片被虚拟化回收时在 Unloaded 里摘掉)。</summary>
+    private void HookLaterState()
+    {
+        if (_laterHooked) return;
+        _laterHooked = true;
+        WatchLaterState.Changed += OnLaterStateChanged;
+        DataContextChanged += OnLaterDataContextChanged;
+        Unloaded += OnLaterUnloaded;
+    }
+
+    private void OnLaterUnloaded(object sender, RoutedEventArgs e)
+    {
+        WatchLaterState.Changed -= OnLaterStateChanged;
+        DataContextChanged -= OnLaterDataContextChanged;
+        Unloaded -= OnLaterUnloaded;
+        _laterHooked = false;
+    }
+
+    /// <summary>全局集合变了(任一卡片增删/整表重载): 所有卡片同步图标。</summary>
+    private void OnLaterStateChanged() => RefreshLaterState();
+
+    private void OnLaterDataContextChanged(object sender, DependencyPropertyChangedEventArgs e) => RefreshLaterState();
+
+    /// <summary>已加入 = 对勾 + 强调色底; 未加入 = 旗帜图标 + 半透明黑底。</summary>
+    private void RefreshLaterState()
+    {
+        var item = DataContext as VideoItem;
+        var inList = item != null && WatchLaterState.Contains(item.Aid);
+
+        if (LaterIcon != null) LaterIcon.Text = inList ? "\uE73E" : "\uE7C1";
+        if (LaterLabelText != null) LaterLabelText.Text = inList ? "从稍后再看移除" : "稍后再看";
+        if (LaterButton != null)
+        {
+            LaterButton.Background = inList
+                ? (TryFindResource("AccentBrush") as Brush ?? LaterNormalBrush)
+                : LaterNormalBrush;
+        }
+    }
+
+    /// <summary>未加入时的底色(半透明黑), 与 XAML 初始值一致。</summary>
+    private static readonly Brush LaterNormalBrush = new SolidColorBrush(Color.FromArgb(0xB3, 0, 0, 0));
 
     /// <summary>左键在卡片上按下: 记下"这一次手势是我的"。Up 命中测试换了目标也不会误认。</summary>
     private void OnCardPress(object sender, MouseButtonEventArgs e) => _pressInside = true;
@@ -329,6 +385,45 @@ public partial class VideoCard : UserControl
             new DoubleAnimation(_coverScale.ScaleX, zoom, ms) { EasingFunction = ease });
         _coverScale.BeginAnimation(ScaleTransform.ScaleYProperty,
             new DoubleAnimation(_coverScale.ScaleY, zoom, ms) { EasingFunction = ease });
+    }
+
+    // ------------------------------------------------------------ 右上角「稍后再看」悬浮按钮
+
+    /// <summary>
+    /// 悬停封面时淡入右上角的「稍后再看」按钮(2026-11-12 用户要求, 参考 B 站客户端)。
+    /// 直播卡片没有这个动作, 直接不显示; 隐藏时同时收起文字标签, 避免下次进来残留。
+    /// </summary>
+    private void ShowLaterBar(bool show)
+    {
+        if (show && DataContext is VideoItem { IsLive: true }) show = false;
+
+        LaterBar.IsHitTestVisible = show;
+        LaterBar.BeginAnimation(UIElement.OpacityProperty,
+            new DoubleAnimation(show ? 1 : 0, TimeSpan.FromMilliseconds(140))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            });
+        if (!show) ShowLaterLabel(false);
+    }
+
+    /// <summary>悬停按钮时展开「稍后再看」文字(与 B 站客户端的悬停提示一致)。</summary>
+    private void ShowLaterLabel(bool show)
+        => LaterLabel.BeginAnimation(UIElement.OpacityProperty,
+            new DoubleAnimation(show ? 1 : 0, TimeSpan.FromMilliseconds(120)));
+
+    private void OnLaterButtonEnter(object sender, MouseEventArgs e) => ShowLaterLabel(true);
+
+    private void OnLaterButtonLeave(object sender, MouseEventArgs e) => ShowLaterLabel(false);
+
+    /// <summary>
+    /// 点悬浮按钮 = 加入稍后再看。
+    /// ★ 必须 e.Handled = true: 按钮在 CoverCard 的 Grid 里, 不拦的话 Up 会冒泡到封面,
+    ///   被 OnClick 当成"点开视频"(用户点的明明是稍后再看)。
+    /// </summary>
+    private void OnAddWatchLaterClick(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        ToggleWatchLaterAsync().Forget();
     }
 
     /// <summary>打开这条视频。封面与标题是两个入口, 逻辑共用一份。</summary>
@@ -495,12 +590,7 @@ public partial class VideoCard : UserControl
             return;
         }
 
-        var aid = v.Aid;
-        if (aid <= 0)
-        {
-            var (_, _, vd) = await Svc.Api.GetVideoAsync(v.Bvid);
-            aid = vd?.Aid ?? 0;
-        }
+        var aid = await ResolveAidAsync(v);
         if (aid <= 0)
         {
             Svc.Toast.Show("没拿到这条视频的 avid, 加不了");
@@ -508,6 +598,66 @@ public partial class VideoCard : UserControl
         }
 
         var (ok, err) = await Svc.Api.AddWatchLaterAsync(aid);
+        if (ok) WatchLaterState.Set(aid, true);
         Svc.Toast.Show(ok ? "已加入稍后再看" : "加入失败: " + (err ?? "未知错误"));
+    }
+
+    /// <summary>
+    /// 悬浮按钮: 在「加入」和「移除」之间切换(2026-11-12 用户要求)。
+    /// 状态以 <see cref="WatchLaterState"/> 为准; 成功后本地立即反映并广播给所有卡片,
+    /// 服务端列表才是持久化来源 —— 下次启动重新拉一次, 与账号完全一致。
+    /// </summary>
+    private async System.Threading.Tasks.Task ToggleWatchLaterAsync()
+    {
+        var v = Current;
+        if (v == null || string.IsNullOrEmpty(v.Bvid)) return;
+        if (!Svc.Session.HasLogin)
+        {
+            Svc.Toast.Show("稍后再看需要先登录");
+            return;
+        }
+
+        var aid = await ResolveAidAsync(v);
+        if (aid <= 0)
+        {
+            Svc.Toast.Show("没拿到这条视频的 avid, 操作不了");
+            return;
+        }
+
+        if (WatchLaterState.Contains(aid))
+        {
+            var (ok, err) = await Svc.Api.RemoveWatchLaterAsync(aid);
+            if (ok)
+            {
+                WatchLaterState.Set(aid, false);
+                Svc.Toast.Show("已从稍后再看移除");
+            }
+            else
+            {
+                Svc.Toast.Show("移除失败: " + (err ?? "未知错误"));
+            }
+        }
+        else
+        {
+            var (ok, err) = await Svc.Api.AddWatchLaterAsync(aid);
+            if (ok)
+            {
+                WatchLaterState.Set(aid, true);
+                Svc.Toast.Show("已加入稍后再看");
+            }
+            else
+            {
+                Svc.Toast.Show("加入失败: " + (err ?? "未知错误"));
+            }
+        }
+    }
+
+    /// <summary>列表没下发 avid(搜索/推荐等页面)时补查一次视频详情。</summary>
+    private static async System.Threading.Tasks.Task<long> ResolveAidAsync(VideoItem v)
+    {
+        if (v.Aid > 0) return v.Aid;
+        if (string.IsNullOrEmpty(v.Bvid)) return 0;
+        var (_, _, vd) = await Svc.Api.GetVideoAsync(v.Bvid);
+        return vd?.Aid ?? 0;
     }
 }

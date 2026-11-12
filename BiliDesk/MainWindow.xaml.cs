@@ -77,6 +77,8 @@ public partial class MainWindow : FluentWindow
         PreviewMouseDown += OnUserActivity;
         PreviewMouseWheel += OnUserActivity;
         PreviewKeyDown += OnUserActivity;
+        // F5 = 刷新当前页面(2026-11-12 用户要求"所有的刷新绑定到 F5")
+        PreviewKeyDown += OnRefreshKey;
         Loaded += (_, _) => StartForegroundIdleTimer();
         Closed += (_, _) => _foregroundIdleTimer?.Stop();
     }
@@ -93,6 +95,52 @@ public partial class MainWindow : FluentWindow
 
     private void OnUserActivity(object sender, InputEventArgs e)
         => _lastInputTick = Environment.TickCount64;
+
+    // ------------------------------------------------------------ F5 刷新
+
+    /// <summary>
+    /// F5 = 刷新当前页面(2026-11-12 用户要求"所有的刷新绑定到 F5")。
+    /// 优先走页面自己的 <see cref="IRefreshable"/>: 首页/关注/分区/我的页的刷新带
+    /// "滚回顶部、短内容补页"等视图动作, 必须复用它们原来那条路径;
+    /// 只绑了命令的页面(历史/收藏/稍后再看/缓存/消息/UP 主页)退化为执行刷新命令。
+    /// 内嵌页(UP 主主页等)盖在 PageLayer 上时, 先刷它。
+    /// </summary>
+    private void OnRefreshKey(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.F5) return;
+        e.Handled = true;
+
+        if (EmbeddedHost.Visibility == Visibility.Visible)
+        {
+            if (EmbeddedContent.Content is IRefreshable embeddedPage)
+            {
+                embeddedPage.Refresh();
+                return;
+            }
+            TryRefreshByCommand(EmbeddedContent.Content as FrameworkElement);
+            return;
+        }
+
+        if (_currentPage is IRefreshable page)
+        {
+            page.Refresh();
+            return;
+        }
+        TryRefreshByCommand(_currentPage);
+    }
+
+    /// <summary>页面没有实现 <see cref="IRefreshable"/> 时: 直接执行 ViewModel 上的刷新命令。</summary>
+    private static void TryRefreshByCommand(FrameworkElement? page)
+    {
+        var vm = page?.DataContext;
+        if (vm == null) return;
+        foreach (var name in new[] { "RefreshCommand", "ReloadCommand" })
+        {
+            if (vm.GetType().GetProperty(name)?.GetValue(vm) is not ICommand cmd) continue;
+            if (cmd.CanExecute(null)) cmd.Execute(null);
+            return;
+        }
+    }
 
     private void StartForegroundIdleTimer()
     {

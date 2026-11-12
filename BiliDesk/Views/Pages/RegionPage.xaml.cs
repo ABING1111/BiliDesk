@@ -183,4 +183,7 @@ public partial class RegionPage : UserControl
         ListScroll.ScrollToTop();
         _ = vm.RefreshAsync();
     }
+
+    /// <summary>F5: 刷新当前分区(与右上角刷新按钮同一条路径, 含滚回顶部)。</summary>
+    public void Refresh() => OnRefreshClick(this, new RoutedEventArgs());
 }
