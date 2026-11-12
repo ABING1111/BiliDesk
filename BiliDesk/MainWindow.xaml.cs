@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -236,8 +236,6 @@ public partial class MainWindow : FluentWindow
             //   一屏封面/卡片的工作集, 任务管理器里显得"关不掉"。
             //   正在播放视频时跳过 —— 阻塞式 GC 会让画面/声音抖一下。
             if (!VlcCore.HasLivePlayers) MemoryTrim.RequestIdleRelease();
-            // 第一次收起时给个托盘气泡, 让用户知道程序没被关掉
-            TrayService.Instance.NotifyMinimizedToTray();
             return;
         }
         base.OnClosing(e);

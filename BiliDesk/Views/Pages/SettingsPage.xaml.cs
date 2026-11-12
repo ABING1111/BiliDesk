@@ -39,6 +39,27 @@ public partial class SettingsPage : UserControl
         HookPalette();
     }
 
+    /// <summary>
+    /// 设置页滚动时的折叠吸顶(2026-11-12 用户要求):
+    ///   0~24px   大标题与 Tab 随内容自然上滑;
+    ///   24~80px  吸顶栏从下方 10px 处滑入 + 淡入; 吸顶栏里的「应用设置」是 14px 小字、
+    ///            Tab 也用了更小的内边距, 高度(44)比原头部矮一档 —— 即"减小高度后固定";
+    ///   >80px    吸顶栏常驻, 原头部已滚出视口。
+    /// ★ 只改 Opacity 与 TranslateTransform, 不碰布局: 每帧不会触发重新测量/排版。
+    /// </summary>
+    private void OnSettingsScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        const double fadeStart = 24;
+        const double fadeEnd = 80;
+        var t = System.Math.Clamp((e.VerticalOffset - fadeStart) / (fadeEnd - fadeStart), 0, 1);
+        StickyHeader.Opacity = t;
+        // ★★★ 关键: 吸顶栏跨在窗口标题栏边界上(主窗口 CaptionHeight=20), 标题栏内的点击
+        //   会被 WindowChrome 当成"拖动窗口"吞掉 —— 用户实测"吸顶后点不动/碰撞体积不一致"
+        //   就是这个(点击点正好落在标题栏那 20px 上)。IsHitTestVisibleInChrome 让吸顶栏
+        //   在标题栏区域内也能收到点击; 只在吸顶栏出现后启用, 否则滚动前会挡住拖窗口。
+        System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(StickyHeader, t > 0.01);
+    }
+
     /// <summary>在当前可视树里找调色盘并接上拖动事件(找不到就是"通用"Tab 不在前, 静默跳过)。</summary>
     private void HookPalette()
     {

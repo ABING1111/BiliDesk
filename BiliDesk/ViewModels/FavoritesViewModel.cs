@@ -9,6 +9,7 @@ using System.Windows.Input;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
+using BiliDesk.Views.Windows;
 
 namespace BiliDesk.ViewModels;
 
@@ -347,9 +348,10 @@ public class FavoritesViewModel : VideoListSelectionViewModel
             return;
         }
 
-        var r = MessageBox.Show($"确定要把选中的 {targets.Count} 个视频移出「{CurrentFolderTitle}」吗?", "BiliDesk",
-            MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (r != MessageBoxResult.Yes) return;
+        if (!ConfirmDialog.Show(
+                $"确定要把选中的 {targets.Count} 个视频移出「{CurrentFolderTitle}」吗?",
+                "移出收藏夹", "移出"))
+            return;
 
         Busy = true;
         var removed = 0;
@@ -417,11 +419,11 @@ public class FavoritesViewModel : VideoListSelectionViewModel
         if (Busy) return;
         if (_currentFolderId <= 0) return;
 
-        var r = MessageBox.Show(
-            $"确定要清空收藏夹「{CurrentFolderTitle}」吗?\n\n" +
-            "夹内**全部**内容都会被移出(不只是当前已加载的), 且无法撤销。",
-            "BiliDesk", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (r != MessageBoxResult.Yes) return;
+        if (!ConfirmDialog.Show(
+                $"确定要清空收藏夹「{CurrentFolderTitle}」吗?\n\n" +
+                "夹内全部内容都会被移出(不只是当前已加载的), 且无法撤销。",
+                "清空收藏夹", "清空"))
+            return;
 
         const int MaxRounds = 80;   // 每轮最多 30 条 → 上限约 2400 条, 远超正常收藏夹规模
         Busy = true;

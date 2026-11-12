@@ -11,6 +11,7 @@ using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
+using BiliDesk.Views.Windows;
 
 namespace BiliDesk.ViewModels;
 
@@ -276,9 +277,10 @@ public class HistoryViewModel : VideoListSelectionViewModel
             return;
         }
 
-        var r = MessageBox.Show($"确定要删除选中的 {targets.Count} 条观看记录吗?", "BiliDesk",
-            MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (r != MessageBoxResult.Yes) return;
+        if (!ConfirmDialog.Show(
+                $"确定要删除选中的 {targets.Count} 条观看记录吗?",
+                "删除观看记录", "删除"))
+            return;
 
         Busy = true;
         var done = 0;
@@ -336,10 +338,10 @@ public class HistoryViewModel : VideoListSelectionViewModel
         // ★ 说明必须写"全部"而不是"当前这一类": /x/v2/history/clear 是**账号级**的清空接口,
         //   没有按类型分的参数, 所以它会连视频带直播一起清掉。含糊其辞会让用户在直播类别下
         //   以为只清直播记录 —— 那是数据损失。
-        var r = MessageBox.Show(
-            "确定要清空**全部**云端观看历史吗?\n\n这会删除账号下所有观看记录(视频与直播都包含, 不只是当前已加载的), 且无法撤销。",
-            "BiliDesk", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (r != MessageBoxResult.Yes) return;
+        if (!ConfirmDialog.Show(
+                "确定要清空全部云端观看历史吗?\n\n这会删除账号下所有观看记录(视频与直播都包含, 不只是当前已加载的), 且无法撤销。",
+                "清空观看历史", "清空"))
+            return;
 
         Busy = true;
         BusyText = "正在清空…";

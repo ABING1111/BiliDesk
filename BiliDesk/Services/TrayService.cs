@@ -31,7 +31,7 @@ public class TrayService : IDisposable
         if (_disposed || _icon != null) return;
         try
         {
-            // ContextMenuStrip 在 WPF 宿主里默认不开视觉样式, 菜单会是 Win2000 观感
+            // NotifyIcon 的图标/气泡渲染仍需要 WinForms 的视觉样式(与下面的 WPF 菜单无关)
             System.Windows.Forms.Application.EnableVisualStyles();
 
             _icon = new System.Windows.Forms.NotifyIcon
@@ -41,13 +41,12 @@ public class TrayService : IDisposable
                 Icon = LoadAppIcon()
             };
             _icon.DoubleClick += (_, _) => ShowMainWindow();
-
-            var menu = new System.Windows.Forms.ContextMenuStrip();
-            menu.Items.Add("显示主界面", null, (_, _) => ShowMainWindow());
-            menu.Items.Add("最小化到托盘", null, (_, _) => MinimizeToTray());
-            menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-            menu.Items.Add("退出", null, (_, _) => ExitApp());
-            _icon.ContextMenuStrip = menu;
+            // ★ 右键菜单改用 WPF 的 ContextMenu(主题里有全局 ContextMenu/MenuItem 样式):
+            //   WinForms 的 ContextMenuStrip 是系统旧风格, 与应用内其它界面明显不一致。
+            _icon.MouseUp += (_, e) =>
+            {
+                if (e.Button == System.Windows.Forms.MouseButtons.Right) ShowTrayMenu();
+            };
         }
         catch (Exception ex)
         {
@@ -55,6 +54,41 @@ public class TrayService : IDisposable
             App.ReportError(ex);
             Dispose();
         }
+    }
+
+    private System.Windows.Controls.ContextMenu? _trayMenu;
+
+    /// <summary>
+    /// 在鼠标位置弹出 WPF 托盘菜单(主题样式来自 Themes/Styles.xaml 的全局 ContextMenu 样式)。
+    /// ★ 必须在 UI 线程构造/打开菜单: NotifyIcon 的事件跑在它自己的消息线程上。
+    /// </summary>
+    private void ShowTrayMenu()
+    {
+        var app = Application.Current;
+        if (app == null) return;
+        app.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _trayMenu ??= BuildTrayMenu();
+            _trayMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+            _trayMenu.IsOpen = true;
+        }));
+    }
+
+    private System.Windows.Controls.ContextMenu BuildTrayMenu()
+    {
+        var menu = new System.Windows.Controls.ContextMenu();
+        menu.Items.Add(MakeTrayItem("显示主界面", ShowMainWindow));
+        menu.Items.Add(MakeTrayItem("最小化到托盘", MinimizeToTray));
+        menu.Items.Add(new System.Windows.Controls.Separator());
+        menu.Items.Add(MakeTrayItem("退出", ExitApp));
+        return menu;
+    }
+
+    private static System.Windows.Controls.MenuItem MakeTrayItem(string header, Action onClick)
+    {
+        var item = new System.Windows.Controls.MenuItem { Header = header };
+        item.Click += (_, _) => onClick();
+        return item;
     }
 
     /// <summary>图标直接从 exe 里抽(ApplicationIcon 就是 app.ico), 不用关心 pack URI 是否打包了 ico</summary>
@@ -92,9 +126,6 @@ public class TrayService : IDisposable
         }));
     }
 
-    /// <summary>已经给过"收进托盘"的气泡提示(整次运行只给一次, 免得每次关闭都弹)</summary>
-    private bool _balloonShown;
-
     /// <summary>
     /// 把主窗口收进托盘(窗口 Hide, 进程继续跑)。
     ///
@@ -111,30 +142,7 @@ public class TrayService : IDisposable
             var win = SvcWindow.Main;
             if (win == null) return;
             win.Hide();
-            NotifyMinimizedToTray();
         }));
-    }
-
-    /// <summary>
-    /// 收起后的气泡提示(整次运行只给一次)。
-    /// 主窗口自己 Hide 的那条路径(MainWindow.OnClosing)会直接调这里 ——
-    /// 那种情况下窗口已经藏好了, 只差一个提示。
-    /// </summary>
-    public void NotifyMinimizedToTray()
-    {
-        // 没有这个提示, 用户点完关闭键会觉得"程序被关了", 然后去任务管理器里找进程 ——
-        // 一个气泡就能省掉这次困惑。
-        if (_balloonShown) return;
-        _balloonShown = true;
-        try
-        {
-            _icon?.ShowBalloonTip(3000, "BiliDesk 仍在后台运行",
-                "双击托盘图标可以恢复主界面, 右键菜单可退出。", System.Windows.Forms.ToolTipIcon.Info);
-        }
-        catch
-        {
-            // 有些系统策略会关掉气泡, 静默忽略
-        }
     }
 
     /// <summary>

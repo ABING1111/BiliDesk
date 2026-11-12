@@ -101,11 +101,11 @@
 
                 <VisualState x:Name="Compact">
                     <Storyboard>
-                        <!-- 轨宽 96 → 68。列宽是 Auto, 跟着 Border 的 Width 走 ——
+                        <!-- 轨宽 72 → 60。列宽是 Auto, 跟着 Border 的 Width 走 ——
                              所以这里只动一个 double 就够, 不需要自己写 GridLength 动画(WPF 没有内置的)。 -->
                         <DoubleAnimation Storyboard.TargetName="NavRail"
                                          Storyboard.TargetProperty="Width"
-                                         To="68" Duration="0" />
+                                         To="60" Duration="0" />
                         <!-- 导航项文字: 淡出 + 高度收到 0。只淡出的话文字仍占着 15px, 图标会偏上 ~7px。 -->
                         <DoubleAnimation Storyboard.TargetName="NavLabelHome"
                                          Storyboard.TargetProperty="Opacity" To="0" Duration="0" />
@@ -133,14 +133,15 @@
         </VisualStateManager.VisualStateGroups>
 
         <Grid.ColumnDefinitions>
-            <!-- Auto 而不是 96: 轨宽由 NavRail 自己的 Width 决定(那是 double, 能平滑动画),
-                 列宽自动跟随。写死 96 的话就得为 GridLength 写一个自定义动画类, 不值当。 -->
+            <!-- Auto 而不是 72: 轨宽由 NavRail 自己的 Width 决定(那是 double, 能平滑动画),
+                 列宽自动跟随。写死 72 的话就得为 GridLength 写一个自定义动画类, 不值当。 -->
             <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
         <!-- ============ 左侧导航栏(通高) ============ -->
-        <Border x:Name="NavRail" Grid.Column="0" Width="96"
+        <!-- 轨宽 72: 参考 B 站官方桌面端的紧凑竖栏(图标 + 11px 文字), 原 96 明显偏宽。 -->
+        <Border x:Name="NavRail" Grid.Column="0" Width="72"
                 Background="{DynamicResource SideBarBackgroundBrush}"
                 BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,1,0">
             <Grid>

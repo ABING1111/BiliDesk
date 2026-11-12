@@ -11,6 +11,7 @@ using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
+using BiliDesk.Views.Windows;
 
 namespace BiliDesk.ViewModels;
 
@@ -284,9 +285,10 @@ public class WatchLaterViewModel : VideoListSelectionViewModel
             return;
         }
 
-        var r = MessageBox.Show($"确定要从「稍后再看」移出选中的 {targets.Count} 个视频吗?", "BiliDesk",
-            MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (r != MessageBoxResult.Yes) return;
+        if (!ConfirmDialog.Show(
+                $"确定要从「稍后再看」移出选中的 {targets.Count} 个视频吗?",
+                "移出稍后再看", "移出"))
+            return;
 
         Busy = true;
         var done = 0;
@@ -325,10 +327,10 @@ public class WatchLaterViewModel : VideoListSelectionViewModel
             return;
         }
 
-        var r = MessageBox.Show(
-            "确定要清空**全部**「稍后再看」吗?\n\n这会删除账号下整个列表, 且无法撤销。",
-            "BiliDesk", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (r != MessageBoxResult.Yes) return;
+        if (!ConfirmDialog.Show(
+                "确定要清空全部「稍后再看」吗?\n\n这会删除账号下整个列表, 且无法撤销。",
+                "清空稍后再看", "清空"))
+            return;
 
         Busy = true;
         BusyText = "正在清空…";
