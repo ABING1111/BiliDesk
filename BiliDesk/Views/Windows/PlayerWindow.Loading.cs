@@ -613,6 +613,9 @@ public partial class PlayerWindow : FluentWindow
         //   顺带把 _longPressFired 清掉 —— 否则新片的第一次 Up 会走进"结束快进"分支。
         StopFastForward();
         _longPressFired = false;
+        // 键盘长按 → 的 3x 与计时器同属"这一次手势": 换片必须停掉并复位
+        _rightKeyTimer?.Stop();
+        _rightKeyFast = false;
         // 长按点赞三连的"抑制窗口"与在途闸属于上一片: 不清的话换片后 1.5 秒内的第一次
         // 点赞会被 OnLikeClick 当成"长按三连松手那次 Click"吞掉(见 OnLikeClick)。
         _tripleComboAt = 0;
@@ -782,6 +785,8 @@ public partial class PlayerWindow : FluentWindow
         nameof(_isFastForwarding), nameof(_rateBeforeFastForward),
         // 长按快进的目标倍速(2026-11-03): 同属"这一次长按"的瞬时态, 换片必须复位。
         nameof(_fastForwardTarget),
+        // 键盘长按 → 的 3 倍速标记(2026-11-12): 属于"这一次按键", 换片必须复位。
+        nameof(_rightKeyFast),
         nameof(_commentTotal),
         // 评论翻页(2026-11-08, issue #55): 游标/是否还有下一页/在途闸/失败标记都属于"这一片"
         nameof(_commentNext), nameof(_commentHasMore),

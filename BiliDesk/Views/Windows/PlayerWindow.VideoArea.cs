@@ -87,6 +87,10 @@ public partial class PlayerWindow : FluentWindow
             if (ReferenceEquals(fw, _overlayKeyboardWindow)) return;
             _overlayKeyboardWindow = fw;
             fw.PreviewKeyDown += OnPreviewKeyDown;
+            // ★ 长按 → 的"松开"也挂上来: 键盘焦点压在视频区时, KeyDown/KeyUp 都属于这层
+            //   浮动窗口(WPF 跨 HWND 不会把 KeyUp 送到播放器主窗口)。漏了这条, 长按会一直
+            //   停在 3 倍速上(用户实测"3.0x 快进中"不消失)。
+            fw.PreviewKeyUp += OnPreviewKeyUp;
             fw.PreviewMouseDown += OnPreviewMouseDown;
             // 滚轮也要挂上来: 鼠标压在视频画面上时事件属于这层浮动窗口(见 OnVideoAreaMouseWheel)
             fw.PreviewMouseWheel += OnVideoAreaMouseWheel;

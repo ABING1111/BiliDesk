@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -41,7 +41,14 @@ public partial class PlayerWindow : FluentWindow
             //   长视频里 5s 一跳要按十几下才够用, Shift 档一下抵六下。走同一条 SeekRelative,
             //   所有 seek 防护(看门狗/静音/进度钉制)自动继承。
             case Key.Left: SeekRelative(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? -30 : -5); e.Handled = true; return;
-            case Key.Right: SeekRelative(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? 30 : 5); e.Handled = true; return;
+            case Key.Right:
+                // ★ 2026-11-12 用户要求: 长按 → 应该是 3 倍速播放(与 B 站一致), 不是连续快进。
+                //   短按仍然立即跳 5 秒(Shift 30 秒); 继续按住由计时器切到 3x, 松开恢复。
+                //   系统的自动重复 KeyDown(e.IsRepeat)一律忽略 —— 否则又会变成连续快进。
+                if (e.IsRepeat) { e.Handled = true; return; }
+                OnRightKeyPressed();
+                e.Handled = true;
+                return;
             // 音量: ↑↓ 走统一入口(顺带弹音量提示), M 在静音与 80 之间切换
             // 基数用 _volumeCache: aout 未就绪时 _mp.Volume 原生读回是 -1/旧值(见 _volumeCache 的说明)
             case Key.Up: SetVolume(_volumeCache + VolumeStep); e.Handled = true; return;
@@ -101,6 +108,70 @@ public partial class PlayerWindow : FluentWindow
         if (e.ChangedButton != MouseButton.XButton1 && e.ChangedButton != MouseButton.XButton2) return;
         e.Handled = true;
         HandleBackRequest();
+    }
+
+    // ------------------------------------------------------------ 方向键 → 长按 = 3 倍速播放
+
+    /// <summary>长按 → 的判定阈值(ms): 超过就进入 3 倍速播放, 而不是连续快进。</summary>
+    private const int RightKeyLongPressMs = 250;
+
+    /// <summary>方向键长按进入的倍速(与 B 站一致)。</summary>
+    private const float RightKeyFastRate = 3.0f;
+
+    private DispatcherTimer? _rightKeyTimer;
+
+    /// <summary>当前是否处于"键盘长按 →"触发的加速态 —— KeyUp 只停自己这一条, 不动鼠标长按的快进。</summary>
+    private bool _rightKeyFast;
+
+    /// <summary>
+    /// → 键按下(非自动重复):
+    ///   短按(≤350ms) = 立即跳 5 秒(Shift 30 秒), 保持原来的即时手感;
+    ///   继续按住 350ms 以上 = 切到 3 倍速播放(与 B 站一致), 松开恢复按下前的倍速。
+    /// </summary>
+    private void OnRightKeyPressed()
+    {
+        // ★ 按下时**不跳**: 用户实测"长按会先触发一次快进" —— 长按应当只加速、不改变播放位置。
+        //   短按的跳放在 KeyUp 里(没到长按阈值就松开 = 短按), 按下与松开之间的延迟只有按住的那一小段。
+        _rightKeyTimer?.Stop();
+        if (_closing || _isLive || _ended) return;
+
+        _rightKeyTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(RightKeyLongPressMs) };
+        _rightKeyTimer.Tick -= OnRightKeyLongPressTick;
+        _rightKeyTimer.Tick += OnRightKeyLongPressTick;
+        _rightKeyTimer.Start();
+    }
+
+    /// <summary>按住 → 超过阈值: 切到 3 倍速播放(复用鼠标长按那条 StartFastForward, 只是倍速不同)。</summary>
+    private void OnRightKeyLongPressTick(object? sender, EventArgs e)
+    {
+        _rightKeyTimer?.Stop();
+        if (_closing || _mp == null || _isLive || _ended) return;
+        if (_isFastForwarding) return;   // 鼠标长按快进中, 不叠加
+
+        _rightKeyFast = true;
+        StartFastForward(RightKeyFastRate);
+        ShowSpeedHint(FormatRate(_fastForwardTarget) + " 快进中", hold: true);
+    }
+
+    /// <summary>→ 键松开: 若是键盘长按触发的 3x, 恢复按下前的速率。</summary>
+    private void OnPreviewKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Right) return;
+        _rightKeyTimer?.Stop();
+
+        if (_rightKeyFast)
+        {
+            // 长按结束: 恢复按下前的速率
+            _rightKeyFast = false;
+            StopFastForward();
+            ShowSpeedHint("已结束快进", hold: false);
+            e.Handled = true;
+            return;
+        }
+
+        // 没到长按阈值就松开 = 短按: 现在才跳, 长按不会先跳一次
+        SeekRelative(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? 30 : 5);
+        e.Handled = true;
     }
 
     private void SeekRelative(double seconds)

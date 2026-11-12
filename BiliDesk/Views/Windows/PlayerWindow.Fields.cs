@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -573,8 +573,11 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private float _fastForwardTarget = FastForwardRate;
 
-    /// <summary>开始长按快进(改倍速)。见上方那段说明为什么用 SetRate 而不是 seek。</summary>
-    private void StartFastForward()
+    /// <summary>
+    /// 开始长按快进(改倍速)。见上方那段说明为什么用 SetRate 而不是 seek。
+    /// <paramref name="rate"/> 默认 2x(鼠标长按快进); 键盘长按 → 传 3x(见 PlayerWindow.Keyboard)。
+    /// </summary>
+    private void StartFastForward(float rate = FastForwardRate)
     {
         if (_closing || _mp == null) return;
         // 直播没有"加速往前放"这回事(本来就一直在最新处); 播完了也没有
@@ -587,7 +590,7 @@ public partial class PlayerWindow : FluentWindow
         // ★ 2026-11-03: 不再把"当前已经是 2.0x"强行记成 1.0x。
         //   自定义倍速下 2.0x/3x 都是常态, 那样会在松手时把用户的倍速偷偷改回 1x。
         //   目标取 max(2x, 当前): 当前更快就保持更快, 绝不因为"快进"而减速。
-        _fastForwardTarget = Math.Max(FastForwardRate, _rateBeforeFastForward);
+        _fastForwardTarget = Math.Max(rate, _rateBeforeFastForward);
 
         _isFastForwarding = true;
         // ★ 顺序: 先让弹幕时钟按新倍速落定当前值, 再真正 SetRate(同 OnSpeedClick 那条说明)
