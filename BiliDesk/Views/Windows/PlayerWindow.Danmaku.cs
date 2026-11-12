@@ -1491,6 +1491,77 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>控制栏上的弹幕开关按钮</summary>
     private void OnDanmakuToggleClick(object sender, RoutedEventArgs e) => ToggleDanmaku();
 
+    // ------------------------------------------------------------ 弹幕输入框(2026-11-12 用户要求)
+
+    /// <summary>点「发弹幕」: 展开输入条并聚焦。</summary>
+    private void OnDanmakuComposerOpenClick(object sender, RoutedEventArgs e)
+    {
+        DanmakuComposer.Visibility = Visibility.Visible;
+        BtnDanmakuComposerOpen.Visibility = Visibility.Collapsed;
+        DanmakuInput.Focus();
+        UpdateDanmakuInputHint();
+    }
+
+    private void OnDanmakuComposerCloseClick(object sender, RoutedEventArgs e)
+    {
+        DanmakuComposer.Visibility = Visibility.Collapsed;
+        BtnDanmakuComposerOpen.Visibility = Visibility.Visible;
+    }
+
+    private void OnDanmakuInputChanged(object sender, TextChangedEventArgs e) => UpdateDanmakuInputHint();
+
+    /// <summary>TextBox 没有占位文案: 用叠在上面的 TextBlock 模拟, 有字时隐藏。</summary>
+    private void UpdateDanmakuInputHint()
+    {
+        if (DanmakuInputHint == null) return;
+        DanmakuInputHint.Visibility = string.IsNullOrEmpty(DanmakuInput?.Text)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void OnDanmakuInputKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        _ = SendDanmakuAsync();
+    }
+
+    private void OnDanmakuSendClick(object sender, RoutedEventArgs e) => _ = SendDanmakuAsync();
+
+    /// <summary>
+    /// 发送输入框里的弹幕: 带上当前播放位置作为出现时间点。
+    /// 成功后清空输入框并提示; 失败保留内容, 方便重试。
+    /// </summary>
+    private async System.Threading.Tasks.Task SendDanmakuAsync()
+    {
+        if (_closing) return;
+        if (_isLocalPlayback) { Svc.Toast.Show("本地文件没有弹幕"); return; }
+        if (!Svc.Session.HasLogin) { Svc.Toast.Show("发弹幕需要先登录"); return; }
+
+        var text = (DanmakuInput?.Text ?? "").Trim();
+        if (text.Length == 0) { Svc.Toast.Show("先写点什么再发送吧"); return; }
+        if (_currentCid <= 0) { Svc.Toast.Show("弹幕参数还没准备好, 稍等一下"); return; }
+
+        long progress = 0;
+        try
+        {
+            if (_mp != null && _mp.Length > 0) progress = Math.Max(0, _mp.Time);
+        }
+        catch { }
+
+        var (ok, err) = await Svc.Api.SendDanmakuAsync(_currentCid, text, progress);
+        if (_closing) return;
+        if (!ok)
+        {
+            Svc.Toast.Show("发送失败: " + (err ?? "未知错误"));
+            return;
+        }
+
+        if (DanmakuInput != null) DanmakuInput.Text = "";
+        UpdateDanmakuInputHint();
+        Svc.Toast.Show("弹幕已发送");
+    }
+
     /// <summary>
     /// 刷新弹幕按钮的文案与可用状态。
     ///

@@ -1195,6 +1195,57 @@
                                         <TextBlock x:Name="TimeText" Grid.Column="1" Foreground="#E6FFFFFF" FontSize="12"
                                                    VerticalAlignment="Center" Margin="10,0,0,0" Text="00:00 / 00:00" />
 
+                                        <!-- ============ 弹幕输入条(2026-11-12 用户要求: 在播放器下方增加弹幕发送的输入框) ============
+                                             收起态只占一个「发弹幕」按钮; 点开后变成 B 站同款输入条(输入框 + 发送 + 收起)。
+                                             ★ 放在 Column 2(伸缩列): 宽度随窗口自适应, 不会把右侧清晰度/倍速按钮挤出去。
+                                             ★ 深色半透明底 + 白字: 控制栏永远压在视频画面上, 不能跟主题色走。 -->
+                                        <Grid Grid.Column="2" Margin="14,0,10,0" VerticalAlignment="Center">
+                                            <Button x:Name="BtnDanmakuComposerOpen" Style="{StaticResource PlayerTextBtn}"
+                                                    HorizontalAlignment="Left" Click="OnDanmakuComposerOpenClick"
+                                                    ToolTip="发弹幕">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xE8D2;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                               FontSize="12" VerticalAlignment="Center" Foreground="#F2FFFFFF" />
+                                                    <TextBlock Text="发弹幕" Margin="6,0,0,0" Foreground="#F2FFFFFF" />
+                                                </StackPanel>
+                                            </Button>
+
+                                            <Grid x:Name="DanmakuComposer" Visibility="Collapsed">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <Border Grid.Column="0" Background="#40000000" CornerRadius="5"
+                                                        Height="26" Padding="10,0" VerticalAlignment="Center">
+                                                    <Grid>
+                                                        <TextBox x:Name="DanmakuInput" Background="Transparent"
+                                                                 BorderThickness="0" Foreground="#F2FFFFFF"
+                                                                 CaretBrush="#F2FFFFFF" FontSize="12"
+                                                                 VerticalAlignment="Center" MaxLength="100"
+                                                                 KeyDown="OnDanmakuInputKeyDown"
+                                                                 TextChanged="OnDanmakuInputChanged" />
+                                                        <!-- TextBox 没有占位文案: 用一层不可命中的 TextBlock 叠在上面, 有字时隐藏 -->
+                                                        <TextBlock x:Name="DanmakuInputHint" Text="发个友善的弹幕见证当下"
+                                                                   Foreground="#66FFFFFF" FontSize="12"
+                                                                   IsHitTestVisible="False" VerticalAlignment="Center" />
+                                                    </Grid>
+                                                </Border>
+
+                                                <Button Grid.Column="1" Style="{StaticResource PlayerTextBtn}"
+                                                        Content="发送" Margin="8,0,0,0" Padding="12,4"
+                                                        Click="OnDanmakuSendClick" ToolTip="发送弹幕 (Enter)" />
+
+                                                <Button Grid.Column="2" Style="{StaticResource PlayerTextBtn}"
+                                                        Margin="6,0,0,0" Padding="6,4"
+                                                        Click="OnDanmakuComposerCloseClick" ToolTip="收起输入框">
+                                                    <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                               FontSize="11" VerticalAlignment="Center" Foreground="#F2FFFFFF" />
+                                                </Button>
+                                            </Grid>
+                                        </Grid>
+
                                         <!-- 音量 -->
                                         <TextBlock x:Name="VolumeIcon" Grid.Column="3" Text="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                    Foreground="#E6FFFFFF" FontSize="14" VerticalAlignment="Center" Margin="10,0,6,0" />

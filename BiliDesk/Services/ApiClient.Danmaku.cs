@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -140,4 +140,44 @@ public partial class ApiClient
         }
     }
 
+    // ------------------------------------------------------------ 发送
+
+    /// <summary>
+    /// 发送一条滚动弹幕(2026-11-12 新增, 用户要求"在播放器下方增加弹幕发送的输入框")。
+    ///
+    /// 接口: POST /x/v2/dm/post
+    ///   · type=1     视频弹幕
+    ///   · oid        稿件 cid(不是 avid/bvid)
+    ///   · progress   弹幕出现的时间点(毫秒), 不是进度条秒数
+    ///   · mode=1     滚动弹幕
+    /// 风控: 复用点赞/投币那条 PostFormAsync(csrf + Cookie + Origin + 写前预热),
+    /// 失败时返回的是已经翻译过的、可以照做的提示。
+    /// </summary>
+    public async Task<(bool ok, string? err)> SendDanmakuAsync(long cid, string msg, long progressMs)
+    {
+        if (cid <= 0) return (false, "还没有拿到这条视频的弹幕参数(cid)");
+        if (!SessionManager.Instance.HasLogin) return (false, "发弹幕需要登录");
+
+        var text = (msg ?? "").Trim();
+        if (text.Length == 0) return (false, "弹幕内容不能为空");
+        if (text.Length > 100) return (false, "弹幕最长 100 个字");
+
+        var form = new Dictionary<string, string>
+        {
+            ["type"] = "1",
+            ["oid"] = cid.ToString(),
+            ["msg"] = text,
+            ["progress"] = Math.Max(0, progressMs).ToString(),
+            ["color"] = "16777215",   // 白色(与本应用弹幕层默认色一致)
+            ["fontsize"] = "25",
+            ["mode"] = "1",           // 滚动弹幕
+            ["pool"] = "0",
+            ["plat"] = "1",
+        };
+
+        return await PostFormAsync(
+            "https://api.bilibili.com/x/v2/dm/post",
+            form,
+            referer: "https://www.bilibili.com/");
+    }
 }
