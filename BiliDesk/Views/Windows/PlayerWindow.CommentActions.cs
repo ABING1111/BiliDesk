@@ -49,10 +49,25 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 点评论缩略图 → 看大图(2026-10-31 评论图片功能)。
     /// DataContext 是 <see cref="CommentPicture"/>(模板直接绑图片项), 原图地址就在 Url 里。
+    ///
+    /// ★ 2026-11-14: 改成把**整条评论的图**一起交给预览窗, 打开后能左右翻。
+    ///   图片 Border 的 DataContext 是图片项, "这条评论"在包住它的 ItemsControl 上
+    ///   (CommentPicturesTemplate 里是 {Binding Pictures}) —— 沿可视树往上找即可。
     /// </summary>
     private void OnCommentPictureClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (_closing || (sender as FrameworkElement)?.DataContext is not CommentPicture pic) return;
+
+        var list = VisualTreeUtil.FindAncestor<ItemsControl>(
+            sender as DependencyObject, ic => ic.DataContext is CommentItem);
+        if (list?.DataContext is CommentItem c && c.Pictures.Count > 0)
+        {
+            var urls = new List<string>(c.Pictures.Count);
+            foreach (var p in c.Pictures) urls.Add(p.Url);
+            MediaActions.ShowImage(urls, c.Pictures.IndexOf(pic), title: "评论图片", owner: this);
+            return;
+        }
+
         MediaActions.ShowImage(pic.Url, title: "评论图片", owner: this);
     }
 

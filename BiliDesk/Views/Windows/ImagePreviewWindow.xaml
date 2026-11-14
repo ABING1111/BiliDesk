@@ -11,6 +11,68 @@
         UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display">
 
+    <vw:FluentWindow.Resources>
+        <!--
+            图片左右切换按钮(浮在图片两侧的半透明圆钮)。
+
+            ★ 为什么不直接用 IconButtonStyle: 那个样式常态是 4% 浅灰(给纯色页面底用的),
+              浮在照片上等于没有底 —— 浅色照片里箭头会糊进画面, 与 HistoryPage/FavoritesPage
+              里"浮在封面上"那批按钮是同一个坑。这里三种状态都给**半透明黑底**,
+              在任意亮度的照片上都读得出来。
+
+            ★ ContentPresenter.Resources 里那段同名隐式 TextBlock 样式**必须带着**:
+              全局隐式 TextBlock 样式里有 Foreground, 优先级压过这里继承下去的
+              FontFamily/Foreground, 结果是 E76B/E76C 这两个私用区字形**一个字都画不出来**
+              (与 Styles.xaml 里 IconButtonStyle 那段长注释同因)。
+        -->
+        <Style x:Key="PreviewNavButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Background" Value="#73000000" />
+            <Setter Property="Foreground" Value="#F0F0F0" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <!-- 不抢键盘焦点: 点完箭头后 ←→ 仍要能被窗口的 OnKey 收到(而不是被按钮当成焦点导航) -->
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="20">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              TextElement.Foreground="{TemplateBinding Foreground}">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#8C000000" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#A6000000" />
+                            </Trigger>
+                            <!-- 首/尾禁用态: 淡出即可, 位置留着(否则箭头会跳一格) -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.3" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </vw:FluentWindow.Resources>
+
     <Border CornerRadius="8" ClipToBounds="True">
         <Border.Effect>
             <DropShadowEffect BlurRadius="14" ShadowDepth="0" Opacity="0.45" Color="Black" />
@@ -22,22 +84,22 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- 自绘标题栏: 图片查看器用纯黑底, 让画面成为唯一焦点 -->
+            <!--
+                标题行: 图片查看器用纯黑底, 让画面成为唯一焦点。
+
+                ★★ 这里**不再放自绘关闭按钮**(2026-11-14 用户报"右上角有两个 X"):
+                  本窗口是 WindowStyle=None, 但**没有声明 WindowChrome**(主窗口/播放器都有),
+                  而 FluentWindow 会给所有窗口补回 WS_CAPTION(为了让 DWM 播最小化/最大化动画)。
+                  有 WindowChrome 的窗口非客户区被压成 0, 补样式位什么都不会多出来;
+                  这个窗口没有, 系统就老老实实按"真标题栏"算非客户区 —— 于是上面多出一条
+                  系统标题栏(含它自己的 — □ ✕), 与自绘的 ✕ 叠成了两个。
+                  ⇒ 保留系统那条(它自带最小化/最大化/关闭, 且随系统主题走),
+                    删掉自绘的这个。关闭途径仍有: 系统 ✕ / Esc / 右键图片 / Alt+F4。
+            -->
             <Border Grid.Row="0" Background="#CC000000" MouseLeftButtonDown="OnTitleBarMouseDown">
-                <Grid Margin="14,10,10,10">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock x:Name="TitleText" Text="图片预览"
-                               Foreground="#F0F0F0" FontSize="13"
-                               VerticalAlignment="Center"
-                               TextTrimming="CharacterEllipsis" />
-                    <Button Grid.Column="1" Style="{StaticResource IconButtonStyle}"
-                            Content="&#xE711;" FontSize="12" Width="32" Height="32"
-                            Click="OnCloseClick" ToolTip="关闭 (Esc)"
-                            Foreground="#F0F0F0" />
-                </Grid>
+                <TextBlock x:Name="TitleText" Text="图片预览"
+                           Margin="14,10" Foreground="#F0F0F0" FontSize="13"
+                           TextTrimming="CharacterEllipsis" />
             </Border>
 
             <!-- 图片区: 滚轮缩放 / 拖动平移 / 双击切换 适配/1:1
@@ -54,6 +116,20 @@
                 <TextBlock x:Name="HintText" Text="正在加载图片…"
                            Foreground="#909090" FontSize="13"
                            HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+                <!-- 左右切换: 只在**多图**时出现(单图由 UpdateNavState 收成 Collapsed)。
+                     ★ 压在图片上层(Panel.ZIndex), 不然会被 Image 挡住点不到;
+                       不循环 —— 首张禁用"上一张", 末张禁用"下一张", 位置固定不跳动。 -->
+                <Button x:Name="PrevButton" Style="{StaticResource PreviewNavButtonStyle}"
+                        Content="&#xE76B;" Panel.ZIndex="1"
+                        HorizontalAlignment="Left" VerticalAlignment="Center"
+                        Margin="14,0,0,0" Visibility="Collapsed"
+                        Click="OnPrevClick" ToolTip="上一张 (←)" />
+                <Button x:Name="NextButton" Style="{StaticResource PreviewNavButtonStyle}"
+                        Content="&#xE76C;" Panel.ZIndex="1"
+                        HorizontalAlignment="Right" VerticalAlignment="Center"
+                        Margin="0,0,14,0" Visibility="Collapsed"
+                        Click="OnNextClick" ToolTip="下一张 (→)" />
             </Grid>
 
             <!-- 底部工具条 -->
@@ -64,11 +140,17 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <TextBlock Text="滚轮缩放 · 拖动平移 · 双击 1:1/适配 · 右键/Esc 关闭"
+                    <!-- 文案由 UpdateNavState 按"单图/多图"切换(多图时多一句 ← → 提示) -->
+                    <TextBlock x:Name="HintBarText"
+                               Text="滚轮缩放 · 拖动平移 · 双击 1:1/适配 · 右键/Esc 关闭"
                                Foreground="#9A9A9A" FontSize="11"
                                VerticalAlignment="Center" />
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <!-- 页码: 单图时为空(整块不占位) -->
+                        <TextBlock x:Name="IndexText" Text=""
+                                   Foreground="#C8C8C8" FontSize="11"
+                                   VerticalAlignment="Center" Margin="0,0,14,0" />
                         <TextBlock x:Name="ZoomText" Text="100%"
                                    Foreground="#C8C8C8" FontSize="11"
                                    VerticalAlignment="Center" Margin="0,0,14,0" />

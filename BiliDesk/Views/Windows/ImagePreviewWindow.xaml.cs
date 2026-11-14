@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
@@ -12,7 +13,7 @@ using BiliDesk.Services;
 namespace BiliDesk.Views.Windows;
 
 /// <summary>
-/// 图片预览窗: 双击/右键"查看大图"时打开, 支持缩放/拖动/另存为。
+/// 图片预览窗: 双击/右键"查看大图"时打开, 支持缩放/拖动/另存为/左右切换。
 ///
 /// ★★★ 2026-10-31 整体重写(用户反馈"只能看到图片中间一部分"修了四轮仍在):
 ///   旧方案是 Stretch=None + 手算 RenderTransform 缩放比(FitToWindow) —— "完整显示"
@@ -26,9 +27,25 @@ namespace BiliDesk.Views.Windows;
 ///       (img.Width/Height), Uniform 只会"缩小到能放下", 不会把 200px 头像撑满窗口;
 ///     · 滚轮缩放/拖动平移是叠加在布局结果之上的 RenderTransform, 双击随时回到
 ///       "必然完整"的布局基线(清掉全部变换)。
+///
+/// ★ 2026-11-14 新增"一组图"与左右切换: 调用方可以一次给整组地址 + 起始下标
+///   (动态九宫格、评论多图、私信图片…), 窗口内用左右箭头 / ←→ 键逐张看。
+///   单张的旧签名保留并转调新重载 —— 封面/头像那十几处调用点一行都不用改。
 /// </summary>
 public partial class ImagePreviewWindow : FluentWindow
 {
+    /// <summary>整组图片地址(已 Normalize、已去空串)。单图预览就是长度 1 的组。</summary>
+    private readonly List<string> _urls = new();
+
+    /// <summary>当前显示的是 <see cref="_urls"/> 里的第几张。</summary>
+    private int _index;
+
+    /// <summary>
+    /// 加载序号。★ 快速连点箭头时会有多个 LoadAsync 同时在飞,
+    /// 只有**最后一次**发起的结果允许上屏, 否则先发的慢请求晚到会把图换回去(串图)。
+    /// </summary>
+    private int _loadGen;
+
     /// <summary>加载 URL(保存用)。空串 = 无图。</summary>
     private string _imageUrl = "";
     private string _suggestedName = "image";
@@ -64,29 +81,80 @@ public partial class ImagePreviewWindow : FluentWindow
         KeyDown += OnKey;
     }
 
+    /// <summary>单图预览(封面/头像/番剧封面等)。转调整组重载, 行为与以前完全一致。</summary>
+    public Task LoadAsync(string url, string? title = null)
+        => LoadAsync(new[] { url }, 0, title);
+
     /// <summary>
-    /// 加载并显示图片。
+    /// 加载并显示**一组**图片里的某一张。
     /// CoverLoader 会先查磁盘缓存(列表里显示过的图几乎瞬时命中), 再走网络下载。
     /// </summary>
-    /// <param name="url">图片地址(封面/头像/评论图)</param>
+    /// <param name="urls">整组图片地址; 空串会被丢掉(下标随之换算)</param>
+    /// <param name="index">起始下标(越界会被夹进有效范围)</param>
     /// <param name="title">窗口标题(通常传视频标题或 UP 名, 便于"另存为"时起个有意义的名字)</param>
-    public async Task LoadAsync(string url, string? title = null)
+    public async Task LoadAsync(IReadOnlyList<string>? urls, int index, string? title = null)
     {
-        _imageUrl = UrlUtil.Normalize(url);
+        // ★ 过滤空地址 + 下标换算走与 MediaActions 同一个纯函数(PreviewList, 有单测):
+        //   两条入口各写一份迟早会算出不同的下标。
+        var (clean, target) = PreviewList.Normalize(urls, index);
+        _urls.Clear();
+        _urls.AddRange(clean);
+        _index = target;
+
         _suggestedName = FileNameUtil.Sanitize(
             string.IsNullOrWhiteSpace(title) ? "image" : title!, "image");
 
-        TitleText.Text = string.IsNullOrWhiteSpace(title) ? "图片预览" : title!;
-        if (_imageUrl.Length == 0)
+        var caption = string.IsNullOrWhiteSpace(title) ? "图片预览" : title!;
+        TitleText.Text = caption;
+        // ★ 不改 Window.Title: 系统标题栏固定写"图片预览", 内容行写具体来源(视频名/动态图片…)。
+        //   两边都写同一个串会像重复渲染了一次标题 —— 这是本窗口保留系统标题栏后的取舍。
+
+        UpdateNavState();
+
+        if (_urls.Count == 0)
         {
+            _imageUrl = "";
             HintText.Text = "没有可显示的图片";
+            HintText.Visibility = Visibility.Visible;
             return;
         }
 
+        await LoadCurrentAsync();
+    }
+
+    /// <summary>
+    /// 把当前下标那张解出来上屏。
+    /// ★ 首次加载才显示"正在加载图片…"; 切图时保留上一张直到新图就绪(不闪黑),
+    ///   失败也只在中间盖一行提示, 不清掉已有画面。
+    /// </summary>
+    private async Task LoadCurrentAsync()
+    {
+        if (_urls.Count == 0) return;
+
+        var gen = ++_loadGen;
+        _imageUrl = _urls[_index];
+
+        if (PreviewImage.Source == null)
+        {
+            HintText.Text = "正在加载图片…";
+            HintText.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            // 已经有画面(切图/重试): 顺手清掉上一张留下的"已保存…/加载失败"提示,
+            // 否则新图都上屏了, 中间还压着一句上一张的旧话。
+            HintText.Visibility = Visibility.Collapsed;
+        }
+
         var img = await CoverLoader.LoadAsync(_imageUrl, 4096);
+
+        // 更晚的请求已经发出: 这次结果作废(防连点串图 / 关窗前的结果也一并丢掉)
+        if (gen != _loadGen) return;
+
         if (img == null)
         {
             HintText.Text = "图片加载失败";
+            HintText.Visibility = Visibility.Visible;
             return;
         }
 
@@ -112,12 +180,14 @@ public partial class ImagePreviewWindow : FluentWindow
         PreviewImage.Stretch = Stretch.Uniform;
         HintText.Visibility = Visibility.Collapsed;
 
+        // ★ 换图必须回到基线: 上一张的缩放/平移留着, 新图一上来就是"局部放大"的样子,
+        //   与"点开就是完整一张"的预期不符。
         ResetView();
     }
 
     /// <summary>
     /// 回到布局基线: 清掉全部缩放/平移, 让 Uniform 自己把图完整摆进容器。
-    /// 双击 / 加载完成 / 尺寸变化后都走这里 —— 它是"必然完整"的那一档。
+    /// 双击 / 加载完成 / 切图后都走这里 —— 它是"必然完整"的那一档。
     /// </summary>
     private void ResetView()
     {
@@ -132,6 +202,52 @@ public partial class ImagePreviewWindow : FluentWindow
     {
         if (ZoomText != null) ZoomText.Text = (int)Math.Round(s * 100) + "%";
     }
+
+    // ------------------------------------------------------------ 左右切换
+
+    /// <summary>
+    /// 按"当前是第几张 / 一共几张"更新箭头可用态与页码。
+    /// ★ 单图时整块收成 Collapsed(不是禁用): 只显示一张的窗口上浮着两个灰箭头很碍眼。
+    /// ★ 首尾**不循环** —— 末张的"下一张"禁用, 用户一眼能看出到头了。
+    /// </summary>
+    private void UpdateNavState()
+    {
+        var multi = _urls.Count > 1;
+
+        if (PrevButton != null)
+        {
+            PrevButton.Visibility = multi ? Visibility.Visible : Visibility.Collapsed;
+            PrevButton.IsEnabled = multi && _index > 0;
+        }
+        if (NextButton != null)
+        {
+            NextButton.Visibility = multi ? Visibility.Visible : Visibility.Collapsed;
+            NextButton.IsEnabled = multi && _index < _urls.Count - 1;
+        }
+        if (IndexText != null)
+            IndexText.Text = multi ? $"{_index + 1} / {_urls.Count}" : "";
+
+        if (HintBarText != null)
+            HintBarText.Text = multi
+                ? "滚轮缩放 · 拖动平移 · 双击 1:1/适配 · ← → 切换图片 · 右键/Esc 关闭"
+                : "滚轮缩放 · 拖动平移 · 双击 1:1/适配 · 右键/Esc 关闭";
+    }
+
+    /// <summary>切到相邻一张(<paramref name="delta"/> 为 ±1)。到头就原地不动。</summary>
+    private void Navigate(int delta)
+    {
+        if (_urls.Count <= 1) return;
+        var next = Math.Clamp(_index + delta, 0, _urls.Count - 1);
+        if (next == _index) return;
+
+        _index = next;
+        UpdateNavState();
+        _ = LoadCurrentAsync();
+    }
+
+    private void OnPrevClick(object sender, RoutedEventArgs e) => Navigate(-1);
+
+    private void OnNextClick(object sender, RoutedEventArgs e) => Navigate(+1);
 
     // ------------------------------------------------------------ 缩放 / 平移
 
@@ -228,6 +344,8 @@ public partial class ImagePreviewWindow : FluentWindow
         switch (e.Key)
         {
             case Key.Escape: Close(); break;
+            case Key.Left: Navigate(-1); e.Handled = true; break;
+            case Key.Right: Navigate(+1); e.Handled = true; break;
             case Key.OemPlus or Key.Add: ApplyScale(_scale.ScaleX * 1.15); break;
             case Key.OemMinus or Key.Subtract: ApplyScale(_scale.ScaleX / 1.15); break;
             case Key.D0 or Key.NumPad0: ApplyScale(1.0); break;
@@ -242,6 +360,7 @@ public partial class ImagePreviewWindow : FluentWindow
         SaveButton.IsEnabled = false;
         try
         {
+            // ★ 存的是**当前这一张**(_imageUrl 在切图时已同步), 不是打开时的那张。
             var path = await ImageDownloader.SaveAsync(_imageUrl, _suggestedName);
             if (path != null)
             {
@@ -263,8 +382,6 @@ public partial class ImagePreviewWindow : FluentWindow
             SaveButton.IsEnabled = true;
         }
     }
-
-    private void OnCloseClick(object sender, RoutedEventArgs e) => Close();
 
     private void OnTitleBarMouseDown(object sender, MouseButtonEventArgs e)
     {

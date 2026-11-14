@@ -365,9 +365,12 @@ public static class DwmInterop
             else
             {
                 // ★★★ 没有 WindowChrome 的窗口**不支持**亚克力, 直接拒绝(2026-10-05 修):
-                //   本工程有两类窗口 —— 自绘边框(MainWindow / PlayerWindow / ImagePreviewWindow,
+                //   本工程有两类窗口 —— 自绘边框(MainWindow / PlayerWindow,
                 //   都是 WindowStyle=None + WindowChrome)与**系统标准窗口**(收藏夹选择/登录/浏览器/
                 //   免责声明/更新提示, 用的是系统标题栏)。
+                //   ★ ImagePreviewWindow 不在这两类里: 它是 WindowStyle=None 但**没有 WindowChrome**,
+                //     系统按"真标题栏"给它算非客户区(用户报"右上角两个 X"就是这条)。
+                //     它走到这里同样返回 false —— 与标准窗口一样不参与材质。
                 //   对标准窗口扩展客户区玻璃会把**系统标题栏之外的内容区也变成非客户区**,
                 //   DWM 用系统材质覆盖它 —— 浅色主题下 WPF 画的内容被压黑, 用户看到的就是
                 //   "收藏界面整个发黑"(它们本来就不该参与亚克力, 也就没有"自绘按钮重复"的问题)。

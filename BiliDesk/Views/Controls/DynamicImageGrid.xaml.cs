@@ -151,7 +151,8 @@ public partial class DynamicImageGrid : UserControl
 
         var menu = new ContextMenu();
         var preview = new MenuItem { Header = "查看大图" };
-        preview.Click += (_, _) => MediaActions.ShowImage(img.Url, "动态图片", Window.GetWindow(this));
+        // ★ 传**整组**: 打开后能在预览窗里左右翻, 而不是关掉再点下一张
+        preview.Click += (_, _) => ShowPreview(img);
         var save = new MenuItem { Header = "下载图片到本地" };
         save.Click += async (_, _) => await MediaActions.SaveImageAsync(img.Url, "动态图片");
         menu.Items.Add(preview);
@@ -165,8 +166,22 @@ public partial class DynamicImageGrid : UserControl
     {
         if (e.ChangedButton != MouseButton.Left) return;
         if ((sender as FrameworkElement)?.DataContext is not DynamicImage img) return;
-        MediaActions.ShowImage(img.Url, "动态图片", Window.GetWindow(this));
+        ShowPreview(img);
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// 打开预览窗, 并把**这一组图**一起交过去(起始下标 = 被点的那张)。
+    ///
+    /// ★ 只传缩略图/详情图会掉清晰度: 预览窗按 4096 解码, 传原始 Url 才能看到大图。
+    /// ★ 用 _images 而不是可见的 9 张: 超过 9 张时列表只显示前 9 张, 但用户点开大图后
+    ///   仍应能翻到后面那些(它们只是没在卡片上露脸)。
+    /// </summary>
+    private void ShowPreview(DynamicImage img)
+    {
+        var urls = new List<string>(_images.Count);
+        foreach (var i in _images) urls.Add(i.Url);
+        MediaActions.ShowImage(urls, _images.IndexOf(img), "动态图片", Window.GetWindow(this));
     }
 
     private void LayoutTiles()

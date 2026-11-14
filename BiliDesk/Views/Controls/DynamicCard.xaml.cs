@@ -376,7 +376,12 @@ public partial class DynamicCard : UserControl
             menu.Items.Add(MakeMenuItem("预览第一张图片", "\uE8B9", (_, _) =>
             {
                 if (Current is { Images.Count: > 0 } it)
-                    MediaActions.ShowImage(it.Images[0].Url, "动态图片", Window.GetWindow(this));
+                {
+                    // ★ 传整组: 从第一张开始, 之后可在预览窗里左右翻
+                    var urls = new System.Collections.Generic.List<string>(it.Images.Count);
+                    foreach (var i in it.Images) urls.Add(i.Url);
+                    MediaActions.ShowImage(urls, 0, "动态图片", Window.GetWindow(this));
+                }
             }));
             menu.Items.Add(MakeMenuItem("下载第一张图片", "\uE896", async (_, _) =>
             {

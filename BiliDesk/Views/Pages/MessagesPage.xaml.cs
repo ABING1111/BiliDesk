@@ -94,8 +94,28 @@ public partial class MessagesPage : UserControl
 
     private void OnMessageImageClick(object sender, MouseButtonEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is MsgItem m && m.ImageUrl.Length > 0)
+        if ((sender as FrameworkElement)?.DataContext is not MsgItem m || m.ImageUrl.Length == 0) return;
+
+        // ★ 把当前会话里的**所有图片消息**串成一组: 私信里连发几张图时,
+        //   点开任意一张就能在预览窗里左右翻, 不用关掉再点下一张。
+        //   Vm.Messages 的先后就是聊天顺序, 与用户看到的列表一致。
+        var urls = new System.Collections.Generic.List<string>();
+        var index = 0;
+        if (Vm != null)
+        {
+            foreach (var item in Vm.Messages)
+            {
+                if (!item.IsImage) continue;
+                if (ReferenceEquals(item, m)) index = urls.Count;
+                urls.Add(item.ImageUrl);
+            }
+        }
+        if (urls.Count == 0)
+        {
             MediaActions.ShowImage(m.ImageUrl, "私信图片", Window.GetWindow(this));
+            return;
+        }
+        MediaActions.ShowImage(urls, index, "私信图片", Window.GetWindow(this));
     }
 
     private void ScrollToBottom()

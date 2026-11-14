@@ -154,6 +154,22 @@ public partial class CommentSection : UserControl
     private void OnCommentPictureClick(object sender, MouseButtonEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not CommentPicture pic) return;
+
+        // ★ 传**整条评论的所有图**: 打开后能在预览窗里左右翻。
+        //   图片 Border 的 DataContext 是 CommentPicture, 而"这条评论"挂在
+        //   包住它的 ItemsControl 上(三个模板里都是 {Binding Pictures}) ——
+        //   沿可视树往上找 DataContext 是 CommentItem 的那个 ItemsControl 即可。
+        var list = VisualTreeUtil.FindAncestor<ItemsControl>(
+            sender as DependencyObject, ic => ic.DataContext is CommentItem);
+        if (list?.DataContext is CommentItem c && c.Pictures.Count > 0)
+        {
+            var urls = new System.Collections.Generic.List<string>(c.Pictures.Count);
+            foreach (var p in c.Pictures) urls.Add(p.Url);
+            MediaActions.ShowImage(urls, c.Pictures.IndexOf(pic), "评论图片", Window.GetWindow(this));
+            return;
+        }
+
+        // 兜底(理论上不会走到): 单张预览, 至少不会点了没反应
         MediaActions.ShowImage(pic.Url, "评论图片", Window.GetWindow(this));
     }
 
