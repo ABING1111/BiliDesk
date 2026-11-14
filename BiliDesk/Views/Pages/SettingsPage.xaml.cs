@@ -46,9 +46,16 @@ public partial class SettingsPage : UserControl
     private double _capsuleRestTop = 20;
 
     /// <summary>
+    /// 吸顶后胶囊距窗口顶端留多少(逻辑像素)。
+    /// ★ 不要贴到 0: 胶囊带 DropShadowEffect, 贴边时阴影会在窗口顶边被切掉, 看着很"顶";
+    ///   8px 既留出呼吸空间, 又能让整圈阴影完整露出来(阴影外扩约 7px)。
+    /// </summary>
+    private const double PinnedTopGap = 8;
+
+    /// <summary>
     /// Tab 胶囊吸顶(2026-11-14 用户要求"只折叠吸顶胶囊, 且不要改变胶囊的大小"):
     /// 胶囊是滚动内容里的**唯一实例**, 滚动多少就用 TranslateTransform 反向抵消多少 ——
-    /// 视觉上先跟着内容一起上滑, 碰到视口顶部后钉住; 大标题照常滚走。
+    /// 视觉上先跟着内容一起上滑, 到距顶端 <see cref="PinnedTopGap"/> 处钉住; 大标题照常滚走。
     /// ★ 只改 RenderTransform, 不碰布局: 每帧不触发测量/排版。
     /// </summary>
     private void OnSettingsScrollChanged(object sender, ScrollChangedEventArgs e) => UpdateStickyCapsule();
@@ -57,8 +64,9 @@ public partial class SettingsPage : UserControl
     {
         if (StickyCapsuleShift == null) return;
         var offset = System.Math.Max(0, PageScroll.VerticalOffset);
-        // 0~restTop: 跟着内容走(位移 0); 超过 restTop: 停在视口顶部
-        StickyCapsuleShift.Y = System.Math.Max(0, offset - _capsuleRestTop);
+        // 位移 = max(0, 已滚动 - (自然位置 - 吸顶留白)):
+        //   滚动不到 restTop-gap 时位移为 0(跟着内容走), 之后正好停在距顶端 gap 处。
+        StickyCapsuleShift.Y = System.Math.Max(0, offset - (_capsuleRestTop - PinnedTopGap));
     }
 
     /// <summary>

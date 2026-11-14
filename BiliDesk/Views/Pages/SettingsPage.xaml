@@ -84,7 +84,7 @@
                 <!-- ============ 吸顶 Tab 胶囊 ============
                      ★ 只有一个实例: 不再有"缩小版"副本, 尺寸/样式与原来的胶囊完全一致。
                      ★ 必须放在滚动内容的**最后一个子元素**: 它要画在卡片之上; 滚动过程中由
-                       code-behind 反向平移抵消滚动量, 到顶后钉住(见 UpdateStickyCapsule)。
+                       code-behind 反向平移抵消滚动量, 到距顶端 8px 处钉住(见 UpdateStickyCapsule)。
                      ★ 只有这颗胶囊, 没有整条背景/分隔线 —— 内容从它两侧与下方正常经过。
                      ★ 钉住后顶端会进入窗口标题栏区域(CaptionHeight=20):
                        IsHitTestVisibleInChrome 让那块区域里的点击仍然落到 Tab 上,
