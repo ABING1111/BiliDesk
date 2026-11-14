@@ -28,32 +28,46 @@ public static class VisualTreeUtil
     ///   处理: 遇到非 Visual 先沿 ContentElement/逻辑树往上跳到最近的 Visual, 再继续。
     /// </summary>
     public static T? FindAncestor<T>(DependencyObject? d) where T : DependencyObject
+        => FindAncestor<T>(d, static _ => true);
+
+    /// <summary>
+    /// 带条件的祖先查找: 只返回第一个满足 <paramref name="match"/> 的 T。
+    ///
+    /// ★ 为什么需要条件版(2026-11-14, 修"嵌套滚动区吞滚轮"):
+    ///   全局滚轮要从鼠标位置往上找"**能纵向滚的**" ScrollViewer。只看类型的话,
+    ///   第一个命中的可能是内容不满一屏的嵌套小列表(MaxHeight 的直播看板、
+    ///   弹层里的规则列表…), 它滚不动, 后面的页面却因为"最近祖先是它"被挡住。
+    ///   有了条件版就能跳过它继续往上, 与 WPF 原生冒泡行为一致。
+    /// </summary>
+    public static T? FindAncestor<T>(DependencyObject? d, Func<T, bool> match) where T : DependencyObject
     {
         while (d != null)
         {
-            if (d is T t) return t;
-
-            DependencyObject? parent;
-            if (d is Visual || d is Visual3D)
-            {
-                // 正常路径: 可视树父级
-                parent = VisualTreeHelper.GetParent(d);
-            }
-            else if (d is FrameworkContentElement fce)
-            {
-                // Run/Span/Paragraph 这类内容元素: 先回到它所属的 TextBlock(或其父 Span)
-                parent = fce.Parent;
-            }
-            else
-            {
-                // 其它不在可视树里的 DependencyObject: 退回逻辑树; 个别类型 LogicalTreeHelper
-                // 也会抛, 兜住并当作"到头了"。
-                try { parent = LogicalTreeHelper.GetParent(d); }
-                catch { parent = null; }
-            }
-
-            d = parent;
+            if (d is T t && match(t)) return t;
+            d = GetParent(d);
         }
         return null;
+    }
+
+    /// <summary>沿可视树/内容元素/逻辑树往上取一级父级(兼容 Run 这类 FrameworkContentElement)。</summary>
+    public static DependencyObject? GetParent(DependencyObject? d)
+    {
+        if (d == null) return null;
+
+        if (d is Visual || d is Visual3D)
+        {
+            // 正常路径: 可视树父级
+            return VisualTreeHelper.GetParent(d);
+        }
+        if (d is FrameworkContentElement fce)
+        {
+            // Run/Span/Paragraph 这类内容元素: 先回到它所属的 TextBlock(或其父 Span)
+            return fce.Parent;
+        }
+
+        // 其它不在可视树里的 DependencyObject: 退回逻辑树; 个别类型 LogicalTreeHelper
+        // 也会抛, 兜住并当作"到头了"。
+        try { return LogicalTreeHelper.GetParent(d); }
+        catch { return null; }
     }
 }

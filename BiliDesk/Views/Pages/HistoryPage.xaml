@@ -91,8 +91,8 @@
                     </StackPanel>
 
                     <!-- ===== 卡片墙(与首页同构: ItemsControl + CardWallPanel + VideoCard) =====
-                         ★ 滚轮手感与首页一致(2026-10-02 用户要求): 这里不挂 SmoothScroll,
-                           用引擎原生滚轮(一格一格、即停)。 -->
+                         ★ 滚轮手感与首页一致: 由全局 WheelScroll 统一接管(按设置距离 + 两级低通平滑),
+                           不再逐处挂旧的 SmoothScroll。 -->
                     <StackPanel Margin="0,12,0,0">
                         <ItemsControl ItemsSource="{Binding Entries}">
                             <ItemsControl.ItemsPanel>

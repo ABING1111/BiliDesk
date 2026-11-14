@@ -2779,13 +2779,19 @@
 
                     <!-- 列表: 展平数据 + IsSectionStart 画分组标题。
                          用 ListBox 而不是 ItemsControl: 一是要**选中态高亮当前集**,
-                         二是选中项自带 BringIntoView(打开面板要滚到正在播的那一集)。 -->
+                         二是选中项自带 BringIntoView(打开面板要滚到正在播的那一集)。
+                         ★ 2026-11-14: 不再挂旧版 SmoothScroll(每格 180px/280ms, 比全局滚轮慢一拍),
+                           改 ScrollUnit=Pixel 交给全局 WheelScroll 的"两级低通平滑"统一处理。
+                           像素滚对虚拟化列表同样有效, 选中项 BringIntoView 不受影响。 -->
                     <ListBox x:Name="SeasonList" Grid.Row="1"
                              Background="Transparent" BorderThickness="0"
                              Padding="10,4,10,10"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             SelectionChanged="OnSeasonEpisodeSelected"
-                             behaviors:SmoothScroll.Enabled="True">
+                             ScrollViewer.CanContentScroll="True"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling"
+                             VirtualizingPanel.ScrollUnit="Pixel"
+                             SelectionChanged="OnSeasonEpisodeSelected">
                         <ListBox.Resources>
                             <!-- 隐式样式会吃掉继承的前景色(全局隐式 TextBlock 样式带 Foreground setter),
                                  所以模板里每一个 TextBlock 都显式给刷子。 -->
