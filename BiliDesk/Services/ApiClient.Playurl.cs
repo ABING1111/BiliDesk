@@ -667,7 +667,7 @@ public partial class ApiClient
                     await FetchMuxedAsync(bvid, cid, qn);
                 if (!string.IsNullOrEmpty(mUrl))
                 {
-                    if (mQualities.Count > 0) qualities = mQualities;
+                    if (mQualities.Count > 0) qualities = FilterPlayableQualities(mQualities);
                     return (true, null, mUrl, mBackups, durMux, qualities, mQn, null, null,
                         lastPlayMsMux, lastPlayCidMux, new List<int>(), 0);
                 }
@@ -730,6 +730,11 @@ public partial class ApiClient
                             qualities.Add((id, QnToLabel(id)));
                     }
                     qualities.Sort((a, b) => b.qn.CompareTo(a.qn));
+                    // ★ 菜单只列**能正常渲染**的档(2026-11-14): 杜比视界/HDR/8K 在这里挡掉。
+                    //   fnval=4048 是为了音轨(无损/杜比)才带上的, 它顺带把这三档视频流也
+                    //   放进了 dash.video; 但播放器渲染不了它们, 列出来只会让用户点了发现
+                    //   画面发灰/卡死。选流逻辑不受影响(见下面的兜底)。
+                    FilterPlayableQualities(qualities);
 
                     // 选流: 不超过请求 qn 的最高清晰度; **同档优先 HEVC**。
                     //
@@ -768,7 +773,7 @@ public partial class ApiClient
                         foreach (var v in videos.EnumerateArray())
                         {
                             var id = GetInt(v, "id");
-                            if (id <= 0 || QualityPreference.IsAutoSkipTier(id)) continue;
+                            if (id <= 0 || QualityPreference.IsUnsupportedTier(id)) continue;
                             var rank = CodecRank(GetStr(v, "codecs"));
                             if (!foundRegular || id > bestId || (id == bestId && rank > bestRank))
                             {
@@ -936,7 +941,7 @@ public partial class ApiClient
                 return (false, "DASH 与 durl 都没能取到可播放的地址(可能是大会员/付费专属, 或该清晰度无源)",
                     null, new List<string>(), 0, qualities, 0, null, null, 0, 0,
                     new List<int>(), 0);
-            if (mQualities2.Count > 0) qualities = mQualities2;
+            if (mQualities2.Count > 0) qualities = FilterPlayableQualities(mQualities2);
             return (true, null, mUrl2, mBackups2, dur2, qualities, mQn2, null, null,
                 lastPlayMs2, lastPlayCid2, new List<int>(), 0);
         }
@@ -1022,6 +1027,25 @@ public partial class ApiClient
             // 这里刻意不 ReportError: 拿到了 200 但结构不认识属于内容问题, 不该弹窗打扰用户。
             return (null, backups, 0, qualities, 0, 0, 0);
         }
+    }
+
+    /// <summary>
+    /// 把一份清晰度列表里**播放器暂时渲染不了**的档位剔掉(杜比视界/HDR/8K), 原地修改并返回它。
+    ///
+    /// ★ 为什么在取流层过滤而不是在 FillQualityMenu 里(2026-11-14):
+    ///   qualities 这份列表同时喂给"菜单可选项"和"按钮上显示的档位名", 只在 UI 层滤一遍
+    ///   会出现"菜单里没有、按钮上还写着杜比视界"的割裂。放在这里, 播放器的三条取流路径
+    ///   (DASH / ≤720P 主路 durl / DASH 失败兜底 durl)一次覆盖, 切档后重新取流也自动生效。
+    /// ★ 判据与"自动选流要跳过的档"同源, 见 <see cref="QualityPreference.IsUnsupportedTier"/>。
+    /// ★ 只动**可选范围**, 不动选流: 整条视频只有这些流时仍按原兜底挑一条播(宁可播也别黑屏)。
+    /// ★ 下载那条路(ApiClient.Download)刻意不走这里 —— 下载是存文件, 不经过播放器渲染,
+    ///   8K/HDR/杜比视界照样可以下。
+    /// </summary>
+    private static List<(int qn, string label)> FilterPlayableQualities(
+        List<(int qn, string label)> qualities)
+    {
+        qualities.RemoveAll(x => QualityPreference.IsUnsupportedTier(x.qn));
+        return qualities;
     }
 
     /// <summary>
