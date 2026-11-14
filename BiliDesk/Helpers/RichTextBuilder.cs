@@ -38,6 +38,17 @@ public static class RichTextBuilder
     /// </summary>
     public static void AppendText(Paragraph p, string text,
         Brush? foreground = null, FontWeight? weight = null)
+        => AppendInlines(p.Inlines, text, foreground, weight);
+
+    /// <summary>
+    /// 与 <see cref="AppendText(Paragraph,string,Brush?,FontWeight?)"/> 完全相同, 只是写到
+    /// 任意的 <see cref="InlineCollection"/> 上 —— 私信气泡用的是 TextBlock(需要"宽度贴合文字"),
+    /// 而 TextBlock 的 Inlines 与 Paragraph 的 Inlines 是同一个类型。
+    /// ★ 抽这一层是为了让 emoji 那条崩溃修复只有**一份**: 两个重载各写一遍的话,
+    ///   下次再修就只会修到其中一个。
+    /// </summary>
+    public static void AppendInlines(InlineCollection inlines, string text,
+        Brush? foreground = null, FontWeight? weight = null)
     {
         if (text.Length == 0) return;
 
@@ -47,7 +58,7 @@ public static class RichTextBuilder
             var plain = new Run(text);
             if (foreground != null) plain.Foreground = foreground;
             if (weight.HasValue) plain.FontWeight = weight.Value;
-            p.Inlines.Add(plain);
+            inlines.Add(plain);
             return;
         }
 
@@ -61,7 +72,7 @@ public static class RichTextBuilder
             if (isEmoji) run.FontFamily = EmojiFont;
             if (foreground != null) run.Foreground = foreground;
             if (weight.HasValue) run.FontWeight = weight.Value;
-            p.Inlines.Add(run);
+            inlines.Add(run);
             sb.Clear();
         }
 

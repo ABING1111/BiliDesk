@@ -1363,4 +1363,42 @@ public static class Cover
             image.Source = bmp;
         });
     }
+
+    /// <summary>
+    /// 附加属性 Cover.EmoteSource: 给**表情图片**用的异步来源。
+    ///
+    /// ★ 为什么不复用 <see cref="ImageSourceProperty"/>: 那个按 512 宽解码 ——
+    ///   表情源图通常只有 20~40px, 按 512 解码等于把一张十几 KB 的图撑成 1MB。
+    ///   表情面板一屏几十个, 用错一次就是几十 MB。这里按 48 解码(走缓存量化后的 64 档)。
+    /// </summary>
+    public static readonly DependencyProperty EmoteSourceProperty = DependencyProperty.RegisterAttached(
+        "EmoteSource", typeof(string), typeof(Cover),
+        new PropertyMetadata(null, OnEmoteSourceChanged));
+
+    public static string? GetEmoteSource(DependencyObject d) => (string?)d.GetValue(EmoteSourceProperty);
+    public static void SetEmoteSource(DependencyObject d, string? value) => d.SetValue(EmoteSourceProperty, value);
+
+    private static void OnEmoteSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not Image image) return;
+        var url = e.NewValue as string;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            image.Source = null;
+            return;
+        }
+        _ = LoadIntoEmoteAsync(image, url);
+    }
+
+    private static async Task LoadIntoEmoteAsync(Image image, string url)
+    {
+        var bmp = await CoverLoader.LoadAsync(url, 48);
+        if (bmp == null) return;
+
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            if (GetEmoteSource(image) != url) return;
+            image.Source = bmp;
+        });
+    }
 }

@@ -4,26 +4,145 @@
              xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
              xmlns:behaviors="clr-namespace:BiliDesk.Helpers"
              Background="{DynamicResource AppBackgroundBrush}">
+    <UserControl.Resources>
+        <!--
+            ============ 顶部消息分类 Tab ============
+            对齐官方 message.bilibili.com 的消息: 四个**纯文字**标签, 选中项变强调色,
+            没有药丸底、也没有下划线(截图里两者都没有)。
+
+            ★ 为什么不用现成的 UnderlineTabStyle / SegmentTabStyle:
+              前者底部带一根 20px 短横线, 后者是一整条灰色轨道 + 滑动药丸 —— 两者都会
+              让"四个标签"看起来比官方那个更重。这里只要文字本身的变化。
+            ★ 未选中是次级灰、悬停变主文字色、选中变强调色 —— 与官方一致的三级层次。
+            ★ 徽标(未读数)是标签内部的一个小圆角块, 所以 ContentPresenter 里必须能放
+              StackPanel 而不是只放字符串; 下面 ContentPresenter.Resources 里挡掉全局
+              TextBlock 隐式样式(它带 Foreground setter, 会吃掉选中态的粉色)。
+        -->
+        <Style x:Key="MsgTabStyle" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="Padding" Value="0,4" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <!-- 未读数放进 Tag: 模板里按 Tag>0 显示角标。
+                 ★ 为什么不用 Content 塞 StackPanel: 模板里的 TextBlock 绑的是
+                   {Binding Content}(为了拿到 TemplateBinding 级联的触发器前景色),
+                   Content 是 StackPanel 时会被 ToString() 成 "System.Windows.Controls.StackPanel"
+                   (2026-11-15 实测翻车)。Content 保持纯文字, 角标走 Tag。 -->
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border Background="Transparent" Padding="{TemplateBinding Padding}">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <!-- ★ 必须用显式 TextBlock + TemplateBinding 绑 Foreground,
+                                     不能依赖 ContentPresenter 的继承:
+                                     全局隐式 TextBlock 样式带 Foreground setter(优先级高于继承),
+                                     会把文字压成主色 —— 探针实测"IsChecked 后 RadioButton.Foreground
+                                     已变粉, 但 TextBlock 还是黑色"就是这个原因。
+                                     TemplateBinding 挂在 TextBlock 自己身上, 触发器改 Foreground 时联动。 -->
+                                <TextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}"
+                                           FontSize="{TemplateBinding FontSize}"
+                                           FontWeight="{TemplateBinding FontWeight}"
+                                           Foreground="{TemplateBinding Foreground}"
+                                           VerticalAlignment="Center"
+                                           TextOptions.TextFormattingMode="Ideal" />
+
+                            <!-- 未读角标: 数字取 Tag, Tag>0 时可见。
+                                 ★ CountToVis 对装箱 int 同样生效(它按 Convert.ToInt32 兜);
+                                   Tag 走 DataContext 是当前 Tab 的未读数, 模板共享时各自取各自的。 -->
+                            <Border x:Name="Badge" Margin="6,0,0,0" VerticalAlignment="Center"
+                                    Background="{DynamicResource AccentBrush}"
+                                    CornerRadius="8" MinWidth="16" Height="16" Padding="4,0"
+                                    Visibility="{Binding Tag, RelativeSource={RelativeSource TemplatedParent},
+                                                 Converter={StaticResource CountToVis}}">
+                                <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
+                                           FontSize="10"
+                                           Foreground="{DynamicResource TextOnAccentBrush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            </Trigger>
+                            <!-- 选中态: 文字变强调色 + 加粗。颜色压过主文字色, 与官方一致 -->
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource AccentTextOnCardBrush}" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 输入区的小工具按钮(表情 / 图片) -->
+        <Style x:Key="MsgToolButtonStyle" TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+            <Setter Property="Width" Value="34" />
+            <Setter Property="Height" Value="34" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="Margin" Value="0,0,4,0" />
+        </Style>
+
+        <!-- 表情面板里的一格。
+             ★ ToolTip 不能写在 Style 的 Setter 里: Setter.Value 不是依赖属性,
+               给它写 {Binding} 会在运行时抛 "A 'Binding' cannot be set on the 'Value'
+               property of type 'Setter'"。改为在 DataTemplate 的 Button 上直接绑。 -->
+        <Style x:Key="EmoteCellStyle" TargetType="Button">
+            <Setter Property="Width" Value="38" />
+            <Setter Property="Height" Value="38" />
+            <Setter Property="Margin" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="6" Background="Transparent" Padding="5">
+                            <!-- 走 Cover.EmoteSource 异步加载(按 48 宽解码, 表情不需要大图):
+                                 直接绑 Image.Source 会让 WPF 在 UI 线程同步下载解码,
+                                 一屏几十个表情就是"点开表情面板卡一下" -->
+                            <Image Stretch="Uniform"
+                                   behaviors:Cover.EmoteSource="{Binding Url}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ControlFillHoverBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 返回 + 标题 + 刷新。
-             这一页不在左侧导航栏上(入口在首页右上角工具列), 所以必须自带一个明确的返回入口。 -->
-        <!--
-                    右上角的窗口按钮(最小化/最大化/关闭)浮在内容区之上、占 y=4~36。
-                    头部因此撑到 62 高: 标题贴顶(和左侧 logo 同一水平线), 右侧操作按钮
-                    贴底 —— 它们的顶边落在 44, 正好让开窗口按钮, 谁也不压谁。
-                -->
+        <!-- ===== 标题(左上角) + 返回/刷新(右上角) =====
+             2026-11-15 用户要求: "消息"放左上角, 返回放右上角。
+             ★ 返回按钮必须**避开右上角的窗口按钮**(最小化/最大化/关闭浮在 y=4~36):
+               刷新按钮原来"贴底"就是为了让开它们, 返回按钮同样贴底并排在刷新左侧。 -->
         <Grid Grid.Row="0" Margin="36,20,36,0" MinHeight="62">
-            <!-- VerticalAlignment="Top" 不能省: 头部这一行被 MinHeight=62 撑高, 若让它拉伸,
-                 标题(默认向上/居中)与"私信"小字(贴底)会被拉开 30 多像素, 看着就是错位。
-                 撑到 62 只为了让右侧按钮让开窗口按钮(见上面那段说明), 内容本身该贴顶。 -->
+            <!-- 标题: 左上角, 贴顶(和左侧 logo 同一水平线) -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
+                <TextBlock Text="&#xE8BD;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="20" VerticalAlignment="Center"
+                           Foreground="{DynamicResource AccentTextBrush}" />
+                <TextBlock Text="消息" Style="{StaticResource PageTitleStyle}" Margin="10,0,0,0" />
+            </StackPanel>
+
+            <!-- 返回 + 刷新: 右上角贴底, 让开窗口按钮 -->
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
                 <Button Style="{StaticResource SubtleButtonStyle}" Click="OnBackClick"
-                        Padding="10,6" FontSize="13" VerticalAlignment="Center" Margin="0,0,14,0"
+                        Padding="10,6" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0"
                         ToolTip="返回首页">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE80F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -31,21 +150,37 @@
                         <TextBlock Text="返回" Margin="6,0,0,0" FontSize="13" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
-                <TextBlock Text="&#xE8BD;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                           FontSize="20" VerticalAlignment="Center"
-                           Foreground="{DynamicResource AccentTextBrush}" />
-                <TextBlock Text="B 站消息" Style="{StaticResource PageTitleStyle}" Margin="10,0,0,0" />
-                <TextBlock Text="私信" VerticalAlignment="Bottom" Margin="8,0,0,6"
-                           Foreground="{DynamicResource TextTertiaryBrush}" FontSize="14" />
+                <Button Style="{StaticResource IconButtonStyle}" VerticalAlignment="Center"
+                        Command="{Binding RefreshCommand}" ToolTip="刷新（F5）">
+                    <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                </Button>
             </StackPanel>
-            <Button HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                    Style="{StaticResource IconButtonStyle}"
-                    Command="{Binding RefreshCommand}" ToolTip="刷新（F5）">
-                <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-            </Button>
         </Grid>
 
-        <Grid Grid.Row="1" Margin="0,16,0,0">
+        <!-- ===== 四个消息分类(对齐官方消息) =====
+             ★ 带角标的三个 Tab 用各自的隐式样式(BasedOn MsgTabStyle): 角标数字在 Tag 上,
+               可见性绑 HasUnreadXxx。Content 保持纯文字 —— 模板里的 TextBlock 直接绑
+               Content, 塞 StackPanel 会被 ToString()(上一版翻车的原因)。 -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="36,14,36,0">
+            <RadioButton x:Name="ChatTabBtn" Style="{StaticResource MsgTabStyle}" Content="聊天列表"
+                         GroupName="MsgTabs"
+                         IsChecked="{Binding TabIsChat, Mode=TwoWay}" />
+            <RadioButton x:Name="ReplyTabBtn" Content="回复我的" Tag="{Binding UnreadReply}"
+                         GroupName="MsgTabs" Margin="30,0,0,0"
+                         Style="{StaticResource MsgTabStyle}"
+                         IsChecked="{Binding TabIsReply, Mode=TwoWay}" />
+            <RadioButton x:Name="AtTabBtn" Content="@我的" Tag="{Binding UnreadAt}"
+                         GroupName="MsgTabs" Margin="30,0,0,0"
+                         Style="{StaticResource MsgTabStyle}"
+                         IsChecked="{Binding TabIsAt, Mode=TwoWay}" />
+            <RadioButton x:Name="LikeTabBtn" Content="收到的赞" Tag="{Binding UnreadLike}"
+                         GroupName="MsgTabs" Margin="30,0,0,0"
+                         Style="{StaticResource MsgTabStyle}"
+                         IsChecked="{Binding TabIsLike, Mode=TwoWay}" />
+        </StackPanel>
+
+        <!-- ===== 内容区 ===== -->
+        <Grid Grid.Row="2" Margin="0,12,0,0">
             <!-- 未登录 / 整页错误 -->
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460"
                         Visibility="{Binding Error, Converter={StaticResource StrToVis}}">
@@ -61,16 +196,32 @@
                         Visibility="{Binding Loading, Converter={StaticResource InvBoolToVis}}" />
             </StackPanel>
 
-            <!-- 主体: 左会话列表 / 右私信内容 -->
-            <Grid Visibility="{Binding Error, Converter={StaticResource InvStrToVis}}">
+            <!-- ==================== 聊天列表 Tab ==================== -->
+            <Grid>
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Visibility"
+                                Value="{Binding IsChatTab, Converter={StaticResource BoolToVis}}" />
+                        <!-- ★ 有整页错误(未登录/会话列表拉失败)时把内容整块收起来:
+                             否则错误提示会叠在一个空的两栏布局上, 看着像"加载坏了但还在转"。
+                             ★ 这两条都写在 Style 里(而不是元素上直接写 Visibility):
+                               元素上的本地值优先级高于 Style 触发器, 混着写会让下面的
+                               DataTrigger 静默失效。 -->
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Error, Converter={StaticResource StrToVis}}"
+                                         Value="Visible">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="248" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
-                <!-- ===== 左: 会话列表 =====
-                     ★ 底色用 PanelBackgroundBrush: 通栏大面板, 亚克力下跟着半透明透出材质
-                       (普通模式下与卡片底同值)。 -->
+                <!-- 左: 会话列表。
+                     ★ 底色用 PanelBackgroundBrush: 通栏大面板, 亚克力下跟着半透明透出材质 -->
                 <Border Grid.Column="0" Background="{DynamicResource PanelBackgroundBrush}"
                         BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,1,0">
                     <Grid>
@@ -102,6 +253,8 @@
                                     <Setter Property="Margin" Value="0" />
                                     <!-- 兜底：点击的显式入口，不依赖 ListBox 自身的选中逻辑 -->
                                     <EventSetter Event="PreviewMouseLeftButtonDown" Handler="OnSessionRowPressed" />
+                                    <!-- 右键菜单(打开 UP 主主页): 在 Opening 里现挂, 见 handler 的说明 -->
+                                    <EventSetter Event="ContextMenuOpening" Handler="OnSessionContextMenuOpening" />
                                     <Setter Property="Template">
                                         <Setter.Value>
                                             <ControlTemplate TargetType="ListBoxItem">
@@ -175,11 +328,12 @@
                     </Grid>
                 </Border>
 
-                <!-- ===== 右: 私信内容 ===== -->
+                <!-- 右: 聊天内容(微信式气泡) -->
                 <Grid Grid.Column="1">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
@@ -200,96 +354,489 @@
                                        Margin="0,10,0,0" HorizontalAlignment="Center" />
                         </StackPanel>
 
+                        <!-- 加载失败提示: 只在**没有消息可显示**时占位。
+                             ★ 不能让它在有消息时也居中压着: 翻页失败、或末尾那条乐观消息
+                               发送成功后服务端报错, 都会留下 ThreadError —— 那时列表里明明
+                               有内容, 一行错误提示盖在气泡上会让人以为整段聊天都坏了。 -->
                         <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
                                    Text="{Binding ThreadError}" FontSize="12" MaxWidth="380"
                                    TextWrapping="Wrap" TextAlignment="Center"
-                                   Foreground="{DynamicResource TextTertiaryBrush}"
-                                   Visibility="{Binding ThreadError, Converter={StaticResource StrToVis}}" />
+                                   Foreground="{DynamicResource TextTertiaryBrush}">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <!-- 有错误 且 消息为空 才显示 -->
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding ThreadError,
+                                                    Converter={StaticResource StrToVis}}" Value="Visible" />
+                                                <Condition Binding="{Binding HasMessages}" Value="False" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
 
                         <ScrollViewer x:Name="MsgScroll" VerticalScrollBarVisibility="Auto"
                                       Padding="20,14,20,14">
-                            <ItemsControl ItemsSource="{Binding Messages}">
+                            <StackPanel>
+                                <!-- 往上翻历史的入口: 放在滚动流**最上面**, 而不是浮在列表上。
+                                     ★ 浮着会压住第一条消息(用户往上滚时正好挡住头像和昵称),
+                                       而且它不该在滚到底部时还挂在视野里。 -->
+                                <Button x:Name="LoadMoreBtn" HorizontalAlignment="Center"
+                                        Content="查看更早的消息" Margin="0,0,0,10"
+                                        Style="{StaticResource SubtleButtonStyle}" Padding="12,5" FontSize="11.5"
+                                        Click="OnLoadOlderClick"
+                                        Visibility="{Binding HasMoreHistory, Converter={StaticResource BoolToVis}}" />
+
+                                <ItemsControl ItemsSource="{Binding Messages}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <!-- 自己的消息靠右且用强调色气泡, 对方的靠左用卡片色 -->
-                                        <StackPanel Margin="0,0,0,10">
-                                            <Border x:Name="Bubble" CornerRadius="10" Padding="12,8"
-                                                    MaxWidth="420" HorizontalAlignment="Left"
-                                                    ToolTip="{Binding TimeText}">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Setter Property="Background"
-                                                                Value="{DynamicResource CardBackgroundBrush}" />
-                                                        <Setter Property="BorderBrush"
-                                                                Value="{DynamicResource CardBorderBrush}" />
-                                                        <Setter Property="BorderThickness" Value="1" />
-                                                        <Setter Property="HorizontalAlignment" Value="Left" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsMine}" Value="True">
-                                                                <Setter Property="HorizontalAlignment" Value="Right" />
+                                        <!--
+                                            ============ 一条消息(微信式) ============
+                                            对方: [头像] [昵称+时间] / [气泡]     靠左
+                                            自己: [昵称+时间] [气泡] [头像]     靠右
+
+                                            ★ 连续同一个人发的消息只在第一条显示头像与昵称(ShowHeader),
+                                              后面几条只留气泡并压缩上间距 —— 这是微信的规矩,
+                                              长对话里能一眼看出"谁连着说了三句"。
+                                            ★ 系统提示(msg_type=18)不带头像, 居中显示成一行灰色小字。
+                                        -->
+                                        <Grid Margin="0,0,0,2">
+                                            <!-- 系统提示: 单独一行, 居中的灰字 -->
+                                            <Border x:Name="SysTip" HorizontalAlignment="Center"
+                                                    CornerRadius="6" Padding="10,4" Margin="0,6"
+                                                    Background="{DynamicResource ControlFillDefaultBrush}"
+                                                    Visibility="Collapsed">
+                                                <TextBlock Text="{Binding Text}" FontSize="11.5"
+                                                           TextWrapping="Wrap" MaxWidth="420"
+                                                           TextAlignment="Center"
+                                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                                            </Border>
+
+                                            <!-- 普通消息行 -->
+                                            <Grid x:Name="Row">
+                                                <Grid.ColumnDefinitions>
+                                                    <!-- ★ 两侧头像列**固定 34 宽**, 不随内容塌陷:
+                                                         连续消息把头像藏起来时, 若这一列跟着塌成 0,
+                                                         后面的气泡就会往外顶 34px, 一列消息看着参差不齐。
+                                                         微信也是"头像没了但位置留着"。 -->
+                                                    <ColumnDefinition Width="34" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="34" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <!-- 对方头像(靠左, 只在组首显示)。
+                                                     ★ 点击跳转 UP 主主页(2026-11-15 用户要求);
+                                                       连续消息里被藏起来的头像不参与命中(Collapsed 不响应)。 -->
+                                                <Grid Grid.Column="0" Width="34" Height="34"
+                                                      VerticalAlignment="Top" Margin="0,2,0,0"
+                                                      Background="Transparent" Cursor="Hand"
+                                                      MouseLeftButtonUp="OnPeerAvatarClick"
+                                                      ToolTip="查看主页">
+                                                    <Border x:Name="PeerAvatar" CornerRadius="17" ClipToBounds="True"
+                                                            Background="{DynamicResource AccentSoftFillBrush}"
+                                                            behaviors:Cover.Source="{Binding DataContext.PeerFace,
+                                                                RelativeSource={RelativeSource AncestorType=UserControl}}">
+                                                        <TextBlock Text="&#xE77B;"
+                                                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                   FontSize="14"
+                                                                   Foreground="{DynamicResource AccentTextBrush}"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                </Grid>
+
+                                                <!-- 中间: 昵称 + 气泡 -->
+                                                <StackPanel x:Name="PeerSide" Grid.Column="1" Margin="9,0,9,0"
+                                                            HorizontalAlignment="Left">
+                                                    <!-- 昵称 + 时间(组首才显示) -->
+                                                    <StackPanel Orientation="Horizontal" Margin="2,0,0,4"
+                                                                Visibility="{Binding ShowHeader, Converter={StaticResource BoolToVis}}">
+                                                        <TextBlock Text="{Binding DataContext.PeerName,
+                                                                          RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                   FontSize="11.5"
+                                                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                                                   TextTrimming="CharacterEllipsis" MaxWidth="220" />
+                                                        <TextBlock Text="{Binding TimeText}" FontSize="10.5"
+                                                                   Margin="8,0,0,0" VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                    </StackPanel>
+
+                                                    <!-- 气泡本体 -->
+                                                    <Border x:Name="PeerBubble" CornerRadius="10" Padding="11,8"
+                                                            HorizontalAlignment="Left" MaxWidth="440"
+                                                            Visibility="{Binding IsBubbleText, Converter={StaticResource BoolToVis}}">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
                                                                 <Setter Property="Background"
-                                                                        Value="{DynamicResource AccentBrush}" />
-                                                                <Setter Property="BorderThickness" Value="0" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Border.Style>
-                                                <StackPanel>
-                                                    <!-- 图片消息: 用 Cover.ImageSource 异步加载,
-                                                         直接绑 Image.Source 会让 WPF 同步下载解码, 卡 UI -->
-                                                    <Image MaxWidth="260" MaxHeight="260" Stretch="Uniform"
-                                                           Visibility="{Binding IsImage, Converter={StaticResource BoolToVis}}"
+                                                                        Value="{DynamicResource CardBackgroundBrush}" />
+                                                                <Setter Property="BorderBrush"
+                                                                        Value="{DynamicResource CardBorderBrush}" />
+                                                                <Setter Property="BorderThickness" Value="1" />
+                                                            </Style>
+                                                        </Border.Style>
+                                                        <controls:MessageText Content="{Binding Text}"
+                                                                             Emotes="{Binding Emotes}"
+                                                                             FontSize="12.5"
+                                                                             TextForeground="{DynamicResource TextPrimaryBrush}" />
+                                                    </Border>
+
+                                                    <!-- 图片(不套气泡底色)。
+                                                         ★ 外层 Border 给一个最小尺寸 + 兜底底色:
+                                                           图还没加载完(或加载失败)时不会变成"什么都没有",
+                                                           用户至少看得到一个可点的方块。 -->
+                                                    <Border x:Name="PeerImage" CornerRadius="8" ClipToBounds="True"
+                                                            HorizontalAlignment="Left" Margin="0,2,0,0"
+                                                            MinWidth="80" MinHeight="80"
+                                                            Background="{DynamicResource ControlFillDefaultBrush}"
+                                                            Visibility="{Binding IsImage, Converter={StaticResource BoolToVis}}">
+                                                        <Image MaxWidth="260" MaxHeight="260" Stretch="Uniform"
+                                                               behaviors:Cover.ImageSource="{Binding ImageUrl}"
+                                                               MouseLeftButtonUp="OnMessageImageClick" Cursor="Hand" />
+                                                    </Border>
+
+                                                    <!-- 自定义表情(小图, 不套气泡) -->
+                                                    <Image x:Name="PeerEmote" MaxWidth="100" MaxHeight="100"
+                                                           Stretch="Uniform" HorizontalAlignment="Left"
+                                                           Margin="0,2,0,0"
+                                                           Visibility="{Binding IsEmote, Converter={StaticResource BoolToVis}}"
                                                            behaviors:Cover.ImageSource="{Binding ImageUrl}"
                                                            MouseLeftButtonUp="OnMessageImageClick" Cursor="Hand" />
-                                                    <!-- 文字消息 -->
-                                                    <TextBox Text="{Binding Text, Mode=OneWay}"
-                                                             IsReadOnly="True" TextWrapping="Wrap"
-                                                             FontSize="12.5" Padding="0"
-                                                             Background="Transparent" BorderThickness="0"
-                                                             HorizontalAlignment="Stretch" Cursor="IBeam"
-                                                             Visibility="{Binding IsText, Converter={StaticResource BoolToVis}}">
-                                                        <TextBox.Style>
-                                                            <Style TargetType="TextBox">
-                                                                <Setter Property="Foreground"
-                                                                        Value="{DynamicResource TextPrimaryBrush}" />
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsMine}" Value="True">
-                                                                        <Setter Property="Foreground"
-                                                                                Value="{DynamicResource TextOnAccentBrush}" />
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBox.Style>
-                                                    </TextBox>
                                                 </StackPanel>
-                                            </Border>
-                                        </StackPanel>
+
+                                                <!-- 自己头像(靠右, 只在组首显示) -->
+                                                <Grid Grid.Column="2" Width="34" Height="34"
+                                                      VerticalAlignment="Top" Margin="0,2,0,0">
+                                                    <Border x:Name="MyAvatar" CornerRadius="17" ClipToBounds="True"
+                                                            Background="{DynamicResource AccentSoftFillBrush}"
+                                                            behaviors:Cover.Source="{Binding DataContext.MyFace,
+                                                                RelativeSource={RelativeSource AncestorType=UserControl}}">
+                                                        <TextBlock Text="&#xE77B;"
+                                                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                   FontSize="14"
+                                                                   Foreground="{DynamicResource AccentTextBrush}"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                </Grid>
+
+                                                <!-- 我的消息(靠右) -->
+                                                <StackPanel x:Name="MineSide" Grid.Column="1" Margin="9,0,9,0"
+                                                            HorizontalAlignment="Right" Visibility="Collapsed">
+                                                    <StackPanel Orientation="Horizontal" Margin="0,0,2,4"
+                                                                HorizontalAlignment="Right"
+                                                                Visibility="{Binding ShowHeader, Converter={StaticResource BoolToVis}}">
+                                                        <TextBlock Text="{Binding TimeText}" FontSize="10.5"
+                                                                   VerticalAlignment="Center" Margin="0,0,8,0"
+                                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                        <TextBlock Text="{Binding DataContext.MyName,
+                                                                          RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                   FontSize="11.5"
+                                                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                                                   TextTrimming="CharacterEllipsis" MaxWidth="220" />
+                                                    </StackPanel>
+
+                                                    <Border x:Name="MineBubble" CornerRadius="10" Padding="11,8"
+                                                            HorizontalAlignment="Right" MaxWidth="440"
+                                                            Background="{DynamicResource AccentBrush}"
+                                                            Visibility="{Binding IsBubbleText, Converter={StaticResource BoolToVis}}">
+                                                        <controls:MessageText Content="{Binding Text}"
+                                                                             Emotes="{Binding Emotes}"
+                                                                             FontSize="12.5"
+                                                                             TextForeground="{DynamicResource TextOnAccentBrush}" />
+                                                    </Border>
+
+                                                    <Border x:Name="MineImage" CornerRadius="8" ClipToBounds="True"
+                                                            HorizontalAlignment="Right" Margin="0,2,0,0"
+                                                            MinWidth="80" MinHeight="80"
+                                                            Background="{DynamicResource ControlFillDefaultBrush}"
+                                                            Visibility="{Binding IsImage, Converter={StaticResource BoolToVis}}">
+                                                        <Image MaxWidth="260" MaxHeight="260" Stretch="Uniform"
+                                                               behaviors:Cover.ImageSource="{Binding ImageUrl}"
+                                                               MouseLeftButtonUp="OnMessageImageClick" Cursor="Hand" />
+                                                    </Border>
+
+                                                    <Image x:Name="MineEmote" MaxWidth="100" MaxHeight="100"
+                                                           Stretch="Uniform" HorizontalAlignment="Right"
+                                                           Margin="0,2,0,0"
+                                                           Visibility="{Binding IsEmote, Converter={StaticResource BoolToVis}}"
+                                                           behaviors:Cover.ImageSource="{Binding ImageUrl}"
+                                                           MouseLeftButtonUp="OnMessageImageClick" Cursor="Hand" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </Grid>
+
+                                        <DataTemplate.Triggers>
+                                            <!-- 系统提示: 只留 SysTip, 整行消息结构隐藏 -->
+                                            <DataTrigger Binding="{Binding IsSystem}" Value="True">
+                                                <Setter TargetName="SysTip" Property="Visibility" Value="Visible" />
+                                                <Setter TargetName="Row" Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+
+                                            <!-- 我发的: 右侧那一组显示, 左侧那组隐藏 -->
+                                            <DataTrigger Binding="{Binding IsMine}" Value="True">
+                                                <Setter TargetName="MineSide" Property="Visibility" Value="Visible" />
+                                                <Setter TargetName="PeerSide" Property="Visibility" Value="Collapsed" />
+                                                <Setter TargetName="PeerAvatar" Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+
+                                            <!-- 对方的: 右侧头像隐藏 -->
+                                            <DataTrigger Binding="{Binding IsMine}" Value="False">
+                                                <Setter TargetName="MyAvatar" Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+
+                                            <!-- 连续消息(不显示头): 只收掉头像里的图, 头像那一列**保留** ——
+                                                 保留缩进才能让同一侧的气泡始终左/右对齐(微信也是这样)。
+                                                 整列塌掉的话, 后面的气泡会往外顶一截, 一列消息就参差了。 -->
+                                            <DataTrigger Binding="{Binding ShowHeader}" Value="False">
+                                                <Setter TargetName="PeerAvatar" Property="Visibility" Value="Collapsed" />
+                                                <Setter TargetName="MyAvatar" Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            </StackPanel>
                         </ScrollViewer>
                     </Grid>
 
+                    <!-- 表情面板(内嵌, 不用 Popup —— 见 PopupToggle 的"点一下收不起来"那套坑) -->
+                    <Border Grid.Row="2" MaxHeight="196" Padding="12,10"
+                            BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,1,0,0"
+                            Background="{DynamicResource PanelBackgroundBrush}"
+                            Visibility="{Binding EmojiPanelOpen, Converter={StaticResource BoolToVis}}">
+                        <Grid>
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                        Visibility="{Binding EmojiLoading, Converter={StaticResource BoolToVis}}">
+                                <controls:LoadingRing Width="20" Height="20" HorizontalAlignment="Center" />
+                                <TextBlock Text="正在加载表情…" Style="{StaticResource MetaTextStyle}"
+                                           Margin="0,8,0,0" HorizontalAlignment="Center" />
+                            </StackPanel>
+
+                            <!-- ★ 错误提示只在**没有表情可显示**时出现:
+                                 否则一次网络抖动就会在表情墙上压一行字, 而表情明明还在。 -->
+                            <TextBlock Text="{Binding EmojiError}" FontSize="12" HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding EmojiError,
+                                                        Converter={StaticResource StrToVis}}" Value="Visible" />
+                                                    <Condition Binding="{Binding HasEmotes}" Value="False" />
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </MultiDataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding EmojiLoading, Converter={StaticResource InvBoolToVis}}">
+                                <ItemsControl ItemsSource="{Binding EmotePackages}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="0,0,0,10">
+                                                <TextBlock Text="{Binding Text}" FontSize="11.5"
+                                                           Margin="2,0,0,4"
+                                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                <ItemsControl ItemsSource="{Binding Emotes}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <WrapPanel />
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Button Style="{StaticResource EmoteCellStyle}"
+                                                                    ToolTip="{Binding Text}"
+                                                                    Click="OnEmoteClick" />
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+
                     <!-- 输入区 -->
-                    <Border Grid.Row="2" Padding="16,12" BorderBrush="{DynamicResource DividerBrush}"
+                    <Border Grid.Row="3" Padding="16,12" BorderBrush="{DynamicResource DividerBrush}"
                             BorderThickness="0,1,0,0">
                         <Grid>
                             <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBox x:Name="DraftBox" Grid.Column="0"
+
+                            <!-- 表情 / 图片 -->
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Style="{StaticResource MsgToolButtonStyle}"
+                                        Command="{Binding ToggleEmojiPanelCommand}"
+                                        ToolTip="表情" IsEnabled="{Binding HasCurrent}">
+                                    <TextBlock Text="&#xE76E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontSize="16" />
+                                </Button>
+                                <Button Style="{StaticResource MsgToolButtonStyle}"
+                                        Click="OnPickImageClick" ToolTip="发送图片"
+                                        IsEnabled="{Binding CanType}">
+                                    <TextBlock Text="&#xEB9F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontSize="16" />
+                                </Button>
+                            </StackPanel>
+
+                            <TextBox x:Name="DraftBox" Grid.Column="1"
                                      Style="{StaticResource FluentTextBoxStyle}"
                                      Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
                                      KeyDown="OnDraftKeyDown" MaxLength="500"
-                                     IsEnabled="{Binding HasCurrent}" />
-                            <Button Grid.Column="1" Content="发送" Margin="10,0,0,0"
-                                    Style="{StaticResource AccentButtonStyle}" Padding="22,8"
-                                    Command="{Binding SendCommand}"
-                                    IsEnabled="{Binding CanSend}" />
+                                     IsEnabled="{Binding CanType}" />
+
+                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                <!-- 上传中: 按钮位置换成一句提示, 不弹窗、不阻塞界面 -->
+                                <TextBlock Text="正在发送图片…" VerticalAlignment="Center" Margin="0,0,10,0"
+                                           FontSize="11.5"
+                                           Foreground="{DynamicResource TextTertiaryBrush}"
+                                           Visibility="{Binding UploadingImage, Converter={StaticResource BoolToVis}}" />
+                                <Button Content="发送" Margin="10,0,0,0"
+                                        Style="{StaticResource AccentButtonStyle}" Padding="22,8"
+                                        Command="{Binding SendCommand}"
+                                        IsEnabled="{Binding CanSend}" />
+                            </StackPanel>
                         </Grid>
                     </Border>
                 </Grid>
+            </Grid>
+
+            <!-- ==================== 互动消息 Tab(回复/@/赞) ==================== -->
+            <Grid>
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Visibility"
+                                Value="{Binding IsFeedTab, Converter={StaticResource BoolToVis}}" />
+                        <!-- ★ 整页错误(未登录)时收起来, 理由同聊天 Tab -->
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Error, Converter={StaticResource StrToVis}}"
+                                         Value="Visible">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding CurrentFeed.Loading, Converter={StaticResource BoolToVis}}">
+                    <controls:LoadingRing Width="26" Height="26" HorizontalAlignment="Center" />
+                    <TextBlock Text="正在加载…" Style="{StaticResource MetaTextStyle}"
+                               Margin="0,10,0,0" HorizontalAlignment="Center" />
+                </StackPanel>
+
+                <!-- 整块错误: 只在**一条都没加载出来**时占位(ShowError) -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="440"
+                            Visibility="{Binding CurrentFeed.ShowError, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding CurrentFeed.Error}" FontSize="12.5" TextWrapping="Wrap"
+                               TextAlignment="Center"
+                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                    <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
+                            HorizontalAlignment="Center" Margin="0,12,0,0" Padding="16,6"
+                            Command="{Binding CurrentFeed.RefreshCommand}" />
+                </StackPanel>
+
+                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Text="{Binding CurrentFeed.EmptyText}" FontSize="13"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           Visibility="{Binding CurrentFeed.IsEmpty, Converter={StaticResource BoolToVis}}" />
+
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="36,6,36,24"
+                              ScrollChanged="OnFeedScrollChanged">
+                    <StackPanel>
+                        <ItemsControl ItemsSource="{Binding CurrentFeed.Items}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <!-- 互动消息卡片: 头像 + "谁 做了什么" + 内容 + 来源标题 -->
+                                <Border CornerRadius="10" Padding="14,12" Margin="0,0,0,10"
+                                        Background="{DynamicResource CardBackgroundBrush}"
+                                        BorderBrush="{DynamicResource CardBorderBrush}"
+                                        BorderThickness="1" Cursor="Hand"
+                                        MouseLeftButtonUp="OnFeedItemClick"
+                                        ToolTip="{Binding ContextUri}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <Border Grid.Column="0" Width="38" Height="38" CornerRadius="19"
+                                                VerticalAlignment="Top" ClipToBounds="True"
+                                                Background="{DynamicResource AccentSoftFillBrush}"
+                                                behaviors:Cover.Source="{Binding UserFace}">
+                                            <TextBlock Text="&#xE77B;"
+                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                       FontSize="15"
+                                                       Foreground="{DynamicResource AccentTextBrush}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+
+                                        <StackPanel Grid.Column="1" Margin="12,0,12,0">
+                                            <TextBlock Text="{Binding HeaderText}" FontSize="13"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <!-- ★ 正文最多 3 行。
+                                                 WPF 的 TextBlock **没有 MaxLines**(那是 UWP 的),
+                                                 只能靠"固定行高 × 3 + 裁切"来限高:
+                                                 设 LineHeight 后每行高度确定, MaxHeight = 3×行高 + 余量,
+                                                 再配合 TextTrimming 让末行收成省略号。
+                                                 不能只给 MaxHeight 不设 LineHeight —— 那样会按像素
+                                                 在半行中间切开, 看着像渲染坏了。 -->
+                                            <TextBlock Text="{Binding Content}" FontSize="12.5" Margin="0,5,0,0"
+                                                       TextWrapping="Wrap"
+                                                       LineHeight="18" LineStackingStrategy="BlockLineHeight"
+                                                       MaxHeight="56"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       Visibility="{Binding HasContent, Converter={StaticResource BoolToVis}}" />
+                                            <TextBlock Text="{Binding ContextTitle}" FontSize="11.5"
+                                                       Margin="0,6,0,0"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                                       Visibility="{Binding HasContext, Converter={StaticResource BoolToVis}}" />
+                                        </StackPanel>
+
+                                        <TextBlock Grid.Column="2" Text="{Binding TimeText}" FontSize="10.5"
+                                                   VerticalAlignment="Top" Margin="0,2,0,0"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                        <!-- 翻页失败: 列表已有内容时只在这里给一行小字, 不弹整块错误 -->
+                        <TextBlock Text="{Binding CurrentFeed.Error}" FontSize="11.5"
+                                   HorizontalAlignment="Center" Margin="0,4,0,8"
+                                   TextWrapping="Wrap" TextAlignment="Center" MaxWidth="460"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   Visibility="{Binding CurrentFeed.ShowInlineError, Converter={StaticResource BoolToVis}}" />
+
+                        <!-- 翻页提示放进滚动流**末尾**: 浮在底部会压住最后一张卡片 -->
+                        <StackPanel HorizontalAlignment="Center" Margin="0,4,0,8"
+                                    Visibility="{Binding CurrentFeed.LoadingMore, Converter={StaticResource BoolToVis}}">
+                            <StackPanel Orientation="Horizontal">
+                                <controls:LoadingRing Width="16" Height="16" />
+                                <TextBlock Text="加载中…" Margin="8,0,0,0" VerticalAlignment="Center"
+                                           Style="{StaticResource MetaTextStyle}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
             </Grid>
         </Grid>
     </Grid>

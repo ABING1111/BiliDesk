@@ -140,8 +140,10 @@ public class MsgSession : System.ComponentModel.INotifyPropertyChanged
 }
 
 /// <summary>一条私信</summary>
-public class MsgItem
+public class MsgItem : System.ComponentModel.INotifyPropertyChanged
 {
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
     public long SenderUid { get; set; }
     /// <summary>消息序号: 用它排序而不是靠接口返回顺序 —— 接口在新旧方向上没有稳定保证</summary>
     public long Seqno { get; set; }
@@ -151,7 +153,56 @@ public class MsgItem
     public string ImageUrl { get; set; } = "";
     public string TimeText { get; set; } = "";
 
-    public bool IsImage => ImageUrl.Length > 0;
+    /// <summary>消息类型(msg_type)。1=文字 2=图片 6=自定义表情 18=系统提示 …</summary>
+    public int MsgType { get; set; } = 1;
+
+    /// <summary>秒级时间戳(排序/分组用; 0 = 接口没给)</summary>
+    public long Timestamp { get; set; }
+
+    /// <summary>
+    /// 这条消息是不是"自定义表情"(msg_type=6)。
+    /// ★ 它和图片消息结构一样(url + 宽高), 但界面上不该按 260px 的大图显示 ——
+    ///   表情就是个 100px 左右的小图, 且**不要**套气泡底色。
+    /// </summary>
+    public bool IsEmote { get; set; }
+
+    /// <summary>
+    /// 正文里出现的表情: 短代码 → 表情。
+    /// 私信的表情表来自 fetch_session_msgs 的 data.e_infos(整段会话一次性给出),
+    /// 解析时把**这条消息真的用到**的那些挑出来挂在消息上, 渲染时就不用再查全局表。
+    /// </summary>
+    public Dictionary<string, MsgEmote> Emotes { get; } = new();
+
+    private bool _showHeader = true;
+
+    /// <summary>
+    /// 微信式布局: 这一条要不要显示"头像 + 昵称"。
+    ///
+    /// ★ 连续同一个人发的消息只在**第一条**显示头像, 后面几条只留气泡 —— 这是微信的规矩,
+    ///   也是长对话里能一眼看出"谁连着说了三句"的关键。分组由 VM 在加载完消息后统一算
+    ///   (见 MessagesViewModel.MarkGroups), 不放在解析里: 解析时还看不到前后关系。
+    /// ★ 必须带变更通知: 分组是在消息**已经绑到界面之后**才补算的, 不通知的话
+    ///   ItemsControl 里那一条仍然显示着上一次的 ShowHeader(表现为"发完第二条还是带头像")。
+    /// </summary>
+    public bool ShowHeader
+    {
+        get => _showHeader;
+        set
+        {
+            if (_showHeader == value) return;
+            _showHeader = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(ShowHeader)));
+        }
+    }
+
+    /// <summary>同一个人连续消息之间的紧凑间距(不显示头像的那些)</summary>
+    public bool Compact => !ShowHeader;
+
+    public bool IsImage => ImageUrl.Length > 0 && !IsEmote;
     public bool IsText => ImageUrl.Length == 0;
+    public bool IsSystem => MsgType == 18;
+
+    /// <summary>纯文字气泡(不含图片/表情), 决定要不要画气泡底</summary>
+    public bool IsBubbleText => IsText && Text.Length > 0 && !IsSystem;
 }
 

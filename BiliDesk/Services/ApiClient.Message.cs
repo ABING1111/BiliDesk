@@ -134,6 +134,10 @@ public partial class ApiClient
     /// 拉取与某个会话的私信记录。
     /// 接口: /svr_sync/v1/svr_sync/fetch_session_msgs (GET, Cookie 认证)。
     /// 返回结果按 msg_seqno 升序排好(旧 → 新), 直接可以正序渲染。
+    ///
+    /// ★ 2026-11-14: 额外解析 data.e_infos(本次会话用到的表情表), 并把它挂到
+    ///   每一条**真的用到**该表情的消息上(MsgItem.Emotes)。表情是自定义图片,
+    ///   没有 Unicode 对应, 只能靠短代码替换成内联图片。
     /// </summary>
     public async Task<(bool ok, string? err, List<MsgItem>? items, bool hasMore)> GetMsgHistoryAsync(
         long talkerId, int size = 30, long endSeqno = 0)
@@ -165,10 +169,31 @@ public partial class ApiClient
 
             var list = new List<MsgItem>();
             var hasMore = false;
+            // 本次响应用到的表情: 短代码 → 表情。整段会话一次性下发, 与消息本身解耦。
+            var emotes = new Dictionary<string, MsgEmote>(StringComparer.Ordinal);
+
             if (data.Value.ValueKind == JsonValueKind.Object)
             {
                 hasMore = data.Value.TryGetProperty("has_more", out var hm) &&
                           hm.ValueKind == JsonValueKind.True;
+
+                // e_infos 先读: 后面解析消息正文时要靠它判断"这条是不是用了表情"
+                if (data.Value.TryGetProperty("e_infos", out var eInfos) &&
+                    eInfos.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var em in eInfos.EnumerateArray())
+                    {
+                        if (em.ValueKind != JsonValueKind.Object) continue;
+                        var text = GetStr(em, "text");
+                        // ★ 实测字段名是 **url**(不是 uri): 文档写的是 uri, 真实返回是 url。
+                        //   两个都读, 免得服务端哪天又改回去。
+                        var uri = UrlUtil.Normalize(GetStr(em, "url"));
+                        if (uri.Length == 0) uri = UrlUtil.Normalize(GetStr(em, "uri"));
+                        if (text.Length == 0 || uri.Length == 0) continue;
+                        var emoteSize = GetInt(em, "size");
+                        emotes[text] = new MsgEmote { Text = text, Url = uri, Size = emoteSize > 1 ? 2 : 1 };
+                    }
+                }
 
                 if (data.Value.TryGetProperty("messages", out var arr) &&
                     arr.ValueKind == JsonValueKind.Array)
@@ -186,22 +211,51 @@ public partial class ApiClient
                             SenderUid = uid,
                             IsMine = uid == me,
                             Seqno = GetLong(m, "msg_seqno"),
+                            MsgType = msgType,
+                            Timestamp = ts,
                             TimeText = ts > 0
                                 ? DateTimeOffset.FromUnixTimeSeconds(ts).LocalDateTime
                                     .ToString("MM-dd HH:mm")
                                 : ""
                         };
 
-                        if (msgType == 2)
+                        // 被撤回的消息(msg_status=1)不显示原文, 给一句提示占位
+                        var status = GetInt(m, "msg_status");
+                        if (status == 1 || status == 2)
                         {
-                            item.ImageUrl = ExtractImageUrl(content);
-                            if (item.ImageUrl.Length == 0) item.Text = "[图片]";
+                            item.Text = "[该消息已撤回]";
+                            item.MsgType = 1;
+                            list.Add(item);
+                            continue;
                         }
-                        else
+
+                        switch (msgType)
                         {
-                            item.Text = DecodeMsgContent(content);
-                            if (item.Text.Length == 0) item.Text = "[暂不支持的消息类型]";
+                            case 2:   // 图片
+                            case 6:   // 自定义表情(结构同图片, 但显示成小图)
+                                item.ImageUrl = ExtractImageUrl(content);
+                                item.IsEmote = msgType == 6;
+                                if (item.ImageUrl.Length == 0) item.Text = msgType == 6 ? "[表情]" : "[图片]";
+                                break;
+
+                            case 18:  // 系统提示(仅自己可见, 如"对方回复前最多发 1 条")
+                                item.Text = ExtractSystemTip(content);
+                                break;
+
+                            default:
+                                item.Text = DecodeMsgContent(content);
+                                if (item.Text.Length == 0) item.Text = "[暂不支持的消息类型]";
+                                break;
                         }
+
+                        // 把这条消息**真的用到**的表情挑出来挂上(没用到就不占内存)
+                        if (emotes.Count > 0 && item.Text.Length > 0)
+                        {
+                            foreach (var kv in emotes)
+                                if (item.Text.Contains(kv.Key, StringComparison.Ordinal))
+                                    item.Emotes[kv.Key] = kv.Value;
+                        }
+
                         list.Add(item);
                     }
                 }
@@ -219,34 +273,216 @@ public partial class ApiClient
     }
 
     /// <summary>发送文字私信</summary>
-    public async Task<(bool ok, string? err)> SendMsgAsync(long receiverId, string text)
+    public Task<(bool ok, string? err)> SendMsgAsync(long receiverId, string text)
     {
-        if (receiverId <= 0) return (false, "缺少接收者");
-        if (string.IsNullOrWhiteSpace(text)) return (false, "消息不能为空");
+        if (receiverId <= 0) return Task.FromResult<(bool, string?)>((false, "缺少接收者"));
+        if (string.IsNullOrWhiteSpace(text)) return Task.FromResult<(bool, string?)>((false, "消息不能为空"));
+
+        // ★ 补 new_face_version=1: 新版表情包的短代码(如 [tv_doge])只在声明新版本时被识别;
+        //   不传的话服务端会把 [doge] 之类自动转换, 用户看到的和发出去的不一致。
+        return SendMsgCoreAsync(receiverId, 1,
+            JsonSerializer.Serialize(new { content = text }), extra: ("msg[new_face_version]", "1"));
+    }
+
+    /// <summary>
+    /// 发送图片私信。
+    /// 接口要求 content 是 {"url":..., "width":..., "height":...} 的 JSON 字符串,
+    /// 且 url **必须**是 B 站图床地址(第三方图床会回 21037)。
+    /// </summary>
+    public Task<(bool ok, string? err)> SendMsgImageAsync(
+        long receiverId, string url, int width, int height)
+    {
+        if (receiverId <= 0) return Task.FromResult<(bool, string?)>((false, "缺少接收者"));
+        if (string.IsNullOrWhiteSpace(url)) return Task.FromResult<(bool, string?)>((false, "图片地址为空"));
+
+        var content = JsonSerializer.Serialize(new
+        {
+            url,
+            width = width > 0 ? width : 0,
+            height = height > 0 ? height : 0,
+            imageType = ImageTypeOf(url),
+            original = 1
+        });
+        return SendMsgCoreAsync(receiverId, 2, content);
+    }
+
+    /// <summary>从图片地址推断 imageType(接口不强制, 但带上更贴近官方客户端)</summary>
+    private static string ImageTypeOf(string url)
+    {
+        var path = url;
+        var q = path.IndexOf('?', StringComparison.Ordinal);
+        if (q >= 0) path = path[..q];
+        if (path.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) return "png";
+        if (path.EndsWith(".gif", StringComparison.OrdinalIgnoreCase)) return "gif";
+        if (path.EndsWith(".webp", StringComparison.OrdinalIgnoreCase)) return "webp";
+        return "jpeg";
+    }
+
+    /// <summary>
+    /// 文字/图片共用的发送核心。
+    ///
+    /// ★ 抽出来的理由: 两者的参数只有 msg_type 与 content 不同, 其余(Cookie / csrf /
+    ///   dev_id / 时间戳 / Referer)必须逐字一致 —— 各写一份迟早有一处漏掉 csrf 或 dev_id,
+    ///   表现是"文字能发、图片报 -400", 很难往参数差异上想。
+    /// </summary>
+    private async Task<(bool ok, string? err)> SendMsgCoreAsync(
+        long receiverId, int msgType, string content, (string Key, string Value)? extra = null)
+    {
         if (!SessionManager.Instance.HasLogin) return (false, "私信需要登录");
 
         var me = ParseMid();
         if (me <= 0) return (false, "无法获取自己的 UID");
 
         var ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        return await PostFormAsync(
-            "https://api.vc.bilibili.com/web_im/v1/web_im/send_msg",
-            new Dictionary<string, string>
+        var ps = new Dictionary<string, string>
+        {
+            ["msg[sender_uid]"] = me.ToString(),
+            ["msg[receiver_id]"] = receiverId.ToString(),
+            ["msg[receiver_type]"] = "1",   // 1 = 用户
+            ["msg[msg_type]"] = msgType.ToString(),
+            ["msg[msg_status]"] = "0",
+            ["msg[content]"] = content,
+            ["msg[timestamp]"] = ts,
+            ["msg[dev_id]"] = Guid.NewGuid().ToString("N").ToUpperInvariant(),
+            // 官方文档写的是 csrf_token, 但别的实现里也用 csrf; 两个都带上最稳
+            ["csrf_token"] = SessionManager.Instance.Current.BiliJct ?? "",
+            ["build"] = "0",
+            ["mobi_app"] = "web"
+        };
+        if (extra is { } ex) ps[ex.Key] = ex.Value;
+
+        var (code, err) = await PostFormCodeAsync(
+            "https://api.vc.bilibili.com/web_im/v1/web_im/send_msg", ps, referer: MsgReferer);
+
+        return code == 0 ? (true, null) : (false, FriendlySendError(code, err));
+    }
+
+    /// <summary>
+    /// 把发送接口的错误码翻成人话。
+    ///
+    /// ★ 必须按**错误码**判断, 不能按 message 字符串: PostFormCodeAsync 会用服务端的
+    ///   message 覆盖掉 "code NNNNN", 而同一个码的 message 文案会随服务端版本变
+    ///   (有时是中文, 有时只是 "请求错误") —— 按字符串匹配迟早全部失效。
+    /// </summary>
+    private static string? FriendlySendError(int code, string? err) => code switch
+    {
+        21020 => "发送太快了, 请稍后再发",
+        21047 => "对方主动回复或关注你前, 最多发送 1 条消息",
+        21015 => "只有绑定手机号的账号才能发送消息",
+        21037 => "图片格式不合法, 请换一张试试",
+        21007 => "消息过长, 无法发送",
+        21026 => "不能给自己发送消息",
+        21028 => "系统升级中, 暂时无法发送",
+        21035 => "这类消息暂时无法发送",
+        25003 => "因对方隐私设置, 暂时无法发送消息",
+        25005 => "你已拉黑对方, 请先移出黑名单",
+        -101 => "登录状态已失效, 请重新登录",
+        _ => err ?? $"发送失败 (code {code})"
+    };
+
+    /// <summary>
+    /// 上传一张图片到 B 站图床, 返回可直接发私信的地址与尺寸。
+    ///
+    /// ★ 为什么走"动态图片"这条通道: 私信没有公开的独立上传接口, 但私信接口只校验
+    ///   "是不是 B 站图床的地址", 不校验来源通道。`x/dynamic/feed/draw/upload_bfs`
+    ///   是最稳的一条(带 csrf、返回宽高), 失败时退回老的 drawImage/upload。
+    /// ★ 超时单独放宽到 60 秒: 主 HttpClient 是 15 秒, 那是给 JSON 接口定的;
+    ///   一张 5MB 的图在慢网上传不完, 会表现为"选了图没反应"。
+    /// </summary>
+    public async Task<(bool ok, string? err, string url, int width, int height)> UploadMsgImageAsync(
+        string filePath)
+    {
+        if (!SessionManager.Instance.HasLogin) return (false, "上传图片需要先登录", "", 0, 0);
+        if (string.IsNullOrEmpty(filePath) || !System.IO.File.Exists(filePath))
+            return (false, "找不到这个文件", "", 0, 0);
+
+        byte[] bytes;
+        try { bytes = await System.IO.File.ReadAllBytesAsync(filePath); }
+        catch (Exception ex) { return (false, "读取图片失败: " + ex.Message, "", 0, 0); }
+
+        if (bytes.Length == 0) return (false, "图片是空文件", "", 0, 0);
+        // 接口上限 20MB; 再大基本也传不上去, 提前拦下省一次等待
+        if (bytes.Length > 20 * 1024 * 1024) return (false, "图片太大了(上限 20MB)", "", 0, 0);
+
+        var fileName = System.IO.Path.GetFileName(filePath);
+        var (ok, err, url, w, h) = await UploadImageCoreAsync(
+            "https://api.bilibili.com/x/dynamic/feed/draw/upload_bfs", bytes, fileName);
+        if (ok) return (true, null, url, w, h);
+
+        // 主通道失败再试老通道(部分账号在灰度里只放行其中一个)
+        var (ok2, err2, url2, w2, h2) = await UploadImageCoreAsync(
+            "https://api.vc.bilibili.com/api/v1/drawImage/upload", bytes, fileName);
+        if (ok2) return (true, null, url2, w2, h2);
+
+        return (false, err ?? err2 ?? "图片上传失败", "", 0, 0);
+    }
+
+    /// <summary>真正的 multipart 上传(两个通道参数名不同, 一起带上)</summary>
+    private async Task<(bool ok, string? err, string url, int width, int height)> UploadImageCoreAsync(
+        string endpoint, byte[] bytes, string fileName)
+    {
+        try
+        {
+            var csrf = SessionManager.Instance.Current.BiliJct ?? "";
+            if (csrf.Length == 0) return (false, "未登录", "", 0, 0);
+
+            using var form = new System.Net.Http.MultipartFormDataContent();
+            var fileContent = new System.Net.Http.ByteArrayContent(bytes);
+            fileContent.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue(GuessMime(fileName));
+            // 两个通道的字段名都叫 file_up; 另外补 category/biz 以兼容两种实现
+            form.Add(fileContent, "file_up", fileName);
+            form.Add(new System.Net.Http.StringContent("daily"), "category");
+            form.Add(new System.Net.Http.StringContent("new_dyn"), "biz");
+            form.Add(new System.Net.Http.StringContent(csrf), "csrf");
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, endpoint) { Content = form };
+            req.Headers.TryAddWithoutValidation("Cookie",
+                AppendFingerprint(SessionManager.Instance.BuildCookieHeader()));
+            req.Headers.TryAddWithoutValidation("Referer", MsgReferer);
+            req.Headers.TryAddWithoutValidation("Origin", "https://message.bilibili.com");
+
+            // ★ 独立超时: 上传比 JSON 接口慢得多, 用主 _http 的 15 秒会中途掐断
+            using var uploadHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            uploadHttp.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", Ua);
+            using var resp = await uploadHttp.SendAsync(req);
+            var text = await resp.Content.ReadAsStringAsync();
+
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            var code = root.TryGetProperty("code", out var c) ? c.GetInt32() : -999;
+            if (code != 0)
             {
-                ["msg[sender_uid]"] = me.ToString(),
-                ["msg[receiver_id]"] = receiverId.ToString(),
-                ["msg[receiver_type]"] = "1",   // 1 = 用户
-                ["msg[msg_type]"] = "1",        // 1 = 文字
-                ["msg[msg_status]"] = "0",
-                ["msg[content]"] = JsonSerializer.Serialize(new { content = text }),
-                ["msg[timestamp]"] = ts,
-                ["msg[dev_id]"] = Guid.NewGuid().ToString("N").ToUpperInvariant(),
-                // 官方文档写的是 csrf_token, 但别的实现里也用 csrf; 两个都带上最稳
-                ["csrf_token"] = SessionManager.Instance.Current.BiliJct ?? "",
-                ["build"] = "0",
-                ["mobi_app"] = "web"
-            },
-            referer: MsgReferer);
+                var msg = root.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String
+                    ? m.GetString() : null;
+                return (false, msg ?? $"上传失败 (code {code})", "", 0, 0);
+            }
+            if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+                return (false, "上传返回为空", "", 0, 0);
+
+            var url = UrlUtil.Normalize(GetStr(data, "image_url"));
+            if (url.Length == 0) return (false, "上传未返回图片地址", "", 0, 0);
+
+            return (true, null, url, GetInt(data, "image_width"), GetInt(data, "image_height"));
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, "", 0, 0);
+        }
+    }
+
+    /// <summary>按扩展名猜 MIME(只覆盖私信能发的几种)</summary>
+    private static string GuessMime(string fileName)
+    {
+        var ext = System.IO.Path.GetExtension(fileName).ToLowerInvariant();
+        return ext switch
+        {
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".bmp" => "image/bmp",
+            _ => "image/jpeg"
+        };
     }
 
     /// <summary>把某个会话标记为已读(失败无所谓, 只是未读数不准)</summary>
@@ -284,9 +520,47 @@ public partial class ApiClient
             catch { return ""; }
         }
         if (lastMsg.ValueKind != JsonValueKind.Object) return "";
+        var msgType = GetInt(lastMsg, "msg_type");
+        if (msgType == 2) return "[图片]";
+        if (msgType == 6) return "[表情]";
         var text = DecodeMsgContent(GetStr(lastMsg, "content"));
         if (text.Length > 0) return text;
-        return GetInt(lastMsg, "msg_type") == 2 ? "[图片]" : "";
+        return "";
+    }
+
+    /// <summary>
+    /// msg_type=18 系统提示: content 是**序列化后的 JSON 数组**,
+    /// 每项形如 {"text":"对方主动回复或关注你前，最多发送1条消息", "color_day":"#9499A0", ...}。
+    /// 这些提示是 B 站自己的规则说明, 必须显示(否则用户不知道自己为什么发不出去)。
+    /// </summary>
+    private static string ExtractSystemTip(string contentJson)
+    {
+        if (string.IsNullOrEmpty(contentJson)) return "";
+        try
+        {
+            using var doc = JsonDocument.Parse(contentJson);
+            var root = doc.RootElement;
+
+            // content 本身是 {"content":"[{...}]"} 这一层包着的情况也见过
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("content", out var inner) &&
+                inner.ValueKind == JsonValueKind.String)
+            {
+                return ExtractSystemTip(inner.GetString() ?? "");
+            }
+
+            if (root.ValueKind != JsonValueKind.Array) return "";
+
+            var parts = new List<string>();
+            foreach (var e in root.EnumerateArray())
+            {
+                if (e.ValueKind != JsonValueKind.Object) continue;
+                var t = GetStr(e, "text");
+                if (t.Length > 0) parts.Add(t);
+            }
+            return string.Join("\n", parts);
+        }
+        catch { return ""; }
     }
 
     /// <summary>
@@ -314,8 +588,10 @@ public partial class ApiClient
         catch { return contentJson; }
     }
 
+    /// <summary>图片/表情消息的 content: {"url":"https://...", "width":..., "height":...}</summary>
     private static string ExtractImageUrl(string contentJson)
     {
+        if (string.IsNullOrEmpty(contentJson)) return "";
         try
         {
             using var doc = JsonDocument.Parse(contentJson);
