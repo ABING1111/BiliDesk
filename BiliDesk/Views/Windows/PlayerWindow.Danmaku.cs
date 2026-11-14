@@ -41,7 +41,8 @@ public partial class PlayerWindow : FluentWindow
     {
         var pct = (int)e.NewValue;
         _danmakuAreaRatio = pct / 100.0;
-        if (DanmakuAreaText != null) DanmakuAreaText.Text = pct + "%";
+        // 占比不再在控制栏里摆小字(2026-11-14 图标化), 改成写进按钮的 ToolTip
+        if (BtnDanmakuArea != null) BtnDanmakuArea.ToolTip = $"弹幕显示区域 {pct}%";
         if (DanmakuAreaValue != null) DanmakuAreaValue.Text = pct + "%";
         // ★ 初始化/程序同步期间只刷文字, 不落库 —— 否则 XAML 里的初始 Value=25
         //   会在 InitializeComponent() 时把用户存的值覆写成默认(见 _syncingDanmakuLook 的说明)。
@@ -552,6 +553,16 @@ public partial class PlayerWindow : FluentWindow
         { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop };
         ControlBar.BeginAnimation(OpacityProperty, fade);
         ControlBar.Opacity = 0;
+
+        // 2026-11-14(重绘): 淡出的同时向下沉 8px —— 像"滑走"而不是原地变透明, 观感更连贯。
+        // ★ FillBehavior.Stop: 动画一结束 Y 就回到基准值 0 —— 此刻已经全透明, 看不出跳回。
+        if (ControlBarShift != null)
+        {
+            var down = new System.Windows.Media.Animation.DoubleAnimation(0, 8,
+                TimeSpan.FromMilliseconds(180))
+            { FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop };
+            ControlBarShift.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, down);
+        }
     }
 
     private void ShowControls()
@@ -570,6 +581,21 @@ public partial class PlayerWindow : FluentWindow
         ControlBar.BeginAnimation(OpacityProperty, null);
         ControlBar.Opacity = 1;
         ControlBar.IsHitTestVisible = true;
+
+        // 从下方 8px 处滑回原位(与 HideControls 的下沉对称)
+        if (ControlBarShift != null)
+        {
+            ControlBarShift.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, null);
+            ControlBarShift.Y = 0;
+            var up = new System.Windows.Media.Animation.DoubleAnimation(8, 0,
+                TimeSpan.FromMilliseconds(180))
+            {
+                FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop,
+                EasingFunction = new System.Windows.Media.Animation.CubicEase
+                { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
+            };
+            ControlBarShift.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, up);
+        }
     }
 
     // ------------------------------------------------------------ 缓存当前视频
@@ -1522,11 +1548,21 @@ public partial class PlayerWindow : FluentWindow
         BtnDanmaku.IsEnabled = usable;
         BtnDanmaku.Opacity = usable ? 1.0 : 0.4;
 
-        DanmakuBtnText.Text = _danmakuOn ? "弹幕开" : "弹幕关";
-        // 局部值直接给刷子, 不引资源: 控制栏压在画面上, 颜色要跟主题无关(永远是白系)
-        DanmakuBtnText.Foreground = new SolidColorBrush(_danmakuOn
+        // ★ 2026-11-14 控制栏图标化: 不再换文案(图标按钮里没有文字位), 状态由**颜色 + 斜线**表达
+        //   —— 开 = 接近纯白且无斜线, 关 = 压暗到 0x99 白并划一道左上→右下的斜线。
+        //   只压暗颜色在深色玻璃上不够显眼, 那道斜线才是"关了"的主信号(与静音图标同一套语义)。
+        //   局部值直接给刷子, 不引资源: 控制栏压在画面上, 颜色要跟主题无关(永远是白系)
+        var iconBrush = new SolidColorBrush(_danmakuOn
             ? Color.FromArgb(0xF2, 0xFF, 0xFF, 0xFF)   // 开: 接近纯白
             : Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF)); // 关: 压暗, 一眼看出状态
+        DanmakuBtnText.Foreground = iconBrush;
+        if (DanmakuOffSlash != null)
+        {
+            // 斜线沿用图标同一支刷子: 两处颜色永远一致, 不会出现"图标灰了线还是白的"
+            DanmakuOffSlash.Stroke = iconBrush;
+            DanmakuOffSlash.Visibility = _danmakuOn ? Visibility.Collapsed : Visibility.Visible;
+        }
+        BtnDanmaku.ToolTip = _danmakuOn ? "弹幕: 开 (D)" : "弹幕: 关 (D)";
     }
 
     /// <summary>全局弹幕设置变化(来自设置页): 同步播放器运行时状态</summary>
@@ -1540,7 +1576,7 @@ public partial class PlayerWindow : FluentWindow
         UpdateDanmakuButton();
         _danmakuAreaRatio = Svc.Settings.DanmakuAreaPercent / 100.0;
         if (DanmakuAreaSlider != null) DanmakuAreaSlider.Value = Svc.Settings.DanmakuAreaPercent;
-        if (DanmakuAreaText != null) DanmakuAreaText.Text = Svc.Settings.DanmakuAreaPercent + "%";
+        if (BtnDanmakuArea != null) BtnDanmakuArea.ToolTip = $"弹幕显示区域 {Svc.Settings.DanmakuAreaPercent}%";
         if (DanmakuAreaValue != null) DanmakuAreaValue.Text = Svc.Settings.DanmakuAreaPercent + "%";
 
         // 外观三项(不透明度/字号/速度)。每项的重算代价不同, 由 ApplyDanmakuLook 内部判断,

@@ -725,12 +725,15 @@ public partial class PlayerWindow : FluentWindow
     /// 视频区窄于这个宽度时, 控制栏先收起"弹幕区域"和音量滑杆这两个次要项。
     ///
     /// ★ 背景(issue #31): 竖屏副屏 864 DIP, 右栏占 400 后视频只剩 464 DIP;
-    ///   而操作行的固定项(播放/时间/音量/倍速/清晰度/弹幕/全屏)加起来约 530 DIP,
-    ///   不收起就会挤成一团甚至被裁掉。只收这两项后约 390 DIP, 常规窄窗仍可用。
+    ///   操作行放不下就会挤成一团甚至被裁掉。
+    /// ★ 2026-11-14 图标化重绘后实测: 固定项(播放/时间/音量图标+滑杆/弹幕/弹幕区域/
+    ///   倍速/清晰度/全屏)约 437 DIP, 加上面板左右内边距与 14px 外边距, 整条要
+    ///   约 465 DIP 才排得开 —— 阈值取 520, 留出字体差异的余量。
+    ///   收起这两项后约 340 DIP, 常规窄窗仍可用。
     /// ★ 用 VideoAreaRoot 的实际宽度判断而不是窗口宽度: 信息栏一收/一展、
     ///   窗口一拖, 视频列宽度都会变, 这个信号最直接。
     /// </summary>
-    private const double CompactControlBarWidth = 560;
+    private const double CompactControlBarWidth = 520;
 
     private void OnVideoAreaSizeChanged(object sender, SizeChangedEventArgs e)
     {
@@ -738,6 +741,13 @@ public partial class PlayerWindow : FluentWindow
         var compact = e.NewSize.Width > 0 && e.NewSize.Width < CompactControlBarWidth;
         BtnDanmakuArea.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         VolumeSlider.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        // 窄窗收起滑杆时, 悬停展开出来的那截宿主宽度也要一起归零 ——
+        // 否则滑杆没了, 却留着一块 81px 的空白把后面的按钮顶开。
+        if (compact && VolumeSliderHost != null)
+        {
+            VolumeSliderHost.BeginAnimation(FrameworkElement.WidthProperty, null);
+            VolumeSliderHost.Width = 0;
+        }
     }
 
     /// <summary>

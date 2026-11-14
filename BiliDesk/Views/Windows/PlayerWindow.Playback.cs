@@ -845,8 +845,8 @@ public partial class PlayerWindow : FluentWindow
             // ---- 卡顿自愈(2026-11-14, issue #81) ----
             // 位置冻结得够久就重建一次 input —— 这正是用户手动"切一下听视频"做的事。
             // 决策(阈值/退避/上限)全在 StallRecoveryPolicy, 这里只负责执行动作。
-            // ★ 正在换清晰度/音质时不算"可救": 那条路自己会重建 input, 两边一起动手会互相打断。
-            var recoverable = !_stallRecoveryInFlight && !_switchingQuality && !_switchingAudio;
+            // ★ 正在换清晰度时不算"可救": 那条路自己会重建 input, 两边一起动手会互相打断。
+            var recoverable = !_stallRecoveryInFlight && !_switchingQuality;
             var action = _stallPolicy.Tick(Environment.TickCount64, frozen: true, recoverable: recoverable);
             HandleStallAction(action, now);
             return;

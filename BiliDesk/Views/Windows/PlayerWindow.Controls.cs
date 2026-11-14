@@ -177,6 +177,73 @@ public partial class PlayerWindow : FluentWindow
         if (!_isSeeking) HideProgressDragHint();
     }
 
+    // ------------------------------------------------------------ 音量条"靠近才展开"(2026-11-14)
+
+    /// <summary>
+    /// 音量滑杆展开后的宿主宽度 = 滑杆 74 + 左侧 7px 间隙。
+    /// ★ 必须与 XAML 里 Slider 的 Width=74 / Margin="7,0,0,0" 对齐:
+    ///   宿主比内容窄会裁掉滑块右端, 宽了则收起/展开之间多一截空白。
+    /// </summary>
+    private const double VolumeExpandedWidth = 81;
+
+    private void OnVolumeAreaMouseEnter(object sender, MouseEventArgs e)
+    {
+        if (_closing || VolumeSliderHost == null || VolumeSlider == null) return;
+        // 窄窗(OnVideoAreaSizeChanged)已经把滑杆收起来了: 这时再展开只会撑出一块空白
+        if (VolumeSlider.Visibility != Visibility.Visible) return;
+        AnimateVolumeHost(VolumeExpandedWidth);
+    }
+
+    private void OnVolumeAreaMouseLeave(object sender, MouseEventArgs e)
+    {
+        if (_closing || VolumeSliderHost == null) return;
+        // ★ 拖动中不收起: 鼠标拖到轨道边缘稍微出界一下, 滑杆就缩回去的话,
+        //   手指还在按着却已经没有可拖的东西了(捕获还在 Slider 上, 但视觉上整个消失)。
+        if (VolumeSlider != null && VolumeSlider.IsMouseCaptureWithin) return;
+        AnimateVolumeHost(0);
+    }
+
+    /// <summary>
+    /// 吃掉音量热区上的左键。
+    ///
+    /// ★ 热区收起时比图标宽(72px, 见 XAML), 那一带是透明的; 不拦的话点击会一路冒泡到
+    ///   VideoAreaRoot, 被当成"单击视频"→ 暂停/播放。在空白处想点一下却把视频暂停了,
+    ///   是很典型的"莫名其妙"反馈。滑块自己的点击由 Slider 内部处理并标记 Handled,
+    ///   根本走不到这里, 所以不会误伤拖动。
+    /// </summary>
+    private void OnVolumeAreaMouseDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
+
+    /// <summary>
+    /// 拖完音量再判一次要不要收起。
+    ///
+    /// ★ 为什么需要: 鼠标是按着拖出去的(松手在热区外), MouseLeave 那一刻还握着鼠标捕获,
+    ///   上面故意没收起 —— 松手之后不会再有第二次 MouseLeave, 滑杆就永远展着了。
+    ///   这里用 DragCompleted 收尾: 指针确实不在热区里才收。
+    /// </summary>
+    private void OnVolumeDragCompleted(object sender, RoutedEventArgs e)
+    {
+        if (_closing || VolumeHoverArea == null) return;
+        if (!VolumeHoverArea.IsMouseOver) AnimateVolumeHost(0);
+    }
+
+    /// <summary>
+    /// 展开/收起音量滑杆宿主。只动这一个 74px 元素的宽度, 重排代价可忽略;
+    /// 宿主 Border 的 ClipToBounds 会把 0 宽时的滑杆**连命中测试一起裁掉**
+    /// (WPF 的裁剪同时作用于渲染与命中测试), 所以收起态不会留下一块点得到的隐形条。
+    /// </summary>
+    private void AnimateVolumeHost(double to)
+    {
+        var anim = new System.Windows.Media.Animation.DoubleAnimation(to,
+            TimeSpan.FromMilliseconds(150))
+        {
+            EasingFunction = new System.Windows.Media.Animation.CubicEase
+            { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
+            // HoldEnd: 动画结束后保持终值。用 Stop 的话会弹回基准值 0, 展开态会"闪一下"
+            FillBehavior = System.Windows.Media.Animation.FillBehavior.HoldEnd
+        };
+        VolumeSliderHost.BeginAnimation(FrameworkElement.WidthProperty, anim);
+    }
+
     private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_mp == null) return;
@@ -660,7 +727,7 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 弹层入口按钮的统一开关入口(倍速/清晰度/音质/弹幕区域/分P 共用)。
+    /// 弹层入口按钮的统一开关入口(倍速/清晰度/弹幕区域/分P 共用)。
     /// <paramref name="onOpen"/> 只在判定为"展开"时执行(灌列表等); 收起时不动内容。
     /// </summary>
     private void TogglePlayerPopup(Popup popup, Action? onOpen = null)
@@ -764,7 +831,6 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool AnyPlayerPopupOpen
         => (QualityPopup != null && QualityPopup.IsOpen)
-        || (AudioPopup != null && AudioPopup.IsOpen)
         || (DanmakuAreaPopup != null && DanmakuAreaPopup.IsOpen)
         || (SpeedPopup != null && SpeedPopup.IsOpen);
 
@@ -807,193 +873,11 @@ public partial class PlayerWindow : FluentWindow
         _ = SwitchQualityAsync(qn);
     }
 
-    // ------------------------------------------------------------ 音质(2026-11-06)
+    // ------------------------------------------------------------ 音质
 
-    /// <summary>
-    /// 填充音质弹层: 用户偏好档位在前, 后面是本次视频**实际可选**的音轨。
-    ///
-    /// ★ 为什么"可选项"要和"实际音轨"取交集: B 站把 flac/dolby 节点放在响应里,
-    ///   但普通视频没有这两个节点 —— 直接把全部档位列出来, 用户点"无损"会发现没反应,
-    ///   像按钮坏了。这里只列真实存在的档, 并在提示行里说明"这条视频没有无损音轨"。
-    /// </summary>
-    private void FillAudioMenu(int actualAudioId)
-    {
-        if (AudioList == null) return;
-        _fillingAudioMenu = true;
-        try
-        {
-            AudioList.Items.Clear();
-            // 第一项永远是「自动」: 它是策略而不是某个具体码率, 任何视频都可用。
-            AudioList.Items.Add(new ListBoxItem
-            {
-                Tag = (int)AudioTier.Auto,
-                Content = AudioPreference.LabelOf(AudioTier.Auto)
-            });
-            foreach (var id in _audioIds)
-            {
-                var tier = AudioPreference.TierOfId(id);
-                if (tier == AudioTier.Auto) continue;
-                AudioList.Items.Add(new ListBoxItem
-                {
-                    Tag = (int)tier,
-                    Content = AudioPreference.LabelOf(tier)
-                });
-            }
-
-            var wanted = AudioPreference.Normalize(Svc.Settings.PreferredAudioTier);
-            if (AudioText != null) AudioText.Text = AudioPreference.ShortLabelOf(wanted);
-
-            // 高亮: 优先"用户指定档", 其次"实际在播的档"
-            var highlight = (int)wanted;
-            if (wanted == AudioTier.Auto && actualAudioId > 0)
-            {
-                // 自动档时按钮显示"自动", 但列表里把实际选中的那一档也标出来会更清楚 ——
-                // 这里仍高亮「自动」, 因为用户的意图就是"让你替我挑"。
-                highlight = (int)AudioTier.Auto;
-            }
-            for (var i = 0; i < AudioList.Items.Count; i++)
-            {
-                if (AudioList.Items[i] is ListBoxItem li && li.Tag is int t && t == highlight)
-                {
-                    AudioList.SelectedIndex = i;
-                    break;
-                }
-            }
-
-            if (AudioHintText != null)
-            {
-                if (wanted == AudioTier.Auto)
-                {
-                    AudioHintText.Text = actualAudioId > 0
-                        ? $"当前音轨: {AudioPreference.LabelOf(AudioPreference.TierOfId(actualAudioId))}"
-                        : "这条视频没有独立的音轨信息(单流或直播)";
-                }
-                else if (actualAudioId > 0 && AudioPreference.TierOfId(actualAudioId) == wanted)
-                {
-                    AudioHintText.Text = "已使用所选音质";
-                }
-                else if (_audioIds.Count == 0)
-                {
-                    AudioHintText.Text = "这条视频没有可选音轨(单流或直播), 音质由视频本身决定";
-                }
-                else
-                {
-                    AudioHintText.Text = $"这条视频没有{AudioPreference.LabelOf(wanted)}音轨, " +
-                                        $"已使用 {AudioPreference.LabelOf(AudioPreference.TierOfId(actualAudioId))}";
-                }
-            }
-        }
-        finally
-        {
-            _fillingAudioMenu = false;
-        }
-    }
-
-    private void OnAudioClick(object sender, RoutedEventArgs e)
-    {
-        // 点一下展开, 再点一下收起(见 HookPopupToggle): 只有展开时才灌列表
-        TogglePlayerPopup(AudioPopup, () => FillAudioMenu(_currentAudioId));
-    }
-
-    private void OnAudioSelected(object sender, SelectionChangedEventArgs e)
-    {
-        if (_fillingAudioMenu || AudioPopup == null) return;
-        if (AudioList.SelectedItem is not ListBoxItem li || li.Tag is not int tierValue) return;
-        AudioPopup.IsOpen = false;
-        var tier = AudioPreference.Normalize((AudioTier)tierValue);
-        if (tier == Svc.Settings.PreferredAudioTier) return;
-        Svc.Settings.PreferredAudioTier = tier;
-        Svc.Settings.Save();
-        if (AudioText != null) AudioText.Text = AudioPreference.ShortLabelOf(tier);
-        // 直播/本地文件没有可选音轨: 只记偏好, 不重新起播(重播也没用, 音轨不由我们选)。
-        if (_isLive || _isLocalPlayback || _currentCid <= 0)
-        {
-            Svc.Toast.Show("已记住音质偏好, 下次打开视频生效");
-            return;
-        }
-        _ = SwitchAudioAsync(tier);
-    }
-
-    /// <summary>
-    /// 切换音质: 重新取一次 playurl(带上新的音轨偏好), 起播后恢复到当前进度。
-    ///
-    /// ★ 必须重取 playurl 而不是"本地换一条 input-slave": LibVLC 3 的 Media 是不可变的,
-    ///   音轨地址绑死在 Media 上; 想换只能重建 Media —— 那就是重新起播, 和换清晰度同一套。
-    /// ★ 这里不碰 `_qualities`: 音质和画质是两个独立维度, 换音轨不该让画质菜单跟着变。
-    /// </summary>
-    private async Task SwitchAudioAsync(AudioTier tier)
-    {
-        if (_closing || _switchingAudio || _switchingQuality || _currentCid <= 0) return;
-        _switchingAudio = true;
-        try
-        {
-            var resumeMs = _mp.Time;
-            ShowLoading("正在切换音质…");
-            CancelRemuxPrefetch();
-
-            var (playOk, playErr, main, backups, _, _, actualQn, audioUrl, remux,
-                 _, _, audioIds, actualAudioId) =
-                await Svc.Api.GetPlayUrlAsync(_currentBvid, _currentCid, _currentQn, tier);
-            if (_closing) return;
-            if (!playOk && string.IsNullOrEmpty(main))
-            {
-                Svc.Toast.Show(playErr ?? "切换音质失败");
-                HideLoading();
-                return;
-            }
-
-            _audioIds.Clear();
-            _audioIds.AddRange(audioIds);
-            _currentAudioId = actualAudioId;
-            // 按钮文案交给 FillAudioMenu 统一决定(它会区分"自动策略"与"实际在播的那一档"),
-            // 这里不再覆盖 —— 两处各写一遍必然漂移。
-            FillAudioMenu(actualAudioId);
-
-            var local = ShortVideoCache.TryGet(_currentBvid, actualQn);
-            if (local == null && ShortVideoCache.WorthCaching(remux))
-                local = await PrepareShortVideoAsync(remux!, actualQn);
-            if (_closing) return;
-
-            var url = local ?? main;
-            if (string.IsNullOrEmpty(url) && backups.Count > 0) url = backups[0];
-            if (string.IsNullOrEmpty(url))
-            {
-                Svc.Toast.Show("切换音质失败: 没有可用播放地址");
-                HideLoading();
-                return;
-            }
-
-            _resumeAfterSwitchMs = resumeMs > 2000 ? resumeMs : 0;
-            _resumeByStartTime = false;
-            _eofResumeCount = 0;
-            _lastEofResumeMs = 0;
-            _lastPlayUrl = url;
-            _lastAudioUrl = local != null ? null : audioUrl;
-            _listenAudioUrl = audioUrl;
-            // 地址保鲜信息随新地址一起更新(否则会拿上一条地址的 deadline 做判断)
-            RememberPlayUrlFreshness(url, backups);
-            try { _mp.Stop(); } catch { }
-            if (_isListenMode && !string.IsNullOrEmpty(_listenAudioUrl))
-                PlayMedia(BuildMedia(_listenAudioUrl!, null));
-            else
-                PlayMedia(BuildMedia(url!, _lastAudioUrl));
-            UpdatePlayButton();
-
-            if (actualAudioId > 0 && AudioPreference.TierOfId(actualAudioId) != tier && tier != AudioTier.Auto)
-                Svc.Toast.Show($"这条视频没有{AudioPreference.LabelOf(tier)}音轨, 已使用 " +
-                               AudioPreference.LabelOf(AudioPreference.TierOfId(actualAudioId)));
-        }
-        catch (Exception ex)
-        {
-            if (_closing) return;
-            Svc.Toast.Show("切换音质失败: " + ex.Message);
-            HideLoading();
-        }
-        finally
-        {
-            _switchingAudio = false;
-        }
-    }
+    // ★ 2026-11-14 用户要求: 播放器控制栏不再提供音质切换, 音轨偏好统一在「设置 → 播放」
+    //   里选(设置页本来就有这一项, 改完下次取流生效)。原来那套「按钮 + 弹层 + 重新取流」
+    //   的代码一并删掉了, 免得留下"点了没反应"或两个入口各说各话。
 
     /// <summary>切换清晰度: 记住播放进度, 换流后自动恢复</summary>
     private async Task SwitchQualityAsync(int qn)
@@ -1009,7 +893,7 @@ public partial class PlayerWindow : FluentWindow
             CancelRemuxPrefetch();
 
             var (_, playErr, main, backups, _, qualities, actualQn, audioUrl, remux,
-                 _, _, audioIds, actualAudioId) =
+                 _, _, _, _) =
                 await Svc.Api.GetPlayUrlAsync(_currentBvid, _currentCid, qn,
                     Svc.Settings.PreferredAudioTier);
             if (_closing) return;
@@ -1033,11 +917,6 @@ public partial class PlayerWindow : FluentWindow
             _qualities.Clear();
             _qualities.AddRange(qualities);
             FillQualityMenu(actualQn > 0 ? actualQn : qn);
-            // 切清晰度会重新取流, 音轨也可能跟着变(不同清晰度集合里音轨不同) —— 一起刷新。
-            _audioIds.Clear();
-            _audioIds.AddRange(audioIds);
-            _currentAudioId = actualAudioId;
-            FillAudioMenu(actualAudioId);
 
             // 起播后(Playing 事件)自动恢复到切换前进度
             _resumeAfterSwitchMs = resumeMs > 2000 ? resumeMs : 0;

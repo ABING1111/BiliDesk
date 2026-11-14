@@ -199,6 +199,48 @@ public partial class PlayerWindow : FluentWindow
         // 先挂第一批(与旧行为一致: 打开播放器先看到 8 条, 不一下铺满 40 条)
         _relatedShown = Math.Min(RelatedPageSize, items.Count);
         RelatedList.ItemsSource = items.GetRange(0, _relatedShown);
+
+        // 相关接口(archive/related)与热门同构, 字段表里没有 is_followed:
+        // 卡片先出来, 再异步补「已关注」标签(与搜索页同一套做法)。
+        MarkRelatedFollowedAsync(items, gen).Forget();
+    }
+
+    /// <summary>
+    /// 相关视频展示后, 异步给卡片补「已关注」标签(2026-11-14)。
+    ///
+    /// 相关接口不下发 is_followed, 只能拿本批作者的 mid 去
+    /// <see cref="ApiClient.GetFollowedMidsAsync"/> 批量问一次(一次最多 40 个,
+    /// 而接口正好一次返 40 条)。三条约束与搜索页完全一致:
+    ///   · **不挡列表**: 卡片先出来, 关注状态回来后再改 IsAuthorFollowed ——
+    ///     VideoItem 带 INPC, 标签会自己出现, 不需要重挂 ItemsSource;
+    ///   · **按代次丢弃**: 换片后在飞的这批 mid 已经不属于当前视频, 直接跳过;
+    ///   · **失败静默**: 未登录时这个接口本来就是 -101, 标签只是装饰。
+    ///
+    /// ★ 给**整批 40 条**打标而不是只给首屏 8 条: ShowMoreRelated 后续补的是同一批
+    ///   条目对象, 标签已经在数据上, 滚到第 9 条时不会又变回没有。
+    /// </summary>
+    private async Task MarkRelatedFollowedAsync(IReadOnlyList<VideoItem> items, int gen)
+    {
+        if (_closing || !Svc.Session.HasLogin || items.Count == 0) return;
+
+        var mids = items.Where(i => i.OwnerMid > 0)
+                        .Select(i => i.OwnerMid)
+                        .Distinct()
+                        .ToList();
+        if (mids.Count == 0) return;
+
+        var (ok, _, followed) = await Svc.Api.GetFollowedMidsAsync(mids);
+        if (!ok || followed.Count == 0) return;
+
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            if (_closing || gen != _relatedGen) return;
+            foreach (var item in items)
+            {
+                // 只置 true: 条目初始都是 false, 没有"取消关注"需要同步回去的场景。
+                if (followed.Contains(item.OwnerMid)) item.IsAuthorFollowed = true;
+            }
+        });
     }
 
     /// <summary>
@@ -366,12 +408,6 @@ public partial class PlayerWindow : FluentWindow
             // 否则按钮/弹层里还挂着上一条点播视频的档位。
             _qualities.Clear();
             FillQualityMenu(0);
-            // 直播没有可选音轨: 清掉列表, 按钮写"直播"(与清晰度按钮一致)
-            _audioIds.Clear();
-            _currentAudioId = 0;
-            FillAudioMenu(0);
-            if (AudioText != null) AudioText.Text = "直播";
-            if (AudioHintText != null) AudioHintText.Text = "直播的音质由主播推流决定, 不可切换";
             // 取流成功后会按 g_qn_desc 填入真实档位; 这一句只是"还没拿到时"的占位。
             if (QualityText != null) QualityText.Text = "直播";
             if (CommentHint != null) CommentHint.Text = "直播没有评论区";
@@ -522,11 +558,6 @@ public partial class PlayerWindow : FluentWindow
     private void ResetForNewMedia()
     {
         _indexInLib = 0;
-        // 音质切换闸必须在这里归零: 与 _switchingQuality 不同, SwitchAudioAsync 的 finally
-        // 可能因为换片路径提前 return 而没跑到(它内部有 _closing/gen 判断),
-        // 留着 true 会让新片的音质按钮永远点不动。
-        _switchingAudio = false;
-        _fillingAudioMenu = false;
         // 换片: 音频链路诊断重新记一次(每个片源一条, 见 LogAudioStateOnce)
         _audioStateLogged = false;
         // 「听视频」的音轨地址属于上一条视频 —— 不清的话换成新片时会拿旧音轨去播。
@@ -535,9 +566,6 @@ public partial class PlayerWindow : FluentWindow
         _listenAudioUrl = null;
         _listenResumeMs = 0;
         _listenWaveTick = 0;
-        // 音质: 可选音轨属于上一条视频 —— 不清的话换成新片时弹层还列着上一条的无损档。
-        _audioIds.Clear();
-        _currentAudioId = 0;
         _coverUrl = "";
         // ★ 每个片源开始时都把"要请求的清晰度"快照成设置里的「默认画质」(2026-10-04)。
         //   放在这里而不是只放构造函数里, 是为了让"设置页改完 → 点开下一个视频"立刻生效,
@@ -818,17 +846,10 @@ public partial class PlayerWindow : FluentWindow
         nameof(_lastLaneCalcHeight),
         // 直播聊天列表的"跟随底部"开关: 每次换片源/换直播间都重新开始跟随
         nameof(_liveChatAutoScroll),
-        // 音质(2026-11-06): 可选音轨/当前音轨/切换闸都属于"这一片" ——
-        // 换片后必须重取, 留着上一条视频的会让弹层列着别人家的无损档。
-        nameof(_audioIds), nameof(_currentAudioId),
         // 异步代次(旧请求回来时必须已作废)
         nameof(_remuxGen), nameof(_loadingGen), nameof(_kaomojiIndex),
         // 界面交互态
         nameof(_switchingQuality), nameof(_fillingQualityMenu), nameof(_updatingSlider),
-        // 音质切换的两个 UI 闸(2026-11-06): 与 _switchingQuality/_fillingQualityMenu 同类。
-        // ★ 与 _switchingQuality 略有不同: SwitchAudioAsync 的 finally 可能因换片路径提前
-        //   return 而没跑到, 所以这两个**在 ResetForNewMedia 里显式清零**(不能只靠 finally)。
-        nameof(_switchingAudio), nameof(_fillingAudioMenu),
         nameof(_commentsLoaded), nameof(_postingComment), nameof(_longPressFired),
         // 长按快进的状态与 _longPressFired 同类(都是"这一次手势"的瞬时态): 换片必须复位。
         // ★ _rateBeforeFastForward 也登记在这里 —— 它决定"松手恢复到几倍速",
@@ -1051,12 +1072,6 @@ public partial class PlayerWindow : FluentWindow
             _qualities.Clear();
             FillQualityMenu(0);
             if (QualityText != null) QualityText.Text = "本地";
-            // 本地文件也没有音轨可选(单文件源里音轨已经合好)
-            _audioIds.Clear();
-            _currentAudioId = 0;
-            FillAudioMenu(0);
-            if (AudioText != null) AudioText.Text = "本地";
-            if (AudioHintText != null) AudioHintText.Text = "本地文件的音轨已经合在文件里, 不可切换";
 
             var media = new Media(_libVLC, path, FromType.FromPath);
             if (_closing) { media.Dispose(); return; }
@@ -1180,7 +1195,7 @@ public partial class PlayerWindow : FluentWindow
             SetLoadingText("正在获取播放地址…");
             // 默认请求 1080P(qn=80), B 站会按登录态/大会员返回实际可用的清晰度
             var (playOk, playErr, main, backups, durMs, qualities, actualQn, audioUrl, remux,
-                 lastPlayMs, lastPlayCid, audioIds, actualAudioId) =
+                 lastPlayMs, lastPlayCid, _, _) =
                 await Svc.Api.GetPlayUrlAsync(_currentBvid, _currentCid, _currentQn,
                     Svc.Settings.PreferredAudioTier);
             tPlayUrl = sw.ElapsedMilliseconds;
@@ -1198,11 +1213,8 @@ public partial class PlayerWindow : FluentWindow
             _qualities.Clear();
             _qualities.AddRange(qualities);
             FillQualityMenu(actualQn);
-            // 音质: 记录本次可选音轨与最终选中的档(弹层与按钮文案都靠它)
-            _audioIds.Clear();
-            _audioIds.AddRange(audioIds);
-            _currentAudioId = actualAudioId;
-            FillAudioMenu(actualAudioId);
+            // 音质: 播放器不再提供切换入口(2026-11-14), 音轨偏好只在设置页选;
+            // 取流时仍然把偏好带过去(见 GetPlayUrlAsync 的 PreferredAudioTier 参数)。
 
             // ---- 续播: 本机记录优先, 没有本机记录时用 playurl 返回的 B 站云端进度 ----
             // ★ 进度选择放在"取流成功"之后、起播之前: 这时 durMs 已知道, 可以过滤掉

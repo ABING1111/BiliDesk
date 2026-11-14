@@ -33,7 +33,7 @@ namespace BiliDesk.Views;
 //   分片清单:
 //     .Fields.cs      字段(全部状态)          .Ctor.cs       构造函数
 //     .Loading.cs     播放入口与加载          .Playback.cs   播放控制与 seek
-//     .Controls.cs    气泡/音量/倍速/画质/音质  .Danmaku.cs   弹幕全链路
+//     .Controls.cs    气泡/音量/倍速/画质      .Danmaku.cs   弹幕全链路
 //     .Keyboard.cs    键盘与返回              .Fullscreen.cs 全屏/铺满/窗口记忆
 //     .Actions.cs     三连/关注/收藏          .Listen.cs     听视频
 //     .States.cs      互动状态刷新            .Comments.cs   评论加载与排序
@@ -514,15 +514,6 @@ public partial class PlayerWindow : FluentWindow
 
     // --- 清晰度 ---
     private readonly List<(int qn, string label)> _qualities = new();
-
-    // --- 音质(2026-11-06) ---
-    /// <summary>本次播放可选的音轨 id(从高到低), 音质弹层用它决定哪些档可点。</summary>
-    private readonly List<int> _audioIds = new();
-    /// <summary>当前实际在播的音轨 id(0 = 无独立音轨 / 未知)</summary>
-    private int _currentAudioId;
-    /// <summary>当前音轨对应的音轨地址(切音质时用 resume 逻辑重新起播)</summary>
-    private bool _switchingAudio;
-    private bool _fillingAudioMenu;
 
     /// <summary>
     /// 本次播放**请求**的清晰度(qn)。

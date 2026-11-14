@@ -97,9 +97,13 @@
                                     <Thumb Focusable="False">
                                         <Thumb.Template>
                                             <ControlTemplate TargetType="Thumb">
+                                                <!-- ★ 圆点必须完整落在 11px 的 Thumb 槽里(2026-11-14):
+                                                     原来写了 Margin="-2,0" 让圆点左右各溢出 2px, 音量条满格时
+                                                     右半边正好压出音量宿主的裁剪边界 —— 圆点被切平成一块。
+                                                     去掉负边距后, 圆点两端都完整; 代价只是极值时圆心内缩 5.5px,
+                                                     本来也是标准滑杆的观感。 -->
                                                 <Grid Background="Transparent">
-                                                    <Ellipse Width="11" Height="11" Fill="White"
-                                                            Margin="-2,0" />
+                                                    <Ellipse Width="11" Height="11" Fill="White" />
                                                 </Grid>
                                             </ControlTemplate>
                                         </Thumb.Template>
@@ -107,6 +111,242 @@
                                 </Track.Thumb>
                             </Track>
                         </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ============ 播放器玻璃风资源(2026-11-14 控制栏重绘) ============
+
+             ★ 为什么是"拟态"而不是真模糊: WPF 的 BlurEffect 只能糊自己的内容, 糊不到背后;
+               视频又是 LibVLC 的 HwndHost(原生 HWND), 根本不在 WPF 合成器里 ——
+               浏览器那句 `backdrop-filter: blur(20px)` 在这里没有等价物。
+               所以玻璃感靠三层叠出来: 半透明深底 + 1px 高光边 + 外层高斯模糊的黑色圆角(外发光)。
+
+             ★ 颜色一律写死白系, 不引主题刷子: 这块永远浮在视频上, 浅色主题下
+               跟着主题走就是"深字压亮画面", 直接看不见(项目里踩过多次)。 -->
+
+        <!-- 玻璃面板底色: 上亮下暗, 模拟玻璃受光 -->
+        <LinearGradientBrush x:Key="PlayerGlassPanelBrush" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#A8181A21" Offset="0" />
+            <GradientStop Color="#990B0C10" Offset="1" />
+        </LinearGradientBrush>
+
+        <!-- 玻璃弹层底(倍速/清晰度/弹幕设置共用) -->
+        <Style x:Key="PlayerGlassPopupStyle" TargetType="Border">
+            <Setter Property="Background" Value="#F218191E" />
+            <Setter Property="BorderBrush" Value="#1FFFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="6" />
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Direction="270"
+                                      Opacity="0.45" Color="Black" />
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 弹层条目(倍速/清晰度共用): 原来两个弹层各抄了一遍, 现在只剩这一份 -->
+        <Style x:Key="PlayerPopupItemStyle" TargetType="ListBoxItem">
+            <!-- ★ 绝不能设 Focusable=False: 鼠标按下时 Focus() 失败会短路选中逻辑,
+                 SelectionChanged 永不触发("切换清晰度没反应"就是这么来的)。去焦点框用 FocusVisualStyle -->
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="#F2FFFFFF" />
+            <!-- ★★★ 文字颜色必须靠这里的 ContentTemplate 落到一个**显式 TextBlock** 上(2026-11-14 修
+                 "弹层里全是黑字, 看不见写的是什么"):
+                 代码往列表里塞的是 `new ListBoxItem { Content = "1080P" }` —— 项**本身就是容器**,
+                 于是 ListBox.ItemTemplate 根本不参与(它只作用于"内容不是容器"的项)。
+                 结果字符串被 ContentPresenter 自动生成一个裸 TextBlock 来显示, 而全局隐式
+                 TextBlock 样式带 Foreground setter(Style setter 优先于继承) —— 这里就拿到了
+                 主题主文字色, 在深色玻璃弹层上等于看不见。
+                 所以颜色必须写在这份模板里: 容器自己的 ContentTemplate 一定生效。 -->
+            <Setter Property="ContentTemplate">
+                <Setter.Value>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" Foreground="#F2FFFFFF" />
+                    </DataTemplate>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="Transparent"
+                                CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1FFFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#26FFFFFF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 播放器图标按钮(控制栏用): 32×32 透明底, 悬停才浮现一层淡白。
+             ★ ContentPresenter.Resources 里那段"同名隐式 TextBlock 样式"补丁照抄 IconButtonStyle:
+               全局那个隐式样式带了 Foreground setter(Style setter 优先于继承), 会把图标的颜色吃掉。
+               去掉它, 控件栏里每个图标就得各写一次 Foreground。 -->
+        <Style x:Key="PlayerIconBtn" TargetType="Button">
+            <Setter Property="Width" Value="30" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Foreground" Value="#F2FFFFFF" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1AFFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#2EFFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 播放器文字按钮(倍速/清晰度): 幽灵态, 平时无底, 悬停浮一层淡白。
+             ★ 与 PlayerTextBtn 分开: 那个还带着"半透明黑胶囊"的老观感, 给跳过提示的「撤回」按钮用。 -->
+        <Style x:Key="PlayerGhostTextBtn" TargetType="Button">
+            <Setter Property="Foreground" Value="#F2FFFFFF" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1AFFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#2EFFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 播放进度条(2026-11-14): 3px 细线, 悬停整条加粗到 5px 并浮出白色圆点。
+             ★ 为什么不复用 PlayerSlider: 那个还被音量条 + 弹层里的三条滑杆共用,
+               把它改细会连弹层里的滑杆一起变样 —— 进度条单独一份, 互不影响。
+             ★ Thumb 始终占 11px 宽(只是默认透明): 轨道几何不变, SponsorMarks 与
+               时刻气泡的换算(TrackMetrics)就仍然对得上; 若让 Thumb 宽度随悬停变化,
+               色块和气泡会在鼠标进出时左右跳一下。
+             ★ 悬停加粗用 DataTrigger 绑 AncestorType=Slider: 轨道三件套各自在自己的
+               ControlTemplate 里, 外层 ControlTemplate.Triggers 够不到它们(TargetName 跨不了模板)。 -->
+        <Style x:Key="PlayerProgressSlider" TargetType="Slider">
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="IsMoveToPointEnabled" Value="True" />
+            <!-- 不吃键盘焦点, 保证空格键始终控制播放/暂停 -->
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid Height="14" Background="Transparent">
+                            <!-- ★ 整轨底衬(2026-11-14 修"进度条中间一块黑"):
+                                 轨道两侧的 RepeatButton 之间夹着 Thumb, Track 会把 Thumb 的 11px 宽度
+                                 从行程里让出去 —— Thumb 平时是**透明**的(只有悬停才画白点), 于是
+                                 已播段与未播段之间露出 11px 的视频, 看上去就是"断了一截/一块黑"。
+                                 这里垫一整条底衬, 颜色与"未播段"完全一致, 断开处就被填满;
+                                 悬停加粗也一起跟上, 所以任何状态下都看不出接缝。 -->
+                            <Border x:Name="TrackBg" Height="3" CornerRadius="1.5"
+                                    Background="#26FFFFFF" VerticalAlignment="Center"
+                                    IsHitTestVisible="False" />
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static Slider.DecreaseLarge}" Focusable="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Grid Background="Transparent">
+                                                    <Border x:Name="Bar" Height="3" CornerRadius="1.5"
+                                                            Background="#F2FFFFFF" VerticalAlignment="Center" />
+                                                </Grid>
+                                                <ControlTemplate.Triggers>
+                                                    <DataTrigger Value="True"
+                                                                 Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Slider}}">
+                                                        <Setter TargetName="Bar" Property="Height" Value="5" />
+                                                    </DataTrigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <!-- 未播段**故意什么都不画**(Grid 保持 Transparent): 它整段都压在下面那条
+                                     TrackBg 上, 颜色由 TrackBg 一次画出。若这里再叠一层 15% 白,
+                                     未播段就成了 30% 白, 而 Thumb 让出的小缺口只有 15% ——
+                                     交界处会冒出一小截"更暗的方块"(2026-11-14 用户复报)。 -->
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static Slider.IncreaseLarge}" Focusable="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Grid Background="Transparent" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Focusable="False">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Grid Width="11" Background="Transparent">
+                                                    <Ellipse x:Name="Dot" Width="10" Height="10"
+                                                             Fill="White" Opacity="0" />
+                                                </Grid>
+                                                <ControlTemplate.Triggers>
+                                                    <DataTrigger Value="True"
+                                                                 Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Slider}}">
+                                                        <Setter TargetName="Dot" Property="Opacity" Value="1" />
+                                                    </DataTrigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="TrackBg" Property="Height" Value="5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -154,31 +394,9 @@
             </Style.Triggers>
         </Style>
 
-        <!-- 播放器圆形图标按钮 -->
-        <Style x:Key="PlayerRoundBtn" TargetType="Button">
-            <Setter Property="Focusable" Value="False" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Foreground" Value="White" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="16">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#26FFFFFF" />
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#40FFFFFF" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- 播放器文字按钮(清晰度/倍速等): 半透明底衬, 与任意视频画面区分开 -->
+        <!-- 播放器文字按钮(清晰度/倍速等): 半透明底衬, 与任意视频画面区分开。
+             ★ 2026-11-14 起控制栏改用 PlayerGhostTextBtn(幽灵态), 这份只剩「跳过提示」里的
+               撤回按钮在用 —— 它压在深色胶囊上, 仍然需要一层实底才看得清, 别顺手删。 -->
         <Style x:Key="PlayerTextBtn" TargetType="Button">
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Cursor" Value="Hand" />
@@ -1046,8 +1264,9 @@
                                  放在视频区左侧中线上, 不挡底部控制栏; IsHitTestVisible=False
                                  保证它不吃掉视频区的手势与滚轮。 -->
                             <Border x:Name="VolumeOsd" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                    Padding="15,10" CornerRadius="9"
-                                    Background="#B3000000" IsHitTestVisible="False"
+                                    Padding="14,10" CornerRadius="12"
+                                    Background="#CC0A0B0F" BorderBrush="#24FFFFFF" BorderThickness="1"
+                                    IsHitTestVisible="False"
                                     Visibility="Collapsed" Opacity="0" Panel.ZIndex="98">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock x:Name="VolumeOsdIcon" Text="&#xE767;"
@@ -1067,8 +1286,9 @@
                                  ★ IsHitTestVisible=False: 不能吃掉视频区的手势与滚轮(同音量提示)。
                                  ★ ZIndex=98 与音量提示同级: 位置不重叠, 不必分高下。 -->
                             <Border x:Name="SpeedOsd" HorizontalAlignment="Center" VerticalAlignment="Top"
-                                    Margin="0,90,0,0" Padding="15,10" CornerRadius="9"
-                                    Background="#B3000000" IsHitTestVisible="False"
+                                    Margin="0,90,0,0" Padding="14,10" CornerRadius="12"
+                                    Background="#CC0A0B0F" BorderBrush="#24FFFFFF" BorderThickness="1"
+                                    IsHitTestVisible="False"
                                     Visibility="Collapsed" Opacity="0" Panel.ZIndex="98">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE7C1;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -1088,8 +1308,9 @@
                                  ZIndex=97: 在控制栏(默认 0)之上、音量提示(98)之下 ——
                                  切全屏那几百毫秒的黑幕必须能盖住它。 -->
                             <Border x:Name="SkipNoticeBorder" HorizontalAlignment="Left" VerticalAlignment="Top"
-                                    Margin="14,14,0,0" Padding="12,6" CornerRadius="8"
-                                    Background="#B3000000" Visibility="Collapsed" Opacity="0"
+                                    Margin="14,14,0,0" Padding="12,6" CornerRadius="10"
+                                    Background="#CC0A0B0F" BorderBrush="#24FFFFFF" BorderThickness="1"
+                                    Visibility="Collapsed" Opacity="0"
                                     Panel.ZIndex="97">
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <TextBlock Text="&#xE76C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -1109,455 +1330,367 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- 播放控件栏(底部覆盖在视频上, 渐变底更沉浸) -->
-                            <Border x:Name="ControlBar" VerticalAlignment="Bottom"
-                                    BorderThickness="0" Padding="14,6,14,8">
-                                <Border.Background>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                        <GradientStop Color="#00000000" Offset="0" />
-                                        <GradientStop Color="#66000000" Offset="0.45" />
-                                        <GradientStop Color="#D9000000" Offset="1" />
-                                    </LinearGradientBrush>
-                                </Border.Background>
-                                <StackPanel>
-                                    <!-- 进度条(点击轨道任意位置可直接跳转)。
-                                         ★ 外面套一层 Grid 是为了压一层"片段色块": 它必须和进度条
-                                           严丝合缝地对齐, 放同一个格子里最省事(几何换算见 RenderSponsorMarks)。 -->
-                                    <Grid>
-                                        <Slider x:Name="ProgressSlider" Style="{StaticResource PlayerSlider}"
-                                                Minimum="0" Maximum="1000" Value="0"
-                                                Thumb.DragStarted="OnProgressDragStart"
-                                                Thumb.DragDelta="OnProgressDragDelta"
-                                                Thumb.DragCompleted="OnProgressDragEnd"
-                                                MouseMove="OnProgressSliderMouseMove"
-                                                MouseLeave="OnProgressSliderMouseLeave"
-                                                ValueChanged="OnProgressValueChanged" />
-                                        <!-- 被标注的片段(sponsor 等)在这里画成色块。
-                                             · IsHitTestVisible=False —— 绝对不能挡住拖进度条 / 点击跳转;
-                                             · 必须排在 Slider **之后**才画在它上面(色块要压住那条白色轨道);
-                                             · ClipToBounds 防止算出来的宽度溢出到控制栏外面。
-                                             ★ 一个已知的小取舍: 色块压在滑块(那个 11px 圆点)上面, 所以
-                                               手动拖进度拖到片段内部时, 圆点中段会被色块盖住 5px —— 圆点
-                                               仍能看出轮廓。把色块放到 Slider 底下就完全避开, 但那样它会被
-                                               那条不透明的白轨道挡掉中间 3px, 只剩两道细边, 反而看不出是色块。 -->
-                                        <Canvas x:Name="SponsorMarks" IsHitTestVisible="False"
-                                                ClipToBounds="True" />
-                                        <!-- 拖动进度条时浮出的「目标时间气泡」(2026-11-07 新增)。
-                                             ★ 为什么需要: 拖动时画面还停在原地, 用户只能从轨道上大致猜位置;
-                                               给一个精确的目标时间, 才知道自己正要跳到哪(长视频尤其重要:
-                                               1 小时 23 分的视频, 轨道上 1% 就是 50 秒)。
-                                             ★ 2026-11-07 扩展: 鼠标**悬停**在轨道上也显示(同一条气泡) ——
-                                               还没按下去就能看到"这个点是几分钟"。气泡本质是
-                                               "轨道上这个点 = 什么时间", 拖动与悬停只是两种输入。
-                                             ★ 为什么放在**进度条这个 Grid 里**(而不是视频区浮层):
-                                               Canvas 不参与布局(不撑高度), 气泡用负的 Canvas.Top 浮到轨道上方,
-                                               控制栏的排版一点不受影响; 而放进视频区浮层就得自己算轨道坐标,
-                                               还得跟着控制栏的排版变(窄窗/全屏/铺满窗口三套布局)。
-                                             ★ 声明在 Slider 与 SponsorMarks **之后**: 气泡要盖在滑块和片段色块上面。
-                                             ★ IsHitTestVisible=False: 气泡正好压在滑块上方, 绝对不能吃掉拖动手势。
-                                             ★ ClipToBounds=False: 气泡要能浮出这个 Canvas 的边界(画布只有轨道那么高)。
-                                             ★ 文字写死白色 + 深底: 这块永远浮在视频画面上, 跟主题走的话浅色主题下
-                                               会变成深色字压在亮画面上, 直接看不见(同音量/倍速提示的老坑)。
-                                             ★ 不用 DropShadowEffect: 拖动时气泡每帧都动, 阴影特效会明显掉帧。 -->
-                                        <Canvas x:Name="ProgressHintLayer" IsHitTestVisible="False"
-                                                ClipToBounds="False">
-                                            <Border x:Name="ProgressHint" Visibility="Collapsed"
-                                                    Background="#E6000000" BorderBrush="#33FFFFFF"
-                                                    BorderThickness="1" CornerRadius="7" Padding="10,3">
-                                                <TextBlock x:Name="ProgressHintText" Text="00:00"
-                                                           Foreground="White" FontSize="12"
-                                                           HorizontalAlignment="Center" />
+                            <!-- ============ 播放控制栏(2026-11-14 重绘) ============
+                                 设计要点(改的时候别丢):
+                                   · **悬浮圆角玻璃面板**, 不再是贴底通栏的黑色渐变。四边距 14,
+                                     圆角 14, 70% 半透明深底 + 1px 白色描边 —— 视频从底下透出来,
+                                     就是"毛玻璃"的观感。
+                                   · ★ 为什么做不出真正的 backdrop-filter:
+                                     WPF 的 BlurEffect 只糊自己的内容, 糊不到背后的东西; 而视频是
+                                     LibVLC 的 HwndHost(原生 HWND), 更在 WPF 合成器之外。浏览器里
+                                     一句 `backdrop-filter: blur(20px)` 在这里没有等价物。
+                                     所以用"多层半透明 + 高光边 + 外发光"拟态, 见下方资源。
+                                   · ★ 外发光单独一层(Border + DropShadowEffect), **不包内容**:
+                                     Effect 会把整棵子树烧成位图再糊, 文字会失去 ClearType 变得发虚。
+                                   · 进度条压在面板顶部, 3px 细线; 悬停整条加粗到 5px 并浮出圆点。
+                                   · 布局: 左(播放/时间/音量) —— 弹性空隙 —— 右(弹幕/弹幕区域│倍速/清晰度│全屏)。
+                                     图标化后整行约 540 DIP, 窄窗由 OnVideoAreaSizeChanged 收起次要项。 -->
+                            <Grid x:Name="ControlBar" VerticalAlignment="Bottom" Margin="14,0,14,14"
+                                  Background="Transparent" RenderTransformOrigin="0.5,0.5">
+                                <!-- 隐藏/唤出的上滑位移由代码动画(见 HideControls / ShowControls)。
+                                     ★ 必须是 XAML 里这一份实打实的 TranslateTransform: 代码每次拿它
+                                       BeginAnimation, 不能像 PlayActionPop 那样新建 —— 不然动画作用在
+                                       一个没挂到元素上的对象上, 什么都不会动。 -->
+                                <Grid.RenderTransform>
+                                    <TranslateTransform x:Name="ControlBarShift" Y="0" />
+                                </Grid.RenderTransform>
+
+                                <!-- 外发光层: 只画一块被高斯模糊的黑圆角矩形, 不承载任何内容 -->
+                                <Border CornerRadius="14" Background="#59000000">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="24" ShadowDepth="5"
+                                                          Direction="270" Opacity="0.45" Color="Black" />
+                                    </Border.Effect>
+                                </Border>
+
+                                <!-- 玻璃面板本体 -->
+                                <Border CornerRadius="14"
+                                        Background="{StaticResource PlayerGlassPanelBrush}"
+                                        BorderBrush="#1FFFFFFF" BorderThickness="1"
+                                        Padding="10,8,10,8">
+                                    <StackPanel>
+                                        <!-- 进度条(点击轨道任意位置可直接跳转)。
+                                             ★ 外面套一层 Grid 是为了压一层"片段色块": 它必须和进度条
+                                               严丝合缝地对齐, 放同一个格子里最省事(几何换算见 RenderSponsorMarks)。
+                                             ★ 这一格高度 14 就是轨道的点击热区: 细线只有 3px, 但鼠标
+                                               不必精确戳中那 3px(可用性优先, 与旧版 18px 热区一致)。 -->
+                                        <Grid Height="14">
+                                            <Slider x:Name="ProgressSlider" Style="{StaticResource PlayerProgressSlider}"
+                                                    Minimum="0" Maximum="1000" Value="0"
+                                                    Thumb.DragStarted="OnProgressDragStart"
+                                                    Thumb.DragDelta="OnProgressDragDelta"
+                                                    Thumb.DragCompleted="OnProgressDragEnd"
+                                                    MouseMove="OnProgressSliderMouseMove"
+                                                    MouseLeave="OnProgressSliderMouseLeave"
+                                                    ValueChanged="OnProgressValueChanged" />
+                                            <!-- 被标注的片段(sponsor 等)在这里画成色块。
+                                                 · IsHitTestVisible=False —— 绝对不能挡住拖进度条 / 点击跳转;
+                                                 · 必须排在 Slider **之后**才画在它上面(色块要压住那条白色轨道);
+                                                 · ClipToBounds 防止算出来的宽度溢出到控制栏外面。 -->
+                                            <Canvas x:Name="SponsorMarks" IsHitTestVisible="False"
+                                                    ClipToBounds="True" />
+                                            <!-- 拖动/悬停进度条时浮出的「目标时间气泡」。
+                                                 ★ 放在进度条这个 Grid 里: Canvas 不参与布局(不撑高度),
+                                                   气泡用负的 Canvas.Top 浮到轨道上方 —— 正好压出玻璃面板的
+                                                   上沿一点, 视觉上更像"气泡悬在轨道上"而不是压在轨道里。
+                                                 ★ IsHitTestVisible=False: 气泡正好压在滑块上方, 不能吃拖动手势。
+                                                 ★ ClipToBounds=False: 它必须能画出这个 14px 高的 Canvas。
+                                                 ★ 底色写死深色: 这块永远浮在视频画面上, 跟主题走的话浅色主题下
+                                                   会变成深字压亮画面, 直接看不见。 -->
+                                            <Canvas x:Name="ProgressHintLayer" IsHitTestVisible="False"
+                                                    ClipToBounds="False">
+                                                <Border x:Name="ProgressHint" Visibility="Collapsed"
+                                                        Background="#E6121318" BorderBrush="#26FFFFFF"
+                                                        BorderThickness="1" CornerRadius="8" Padding="10,4">
+                                                    <TextBlock x:Name="ProgressHintText" Text="00:00"
+                                                               Foreground="White" FontSize="12"
+                                                               HorizontalAlignment="Center" />
+                                                </Border>
+                                            </Canvas>
+                                        </Grid>
+
+                                        <!-- 操作行 -->
+                                        <Grid Margin="0,6,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- 播放/暂停。★ Content 由代码替换(见 UpdatePlayButton):
+                                                 仍然是 Path, 跟旧版一样, 换成图标字体反而要多维护一套字形。 -->
+                                            <Button Grid.Column="0" x:Name="BtnPlay" Style="{StaticResource PlayerIconBtn}"
+                                                    Click="OnPlayPauseClick" ToolTip="播放/暂停 (空格)">
+                                                <Path Fill="White" Width="15" Height="15" Stretch="Uniform"
+                                                      Data="M 7,4 L 18,11 L 7,18 Z" />
+                                            </Button>
+                                            <TextBlock x:Name="TimeText" Grid.Column="1" Foreground="#E6FFFFFF"
+                                                       FontFamily="Consolas, Segoe UI" FontSize="12"
+                                                       VerticalAlignment="Center" Margin="8,0,0,0"
+                                                       Text="00:00 / 00:00" />
+
+                                            <!-- 音量(2026-11-14 改成"靠近才展开"):
+                                                 平时只留一个喇叭图标, 鼠标进到这块区域再从图标右侧把滑杆
+                                                 展开 —— 控制栏本来就挤, 常驻一条 74px 的滑杆占了不小的地方。
+                                                 ★ 悬停热区是**整块 Border**(图标 + 滑杆宿主), 未展开时它就只有
+                                                   图标那么宽; 展开后 Border 跟着变宽, 鼠标滑到滑杆上仍算"没离开",
+                                                   所以不会刚展开就缩回去。
+                                                 ★ 宿主 Border 用 ClipToBounds + 宽度动画: 只动一个 74px 元素,
+                                                   重排代价可忽略, 而且滑杆在 0 宽时**连命中测试一起被裁掉**,
+                                                   不会在图标右侧留一块点得到的"隐形条"。
+                                                 ★ 窄窗(OnVideoAreaSizeChanged)会把滑杆整个收起, 此时悬停也不会展开。 -->
+                                            <!-- ★ MinWidth=72(2026-11-14 用户要求"热区放大一些"):
+                                                 收起态只有图标 14px 宽, 鼠标必须精确戳中喇叭才展开, 太难瞄。
+                                                 这里让整块热区在收起时也占 72px(≈ 展开后滑杆那块地方的宽度),
+                                                 鼠标移到图标右侧的空白带就把滑杆展开 —— 反正那块空白马上会被滑杆填上。
+                                                 ★ 空白带上的左键要**吃掉**: 这一层有背景, 若让点击继续冒泡,
+                                                   视频区会把它当成一次"单击视频"从而暂停/播放。 -->
+                                            <Border Grid.Column="2" x:Name="VolumeHoverArea"
+                                                    Background="Transparent" VerticalAlignment="Center"
+                                                    MinWidth="72"
+                                                    Margin="6,0,4,0" Padding="6,8,0,8"
+                                                    MouseEnter="OnVolumeAreaMouseEnter"
+                                                    MouseLeave="OnVolumeAreaMouseLeave"
+                                                    MouseLeftButtonDown="OnVolumeAreaMouseDown">
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <TextBlock x:Name="VolumeIcon" Text="&#xE767;"
+                                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                               Foreground="#E6FFFFFF" FontSize="14"
+                                                               VerticalAlignment="Center" />
+                                                    <Border x:Name="VolumeSliderHost" Width="0"
+                                                            ClipToBounds="True" VerticalAlignment="Center">
+                                                        <Slider x:Name="VolumeSlider" Style="{StaticResource PlayerSlider}"
+                                                                Minimum="0" Maximum="100" Value="80" Width="74"
+                                                                Margin="7,0,0,0"
+                                                                Thumb.DragCompleted="OnVolumeDragCompleted"
+                                                                ValueChanged="OnVolumeChanged" />
+                                                    </Border>
+                                                </StackPanel>
                                             </Border>
-                                        </Canvas>
-                                    </Grid>
-                                    <!-- 操作行 -->
-                                    <Grid Margin="0,2,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
 
-                                        <!-- 播放/暂停 -->
-                                        <Button Grid.Column="0" x:Name="BtnPlay" Style="{StaticResource PlayerRoundBtn}"
-                                                Width="36" Height="36" Click="OnPlayPauseClick" ToolTip="播放/暂停 (空格)">
-                                            <Path Fill="White" Width="15" Height="15" Stretch="Uniform"
-                                                  Data="M 7,4 L 18,11 L 7,18 Z" />
-                                        </Button>
-                                        <TextBlock x:Name="TimeText" Grid.Column="1" Foreground="#E6FFFFFF" FontSize="12"
-                                                   VerticalAlignment="Center" Margin="10,0,0,0" Text="00:00 / 00:00" />
+                                            <!-- 弹幕开关。★ 图标态: 开=接近纯白, 关=压暗(0x99 白),
+                                                 由 UpdateDanmakuButton 改图标颜色, 不再换文案。 -->
+                                            <Button Grid.Column="4" x:Name="BtnDanmaku" Style="{StaticResource PlayerIconBtn}"
+                                                    Click="OnDanmakuToggleClick" ToolTip="开关弹幕 (D)">
+                                                <!-- 图标 + "关闭"斜线(2026-11-14): 形状相同、只靠颜色压暗不够一眼可读,
+                                                     关闭时从左上到右下划一道 —— 与"静音"图标同一套语义。 -->
+                                                <Grid Width="16" Height="16">
+                                                    <TextBlock x:Name="DanmakuBtnText" Text="&#xE90A;"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                               FontSize="15" Foreground="#F2FFFFFF" />
+                                                    <Line x:Name="DanmakuOffSlash" X1="1.5" Y1="1.5" X2="14.5" Y2="14.5"
+                                                          Stroke="#99FFFFFF" StrokeThickness="1.4"
+                                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                          Visibility="Collapsed" />
+                                                </Grid>
+                                            </Button>
+                                            <!-- 弹幕显示区域占比: 图标态, 百分比写进 ToolTip(见 UpdateDanmakuButton /
+                                                 OnDanmakuSettingsChanged), 控制栏里不摆小字。
+                                                 ★ 图标自己画(screen + 上方一条区域线): E734 在 Segoe MDL2 里
+                                                   是"收藏星", 跟弹幕区域毫无关系 —— 旧版那颗星就是这么来的。 -->
+                                            <Button Grid.Column="5" x:Name="BtnDanmakuArea" Style="{StaticResource PlayerIconBtn}"
+                                                    Margin="2,0,0,0" Click="OnDanmakuAreaClick" ToolTip="弹幕显示区域占比">
+                                                <Grid Width="16" Height="14">
+                                                    <Path Data="M 1.6,1.6 H 14.4 V 12.4 H 1.6 Z"
+                                                          Stroke="#F2FFFFFF" StrokeThickness="1.3"
+                                                          StrokeLineJoin="Round" Fill="Transparent" />
+                                                    <Path Data="M 1.6,5.4 H 14.4"
+                                                          Stroke="#F2FFFFFF" StrokeThickness="1.3" />
+                                                </Grid>
+                                            </Button>
 
-                                        <!-- 音量 -->
-                                        <TextBlock x:Name="VolumeIcon" Grid.Column="3" Text="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                   Foreground="#E6FFFFFF" FontSize="14" VerticalAlignment="Center" Margin="10,0,6,0" />
-                                        <Slider Grid.Column="4" x:Name="VolumeSlider" Style="{StaticResource PlayerSlider}"
-                                                Minimum="0" Maximum="100" Value="80" Width="78"
-                                                ValueChanged="OnVolumeChanged" />
+                                            <Border Grid.Column="6" Width="1" Height="16" Background="#1FFFFFFF"
+                                                    Margin="7,0,7,0" VerticalAlignment="Center" />
 
-                                        <!-- 倍速: 点开弹层选预设或输入自定义值(0.25x ~ 4.0x) -->
-                                        <Button Grid.Column="5" x:Name="SpeedBtn" Style="{StaticResource PlayerTextBtn}"
-                                                Margin="6,0,0,0" Click="OnSpeedClick" ToolTip="设置播放速度">
-                                            <TextBlock x:Name="SpeedText" Text="1.0x" Foreground="#F2FFFFFF" />
-                                        </Button>
-                                        <Popup x:Name="SpeedPopup"
-                                               Placement="Top" StaysOpen="False" AllowsTransparency="True"
-                                               PopupAnimation="Fade">
-                                            <Border Background="#F0202226" CornerRadius="8" Padding="6"
-                                                    BorderBrush="#33FFFFFF" BorderThickness="1" Width="190">
-                                                <StackPanel>
-                                                    <ListBox x:Name="SpeedList" Background="Transparent"
-                                                             BorderThickness="0" Foreground="White"
-                                                             MaxHeight="230"
-                                                             ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                                             SelectionChanged="OnSpeedSelected">
-                                                        <ListBox.ItemContainerStyle>
-                                                            <Style TargetType="ListBoxItem">
-                                                                <!-- 与清晰度弹层同款: 不能设 Focusable=False,
-                                                                     否则鼠标按下时 Focus() 失败会短路选中逻辑 -->
-                                                                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-                                                                <Setter Property="Padding" Value="10,6" />
-                                                                <Setter Property="Cursor" Value="Hand" />
-                                                                <Setter Property="ContentTemplate">
-                                                                    <Setter.Value>
-                                                                        <DataTemplate>
-                                                                            <TextBlock Text="{Binding}" Foreground="#F2FFFFFF" />
-                                                                        </DataTemplate>
-                                                                    </Setter.Value>
-                                                                </Setter>
-                                                                <Setter Property="Template">
-                                                                    <Setter.Value>
-                                                                        <ControlTemplate TargetType="ListBoxItem">
-                                                                            <Border x:Name="Bd" Background="Transparent"
-                                                                                    CornerRadius="5" Padding="{TemplateBinding Padding}">
-                                                                                <ContentPresenter VerticalAlignment="Center" />
-                                                                            </Border>
-                                                                            <ControlTemplate.Triggers>
-                                                                                <Trigger Property="IsMouseOver" Value="True">
-                                                                                    <Setter TargetName="Bd" Property="Background" Value="#26FFFFFF" />
-                                                                                </Trigger>
-                                                                                <Trigger Property="IsSelected" Value="True">
-                                                                                    <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF" />
-                                                                                </Trigger>
-                                                                            </ControlTemplate.Triggers>
-                                                                        </ControlTemplate>
-                                                                    </Setter.Value>
-                                                                </Setter>
-                                                            </Style>
-                                                        </ListBox.ItemContainerStyle>
-                                                    </ListBox>
+                                            <!-- 倍速: 点开弹层选预设或输入自定义值(0.25x ~ 4.0x)。
+                                                 文字按钮保留 —— 当前倍速必须一眼可读, 图标表达不了 "1.5x"。 -->
+                                            <Button Grid.Column="7" x:Name="SpeedBtn" Style="{StaticResource PlayerGhostTextBtn}"
+                                                    Click="OnSpeedClick" ToolTip="设置播放速度">
+                                                <TextBlock x:Name="SpeedText" Text="1.0x" Foreground="#F2FFFFFF" />
+                                            </Button>
+                                            <Popup x:Name="SpeedPopup"
+                                                   Placement="Top" StaysOpen="False" AllowsTransparency="True"
+                                                   PopupAnimation="Fade">
+                                                <Border Style="{StaticResource PlayerGlassPopupStyle}" Width="190">
+                                                    <StackPanel>
+                                                        <ListBox x:Name="SpeedList" Background="Transparent"
+                                                                 BorderThickness="0" Foreground="White"
+                                                                 ItemContainerStyle="{StaticResource PlayerPopupItemStyle}"
+                                                                 MaxHeight="230"
+                                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                                 SelectionChanged="OnSpeedSelected">
+                                                        </ListBox>
 
-                                                    <!-- 自定义倍速: 输入 1.15 / 1.15x 都可以, Enter 应用, Esc 关闭 -->
-                                                    <Border Height="1" Background="#26FFFFFF" Margin="4,4" />
-                                                    <StackPanel Margin="4,2,4,2">
-                                                        <TextBlock Text="自定义倍速 (0.25 – 4.0x)"
-                                                                   Foreground="#B3FFFFFF" FontSize="11" />
-                                                        <Grid Margin="0,6,0,0">
-                                                            <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="*" />
-                                                                <ColumnDefinition Width="Auto" />
-                                                            </Grid.ColumnDefinitions>
-                                                            <TextBox x:Name="SpeedCustomText"
-                                                                     Background="#33000000" Foreground="#F2FFFFFF"
-                                                                     BorderBrush="#33FFFFFF" CaretBrush="White"
-                                                                     FontSize="12" Padding="6,4"
-                                                                     VerticalContentAlignment="Center"
-                                                                     KeyDown="OnSpeedCustomKeyDown" />
-                                                            <Button Grid.Column="1"
-                                                                    Style="{StaticResource PlayerTextBtn}"
-                                                                    Margin="6,0,0,0" Padding="10,4"
-                                                                    Click="OnSpeedCustomApply">
-                                                                <TextBlock Text="应用" Foreground="#F2FFFFFF" />
-                                                            </Button>
-                                                        </Grid>
-                                                        <TextBlock x:Name="SpeedCustomHint" Text=""
-                                                                   Foreground="#FFFF7B7B" FontSize="11"
-                                                                   Margin="0,4,0,0" TextWrapping="Wrap" />
+                                                        <!-- 自定义倍速: 输入 1.15 / 1.15x 都可以, Enter 应用, Esc 关闭 -->
+                                                        <Border Height="1" Background="#1FFFFFFF" Margin="4,4" />
+                                                        <StackPanel Margin="4,2,4,2">
+                                                            <TextBlock Text="自定义倍速 (0.25 – 4.0x)"
+                                                                       Foreground="#B3FFFFFF" FontSize="11" />
+                                                            <Grid Margin="0,6,0,0">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*" />
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                </Grid.ColumnDefinitions>
+                                                                <TextBox x:Name="SpeedCustomText"
+                                                                         Background="#33000000" Foreground="#F2FFFFFF"
+                                                                         BorderBrush="#33FFFFFF" CaretBrush="White"
+                                                                         FontSize="12" Padding="6,4"
+                                                                         VerticalContentAlignment="Center"
+                                                                         KeyDown="OnSpeedCustomKeyDown" />
+                                                                <Button Grid.Column="1"
+                                                                        Style="{StaticResource PlayerGhostTextBtn}"
+                                                                        Margin="6,0,0,0" Padding="10,4"
+                                                                        Click="OnSpeedCustomApply">
+                                                                    <TextBlock Text="应用" Foreground="#F2FFFFFF" />
+                                                                </Button>
+                                                            </Grid>
+                                                            <TextBlock x:Name="SpeedCustomHint" Text=""
+                                                                       Foreground="#FFFF7B7B" FontSize="11"
+                                                                       Margin="0,4,0,0" TextWrapping="Wrap" />
+                                                        </StackPanel>
                                                     </StackPanel>
-                                                </StackPanel>
-                                            </Border>
-                                        </Popup>
+                                                </Border>
+                                            </Popup>
 
-                                        <!-- 清晰度 -->
-                                        <Button Grid.Column="6" x:Name="BtnQuality" Style="{StaticResource PlayerTextBtn}"
-                                                Margin="4,0,0,0" Click="OnQualityClick" ToolTip="切换清晰度">
-                                            <TextBlock x:Name="QualityText" Text="1080P" Foreground="#F2FFFFFF" />
-                                        </Button>
-                                        <Popup x:Name="QualityPopup"
-                                               Placement="Top" StaysOpen="False" AllowsTransparency="True"
-                                               PopupAnimation="Fade">
-                                            <Border Background="#F0202226" CornerRadius="8" Padding="6"
-                                                    BorderBrush="#33FFFFFF" BorderThickness="1" MinWidth="110">
-                                                <ListBox x:Name="QualityList" Background="Transparent"
-                                                         BorderThickness="0" Foreground="White"
-                                                         SelectionChanged="OnQualitySelected">
-                                                    <ListBox.ItemContainerStyle>
-                                                        <Style TargetType="ListBoxItem">
-                                                            <!-- 绝不能设 Focusable=False: ListBoxItem 鼠标按下时
-                                                                 Focus() 失败会短路选中逻辑, SelectionChanged 永不触发
-                                                                 (之前"切换清晰度没反应"就是它)。去焦点框用 FocusVisualStyle -->
-                                                            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-                                                            <Setter Property="Padding" Value="10,6" />
-                                                            <Setter Property="Cursor" Value="Hand" />
-                                                            <Setter Property="ContentTemplate">
-                                                                <Setter.Value>
-                                                                    <DataTemplate>
-                                                                        <!-- 显式白字: 全局隐式 TextBlock 样式(主题色)会覆盖继承的前景色 -->
-                                                                        <TextBlock Text="{Binding}" Foreground="#F2FFFFFF" />
-                                                                    </DataTemplate>
-                                                                </Setter.Value>
-                                                            </Setter>
-                                                            <Setter Property="Template">
-                                                                <Setter.Value>
-                                                                    <ControlTemplate TargetType="ListBoxItem">
-                                                                        <Border x:Name="Bd" Background="Transparent"
-                                                                                CornerRadius="5" Padding="{TemplateBinding Padding}">
-                                                                            <ContentPresenter VerticalAlignment="Center" />
-                                                                        </Border>
-                                                                        <ControlTemplate.Triggers>
-                                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                                <Setter TargetName="Bd" Property="Background" Value="#26FFFFFF" />
-                                                                            </Trigger>
-                                                                            <Trigger Property="IsSelected" Value="True">
-                                                                                <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF" />
-                                                                            </Trigger>
-                                                                        </ControlTemplate.Triggers>
-                                                                    </ControlTemplate>
-                                                                </Setter.Value>
-                                                            </Setter>
-                                                        </Style>
-                                                    </ListBox.ItemContainerStyle>
-                                                </ListBox>
-                                            </Border>
-                                        </Popup>
-
-                                        <!-- 音质(2026-11-06): 与清晰度并列的第二枚胶囊。
-                                             点开弹层选音轨档位 —— 只换 DASH 的音轨, 不动画面清晰度。
-                                             ★ 文案用**短标签**(自动 / 无损 / 杜比 / 192K…): 控制栏是
-                                               一整行, 长文案会把后面的弹幕按钮挤出去。 -->
-                                        <Button Grid.Column="7" x:Name="BtnAudio" Style="{StaticResource PlayerTextBtn}"
-                                                Margin="4,0,0,0" Click="OnAudioClick" ToolTip="切换音质">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                           FontSize="11" VerticalAlignment="Center" Foreground="#F2FFFFFF" />
-                                                <TextBlock x:Name="AudioText" Text="自动" Margin="5,0,0,0"
-                                                           Foreground="#F2FFFFFF" />
-                                            </StackPanel>
-                                        </Button>
-                                        <Popup x:Name="AudioPopup"
-                                               Placement="Top" StaysOpen="False" AllowsTransparency="True"
-                                               PopupAnimation="Fade">
-                                            <Border Background="#F0202226" CornerRadius="8" Padding="6"
-                                                    BorderBrush="#33FFFFFF" BorderThickness="1" MinWidth="160">
-                                                <StackPanel>
-                                                    <ListBox x:Name="AudioList" Background="Transparent"
+                                            <!-- 清晰度: 文字按钮(1080P / 4K / 直播 / 本地 都必须可读) -->
+                                            <Button Grid.Column="8" x:Name="BtnQuality" Style="{StaticResource PlayerGhostTextBtn}"
+                                                    Margin="2,0,0,0" Click="OnQualityClick" ToolTip="切换清晰度">
+                                                <TextBlock x:Name="QualityText" Text="1080P" Foreground="#F2FFFFFF" />
+                                            </Button>
+                                            <Popup x:Name="QualityPopup"
+                                                   Placement="Top" StaysOpen="False" AllowsTransparency="True"
+                                                   PopupAnimation="Fade">
+                                                <Border Style="{StaticResource PlayerGlassPopupStyle}" MinWidth="110">
+                                                    <ListBox x:Name="QualityList" Background="Transparent"
                                                              BorderThickness="0" Foreground="White"
-                                                             SelectionChanged="OnAudioSelected">
-                                                        <ListBox.ItemContainerStyle>
-                                                            <Style TargetType="ListBoxItem">
-                                                                <!-- 与清晰度弹层同款: 不能设 Focusable=False,
-                                                                     否则 SelectionChanged 永不触发 -->
-                                                                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-                                                                <Setter Property="Padding" Value="10,6" />
-                                                                <Setter Property="Cursor" Value="Hand" />
-                                                                <Setter Property="ContentTemplate">
-                                                                    <Setter.Value>
-                                                                        <DataTemplate>
-                                                                            <TextBlock Text="{Binding}" Foreground="#F2FFFFFF" />
-                                                                        </DataTemplate>
-                                                                    </Setter.Value>
-                                                                </Setter>
-                                                                <Setter Property="Template">
-                                                                    <Setter.Value>
-                                                                        <ControlTemplate TargetType="ListBoxItem">
-                                                                            <Border x:Name="Bd" Background="Transparent"
-                                                                                    CornerRadius="5" Padding="{TemplateBinding Padding}">
-                                                                                <ContentPresenter VerticalAlignment="Center" />
-                                                                            </Border>
-                                                                            <ControlTemplate.Triggers>
-                                                                                <Trigger Property="IsMouseOver" Value="True">
-                                                                                    <Setter TargetName="Bd" Property="Background" Value="#26FFFFFF" />
-                                                                                </Trigger>
-                                                                                <Trigger Property="IsSelected" Value="True">
-                                                                                    <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF" />
-                                                                                </Trigger>
-                                                                            </ControlTemplate.Triggers>
-                                                                        </ControlTemplate>
-                                                                    </Setter.Value>
-                                                                </Setter>
-                                                            </Style>
-                                                        </ListBox.ItemContainerStyle>
+                                                             ItemContainerStyle="{StaticResource PlayerPopupItemStyle}"
+                                                             SelectionChanged="OnQualitySelected">
                                                     </ListBox>
-                                                    <TextBlock x:Name="AudioHintText" Text=""
-                                                               Foreground="#99FFFFFF" FontSize="10.5"
-                                                               Margin="8,4,8,2" TextWrapping="Wrap"
-                                                               MaxWidth="220" />
-                                                </StackPanel>
-                                            </Border>
-                                        </Popup>
+                                                </Border>
+                                            </Popup>
 
-                                        <Button Grid.Column="8" x:Name="BtnDanmaku" Style="{StaticResource PlayerTextBtn}"
-                                                Margin="4,0,0,0" Click="OnDanmakuToggleClick" ToolTip="开关弹幕 (D)">
-                                            <TextBlock x:Name="DanmakuBtnText" Text="弹幕开" Foreground="#F2FFFFFF" />
-                                        </Button>
+                                            <Border Grid.Column="9" Width="1" Height="16" Background="#1FFFFFFF"
+                                                    Margin="7,0,7,0" VerticalAlignment="Center" />
 
-                                        <!-- 弹幕区域占比 -->
-                                        <Button Grid.Column="9" x:Name="BtnDanmakuArea" Style="{StaticResource PlayerTextBtn}"
-                                                Margin="4,0,0,0" Click="OnDanmakuAreaClick" ToolTip="弹幕显示区域占比">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="&#xE734;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                           FontSize="12" VerticalAlignment="Center" Foreground="#F2FFFFFF" />
-                                                <TextBlock x:Name="DanmakuAreaText" Text="25%" Margin="5,0,0,0"
-                                                           Foreground="#F2FFFFFF" />
-                                            </StackPanel>
-                                        </Button>
-                                        <Popup x:Name="DanmakuAreaPopup"
-                                               Placement="Top" StaysOpen="False" AllowsTransparency="True"
-                                               PopupAnimation="Fade">
-                                            <!-- ★ 宽度从 190 放宽到 240: 现在这一张里要放三行
-                                                 "标签 + 滑杆 + 数值", 190 会让「不透明度 100%」
-                                                 这类标签+数值挤到一行放不下(用户截图里就是这么挤的)。 -->
-                                            <Border Background="#F0202226" CornerRadius="8" Padding="12,10"
-                                                    BorderBrush="#33FFFFFF" BorderThickness="1" Width="240">
-                                                <StackPanel>
-                                                    <TextBlock Text="弹幕显示区域" Foreground="#E6FFFFFF" FontSize="12" />
-                                                    <Slider x:Name="DanmakuAreaSlider" Style="{StaticResource PlayerSlider}"
-                                                            Minimum="25" Maximum="100" Value="25"
-                                                            Margin="0,10,0,4" IsSnapToTickEnabled="True"
-                                                            TickFrequency="5" ValueChanged="OnDanmakuAreaChanged" />
-                                                    <TextBlock x:Name="DanmakuAreaValue" Text="25%"
-                                                               Foreground="#99FFFFFF" FontSize="11" HorizontalAlignment="Right" />
+                                            <!-- 全屏 -->
+                                            <Button Grid.Column="10" x:Name="BtnFullscreen2" Style="{StaticResource PlayerIconBtn}"
+                                                    Click="OnFullscreenClick" ToolTip="全屏 (F)">
+                                                <TextBlock Text="&#xE740;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                           FontSize="15" Foreground="White" />
+                                            </Button>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
 
-                                                    <!-- ============ 弹幕外观三项(2026-10-12 新增) ============
-                                                         ★ 排版照用户给的截图来: 每行都是「标签 | 滑杆 | 数值」,
-                                                           标签左对齐固定宽(70), 滑杆撑开, 数值右对齐(50)。
-                                                           三行等距(margin 14)才像一组, 不然会散成三块。
-                                                         ★ 底色仍是 #F0202226 而不是主题刷子: 控制栏浮在画面上,
-                                                           必须与主题无关(浅色主题下也不会变成白底糊住画面)。
-                                                         ★ 数值单独放一个 TextBlock 而不是绑到滑杆上:
-                                                           要更新的地方多一个控件,但"代码里写字符串"这件事
-                                                           不再散落在三个地方 —— 见 UpdateDanmakuLookTexts。 -->
-                                                    <Border Height="1" Margin="0,12,0,12"
-                                                            Background="#26FFFFFF" />
+                                <!-- 弹幕外观/区域弹层。★ 挂在 ControlBar(Grid) 里而不是某个按钮里:
+                                     它的 PlacementTarget 是 BtnDanmakuArea, 与旧版一致, 布局位置上
+                                     仍贴着控制栏右上角。 -->
+                                <Popup x:Name="DanmakuAreaPopup"
+                                       Placement="Top" StaysOpen="False" AllowsTransparency="True"
+                                       PopupAnimation="Fade">
+                                    <!-- ★ 宽度 240: 这一张里要放三行"标签 + 滑杆 + 数值", 190 会让
+                                         「不透明度 100%」这类标签+数值挤到一行放不下。 -->
+                                    <Border Style="{StaticResource PlayerGlassPopupStyle}" Width="240" Padding="12,10">
+                                        <StackPanel>
+                                            <TextBlock Text="弹幕显示区域" Foreground="#E6FFFFFF" FontSize="12" />
+                                            <Slider x:Name="DanmakuAreaSlider" Style="{StaticResource PlayerSlider}"
+                                                    Minimum="25" Maximum="100" Value="25"
+                                                    Margin="0,10,0,4" IsSnapToTickEnabled="True"
+                                                    TickFrequency="5" ValueChanged="OnDanmakuAreaChanged" />
+                                            <TextBlock x:Name="DanmakuAreaValue" Text="25%"
+                                                       Foreground="#99FFFFFF" FontSize="11" HorizontalAlignment="Right" />
 
-                                                    <Grid>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="70" />
-                                                            <ColumnDefinition Width="*" />
-                                                            <ColumnDefinition Width="50" />
-                                                        </Grid.ColumnDefinitions>
-                                                        <TextBlock Grid.Column="0" Text="不透明度" Style="{StaticResource DanmakuRowLabelStyle}" />
-                                                        <Slider Grid.Column="1" x:Name="DanmakuOpacitySlider"
-                                                                Style="{StaticResource PlayerSlider}"
-                                                                Minimum="20" Maximum="100" Value="80"
-                                                                Margin="8,0,8,0" IsSnapToTickEnabled="True"
-                                                                TickFrequency="5" ValueChanged="OnDanmakuOpacityChanged" />
-                                                        <TextBlock Grid.Column="2" x:Name="DanmakuOpacityValue" Text="80%"
-                                                                   Style="{StaticResource DanmakuRowValueStyle}" />
-                                                    </Grid>
+                                            <!-- ============ 弹幕外观三项 ============
+                                                 排版照用户给的截图来: 每行都是「标签 | 滑杆 | 数值」,
+                                                 标签左对齐固定宽(70), 滑杆撑开, 数值右对齐(50)。 -->
+                                            <Border Height="1" Margin="0,12,0,12" Background="#1FFFFFFF" />
 
-                                                    <Grid Margin="0,14,0,0">
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="70" />
-                                                            <ColumnDefinition Width="*" />
-                                                            <ColumnDefinition Width="50" />
-                                                        </Grid.ColumnDefinitions>
-                                                        <TextBlock Grid.Column="0" Text="弹幕字号" Style="{StaticResource DanmakuRowLabelStyle}" />
-                                                        <Slider Grid.Column="1" x:Name="DanmakuFontSlider"
-                                                                Style="{StaticResource PlayerSlider}"
-                                                                Minimum="50" Maximum="300" Value="100"
-                                                                Margin="8,0,8,0" IsSnapToTickEnabled="True"
-                                                                TickFrequency="25" ValueChanged="OnDanmakuFontChanged" />
-                                                        <TextBlock Grid.Column="2" x:Name="DanmakuFontValue" Text="100%"
-                                                                   Style="{StaticResource DanmakuRowValueStyle}" />
-                                                    </Grid>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="70" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="50" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="不透明度" Style="{StaticResource DanmakuRowLabelStyle}" />
+                                                <Slider Grid.Column="1" x:Name="DanmakuOpacitySlider"
+                                                        Style="{StaticResource PlayerSlider}"
+                                                        Minimum="20" Maximum="100" Value="80"
+                                                        Margin="8,0,8,0" IsSnapToTickEnabled="True"
+                                                        TickFrequency="5" ValueChanged="OnDanmakuOpacityChanged" />
+                                                <TextBlock Grid.Column="2" x:Name="DanmakuOpacityValue" Text="80%"
+                                                           Style="{StaticResource DanmakuRowValueStyle}" />
+                                            </Grid>
 
-                                                    <Grid Margin="0,14,0,0">
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="70" />
-                                                            <ColumnDefinition Width="*" />
-                                                            <ColumnDefinition Width="50" />
-                                                        </Grid.ColumnDefinitions>
-                                                        <TextBlock Grid.Column="0" Text="弹幕速度" Style="{StaticResource DanmakuRowLabelStyle}" />
-                                                        <!-- ★ 速度是五档离散值, 用 Slider 而不是滑杆+区间:
-                                                             整数档位才能保证"每一格 = 一个明确的速度",
-                                                             拖到任意位置都能对上 SpeedLabel。
-                                                             ★ 步长 = 1 档(IsSnapToTickEnabled), 不设的话
-                                                             滑杆能停在 2.37 这种值上, 而 DanmakuMotion 会
-                                                             把它夹到 2 —— 于是滑杆显示"2.37"而实际是"适中",
-                                                             看着就是"滑块不准"。 -->
-                                                        <Slider Grid.Column="1" x:Name="DanmakuSpeedSlider"
-                                                                Style="{StaticResource PlayerSlider}"
-                                                                Minimum="0" Maximum="4" Value="2"
-                                                                Margin="8,0,8,0" IsSnapToTickEnabled="True"
-                                                                TickFrequency="1" ValueChanged="OnDanmakuSpeedChanged" />
-                                                        <TextBlock Grid.Column="2" x:Name="DanmakuSpeedValue" Text="适中"
-                                                                   Style="{StaticResource DanmakuRowValueStyle}" />
-                                                    </Grid>
+                                            <Grid Margin="0,14,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="70" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="50" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="弹幕字号" Style="{StaticResource DanmakuRowLabelStyle}" />
+                                                <Slider Grid.Column="1" x:Name="DanmakuFontSlider"
+                                                        Style="{StaticResource PlayerSlider}"
+                                                        Minimum="50" Maximum="300" Value="100"
+                                                        Margin="8,0,8,0" IsSnapToTickEnabled="True"
+                                                        TickFrequency="25" ValueChanged="OnDanmakuFontChanged" />
+                                                <TextBlock Grid.Column="2" x:Name="DanmakuFontValue" Text="100%"
+                                                           Style="{StaticResource DanmakuRowValueStyle}" />
+                                            </Grid>
 
-                                                    <!-- ============ 胶囊底衬开关(2026-11-05 新增) ============
-                                                         ★ 不是一个滑杆而是**开关**: 它只有开/关两态,
-                                                           滑杆停在哪都说不清 —— 直接写"开/关"最省事。
-                                                         ★ 单独隔一条线: 上面三条是"连续调外观",
-                                                           这一条是"要不要底衬"(换了一种呈现方式),
-                                                           混在一起会让人以为它也是滑杆。
-                                                         ★ 文案与设置页一致(「胶囊底衬」), 两处说法统一。
-                                                         ★ 底色/圆角照 PlayerTextBtn(半透明黑 + 细白边),
-                                                           与这个弹层"浮在画面上、与主题无关"的规矩一致。
-                                                         ★★ 它不能是 Button(见下面 DanmakuPillToggleStyle 的说明)。 -->
-                                                    <Border Height="1" Margin="0,14,0,10"
-                                                            Background="#26FFFFFF" />
-                                                    <Grid>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="70" />
-                                                            <ColumnDefinition Width="*" />
-                                                            <ColumnDefinition Width="50" />
-                                                        </Grid.ColumnDefinitions>
-                                                        <TextBlock Grid.Column="0" Text="胶囊底衬" Style="{StaticResource DanmakuRowLabelStyle}" />
-                                                        <!-- ★ 用 Border 而不是 Button, 原因见上面 DanmakuPillToggleStyle 的说明:
-                                                             Button 会在按下时抢鼠标捕获, 把这个 StaysOpen=False 的弹层卡死,
-                                                             点完之后整个应用都点不动。Border 不捕获鼠标。 -->
-                                                        <!-- ★ 用 PreviewMouseLeftButtonDown 而不是 MouseLeftButtonUp:
-                                                             这个弹层是 StaysOpen=False, WPF 替它握着鼠标捕获,
-                                                             **鼠标抬起(Up)根本不会送进弹层的可视树**
-                                                             (实测: PreviewDown=1 / PreviewUp=0)。
-                                                             所以点击只能在**按下**这一下完成 —— 抬起事件收不到,
-                                                             等它等于永远等不到。 -->
-                                                        <Border Grid.Column="1" x:Name="DanmakuPillButton"
-                                                                Style="{StaticResource DanmakuPillToggleStyle}"
-                                                                HorizontalAlignment="Left" Margin="8,0,8,0"
-                                                                PreviewMouseLeftButtonDown="OnDanmakuPillClick"
-                                                                ToolTip="半透明圆角底衬, 压在亮画面上也能看清; 关掉恢复纯文字">
-                                                            <!-- ★ 必须显式写 Foreground: 全局隐式 TextBlock 样式带 Foreground setter,
-                                                                 优先级高于从父级继承下来的值 —— 省略就等于什么都没写
-                                                                 (本项目的老坑, 浅色主题下这里会变成深色字压在亮画面上)。 -->
-                                                            <TextBlock x:Name="DanmakuPillButtonText" Text="开"
-                                                                       Foreground="#F2FFFFFF" FontSize="12" />
-                                                        </Border>
-                                                        <!-- ★ 第三格刻意留空: 上面三行是「标签 | 滑杆 | 数值」,
-                                                             这一行是「标签 | 开关」—— 按钮上已经写着"开/关",
-                                                             再在右边重复一遍就是两份同义信息, 反而看不清状态。 -->
-                                                    </Grid>
-                                                </StackPanel>
-                                            </Border>
-                                        </Popup>
+                                            <Grid Margin="0,14,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="70" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="50" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="弹幕速度" Style="{StaticResource DanmakuRowLabelStyle}" />
+                                                <!-- ★ 速度是五档离散值, 步长 = 1 档, 拖到任意位置都能对上 SpeedLabel -->
+                                                <Slider Grid.Column="1" x:Name="DanmakuSpeedSlider"
+                                                        Style="{StaticResource PlayerSlider}"
+                                                        Minimum="0" Maximum="4" Value="2"
+                                                        Margin="8,0,8,0" IsSnapToTickEnabled="True"
+                                                        TickFrequency="1" ValueChanged="OnDanmakuSpeedChanged" />
+                                                <TextBlock Grid.Column="2" x:Name="DanmakuSpeedValue" Text="适中"
+                                                           Style="{StaticResource DanmakuRowValueStyle}" />
+                                            </Grid>
 
-                                        <!-- 全屏(离线缓存已挪到右侧信息面板的操作栏, 2026-09-26) -->
-                                        <Button Grid.Column="10" x:Name="BtnFullscreen2" Style="{StaticResource PlayerRoundBtn}"
-                                                Width="36" Height="36" Click="OnFullscreenClick" ToolTip="全屏 (F)">
-                                            <TextBlock Text="&#xE92D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                       FontSize="14" Foreground="White" />
-                                        </Button>
-                                    </Grid>
-                                </StackPanel>
-                            </Border>
+                                            <!-- ============ 胶囊底衬开关 ============
+                                                 ★ 不是一个滑杆而是**开关**: 只有开/关两态。
+                                                 ★ 用 Border 而不是 Button: 这个弹层是 StaysOpen="False",
+                                                    Button 按下时会抢鼠标捕获, 和弹层自己的捕获互相卡死
+                                                   —— 点完之后整个应用都点不动(实测)。Border 不捕获鼠标。
+                                                 ★ 用 PreviewMouseLeftButtonDown 而不是 Up: 弹层握着捕获时
+                                                    Up 根本送不进可视树(实测 PreviewDown=1 / PreviewUp=0)。 -->
+                                            <Border Height="1" Margin="0,14,0,10" Background="#1FFFFFFF" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="70" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="50" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="胶囊底衬" Style="{StaticResource DanmakuRowLabelStyle}" />
+                                                <Border Grid.Column="1" x:Name="DanmakuPillButton"
+                                                        Style="{StaticResource DanmakuPillToggleStyle}"
+                                                        HorizontalAlignment="Left" Margin="8,0,8,0"
+                                                        PreviewMouseLeftButtonDown="OnDanmakuPillClick"
+                                                        ToolTip="半透明圆角底衬, 压在亮画面上也能看清; 关掉恢复纯文字">
+                                                    <TextBlock x:Name="DanmakuPillButtonText" Text="开"
+                                                               Foreground="#F2FFFFFF" FontSize="12" />
+                                                </Border>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </Popup>
+                            </Grid>
                         </Grid>
                 </vlc:VideoView>
             </Grid>
@@ -2189,6 +2322,19 @@
                                                                            TextTrimming="CharacterEllipsis"
                                                                            Foreground="{DynamicResource TextPrimaryBrush}" />
                                                                 <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                                    <!-- 「已关注」标签(2026-11-14): 与该 UP 的首页/搜索卡片同一枚,
+                                                                         放在元信息行**行首**(UP 角标左边), 与卡片上的位置约定一致。
+                                                                         相关接口不下发 is_followed, 由 PlayerWindow.Loading 里的
+                                                                         MarkRelatedFollowedAsync 批量查 /x/relation/relations 异步回填;
+                                                                         条目带 INPC, 标签自己出现。未登录/未关注恒为 false, 自动隐藏。
+                                                                         ★ 整行是"点一下换片"的 Button, 标签必须 IsHitTestVisible=False
+                                                                           (FollowedBadgeStyle 已带), 不能截走点击。 -->
+                                                                    <Border Style="{StaticResource FollowedBadgeStyle}"
+                                                                            Visibility="{Binding IsAuthorFollowed,
+                                                                                         Converter={StaticResource BoolToVis}}">
+                                                                        <TextBlock Text="已关注" FontSize="9.5" FontWeight="SemiBold"
+                                                                                   Foreground="{DynamicResource TextOnAccentBrush}" />
+                                                                    </Border>
                                                                     <!-- UP 主名前的 UP 角标: 与 B 站卡片一致的一眼辨识 -->
                                                                     <TextBlock Text="UP" FontSize="9.5"
                                                                                Margin="0,0,4,0"

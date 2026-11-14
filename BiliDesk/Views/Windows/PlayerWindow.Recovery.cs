@@ -153,8 +153,8 @@ public partial class PlayerWindow : FluentWindow
         if (_isLive || _isLocalPlayback || _aid <= 0 || _currentCid <= 0) return false;
         if (string.IsNullOrEmpty(_lastPlayUrl) ||
             !_lastPlayUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return false;
-        // 正在换清晰度/音质: 那边会自己取流并覆盖地址, 这里别插一脚
-        if (_switchingQuality || _switchingAudio) return false;
+        // 正在换清晰度: 那边会自己取流并覆盖地址, 这里别插一脚
+        if (_switchingQuality) return false;
 
         if (_playUrlDeadline > 0 &&
             DateTimeOffset.UtcNow.ToUnixTimeSeconds() >= _playUrlDeadline - UrlRefreshLeadSeconds)
@@ -267,7 +267,7 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 记下"这份播放地址的有效期与候选线路"。
-    /// ★ 三条取流路径(起播 / 换清晰度 / 换音质)必须共用: 各写一遍必然漏一处,
+    /// ★ 两条取流路径(起播 / 换清晰度)必须共用: 各写一遍必然漏一处,
     ///   而漏掉的那次会让地址保鲜拿着**上一条地址**的 deadline 做判断。
     /// </summary>
     private void RememberPlayUrlFreshness(string? mainUrl, IEnumerable<string>? backups)

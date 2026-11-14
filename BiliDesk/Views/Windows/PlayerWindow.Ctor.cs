@@ -65,8 +65,6 @@ public partial class PlayerWindow : FluentWindow
         // Opened 时量出宽度差做负偏移, 弹层右缘与按钮右缘平齐。
         QualityPopup.PlacementTarget = BtnQuality;
         DanmakuAreaPopup.PlacementTarget = BtnDanmakuArea;
-        // 音质弹层(2026-11-06): 与清晰度同款, 右缘对齐音质按钮。
-        AudioPopup.PlacementTarget = BtnAudio;
         // 倍速弹层(2026-11-03 自定义倍速): 与清晰度弹层同款, 右缘对齐 SpeedBtn。
         SpeedPopup.PlacementTarget = SpeedBtn;
         // 右缘对齐(弹层右缘 = 按钮右缘)。注意必须等弹层布局完成后再量宽:
@@ -75,9 +73,6 @@ public partial class PlayerWindow : FluentWindow
         QualityPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
                 RightAlignPopup(QualityPopup, BtnQuality)));
-        AudioPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
-            System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
-                RightAlignPopup(AudioPopup, BtnAudio)));
         DanmakuAreaPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
                 RightAlignPopup(DanmakuAreaPopup, BtnDanmakuArea)));
@@ -89,12 +84,11 @@ public partial class PlayerWindow : FluentWindow
                 // 否则用户看到的永远是列表顶部, 以为没选中。
                 if (SpeedList.SelectedItem != null) SpeedList.ScrollIntoView(SpeedList.SelectedItem);
             }));
-        // ★ 弹层「点一下展开, 再点一下收起」(2026-11-14): 五个入口统一登记。
+        // ★ 弹层「点一下展开, 再点一下收起」(2026-11-14): 四个入口统一登记。
         //   StaysOpen=False 的弹层在"再点入口按钮"那一下会被 WPF 先行自动收起,
         //   Click 到达时 IsOpen 恒为 false —— 旧写法(无条件置 true / 取反 IsOpen)一律展开,
         //   用户报的"点击一律是打开"就是它。两层防线的接线见 HookPopupToggle。
         HookPopupToggle(QualityPopup, BtnQuality);
-        HookPopupToggle(AudioPopup, BtnAudio);
         HookPopupToggle(DanmakuAreaPopup, BtnDanmakuArea);
         HookPopupToggle(SpeedPopup, SpeedBtn);
         HookPopupToggle(PagesPopup, BtnPages);

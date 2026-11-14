@@ -2,6 +2,9 @@
 bin/
 obj/
 .vs/
+# WPF 模板编译的中间工程(每次 build 随机命名, 如 BiliDesk_cjjmxtnx_wpftmp.csproj):
+# 它是构建产物, 不是源码 —— 漏提交会让仓库里凭空多一个 400 行的临时文件
+*_wpftmp.csproj
 *.user
 *.suo
 *.userosscache
