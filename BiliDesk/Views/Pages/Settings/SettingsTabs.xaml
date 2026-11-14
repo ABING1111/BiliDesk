@@ -606,7 +606,30 @@
                                   IsChecked="{Binding AutoResume, Mode=TwoWay}" />
                     </Grid>
 
-                    <!-- ★ 组四: 缓冲 -->
+                    <!-- ★ 组四: 播放页(2026-11-14)
+                         相关视频是信息栏里的补充内容, 不属于画质/缓冲/网络任何一组;
+                         单独成组, 用户找"播放器里显示什么"时不用在播放进度里翻。 -->
+                    <TextBlock Text="播放页" Style="{StaticResource SettingsGroupHeaderStyle}" />
+
+                    <!-- 显示相关视频: 关闭后播放器不再请求相关视频接口, 信息栏也不显示该区块。
+                         ★ 已打开的播放器会立即生效(见 SettingsStore.RelatedVideosChanged)。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="显示相关视频" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding ShowRelatedVideosHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding ShowRelatedVideos, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- ★ 组五: 缓冲 -->
                     <TextBlock Text="缓冲" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
                     <!-- 缓冲策略(2026-11-01 新增): 自动按带宽/码率挑预读深度, 还是手动固定值。

@@ -153,6 +153,15 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing || string.IsNullOrEmpty(bvid)) return;
 
+        // ★ 设置页关掉「显示相关视频」(2026-11-14): 不请求接口, 也不留任何区块。
+        //   必须放在"显示转圈"之前 —— 否则会先闪一下「正在加载…」再消失, 看着像功能坏了。
+        //   ClearRelatedPanel 还会让在途请求的 gen 作废, 双保险。
+        if (!Svc.Settings.ShowRelatedVideos)
+        {
+            ClearRelatedPanel();
+            return;
+        }
+
         // 直播/本地文件没有"相关视频"这回事(见 LoadLiveAsync 里对 DescText 的处理)
         if (RelatedPanel == null || RelatedList == null) return;
 
@@ -190,6 +199,26 @@ public partial class PlayerWindow : FluentWindow
         // 先挂第一批(与旧行为一致: 打开播放器先看到 8 条, 不一下铺满 40 条)
         _relatedShown = Math.Min(RelatedPageSize, items.Count);
         RelatedList.ItemsSource = items.GetRange(0, _relatedShown);
+    }
+
+    /// <summary>
+    /// 设置页「显示相关视频」开关变化。
+    ///
+    /// ★ 关闭: 立即清空并隐藏整块 —— 不等换片, 否则用户改完设置看不到任何反应。
+    /// ★ 打开: 当前是在线视频就重新加载; 直播/本地文件没有 bvid(或已标记本地播放),
+    ///   本来就没有相关视频, 直接跳过。
+    /// ★ 重新加载走 LoadRelatedAsync 的代次闸门: 快速开关两次也只保留最后一次结果。
+    /// </summary>
+    private void OnRelatedVideosSettingChanged()
+    {
+        if (_closing) return;
+        if (!Svc.Settings.ShowRelatedVideos)
+        {
+            ClearRelatedPanel();
+            return;
+        }
+        if (_isLive || _isLocalPlayback || string.IsNullOrEmpty(_currentBvid)) return;
+        _ = LoadRelatedAsync(_currentBvid);
     }
 
     /// <summary>

@@ -134,6 +134,8 @@ public partial class PlayerWindow : FluentWindow
         Svc.Settings.SponsorBlockChanged += OnSponsorSettingsChanged;        // 进度条色块是按像素摆的, 控件一改宽度就得重画(窗口缩放、切全屏、控制栏重排都会触发)。
         // 重画成本只有几个 Rectangle, 不必做节流。
         SponsorMarks.SizeChanged += (_, _) => RenderSponsorMarks();
+        // 显示相关视频: 开关一变, 已打开的信息栏立即隐藏/重新加载(2026-11-14)
+        Svc.Settings.RelatedVideosChanged += OnRelatedVideosSettingChanged;
         if (DanmakuAreaSlider != null) DanmakuAreaSlider.Value = Svc.Settings.DanmakuAreaPercent;
         // ★ 到这里四个滑杆都已经同步成"用户的真实设置", 才打开回灌闸门。
         //   在这之前的所有 ValueChanged 都只刷文字、不落库 —— 否则 XAML 里的初始

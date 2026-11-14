@@ -969,6 +969,29 @@ public class SettingsViewModel : ObservableObject
     public string AutoResumeHint =>
         "打开视频时自动跳到此前的观看进度(本机记录 + B 站云端); 关闭后仍会记录, 只是从头播放";
 
+    // ----------------- 相关视频(2026-11-14) -----------------
+
+    /// <summary>
+    /// 是否在播放器信息栏显示「相关视频」(默认开)。
+    /// 关闭后播放器不再请求相关视频接口, 信息栏也不显示那一块。
+    /// </summary>
+    public bool ShowRelatedVideos
+    {
+        get => Svc.Settings.ShowRelatedVideos;
+        set
+        {
+            if (value == Svc.Settings.ShowRelatedVideos) return;
+            Svc.Settings.SetShowRelatedVideos(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ShowRelatedVideosHint));
+        }
+    }
+
+    /// <summary>副标题: 说清关闭后的行为(不再请求 + 不再显示), 以及立即生效</summary>
+    public string ShowRelatedVideosHint => Svc.Settings.ShowRelatedVideos
+        ? "播放器右侧简介下方显示相关推荐; 关闭后不再加载相关视频"
+        : "已关闭, 播放器不再请求与显示相关视频";
+
     // ----------------- 起播缓冲(网络缓存) -----------------
 
     /// <summary>

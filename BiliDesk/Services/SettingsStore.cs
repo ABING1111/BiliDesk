@@ -332,6 +332,16 @@ public class SettingsStore
     public bool AutoResume { get; set; } = true;
 
     /// <summary>
+    /// 是否在播放器信息栏显示「相关视频」(默认开)。
+    ///
+    /// ★ 关闭后: 播放器不请求 /x/web-interface/archive/related, 信息栏也不显示那一块。
+    ///   相关视频是后台补充信息, 关掉不影响正在播放的视频本身。
+    /// ★ 老配置缺这个字段 ⇒ 反序列化保留属性初始化值 true ⇒ 行为与改动前一致。
+    /// ★ 与 <see cref="Models.AppSettings.ShowRelatedVideos"/> 是读写契约。
+    /// </summary>
+    public bool ShowRelatedVideos { get; set; } = true;
+
+    /// <summary>
     /// 是否记住播放器窗口大小**和位置**(默认开)。
     ///
     /// ★ 关掉后: 播放器每次打开都用 XAML 里的默认 1280×760 并按 CenterScreen 居中,
@@ -558,6 +568,12 @@ public class SettingsStore
     /// </summary>
     public event Action? SponsorBlockChanged;
 
+    /// <summary>
+    /// 「显示相关视频」开关变更。已打开的播放器据此立即隐藏 / 重新加载信息栏里的相关视频 ——
+    /// 不广播的话用户改完设置得重开视频才生效, 看起来像开关没作用。
+    /// </summary>
+    public event Action? RelatedVideosChanged;
+
     public void Load()
     {
         try
@@ -735,6 +751,9 @@ public class SettingsStore
         // 高音质音轨 / 自动续播: 老配置缺字段 ⇒ AppSettings 的初始化值 true(与设计默认一致)。
         PreferHighQualityAudio = s.PreferHighQualityAudio;
         AutoResume = s.AutoResume;
+
+        // 显示相关视频(2026-11-14): 老配置缺字段 ⇒ AppSettings 的初始化值 true(保持原有行为)。
+        ShowRelatedVideos = s.ShowRelatedVideos;
 
         // 音质档位: 手改配置可能塞进 30251 之外的数字 ⇒ 一律落回「自动」。
         PreferredAudioTier = AudioPreference.Normalize(s.PreferredAudioTier);
@@ -945,6 +964,7 @@ public class SettingsStore
         PreferHighQualityAudio = PreferHighQualityAudio,
         PreferredAudioTier = PreferredAudioTier,
         AutoResume = AutoResume,
+        ShowRelatedVideos = ShowRelatedVideos,
         RememberPlayerWindowSize = RememberPlayerWindowSize,
         PlayerWindowWidth = PlayerWindowWidth,
         PlayerWindowHeight = PlayerWindowHeight,
@@ -1151,6 +1171,18 @@ public class SettingsStore
         if (CloseToTray == value) return;
         CloseToTray = value;
         Save();
+    }
+
+    /// <summary>
+    /// 改"显示相关视频"并落盘。
+    /// ★ 需要广播: 已经打开的播放器要立即隐藏 / 重新加载相关视频, 不能等下一次换片。
+    /// </summary>
+    public void SetShowRelatedVideos(bool value)
+    {
+        if (ShowRelatedVideos == value) return;
+        ShowRelatedVideos = value;
+        Save();
+        RelatedVideosChanged?.Invoke();
     }
 
     /// <summary>改"自动检查更新"并落盘</summary>

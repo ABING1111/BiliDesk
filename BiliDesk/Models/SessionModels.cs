@@ -90,6 +90,16 @@ public class AppSettings
     public bool AutoResume { get; set; } = true;
 
     /// <summary>
+    /// 是否在播放器信息栏显示「相关视频」(默认开)。
+    ///
+    /// ★ 关闭后播放器不再请求相关视频接口, 信息栏也不显示那一块 ——
+    ///   给"只想看当前视频、不要推荐干扰"的用户一个入口, 同时省掉一次接口请求。
+    /// ★ 老配置没有这个字段 ⇒ 属性初始化值 true, 行为与改动前一致。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool ShowRelatedVideos { get; set; } = true;
+
+    /// <summary>
     /// 是否记住播放器窗口大小**和位置**(默认开)。关闭后播放器每次都用 XAML 默认尺寸并居中.
     /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
     /// </summary>

@@ -217,6 +217,7 @@ public partial class PlayerWindow : FluentWindow
         UnhookPopupToggles();
         // 跳过赞助片段: 退订 + 掐掉还没回来的查询
         Svc.Settings.SponsorBlockChanged -= OnSponsorSettingsChanged;
+        Svc.Settings.RelatedVideosChanged -= OnRelatedVideosSettingChanged;
         CancelSponsorFetch();
         // 主动松掉"占地大"的那几处引用, 再请求一次回收 + 把空出来的物理页交还系统。
         // 顺序不能反: 先松引用, 紧接着那次回收才有东西可收 —— 对用户就是"关掉视频内存数字马上掉"。
