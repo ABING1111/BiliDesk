@@ -727,9 +727,12 @@
         </Setter>
     </Style>
 
-    <!-- 属性卡片底(设置页) -->
+    <!-- 属性卡片底(设置页)。
+         ★ 用 PanelBackgroundBrush 而不是 CardBackgroundBrush: 设置页卡片是"大面板",
+           亚克力下与页面底同档透明; 动态卡那种内容卡片用 CardBackgroundBrush,
+           亚克力下比面板更实一档(普通/云母下两者同值, 观感不变)。 -->
     <Style x:Key="SettingCardStyle" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+        <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="10" />
@@ -930,13 +933,17 @@
                         </ToggleButton>
                         <!-- 弹层: 白卡圆角 + 阴影 + 内部列表。
                              Margin=8 是给投影留的空间(不留会被裁), 用 Horizontal/VerticalOffset
-                             抵回来, 让卡片视觉上正对选择框。 -->
+                             抵回来, 让卡片视觉上正对选择框。
+                             ★ 底色用 FlyoutBackgroundBrush 而不是 CardBackgroundBrush:
+                               下拉弹层浮在页面内容上, 亚克力下卡片底会变半透明,
+                               弹层跟着透就会把底下的字透上来糊成一片(合集面板同款坑)。
+                               这个键恒不透明, 普通模式下又与卡片底几乎同值, 观感不变。 -->
                         <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}"
                                Placement="Bottom" AllowsTransparency="True" PopupAnimation="Fade"
                                HorizontalOffset="-8" VerticalOffset="0">
                             <Border MinWidth="{TemplateBinding ActualWidth}"
                                     MaxHeight="{TemplateBinding MaxDropDownHeight}"
-                                    Background="{DynamicResource CardBackgroundBrush}"
+                                    Background="{DynamicResource FlyoutBackgroundBrush}"
                                     BorderBrush="{DynamicResource CardBorderBrush}"
                                     BorderThickness="1" CornerRadius="12" Margin="8"
                                     Padding="0,4">
@@ -1075,10 +1082,13 @@
                                 Background="{DynamicResource ControlFillHoverBrush}" />
                         <Border x:Name="TrackOn" CornerRadius="12" Opacity="0"
                                 Background="{DynamicResource AccentBrush}" />
-                        <!-- 圆点: 关在左 2px, 开在右 2px。位置动画 120ms, 与轨道淡入同步。 -->
+                        <!-- 圆点: 关在左 2px, 开在右 2px。位置动画 120ms, 与轨道淡入同步。
+                             ★ 底色用 FlyoutBackgroundBrush(恒不透明)而不是 CardBackgroundBrush:
+                               圆点压在强调色轨道上, 亚克力下卡片底变半透明后圆点会透出轨道色
+                               (开启时整个圆点泛粉)。这个键普通模式下与卡片底几乎同值。 -->
                         <Border x:Name="Thumb" Width="18" Height="18" CornerRadius="9"
                                 HorizontalAlignment="Left" Margin="3,0,0,0"
-                                Background="{DynamicResource CardBackgroundBrush}">
+                                Background="{DynamicResource FlyoutBackgroundBrush}">
                             <Border.Effect>
                                 <DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity="0.25" />
                             </Border.Effect>

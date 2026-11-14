@@ -20,7 +20,7 @@
                实测不会真正落值（标签一直不消失）；绑到 Class 上则宽窄切换和切页回来都可靠。 -->
         <Border x:Name="KindTabs" HorizontalAlignment="Left" VerticalAlignment="Top"
                 Margin="36,24,0,0" Panel.ZIndex="5"
-                Background="{DynamicResource CardBackgroundBrush}"
+                Background="{DynamicResource PanelBackgroundBrush}"
                 BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
                 CornerRadius="22" Padding="5">
             <Border.Style>

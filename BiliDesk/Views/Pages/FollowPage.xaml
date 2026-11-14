@@ -490,7 +490,7 @@
                            未登录才整块隐藏(登录了才有"关注"可言)。
                          ★ 展开态可折叠(点标题行切换), 数据与动态流并行加载。 -->
                     <Border Grid.Row="1" Margin="8,0,8,10" Padding="12,10" CornerRadius="10"
-                            Background="{DynamicResource CardBackgroundBrush}"
+                            Background="{DynamicResource PanelBackgroundBrush}"
                             BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">

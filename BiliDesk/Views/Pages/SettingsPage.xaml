@@ -91,7 +91,7 @@
                        而不是被 WindowChrome 当成"拖动窗口"吞掉。 -->
                 <Border x:Name="StickyCapsule" VerticalAlignment="Top" HorizontalAlignment="Center"
                         Margin="0,20,0,0"
-                        Background="{DynamicResource CardBackgroundBrush}"
+                        Background="{DynamicResource PanelBackgroundBrush}"
                         BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
                         CornerRadius="22" Padding="5"
                         shell:WindowChrome.IsHitTestVisibleInChrome="True">

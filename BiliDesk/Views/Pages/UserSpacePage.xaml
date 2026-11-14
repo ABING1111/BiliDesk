@@ -98,8 +98,9 @@
         </Grid.RowDefinitions>
 
         <!-- ======== 顶部 UP 主信息区(2026-11-08 按参考图重排) ========
-             从左到右: 头像(带 LV) / 昵称 + 大会员 + UID + 简介 / 关注·粉丝·获赞 / 关注按钮 -->
-        <Border Grid.Row="0" Background="{DynamicResource CardBackgroundBrush}"
+             从左到右: 头像(带 LV) / 昵称 + 大会员 + UID + 简介 / 关注·粉丝·获赞 / 关注按钮
+             ★ 底色用 PanelBackgroundBrush: 通栏大面板, 亚克力下跟着半透明透出材质。 -->
+        <Border Grid.Row="0" Background="{DynamicResource PanelBackgroundBrush}"
                 BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1">
             <Grid Margin="36,22,36,16">
                 <Grid.ColumnDefinitions>

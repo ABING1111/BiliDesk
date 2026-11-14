@@ -68,8 +68,10 @@
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
-                <!-- ===== 左: 会话列表 ===== -->
-                <Border Grid.Column="0" Background="{DynamicResource CardBackgroundBrush}"
+                <!-- ===== 左: 会话列表 =====
+                     ★ 底色用 PanelBackgroundBrush: 通栏大面板, 亚克力下跟着半透明透出材质
+                       (普通模式下与卡片底同值)。 -->
+                <Border Grid.Column="0" Background="{DynamicResource PanelBackgroundBrush}"
                         BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,1,0">
                     <Grid>
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"

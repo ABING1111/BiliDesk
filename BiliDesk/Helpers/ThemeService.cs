@@ -493,6 +493,7 @@ public class ThemeService
     private static readonly string[] SurfaceKeys =
     {
         "AppBackgroundBrush", "SideBarBackgroundBrush", "CardBackgroundBrush",
+        "PanelBackgroundBrush",
         "InfoBarBackgroundBrush", "InputBackgroundBrush", "FlyoutBackgroundBrush",
         "ToastBackgroundBrush", "FloatingFillBrush", "FloatingFillHoverBrush",
         "FloatingFillPressedBrush"
@@ -764,19 +765,34 @@ public class ThemeService
         into["AppBackgroundBrush"] = WithAlpha(acrylicBase, alpha);
         into["SideBarBackgroundBrush"] = WithAlpha(acrylicBase, sidebarAlpha);
 
-        // 卡片/提示条: 2026-10-17 起**不再压暗**(上一版的 #E9EAEC 是"压暗一档"的旧配方)。
-        //   为什么撤掉: 那一档压暗本来是为"页面底很实"设计的补偿 —— 页面底若接近实色,
-        //   卡片不压暗就会与它糊在一起。但现在页面底**真的透**(见上面), 层次已经由
-        //   "透出度差"拉开了; 再压暗就变成整屏偏灰, 观感就是用户说的"脏"。
-        //   ⇒ 回到接近色板原值, 只留一点点差距(3~4 阶)以保证卡片仍然"浮起来"。
-        into["CardBackgroundBrush"] = IsDark
-            ? Color.FromRgb(0x2A, 0x2A, 0x2A)
-            : Color.FromRgb(0xFC, 0xFC, 0xFD);
+        // 卡片(动态卡/缓存页卡/聊天气泡/播放器 UP 卡等): 亚克力下**也半透明**
+        //   (2026-11-14 用户拍板"卡片也半透明" —— 大面板透出来之后, 实色卡片反而成了
+        //   整页最突兀的纯色块)。比板块面板**更实一档**(alpha + 0.15): 卡片是内容主体,
+        //   太透文字会发飘。默认滑杆档下合成不透明度约 5 成(浅)/7 成(深), 材质透得出、
+        //   卡片仍比面板"浮"一层。封面图本身不透明, 不受影响。
+        // ★ 视频卡/番剧卡没有卡片底(封面+文字直接衬在页面底上), 天然不受这里影响。
+        // ★ 浮在内容上的弹层(ComboBox 下拉/收藏夹折叠浮层)与开关圆点**不能**跟着透,
+        //   它们已改绑 FlyoutBackgroundBrush(恒不透明), 见 Styles.xaml / FavoritesPage。
+        // ★ 普通/云母模式: 色板原值(不透明), 这里不写覆盖项时由调用方回落。
+        into["CardBackgroundBrush"] = WithAlpha(acrylicBase, (byte)Math.Min(255, alpha + 38));
         into["InfoBarBackgroundBrush"] = IsDark
             ? Color.FromRgb(0x2A, 0x2A, 0x2A)
             : Color.FromRgb(0xFC, 0xFC, 0xFD);
 
-        // 浮层/输入框/Toast: 同上, 回到接近色板原值(输入框要透一点才能看出"是个洞")
+        // ★★ 板块面板(设置页大卡片 / 消息页左栏 / UP 主页头 / 胶囊条): 亚克力下**半透明**,
+        //   让材质从大面板里透出来(2026-11-14 用户报"某些板块显示时亚克力不生效,
+        //   那一块纯色背景很突兀")。它们直接坐在页面底上, 底下透出的是材质而不是文字列表,
+        //   半透明不会糊字 —— 与合集面板那种"浮在内容上"的浮层(OverlaySurfaceBrush,
+        //   恒不透明)是两回事。
+        // ★★ 透明度与页面底**同一档**(同一个反解后的 alpha): 第一版给的是固定 70%,
+        //   用户实机反馈"和之前区别不大" —— 70% 压在半透明页面底上, 材质只剩约两成可见,
+        //   观感仍接近实色。改成同档后默认滑杆档下合成不透明度约 4 成(浅)/6.5 成(深),
+        //   材质清晰可见; 面板比页面底多叠一层、仍然更实, 靠边框/投影分层, 不会糊成一片。
+        //   滑杆因此同时控制页面底与面板, 调一处两边一起变。
+        // ★ 卡片(CardBackgroundBrush)比面板再实一档, 见上面那组覆盖。
+        into["PanelBackgroundBrush"] = WithAlpha(acrylicBase, alpha);
+
+        // 浮层/输入框/Toast: 保持不透明(浮层要压住底下内容; 输入框/Toast 接近色板原值)
         into["InputBackgroundBrush"] = IsDark
             ? Color.FromRgb(0x2E, 0x2E, 0x2E)
             : Color.FromRgb(0xF6, 0xF7, 0xF9);

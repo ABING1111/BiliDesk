@@ -55,7 +55,7 @@
                  ★ GroupName 必须给: 同组 RadioButton 才有互斥。 -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom"
                         Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
-                <Border Background="{DynamicResource CardBackgroundBrush}"
+                <Border Background="{DynamicResource PanelBackgroundBrush}"
                         BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
                         CornerRadius="22" Padding="5" VerticalAlignment="Center">
                     <Border.Effect>

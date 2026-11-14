@@ -99,7 +99,7 @@
               Visibility="{Binding Folders.Count, Converter={StaticResource CountToVis}}">
             <Grid x:Name="FolderBarHost">
                 <Border HorizontalAlignment="Left"
-                        Background="{DynamicResource CardBackgroundBrush}"
+                        Background="{DynamicResource PanelBackgroundBrush}"
                         BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
                         CornerRadius="22" Padding="5">
                     <Border.Effect>
@@ -149,11 +149,13 @@
                     </StackPanel>
                 </Border>
 
-                <!-- 折叠浮层: 白卡圆角带投影, 流式多行展示**被折叠的**收藏夹 -->
+                <!-- 折叠浮层: 白卡圆角带投影, 流式多行展示**被折叠的**收藏夹。
+                     ★ 底色用 FlyoutBackgroundBrush(恒不透明)而不是 CardBackgroundBrush:
+                       浮层盖在卡片墙上, 亚克力下卡片底半透明, 跟着透会糊字(合集面板同款坑)。 -->
                 <Popup x:Name="FolderMorePopup" PlacementTarget="{Binding ElementName=FolderMoreButton}"
                        Placement="Bottom" AllowsTransparency="True" PopupAnimation="Fade"
                        StaysOpen="False">
-                    <Border Background="{DynamicResource CardBackgroundBrush}"
+                    <Border Background="{DynamicResource FlyoutBackgroundBrush}"
                             BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
                             CornerRadius="12" Padding="10" Margin="8" MaxWidth="560">
                         <Border.Effect>

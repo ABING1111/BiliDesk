@@ -13,6 +13,15 @@
 
     <!-- 卡片 -->
     <SolidColorBrush x:Key="CardBackgroundBrush" Color="#FFFFFF" />
+    <!--
+        板块面板底色(设置页大卡片 / 消息页左栏 / UP 主页头 / 胶囊条这类**大面板**):
+        普通/云母模式下取值与 CardBackgroundBrush 一致; 亚克力模式下由 ThemeService
+        覆盖成半透明, 让材质从大面板里透出来(2026-11-14 修"某些板块纯色背景很突兀")。
+        ★ 为什么必须与 CardBackgroundBrush 分开: 亚克力下两者透明度**不同档** ——
+          面板与页面底同档(更透), 卡片比面板更实一档(内容主体, 太透文字发飘)。
+          普通/云母下两者同值, 观感无差。大面板直接坐在页面底上, 底下透出的是材质
+          不是文字, 半透明不会糊 —— 与 OverlaySurfaceBrush 防的"浮层压文字"是两回事。 -->
+    <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#FFFFFF" />
     <!-- 悬停色。浅色主题下原来是纯白(= 和常态一样, 等于没有反馈), 压暗一点点才看得出来 -->
     <SolidColorBrush x:Key="CardBorderBrush" Color="#14000000" />
     <!-- 悬停时的描边: 比常态深一档, 是"鼠标在手边"的主要视觉提示 -->
