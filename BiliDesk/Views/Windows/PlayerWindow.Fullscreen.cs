@@ -31,8 +31,22 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing) return;
 
+        // 进全屏前把常规几何落盘: 进全屏后 Width/Height 会变成全屏尺寸, 读不到可信值了。
+        if (!_isFullscreen)
+        {
+            CaptureNormalPlacement();
+            PersistNormalPlacement();
+        }
+
+        // ★★★ 必须在改状态**之前**进稳定期(2026-11-14 实测):
+        //   退全屏时 WPF 会先发 SizeChanged/LocationChanged(此时 WindowState 已是 Normal、
+        //   `_isFullscreen` 也已置 false), 之后才发 StateChanged。若等 OnStateChanged 里才置位,
+        //   中间那次事件会把"位置已还原、尺寸还是全屏"的中间态采成常规几何。
+        BeginPlacementTransition();
+
         _isFullscreen = !_isFullscreen;
         ApplyFullscreen(_isFullscreen);
+        WritePlacementLog("toggle-fullscreen", $"isFullscreen={_isFullscreen} state={WindowState}");
     }
 
     /// <summary>全屏的开关(布局细节与顺序见 ApplyFullscreenLayout)</summary>
@@ -181,6 +195,14 @@ public partial class PlayerWindow : FluentWindow
     private void ToggleFillWindow()
     {
         if (_closing) return;
+        // 与全屏同理: 铺满模式下的几何不记(见 IsNormalStateForPlacement), 切之前先把常规几何存好。
+        if (!_isFillWindow)
+        {
+            CaptureNormalPlacement();
+            PersistNormalPlacement();
+        }
+        // 状态切换前先进稳定期(与 ToggleFullscreen 同一个理由)。
+        BeginPlacementTransition();
         _isFillWindow = !_isFillWindow;
         ApplyInfoPanelState();
         UpdateFillWindowButton();
@@ -238,23 +260,68 @@ public partial class PlayerWindow : FluentWindow
         MinHeight = hide ? FillWindowMinHeight : NormalWindowMinHeight;
     }
 
-    // ------------------------------------------------------------ 播放器窗口大小/位置记忆(2026-11-03, 位置 2026-11-07)
+    // ------------------------------------------------------------ 播放器窗口大小/位置记忆
+    //
+    // 2026-11-03 加入尺寸, 2026-11-07 加入位置, 2026-11-14 重做为"快照 + 稳定期"。
+    //
+    // ★★★ 这次重做修的是什么(用户报: 双击全屏后退出视频, 第二次打开窗口跑到左上角):
+    //   旧实现里 `LocationChanged/SizeChanged` 只要 WindowState==Normal 就直接记, 而
+    //   "退出全屏/还原最大化"是一个**有系统动画的过程** —— `_isFullscreen` 在窗口状态
+    //   真正还原之前就被置 false 了, 动画途中的中间坐标会被当成常规几何记下来; 关闭时
+    //   再落盘, 下一次打开就被钉在动画半路(屏幕左上角)。同时 `Window.Width/Height` 在
+    //   最大化时会变成**全屏尺寸**(实测 800×600 → 1536×864), 旧代码用它们做兜底,
+    //   一旦快照没采到就把全屏尺寸存进设置。
+    //
+    //   现在: 只在"常规态 + 过了稳定期"采一份完整快照, 切换前后再各兜一次;
+    //   落盘只认快照, 兜底用 RestoreBounds(它保留最大化前的常规几何), **绝不再读当前
+    //   Width/Height**。
 
-    /// <summary>最后一次"常规态"的窗口尺寸(全屏/最大化/铺满期间不更新)。关闭时从这里落盘。</summary>
-    private double _lastNormalWidth;
-    private double _lastNormalHeight;
+    /// <summary>
+    /// 最后一次"常规态"的完整几何(DIP)。全屏/最大化/铺满/切换动画期间不更新。
+    /// 关闭与切换时都从这里落盘 —— 不再直接读窗口当前值(原因见本节开头)。
+    /// </summary>
+    private PlayerWindowPlacement.PlacementRect _normalPlacement;
 
-    /// <summary>最后一次"常规态"的窗口位置(DIP; 与尺寸同一套过滤条件)。关闭时从这里落盘。</summary>
-    private double _lastNormalLeft;
-    private double _lastNormalTop;
+    /// <summary>快照是否有效(0 尺寸 / NaN 都视为没有)。</summary>
+    private bool _hasNormalPlacement;
 
-    /// <summary>_lastNormalLeft/Top 是否采到了真实值。
-    /// ★ 不能拿 0 当哨兵: 多屏布局里 0 是合法坐标; 也不能直接读 Left ——
-    ///   WindowStartupLocation=CenterScreen 的窗口只要用户没动过, Left/Top 一直是 NaN。</summary>
-    private bool _lastNormalPosValid;
+    /// <summary>
+    /// 是否处于"几何不可信"的稳定期。全屏/最大化/铺满切换、二次定位之后置位;
+    /// 期间任何 SizeChanged/LocationChanged 都只**续期**、不采几何 —— 那是在系统还原动画里。
+    ///
+    /// ★ 为什么不能用"一个固定的截止时间"(第一版就是这么写的, 实测不够):
+    ///   DWM 的还原动画在慢机器上能拖到 400ms 以上, 而且位置先到位、尺寸后到位。
+    ///   固定 300ms 的窗口一过就采, 会把"位置已是常规值、尺寸还是全屏尺寸"的中间态
+    ///   存进设置(实测: 退全屏后 440ms 关闭 → 下次打开窗口铺满屏幕)。
+    ///   现在是"尾部防抖 + 连续两次采样一致": 只要还在动就续期, 两次读到同一几何才提交;
+    ///   关闭时若仍在稳定期, 直接沿用上一份快照 —— 两端口径一致。
+    /// </summary>
+    private bool _placementSettling;
+
+    /// <summary>稳定期里上一次采到的几何样本: 连续两次一致才认为动画结束(见 OnPlacementSettleTick)。</summary>
+    private PlayerWindowPlacement.PlacementRect _placementSettleSample;
+
+    /// <summary>是否已经有上一轮的稳定期样本。</summary>
+    private bool _hasPlacementSettleSample;
+
+    /// <summary>稳定期结束后补采一次(不依赖"最后一个事件一定会到")。</summary>
+    private DispatcherTimer? _placementSettleTimer;
 
     /// <summary>本次窗口是否已经保存过几何(OnClosing 可能被调用两次: 先取消、拆解完再真关)。</summary>
     private bool _windowPlacementSaved;
+
+    /// <summary>
+    /// 从设置里读到、等待套用的常规几何(DIP)。构造时先按它定位一次(避免居中闪一下),
+    /// 窗口实体化之后再套一次 —— 见 <see cref="ReapplyRememberedPlacementAfterRealized"/>。
+    /// </summary>
+    private PlayerWindowPlacement.PlacementRect? _rememberedPlacement;
+
+    /// <summary>
+    /// 稳定期采样间隔。注意: 真正的"稳定"判据是**连续两次采样一致**(见 OnPlacementSettleTick),
+    /// 不是"过了这么久就算稳定" —— 慢机器/RDP 上 DWM 的还原动画能拖到 500ms 以上,
+    /// 只等一次会把"位置已还原、尺寸还是全屏"的中间态采下来(2026-11-14 实测)。
+    /// </summary>
+    private const int PlacementSettleMs = 250;
 
     // 记忆位置不可用时, 保证窗口至少露出的可见区域(标题栏 + 一块可点面积),
     // 参考 Chrome/资源管理器对"屏幕外窗口"的救援标准。
@@ -266,12 +333,15 @@ public partial class PlayerWindow : FluentWindow
     ///
     /// ★ 夹取规则(尺寸): 不能小于窗口最小尺寸(常规态要放得下右侧详情栏), 也不能超过当前
     ///   主屏工作区 —— 用户换到更小的显示器/改过缩放后, 旧的大尺寸会让窗口伸出屏幕外。
-    /// ★ 夹取规则(位置, 2026-11-07): 按**虚拟桌面**夹, 而不是主屏工作区 ——
-    ///   多屏布局里负坐标完全合法(副屏在主屏左侧/上方), 按"必须是正数"夹会误杀;
-    ///   真正要防的是"上次用的副屏被拔掉"之后整窗落进无人区。做法是保证左上角(标题栏)
-    ///   始终留在虚拟桌面内, 且至少 160×120 的窗口面积可见, 位置尽量不变。
+    /// ★ 夹取规则(位置, 2026-11-07 / 2026-11-14 抽到 PlayerWindowPlacement):
+    ///   按**虚拟桌面**夹, 而不是主屏工作区 —— 多屏布局里负坐标完全合法(副屏在主屏左侧/上方),
+    ///   按"必须是正数"夹会误杀; 真正要防的是"上次用的副屏被拔掉"之后整窗落进无人区。
+    ///   做法是保证左上角(标题栏)始终留在虚拟桌面内, 且至少 160×120 的窗口面积可见。
     /// ★ 位置必须配合 WindowStartupLocation=Manual: XAML 里是 CenterScreen, 不改成 Manual
     ///   的话 WPF 会用居中结果覆盖手写的 Left/Top。
+    /// ★★ 这里只是**初值**: `Show()` 之前写 Left/Top, PerMonitorV2 下 WPF 会按"猜的显示器
+    ///   DPI"换算, 125%/150% 缩放下可能把窗口放到偏左上。真正的定位由
+    ///   <see cref="ReapplyRememberedPlacementAfterRealized"/> 在窗口实体化后再做一次。
     /// </summary>
     private void ApplyRememberedPlayerWindowPlacement()
     {
@@ -290,52 +360,246 @@ public partial class PlayerWindow : FluentWindow
         var top = Svc.Settings.PlayerWindowTop;
         if (!left.HasValue || !top.HasValue) return;
 
-        var vsL = SystemParameters.VirtualScreenLeft;
-        var vsT = SystemParameters.VirtualScreenTop;
-        var vsR = vsL + SystemParameters.VirtualScreenWidth;
-        var vsB = vsT + SystemParameters.VirtualScreenHeight;
-        // 可见的右/下边界: 左上角最多向左/向上退到"还留得出 160×120 可见区"的位置。
-        var maxLeft = vsR - PlacementVisibleMinWidth;
-        var maxTop = vsB - PlacementVisibleMinHeight;
+        var virtualScreen = new PlayerWindowPlacement.PlacementRect(
+            SystemParameters.VirtualScreenLeft,
+            SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth,
+            SystemParameters.VirtualScreenHeight);
+
+        var clamped = PlayerWindowPlacement.ClampToBounds(
+            new PlayerWindowPlacement.PlacementRect(left.Value, top.Value, Width, Height),
+            virtualScreen,
+            PlacementVisibleMinWidth, PlacementVisibleMinHeight);
 
         WindowStartupLocation = WindowStartupLocation.Manual;
-        Left = Math.Clamp((double)left.Value, vsL - (Width - PlacementVisibleMinWidth), maxLeft);
-        Top = Math.Clamp((double)top.Value, vsT - (Height - PlacementVisibleMinHeight), maxTop);
+        Left = clamped.Left;
+        Top = clamped.Top;
+        _rememberedPlacement = clamped;
+        WritePlacementLog("restore(ctor)",
+            $"saved=({left.Value},{top.Value},{w},{h}) applied=({clamped.Left},{clamped.Top},{clamped.Width},{clamped.Height})");
     }
 
     /// <summary>
-    /// 记录最后一次常规几何。最大化/全屏时 SizeChanged 也会发, 但那时记录的是屏幕尺寸,
-    /// 带进下一次启动就会"一打开就铺满" —— 所以按窗口状态过滤。
+    /// 窗口实体化(HWND 已建、DPI 已确定)之后，把记住的位置**再套一次**并核对。
+    ///
+    /// ★ 为什么必须在 Loaded 再做一次(dotnet/wpf#4127): WPF 的 Left/Top 在窗口创建**之前**
+    ///   是按"猜的显示器 DPI"换算的; PerMonitorV2 + 125%/150% 缩放下会换算错, 表现就是
+    ///   "第一次打开(居中)正常, 第二次打开(按记忆定位)跑到左上角"。窗口实体化后 Left/Top
+    ///   走的是真实显示器 DPI, 同一个值就落得准。
+    /// ★ 先写回同一目标值, 再用 Win32 `GetWindowRect` 核对物理像素; 偏得明显才 `SetWindowPos`
+    ///   校正。2~4px 的差异是 WindowChrome 的边框/圆角换算噪声, 不去抖。
+    /// </summary>
+    private void ReapplyRememberedPlacementAfterRealized()
+    {
+        if (!Svc.Settings.RememberPlayerWindowSize) return;
+        if (_rememberedPlacement is not { } target) return;
+
+        // 只重写位置: 尺寸已在构造时按屏幕夹过, 这里再写会把小屏上的夹取结果顶回去。
+        Left = target.Left;
+        Top = target.Top;
+        WritePlacementLog("restore(reapply)", $"target=({target.Left},{target.Top}) actual=({Left},{Top})");
+
+        // 物理像素核对放到 Loaded 优先级: 等 WPF 处理完可能的 WM_DPICHANGED。
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(VerifyAppliedPlacement));
+    }
+
+    /// <summary>核对"套用后的物理位置"是否就是目标位置; 偏差过大时校正一次。</summary>
+    private void VerifyAppliedPlacement()
+    {
+        if (_closing || !IsLoaded) return;
+        if (_isFullscreen || _isFillWindow || WindowState != WindowState.Normal) return;
+
+        if (_rememberedPlacement is { } target)
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd != IntPtr.Zero && GetWindowRect(hwnd, out var rect))
+            {
+                var dpi = VisualTreeHelper.GetDpi(this);
+                var expectedLeft = (int)Math.Round(target.Left * dpi.DpiScaleX);
+                var expectedTop = (int)Math.Round(target.Top * dpi.DpiScaleY);
+                if (Math.Abs(rect.Left - expectedLeft) > 8 || Math.Abs(rect.Top - expectedTop) > 8)
+                {
+                    SetWindowPos(hwnd, IntPtr.Zero, expectedLeft, expectedTop, 0, 0,
+                        SwpNoSize | SwpNoZOrder | SwpNoActivate);
+                    WritePlacementLog("nudge",
+                        $"actual=({rect.Left},{rect.Top}) expected=({expectedLeft},{expectedTop}) dpi={dpi.DpiScaleX:0.##}");
+                }
+            }
+        }
+
+        // 副屏被拔掉 / 显示器重新排列后, 记忆点可能落在虚拟桌面的"洞"里:
+        // 虚拟桌面矩形包含屏幕之间的空隙, 夹完仍可能不可见。实体化后按真实显示器再兜一次。
+        EnsureVisibleOnScreen();
+        BeginPlacementTransition();
+    }
+
+    /// <summary>
+    /// 保证窗口在"离它最近的显示器"上有足够可见面积(至少 160×120 DIP);
+    /// 不够就把窗口居中到那块显示器的工作区 —— 这是"副屏被拔掉"的救援路径。
+    /// </summary>
+    private void EnsureVisibleOnScreen()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return;
+
+        var screen = System.Windows.Forms.Screen.FromHandle(hwnd);
+        if (screen == null) return;
+
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var work = new PlayerWindowPlacement.PlacementRect(
+            screen.WorkingArea.Left / dpi.DpiScaleX,
+            screen.WorkingArea.Top / dpi.DpiScaleY,
+            screen.WorkingArea.Width / dpi.DpiScaleX,
+            screen.WorkingArea.Height / dpi.DpiScaleY);
+        var actual = new PlayerWindowPlacement.PlacementRect(Left, Top, ActualWidth, ActualHeight);
+        if (PlayerWindowPlacement.IntersectionArea(actual, work)
+            >= PlacementVisibleMinWidth * PlacementVisibleMinHeight) return;
+
+        var w = Math.Min(actual.Width, work.Width);
+        var h = Math.Min(actual.Height, work.Height);
+        Width = w;
+        Height = h;
+        Left = work.Left + (work.Width - w) / 2;
+        Top = work.Top + (work.Height - h) / 2;
+        WritePlacementLog("ensure-visible", $"centered=({Left},{Top},{w},{h}) work=({work.Left},{work.Top},{work.Width},{work.Height})");
+    }
+
+    /// <summary>
+    /// 记录最后一次常规几何的唯一入口。最大化/全屏/铺满时 SizeChanged 也会发, 但那时
+    /// 记录的是屏幕尺寸, 带进下一次启动就会"一打开就铺满" —— 所以按窗口状态过滤。
     /// ★ 铺满模式(_isFillWindow)也不记: 那个布局里窗口下限是 320×200, 用户拖出来的小窗
     ///   下次按**常规布局**打开时会被 840×600 的最小尺寸顶回去, 记了等于没记。
     /// ★ 位置(LocationChanged)与尺寸(SizeChanged)走同一套过滤, 两个事件都汇到这里,
     ///   保证拖尺寸和拖位置总是成对更新(拖边缘时 WPF 两个事件都会发)。
+    /// ★ 稳定期内一律不采: 那是在系统的还原动画里(见本节开头)。
     /// </summary>
     private bool IsNormalStateForPlacement()
     {
         return IsLoaded && !_closing && !_isFullscreen && !_isFillWindow
+            && !_placementSettling
             && WindowState == WindowState.Normal
             && ActualWidth >= 100 && ActualHeight >= 100;
     }
 
+    /// <summary>从当前窗口值采一份常规态快照(只有稳定期结束、状态也正常时才采)。</summary>
+    private void CaptureNormalPlacement()
+    {
+        // ★ 稳定期内一律不采: 这时读到的是系统还原动画的中间值(可能"位置已还原、尺寸还是全屏")。
+        if (_placementSettling) return;
+        if (!IsNormalStateForPlacement()) return;
+        var rect = new PlayerWindowPlacement.PlacementRect(Left, Top, ActualWidth, ActualHeight);
+        if (!PlayerWindowPlacement.IsUsable(rect, 100, 100)) return;
+        _normalPlacement = rect;
+        _hasNormalPlacement = true;
+    }
+
+    /// <summary>尺寸/位置仍在变化 ⇒ 说明动画没结束, 把稳定期往后推(尾部防抖)。</summary>
     private void OnPlayerSizeChanged(object? sender, SizeChangedEventArgs e)
     {
-        if (!IsNormalStateForPlacement()) return;
-        _lastNormalWidth = ActualWidth;
-        _lastNormalHeight = ActualHeight;
+        if (_placementSettling) { ArmPlacementSettleTimer(); return; }
+        CaptureNormalPlacement();
     }
 
     private void OnPlayerLocationChanged(object? sender, EventArgs e)
     {
-        if (!IsNormalStateForPlacement()) return;
-        _lastNormalLeft = Left;
-        _lastNormalTop = Top;
-        _lastNormalPosValid = double.IsFinite(Left) && double.IsFinite(Top);
+        if (_placementSettling) { ArmPlacementSettleTimer(); return; }
+        CaptureNormalPlacement();
+    }
+
+    /// <summary>
+    /// 进入"几何不可信"的稳定期: 全屏/最大化/铺满切换、二次定位之后调用。
+    /// 期间每个几何事件都会把定时器往后推; 直到几何真正静止 PlacementSettleMs 后才补采一次。
+    /// </summary>
+    private void BeginPlacementTransition()
+    {
+        if (_closing) return;
+        _placementSettling = true;
+        _hasPlacementSettleSample = false;
+        ArmPlacementSettleTimer();
+    }
+
+    /// <summary>(重新)启动稳定期定时器 —— 从**现在**算起; 期间每个几何事件都会再续期。</summary>
+    private void ArmPlacementSettleTimer()
+    {
+        if (_placementSettleTimer == null)
+        {
+            _placementSettleTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(PlacementSettleMs)
+            };
+            _placementSettleTimer.Tick += OnPlacementSettleTick;
+        }
+        _placementSettleTimer.Stop();
+        _placementSettleTimer.Start();
+    }
+
+    /// <summary>
+    /// 稳定期到点: 读一次当前几何, 与上一轮样本比较。
+    ///   · 两次一致 ⇒ 动画真的结束了, 提交快照并落盘;
+    ///   · 还不一致 ⇒ 动画仍在跑(或刚被二次定位挪过), 存下新样本再等一轮。
+    /// 这样无论 DWM 动画多长, 都不会把中间态当成常规几何。
+    /// </summary>
+    private void OnPlacementSettleTick(object? sender, EventArgs e)
+    {
+        _placementSettleTimer?.Stop();
+        if (_closing) return;
+
+        // 全屏/最大化/铺满态没有"常规几何"可采: 退出这些状态时会重新进稳定期。
+        if (WindowState != WindowState.Normal || _isFullscreen || _isFillWindow)
+        {
+            _placementSettling = false;
+            _hasPlacementSettleSample = false;
+            return;
+        }
+
+        var rect = new PlayerWindowPlacement.PlacementRect(Left, Top, ActualWidth, ActualHeight);
+        if (!PlayerWindowPlacement.IsUsable(rect, 100, 100))
+        {
+            _placementSettling = false;
+            _hasPlacementSettleSample = false;
+            return;
+        }
+
+        if (_hasPlacementSettleSample && NearlyEqual(_placementSettleSample, rect))
+        {
+            _placementSettling = false;
+            _hasPlacementSettleSample = false;
+            _normalPlacement = rect;
+            _hasNormalPlacement = true;
+            PersistNormalPlacement();
+            WritePlacementLog("settled",
+                $"=({rect.Left:0.##},{rect.Top:0.##},{rect.Width:0.##},{rect.Height:0.##})");
+            return;
+        }
+
+        _placementSettleSample = rect;
+        _hasPlacementSettleSample = true;
+        ArmPlacementSettleTimer();
+    }
+
+    /// <summary>两次稳定期采样是否可视为同一个几何(小于 0.5 DIP 的抖动算噪声)。</summary>
+    private static bool NearlyEqual(PlayerWindowPlacement.PlacementRect a, PlayerWindowPlacement.PlacementRect b)
+    {
+        const double tolerance = 0.5;
+        return Math.Abs(a.Left - b.Left) < tolerance
+            && Math.Abs(a.Top - b.Top) < tolerance
+            && Math.Abs(a.Width - b.Width) < tolerance
+            && Math.Abs(a.Height - b.Height) < tolerance;
+    }
+
+    /// <summary>把快照写进设置(不改变"本次窗口是否已保存"的状态, 供切换/拖动结束时复用)。</summary>
+    private void PersistNormalPlacement()
+    {
+        if (!_hasNormalPlacement || !Svc.Settings.RememberPlayerWindowSize) return;
+        Svc.Settings.SetPlayerWindowPlacement(
+            _normalPlacement.Width, _normalPlacement.Height,
+            _normalPlacement.Left, _normalPlacement.Top);
     }
 
     /// <summary>
     /// 关闭时保存窗口几何(设置项关掉时直接跳过, 也不清掉旧值 —— 重新打开还能沿用)。
-    /// ★ 在 OnClosing **最前面**调用: 后面会把全屏态还原成 Normal, 那时再读几何就不准了。
+    /// ★ 在 OnClosing **最前面**调用: 后面会把全屏态还原成 Normal, 那时再采几何就不准了。
+    /// ★ 只认快照: 从全屏/最大化直接关闭时, 当前 Width/Height 是**全屏尺寸**, 绝不能存。
     /// </summary>
     private void SavePlayerWindowPlacement()
     {
@@ -343,13 +607,116 @@ public partial class PlayerWindow : FluentWindow
         _windowPlacementSaved = true;
         if (!Svc.Settings.RememberPlayerWindowSize) return;
 
-        var w = _lastNormalWidth > 0 ? _lastNormalWidth : Width;
-        var h = _lastNormalHeight > 0 ? _lastNormalHeight : Height;
-        // 位置没采到(窗口居中打开且用户没拖动过 ⇒ Left/Top 还是 NaN)就不写坐标,
-        // 按上次记录的位置沿用 —— 与尺寸"没采到就沿用旧值"同一个策略。
-        Svc.Settings.SetPlayerWindowPlacement(w, h,
-            _lastNormalPosValid ? _lastNormalLeft : double.NaN,
-            _lastNormalPosValid ? _lastNormalTop : double.NaN);
+        // 常规态关闭: 先按当前值补采一次(覆盖"程序改了几何但没发事件"的边角情况)。
+        CaptureNormalPlacement();
+
+        // 快照无效(整场都在全屏/最大化里, 或首帧还没采到) ⇒ 用 RestoreBounds:
+        // 它保留最大化/全屏之前的常规矩形; 仍不可用就放弃本次保存, 沿用旧值。
+        if (!_hasNormalPlacement)
+        {
+            var rb = RestoreBounds;
+            var fallback = new PlayerWindowPlacement.PlacementRect(rb.Left, rb.Top, rb.Width, rb.Height);
+            if (PlayerWindowPlacement.IsUsable(fallback,
+                    SettingsStore.PlayerWindowMinWidth, SettingsStore.PlayerWindowMinHeight))
+            {
+                _normalPlacement = fallback;
+                _hasNormalPlacement = true;
+            }
+        }
+
+        if (!_hasNormalPlacement)
+        {
+            WritePlacementLog("save(skip)", $"state={WindowState} fullscreen={_isFullscreen} fill={_isFillWindow}");
+            return;
+        }
+
+        PersistNormalPlacement();
+        WritePlacementLog("save",
+            $"=({_normalPlacement.Left},{_normalPlacement.Top},{_normalPlacement.Width},{_normalPlacement.Height}) state={WindowState} fullscreen={_isFullscreen} settling={_placementSettling}");
+    }
+
+    /// <summary>几何记忆的诊断日志(只在 DEBUG 构建输出, 发布版零开销)。</summary>
+    [Conditional("DEBUG")]
+    private void WritePlacementLog(string tag, string detail)
+    {
+        WriteLibVLCDebug($"[Placement] {tag} {detail}\n");
+    }
+
+    // ------------------------------------------------------------ 几何记忆的 Win32 兜底
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after,
+        int x, int y, int cx, int cy, uint flags);
+
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoZOrder = 0x0004;
+    private const uint SwpNoActivate = 0x0010;
+
+    /// <summary>
+    /// 窗口状态变化(正常 ↔ 最大化 ↔ 最小化)。
+    ///
+    /// ★ 标题栏双击/窗口按钮最大化**不经过** ToggleFullscreen, 所以快照要在这里补:
+    ///   最大化时 `RestoreBounds` 仍是最大化前的常规矩形, 是这条路径下最可靠的来源。
+    /// ★ 全屏(`_isFullscreen`)不在这里采: 进全屏前已经在 ToggleFullscreen 里存过常规几何,
+    ///   而全屏本身也是"最大化", 再采会把全屏尺寸记进去。
+    /// ★ 任何状态变化之后都进稳定期 —— 系统还原动画期间的坐标不能采。
+    /// </summary>
+    protected override void OnStateChanged(EventArgs e)
+    {
+        base.OnStateChanged(e);
+        if (!IsLoaded || _closing) return;
+
+        WritePlacementLog("state", $"={WindowState} fullscreen={_isFullscreen} fill={_isFillWindow}");
+
+        if (WindowState == WindowState.Maximized && !_isFullscreen)
+        {
+            var rb = RestoreBounds;
+            var rect = new PlayerWindowPlacement.PlacementRect(rb.Left, rb.Top, rb.Width, rb.Height);
+            if (PlayerWindowPlacement.IsUsable(rect,
+                    SettingsStore.PlayerWindowMinWidth, SettingsStore.PlayerWindowMinHeight))
+            {
+                _normalPlacement = rect;
+                _hasNormalPlacement = true;
+                PersistNormalPlacement();
+                WritePlacementLog("maximize-snapshot",
+                    $"=({rect.Left},{rect.Top},{rect.Width},{rect.Height})");
+            }
+        }
+
+        BeginPlacementTransition();
+    }
+
+    /// <summary>
+    /// 标题栏双击/窗口按钮/系统菜单即将最大化或还原。
+    /// ★ 只是**提前**进入稳定期(赶在 WPF 的 SizeChanged 之前), 不改任何状态。
+    /// </summary>
+    protected override void OnWindowStateTransitionStarting()
+    {
+        if (_closing || !IsLoaded) return;
+        BeginPlacementTransition();
+    }
+
+    /// <summary>
+    /// 用户刚结束一次"拖窗口 / 拖边缘"(WM_EXITSIZEMOVE)。
+    ///
+    /// ★ 这是常规几何最可靠的时刻: 模态循环结束, 窗口已经停在最终位置。
+    ///   在这里立刻采一次并落盘, 进程就算随后被杀也不会丢记忆。
+    /// ★ 若刚好还在稳定期(例如刚退全屏就马上拖), 交给稳定期结束后的补采。
+    /// </summary>
+    protected override void OnModalMoveResizeEnded()
+    {
+        base.OnModalMoveResizeEnded();
+        if (_closing || !IsLoaded) return;
+
+        if (IsNormalStateForPlacement())
+        {
+            CaptureNormalPlacement();
+            PersistNormalPlacement();
+        }
+        else
+        {
+            BeginPlacementTransition();
+        }
     }
 
     // ------------------------------------------------------------ 窄视频区控制栏

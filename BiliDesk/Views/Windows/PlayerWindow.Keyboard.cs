@@ -78,12 +78,16 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_isFullscreen)
         {
+            // ★ 先进稳定期再退: WPF 的 SizeChanged/LocationChanged 会先于 StateChanged 到达,
+            //   晚一步置位就会把还原动画的中间态采下来(见 ToggleFullscreen 的说明)。
+            BeginPlacementTransition();
             _isFullscreen = false;
             ApplyFullscreen(false);
             return;
         }
         if (_isFillWindow)
         {
+            BeginPlacementTransition();
             _isFillWindow = false;
             ApplyInfoPanelState();
             UpdateFillWindowButton();

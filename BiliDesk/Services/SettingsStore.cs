@@ -751,9 +751,12 @@ public class SettingsStore
         // 位置记忆(2026-11-07 新增): 老配置没有这两个字段 ⇒ null(= 保持 CenterScreen 居中),
         // 可空类型天然承载"没记过"的语义, 不需要版本兼容。两个坐标必须一起有效,
         // 半新半旧(只落盘成功一个)的情况一律当没记过。
-        PlayerWindowLeft = IsValidPlayerWindowPos(s.PlayerWindowLeft, s.PlayerWindowTop)
-            ? s.PlayerWindowLeft : null;
-        PlayerWindowTop = PlayerWindowLeft;   // 上面校验过两者同有效/同无效, 直接取同值
+        // ★ 2026-11-14 修笔误: 这里原来写的是 `PlayerWindowTop = PlayerWindowLeft` ——
+        //   每次启动读配置都会把 Y 覆盖成 X, 用户摆好的窗口重启后被拉到错误高度
+        //   ("窗口记忆不准"的确定性来源之一)。两个坐标各自取自己的值。
+        var hasPlayerWindowPos = IsValidPlayerWindowPos(s.PlayerWindowLeft, s.PlayerWindowTop);
+        PlayerWindowLeft = hasPlayerWindowPos ? s.PlayerWindowLeft : null;
+        PlayerWindowTop = hasPlayerWindowPos ? s.PlayerWindowTop : null;
 
         // 网络缓冲: 老配置缺字段 ⇒ AppSettings 的初始化值 1000(与旧版一致)。
         // ★ 这里仍要夹取: 手改配置可能塞进 0(等于关掉缓冲)或十万(白占内存)。

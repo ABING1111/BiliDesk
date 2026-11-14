@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using BiliDesk.Helpers;
 
 namespace BiliDesk.Views.Controls;
 
@@ -71,17 +72,28 @@ public partial class WindowButtons : UserControl
 
     private void OnMinClick(object sender, RoutedEventArgs e)
     {
-        if (_win != null) _win.WindowState = WindowState.Minimized;
+        if (_win == null) return;
+        NotifyStateTransitionStarting();
+        _win.WindowState = WindowState.Minimized;
     }
 
     private void OnMaxClick(object sender, RoutedEventArgs e)
     {
         if (_win == null) return;
+        NotifyStateTransitionStarting();
         _win.WindowState = _win.WindowState == WindowState.Maximized
             ? WindowState.Normal
             : WindowState.Maximized;
         UpdateMaxGlyph();
     }
+
+    /// <summary>
+    /// 改 WindowState **之前**先通知宿主(播放器用它进入几何稳定期)。
+    /// ★ 顺序不能反: 还原最大化时 WPF 先发 SizeChanged/LocationChanged、后发 StateChanged,
+    ///   晚一步置位就会把中间态当成常规几何(见 IWindowStateTransitionAware 的说明)。
+    /// </summary>
+    private void NotifyStateTransitionStarting()
+        => (_win as IWindowStateTransitionAware)?.OnWindowStateTransitionStarting();
 
     private void OnCloseClick(object sender, RoutedEventArgs e) => _win?.Close();
 }

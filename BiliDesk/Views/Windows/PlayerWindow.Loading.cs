@@ -862,8 +862,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_playerRegistered),   // 注册计数, 生命周期是窗口而非片源
         // 倍速弹层/窗口几何记忆(2026-11-03 未提交改动, 位置 2026-11-07)的窗口级状态
         nameof(_fillingSpeedMenu),   // 填充倍速列表时抑制 SelectionChanged, 纯 UI 瞬时闸
-        nameof(_lastNormalWidth), nameof(_lastNormalHeight), // 最后一次常规窗口尺寸
-        nameof(_lastNormalLeft), nameof(_lastNormalTop), nameof(_lastNormalPosValid), // 最后一次常规窗口位置
+        nameof(_hasNormalPlacement), nameof(_placementSettling), nameof(_hasPlacementSettleSample), // 常规几何快照与稳定期(2026-11-14 重做)
         nameof(_windowPlacementSaved), // 本次窗口是否已落盘几何
         nameof(_seasonOpen),         // 合集面板的展开态: 用户开着面板连看几集是常态, 换片收起它很烦
         nameof(_isFillWindow),       // 「铺满窗口」是窗口级的显示模式(同 _isFullscreen), 换片不该把它弹回去
@@ -1029,22 +1028,13 @@ public partial class PlayerWindow : FluentWindow
         UpdateButtonState();
         // 窗口是复用的: 按当前状态(铺满/常规)同步一次信息栏与窗口最小尺寸
         ApplyInfoPanelState();
-        // 窗口大小/位置记忆: 起播时先记下当前常规几何, 用户不动窗口直接关闭也能沿用
-        // (铺满模式下的几何不记: 那是在"详情栏已收起"的布局里拖出来的, 下次按常规布局
-        //  打开会被最小宽度顶回去, 记了也用不上, 见 OnPlayerSizeChanged/OnPlayerLocationChanged)
-        if (!_isFullscreen && !_isFillWindow && WindowState == WindowState.Normal)
-        {
-            _lastNormalWidth = ActualWidth;
-            _lastNormalHeight = ActualHeight;
-            // ★ 位置只有真正生效过才记: 按记忆位置打开时 Left/Top 已是有限值;
-            //   CenterScreen 居中时是 NaN, 不能把 NaN 记进去(保存层会拒绝它)。
-            if (double.IsFinite(Left) && double.IsFinite(Top))
-            {
-                _lastNormalLeft = Left;
-                _lastNormalTop = Top;
-                _lastNormalPosValid = true;
-            }
-        }
+        // 窗口大小/位置记忆: 按记忆位置做一次"实体化后的二次定位", 再采一份常规几何。
+        // ★ 旧实现这里直接读 Left/Top 记下 —— 而 Show() 之前的定位在 PerMonitorV2/高缩放下
+        //   可能是偏的(第二次打开跑到左上角), 记下来就等于把错误位置固化成"记忆"。
+        //   现在的顺序: 二次定位(可能含一次 SetWindowPos 校正) → 采快照 → 进稳定期补采。
+        ReapplyRememberedPlacementAfterRealized();
+        CaptureNormalPlacement();
+        BeginPlacementTransition();
         // 「铺满窗口」按钮的字形初值: XAML 里写的是"进入前"那个字形(E9A6), 这里按实际状态
         // 再同步一次 —— 窗口是复用的, 复用到一个"上次已铺满"的窗口时不能显示成未铺满。
         UpdateFillWindowButton();

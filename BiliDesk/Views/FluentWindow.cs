@@ -18,7 +18,7 @@ namespace BiliDesk.Views;
 /// 主窗口和播放器都用 WindowStyle=None + WindowChrome 自绘标题栏, 而 WPF 自己的最大化
 /// 会把窗口撑到显示器**整屏**大小(各方向多出调整边框的量), 结果是任务栏被压住、底部内容看不见。
 /// </summary>
-public class FluentWindow : Window
+public class FluentWindow : Window, IWindowStateTransitionAware
 {
     private bool _hooked;
 
@@ -557,6 +557,12 @@ public class FluentWindow : Window
     private const int WM_ENTERSIZEMOVE = 0x0231;
     private const int WM_EXITSIZEMOVE = 0x0232;
 
+    /// <summary>标题栏双击 / 系统菜单 / 任务栏"最大化/还原"都从这里进来(SC_* 命令)</summary>
+    private const int WM_SYSCOMMAND = 0x0112;
+    private const int SC_MINIMIZE = 0xF020;
+    private const int SC_MAXIMIZE = 0xF030;
+    private const int SC_RESTORE = 0xF120;
+
     // ------------------------------------------------------------ 最大化尺寸修正
 
     private const int WM_GETMINMAXINFO = 0x0024;
@@ -629,16 +635,47 @@ public class FluentWindow : Window
             ApplyWorkingAreaLimit(hwnd, lParam, MaximizeCoversTaskbar);
             handled = true;
         }
+        else if (msg == WM_SYSCOMMAND)
+        {
+            // 标题栏双击 / 系统菜单 / 任务栏右键的"最大化/还原"在改状态**之前**走这里。
+            // 提前通知子类, 让播放器在 WPF 发 SizeChanged/LocationChanged 之前进入几何稳定期
+            // (还原最大化时事件先于 StateChanged 到达, 见 IWindowStateTransitionAware)。
+            var command = wParam.ToInt32() & 0xFFF0;
+            if (command == SC_MAXIMIZE || command == SC_RESTORE || command == SC_MINIMIZE)
+                OnWindowStateTransitionStarting();
+            // 不设 handled: 继续交给 DefWindowProc 完成真正的最大化/还原
+        }
         else if (msg == WM_ENTERSIZEMOVE || msg == WM_EXITSIZEMOVE)
         {
             // 用户开始/结束"拖着窗口边缘改大小"。★ **不要设 handled** —— 这两个消息还有别人要处理
             // (WindowChrome 与 WPF 自己的排版), 吃掉会让拖动行为出问题。
             // 广播出去是为了让卡片墙把重算**合流**: 拖动期间跟着每一帧重算整墙卡片,
             // 就是用户说的"拖边缘很卡"。
-            CardWall.NotifyModalResize(msg == WM_ENTERSIZEMOVE);
+            var entering = msg == WM_ENTERSIZEMOVE;
+            CardWall.NotifyModalResize(entering);
+            // 结束拖动/缩放时通知子类: 播放器用它把"常规窗口几何"落盘(见 PlayerWindow)。
+            if (!entering) OnModalMoveResizeEnded();
         }
         return IntPtr.Zero;
     }
+
+    /// <summary>
+    /// 用户刚结束一次"拖动窗口 / 拖边缘缩放"的模态循环(WM_EXITSIZEMOVE)。
+    ///
+    /// ★ 播放器覆写它来落盘窗口大小/位置记忆: 这是窗口停在最终位置、最可靠的时刻
+    ///   (拖动过程中每一帧都在变, 关窗时才采又可能被系统动画污染)。
+    /// ★ 默认空实现: 其它窗口没有这个需求, 不应该因为基类加钩子而改变行为。
+    /// </summary>
+    protected virtual void OnModalMoveResizeEnded() { }
+
+    /// <summary>
+    /// 窗口状态**即将**变化(最大化/还原/最小化), 在 WPF 发 SizeChanged 之前调用。
+    /// 播放器覆写它进入几何稳定期 —— 原因见 <see cref="IWindowStateTransitionAware"/>。
+    /// </summary>
+    protected virtual void OnWindowStateTransitionStarting() { }
+
+    /// <summary>供 WindowButtons 这类"只知道 Window"的控件在改状态前调用。</summary>
+    void IWindowStateTransitionAware.OnWindowStateTransitionStarting() => OnWindowStateTransitionStarting();
 
     /// <summary>
     /// DIP → 物理像素。**NaN / 无穷大 / 非正数一律返回 0**，即"这一侧没设限制"。
