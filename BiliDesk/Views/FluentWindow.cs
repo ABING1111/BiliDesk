@@ -30,6 +30,12 @@ public class FluentWindow : Window
         //   (Styles.xaml 隐式 TextBlock 样式那段长注释说的就是这件事)。
         FontFamily = UiFont.Current;
         SourceInitialized += OnSourceInitialized;
+        // ★ 任务栏自动隐藏/换显示器等让"工作区"变化时, 最大化窗口会被系统重新摆放,
+        //   但 WindowState 不变(不会触发 StateChanged) —— 尺寸一变就按新几何补一次内缩。
+        SizeChanged += (_, _) =>
+        {
+            if (WindowState == WindowState.Maximized) SyncMaximizedContentInset();
+        };
         // ★ 软件缩放(2026-10-06): 内容一就绪就登记进 UiScale。
         //   用 Loaded 而不是 SourceInitialized —— 那时 Content 才真正挂上可视树,
         //   拿到的根元素才是最终会被渲染的那一个。
@@ -398,6 +404,105 @@ public class FluentWindow : Window
         base.OnClosed(e);
     }
 
+    // ------------------------------------------------------------ 最大化时的内容内缩
+
+    /// <summary>进入最大化之前的根内容 Margin(通常是 0), 退出时原样还回去。</summary>
+    private Thickness _contentBaseMargin;
+    private bool _contentBaseMarginCaptured;
+
+    /// <summary>
+    /// 最大化期间把根内容往里收一圈, 抵消 Windows 给"带缩放边框的窗口"多出来的窗口矩形。
+    ///
+    /// ★★★ 为什么需要它(2026-11-14, 用户报"全屏后窗口边缘显示少了一点点"):
+    ///   Windows 最大化时会把窗口矩形撑成"工作区 + 每边一条不可见缩放边框" ——
+    ///   本机 1920x1080@125% 实测 工作区 (0,0)-(1920,1020), 最大化窗口 (-9,-9)-(1929,1029)。
+    ///   普通窗口的客户区仍是工作区(边框由非客户区吃掉); 但本工程是
+    ///   WindowStyle=None + WindowChrome, WM_NCCALCSIZE 把非客户区压成 0 ⇒ 客户区 = 整个
+    ///   窗口矩形 ⇒ 根内容比工作区每边大 7.2 DIP(9px / 1.25), 最外圈正好落在屏幕外:
+    ///   表现就是四边各少一条。
+    ///   ★ 播放器全屏例外: 它在最大化前摘掉了 WS_CAPTION(见 SuppressCaptionForFullscreen),
+    ///     系统会把它精确摆到整块显示器上(实测窗口矩形 = 显示器矩形) ⇒ 这里算出来是 0。
+    ///     这条通路仍然保留, 用来兜住"全屏却仍被补边框"的系统版本/显示配置差异。
+    ///
+    /// ★ 为什么不去改窗口几何: 实测三条路都走不通 ——
+    ///   · 改 WM_GETMINMAXINFO 的 ptMaxSize/ptMaxPosition: 系统仍会补边框;
+    ///   · 最大化后 SetWindowPos: WPF 的 Window 会立刻把几何压回去(实测矩形不动);
+    ///   · 拦 WM_NCCALCSIZE 缩小客户区: 内容尺寸能对上, 但客户区原点偏移,
+    ///     会破坏 WindowChrome 对标题栏/命中测试的坐标假设。
+    ///   ⇒ 只能保持窗口不动, 给**内容**补内缩。这样 WPF 的坐标仍从屏幕 (0,0) 开始,
+    ///     WindowChrome 的命中测试也仍然自洽(内容偏移量与窗口偏移量一致)。
+    ///
+    /// ★ 目标区域: 常规最大化 = 工作区(不盖任务栏); 播放器全屏(MaximizeCoversTaskbar)
+    ///   = 整块显示器。播放器**不需要单独调用**: 它的全屏路径会先置这个开关再
+    ///   Normal → Maximized, 状态变化必然走到这里(它同时摘掉了 WS_CAPTION,
+    ///   系统会把窗口精确摆到显示器上, 因此实际算出来是 0)。
+    ///
+    /// ★ 幂等: 值没变就不赋(避免每次 StateChanged 都白触发一次布局)。
+    /// </summary>
+    private void SyncMaximizedContentInset()
+    {
+        if (Content is not FrameworkElement root) return;
+
+        // 第一次调用时记住原始 Margin: 退出最大化要原样还回去, 不能一律清成 0
+        // (个别窗口的根内容自带边距)。
+        if (!_contentBaseMarginCaptured)
+        {
+            _contentBaseMargin = root.Margin;
+            _contentBaseMarginCaptured = true;
+        }
+
+        var margin = _contentBaseMargin;
+
+        // ★ 只有 WindowChrome 窗口需要补偿: WindowChrome 在 WM_NCCALCSIZE 里把非客户区压成 0,
+        //   客户区 = 整个窗口矩形, 多出来的那圈边框才会落到屏幕外。
+        //   普通窗口(系统标题栏/边框)的客户区仍等于工作区, 补了反而会缩一圈 —— 必须挡掉。
+        if (WindowState == WindowState.Maximized && System.Windows.Shell.WindowChrome.GetWindowChrome(this) != null)
+        {
+            try
+            {
+                var hwnd = new WindowInteropHelper(this).Handle;
+                if (hwnd != IntPtr.Zero && GetWindowRect(hwnd, out var windowRect))
+                {
+                    var monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
+                    if (monitor != IntPtr.Zero)
+                    {
+                        var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+                        if (GetMonitorInfo(monitor, ref info))
+                        {
+                            // 全屏要的是整块显示器, 常规最大化只占工作区(任务栏照常露着)
+                            var target = MaximizeCoversTaskbar ? info.Monitor : info.Work;
+                            var dpi = VisualTreeHelper.GetDpi(this);
+                            var inset = WindowMaximizeInset.Compute(
+                                windowRect.Left, windowRect.Top, windowRect.Right, windowRect.Bottom,
+                                target.Left, target.Top, target.Right, target.Bottom,
+                                dpi.DpiScaleX, dpi.DpiScaleY);
+
+                            margin = new Thickness(
+                                _contentBaseMargin.Left + inset.Left,
+                                _contentBaseMargin.Top + inset.Top,
+                                _contentBaseMargin.Right + inset.Right,
+                                _contentBaseMargin.Bottom + inset.Bottom);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // 拿不到几何就保持原 Margin: 顶多还是原来那条边, 不能让窗口起不来
+                margin = _contentBaseMargin;
+            }
+        }
+
+        if (!NearlyEqual(root.Margin, margin))
+            root.Margin = margin;
+    }
+
+    private static bool NearlyEqual(Thickness a, Thickness b)
+        => Math.Abs(a.Left - b.Left) < 0.01
+        && Math.Abs(a.Top - b.Top) < 0.01
+        && Math.Abs(a.Right - b.Right) < 0.01
+        && Math.Abs(a.Bottom - b.Bottom) < 0.01;
+
     // ------------------------------------------------------------ 最大化 / 还原
 
     /// <summary>
@@ -499,6 +604,10 @@ public class FluentWindow : Window
 
     [DllImport("user32.dll")]
     private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+
+    /// <summary>取窗口的**物理像素**矩形 —— 最大化内缩靠它和目标区域相减(见 SyncMaximizedContentInset)</summary>
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
 
     /// <summary>
     /// 最大化时**盖住任务栏**(把最大化尺寸从"工作区"放大到"整块显示器")。
