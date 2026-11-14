@@ -1009,6 +1009,9 @@
                             <TextBlock Text="封面图片缓存" Style="{StaticResource SettingsRowTitleStyle}" />
                             <TextBlock Text="{Binding CacheSizeText}"
                                        Style="{StaticResource SettingsRowDescStyle}" />
+                            <TextBlock Text="{Binding CoverCacheHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
                         </StackPanel>
                         <Button Grid.Column="1" Content="清理缓存" Style="{StaticResource SubtleButtonStyle}"
                                 VerticalAlignment="Center"

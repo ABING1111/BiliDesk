@@ -110,6 +110,13 @@ public partial class App : Application
         // 那批文件就再也没机会被清理了。放线程池里跑, 不占启动时间。
         _ = System.Threading.Tasks.Task.Run(ShortVideoCache.Prune);
 
+        // 封面图磁盘缓存(imgcache)的自动清理。
+        // ★ 必须放在启动时做一次: 用户关了程序之后, 上一次会话里攒下的冷门封面
+        //   没有机会再被"按下载量触发"的清理碰到 —— 而实测重度使用两天就能堆到 759MB。
+        //   放线程池、不 await: 几千个文件的枚举不能挡启动。
+        // ★ 运行期间还有一道"攒够 200 次新下载 + 间隔 30 分钟"的清理, 见 CoverLoader.NotifyCacheWritten。
+        _ = System.Threading.Tasks.Task.Run(CoverLoader.PruneDiskCache);
+
         // 首次启动: 先过免责声明这道门。
         // 放在建主窗口**之前** —— 不同意就直接 Shutdown, 用户不该看到主界面一闪而过。
         // 老版本升级上来的用户也会被问一次: 声明里有"账号风控/数据丢失风险自担"这类实质内容,

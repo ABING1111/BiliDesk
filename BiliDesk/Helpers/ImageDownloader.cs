@@ -54,8 +54,16 @@ public static class ImageDownloader
             var cacheFile = Path.Combine(AppPaths.CacheDir, Hashing.Md5Hex(url) + ".jpg");
             if (File.Exists(cacheFile))
             {
-                File.Copy(cacheFile, path, overwrite: false);
-                return path;
+                try
+                {
+                    File.Copy(cacheFile, path, overwrite: false);
+                    return path;
+                }
+                catch
+                {
+                    // 缓存文件可能刚好被自动清理删掉(或正被解码占用) ——
+                    // 不能在这里直接返回 null, 落到下面现下载一次即可。
+                }
             }
 
             // 2) 缓存没有就现下载

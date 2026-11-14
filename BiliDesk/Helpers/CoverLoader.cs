@@ -130,6 +130,28 @@ public static class CoverLoader
     private static long _cachedBytes;
 
     /// <summary>
+    /// 距上次自动清理磁盘缓存后**新写入了多少张**。
+    ///
+    /// ★ 为什么不在每次写盘后都跑一遍 <see cref="CoverCachePrune"/>:
+    ///   清理要枚举整个 imgcache(实测可达数千个文件), 每下载一张就枚举一次
+    ///   等于把网络 IO 的间隙全填成磁盘遍历, 弱网下尤其亏。
+    ///   攒够一批再清, 摊到每张图上的开销可以忽略。
+    /// </summary>
+    private static int _writesSincePrune;
+
+    /// <summary>上次自动清理的时刻(Environment.TickCount64), 用于限制清理频率。</summary>
+    private static long _lastPruneTicks = Environment.TickCount64;
+
+    /// <summary>自动清理的并发闸门(0 = 没在跑, 1 = 正在跑), 防止多轮下载同时触发多次枚举。</summary>
+    private static int _pruneRunning;
+
+    /// <summary>攒够这么多次新写入才考虑自动清理。</summary>
+    private const int PruneAfterWrites = 200;
+
+    /// <summary>两次自动清理之间至少间隔这么久(启动时的那次不计入)。</summary>
+    private const long MinPruneIntervalMs = 30L * 60 * 1000;
+
+    /// <summary>
     /// 内存缓存上限。
     /// 为什么按"字节预算"而不是"条数": 条数上限完全约束不住内存 —— 同样是 250 条,
     /// 全是小头像可能只有十几 MB, 全是 1280 宽的封面能到两百多 MB。按解码后的像素字节算才准。
@@ -267,6 +289,8 @@ public static class CoverLoader
                     try { downloaded = await Http.GetByteArrayAsync(url).ConfigureAwait(false); }
                     finally { DownloadGate.Release(); }
                     await File.WriteAllBytesAsync(cacheFile, downloaded).ConfigureAwait(false);
+                    // 写盘成功才计数: 写失败的图下次还会重下, 不该被算进"缓存增长"里。
+                    NotifyCacheWritten();
                 }
             }
             catch
@@ -532,6 +556,61 @@ public static class CoverLoader
         }
     }
 
+    /// <summary>
+    /// 按 <see cref="CoverCachePrune"/> 的规则清理磁盘缓存, 返回**实际释放**的字节数。
+    ///
+    /// ★ 只删磁盘文件, **不动内存缓存**: 已经解码的位图在本次会话里继续可用,
+    ///   用户不会看到"清理完当前页面封面全灰"; 下次冷启动才真正从网络重取被删的那些。
+    /// ★ 在后台线程调用(启动时 / 攒够写入量后由 <see cref="NotifyCacheWritten"/> 触发),
+    ///   不要在 UI 线程同步跑 —— 几千个文件的枚举足够卡出一帧白屏。
+    /// </summary>
+    public static long PruneDiskCache()
+    {
+        try
+        {
+            return CoverCachePrune.PruneDirectory(
+                AppPaths.CacheDir, DateTime.UtcNow,
+                CoverCachePrune.MaxTotalBytes, CoverCachePrune.MaxFiles,
+                CoverCachePrune.MaxAge, CoverCachePrune.FreshGuard);
+        }
+        catch
+        {
+            // 自动清理是附加优化, 绝不能因为磁盘权限/IO 异常影响到封面加载
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// 每成功写盘一张新封面后调一次, 攒够 <see cref="PruneAfterWrites"/> 张、
+    /// 且距上次清理超过 <see cref="MinPruneIntervalMs"/> 时, 在后台跑一轮自动清理。
+    ///
+    /// ★ 长会话兜底: 只靠"启动时清一次"的话, 一个开几天的客户端会把 imgcache
+    ///   重新堆到几百 MB(实测两天就能到 759MB)。这里让清理跟着下载量走。
+    /// ★ 计数/时间戳都用 Interlocked: 多个下载任务会同时走到这里。
+    /// </summary>
+    private static void NotifyCacheWritten()
+    {
+        var writes = Interlocked.Increment(ref _writesSincePrune);
+        if (writes < PruneAfterWrites) return;
+        if (Environment.TickCount64 - Interlocked.Read(ref _lastPruneTicks) < MinPruneIntervalMs) return;
+        // 已经有一轮在跑: 直接返回。它结束时会把计数清零, 这一批不会丢。
+        if (Interlocked.CompareExchange(ref _pruneRunning, 1, 0) != 0) return;
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                PruneDiskCache();
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _writesSincePrune, 0);
+                Interlocked.Exchange(ref _lastPruneTicks, Environment.TickCount64);
+                Interlocked.Exchange(ref _pruneRunning, 0);
+            }
+        });
+    }
+
     /// <summary>清空磁盘缓存并返回删除的总字节数</summary>
     public static long ClearDiskCache()
     {
@@ -541,6 +620,10 @@ public static class CoverLoader
             MemCache.Clear();
             _cachedBytes = 0;
         }
+        // 手动清空后重置自动清理的节流状态: 刚清完目录是空的, 没必要再跑一轮空枚举;
+        // 间隔也重新计时, 免得下一次下载立刻又触发。
+        Interlocked.Exchange(ref _writesSincePrune, 0);
+        Interlocked.Exchange(ref _lastPruneTicks, Environment.TickCount64);
         long total = 0;
         try
         {

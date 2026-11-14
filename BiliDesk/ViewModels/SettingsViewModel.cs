@@ -56,6 +56,15 @@ public class SettingsViewModel : ObservableObject
         $"自动清理: 超 {ShortVideoCache.MaxAge.TotalDays:0} 天 / {ShortVideoCache.MaxFiles} 个 / " +
         $"{FormatBytes(ShortVideoCache.MaxTotalBytes)} 时按最久没播放过的先删 (启动时也会清一次)";
 
+    /// <summary>
+    /// 封面图片缓存的自动清理规则。与 <see cref="VideoCacheHint"/> 同款: 直接读
+    /// <see cref="CoverCachePrune"/> 里的常量, 界面上写的必须和真在跑的是同一个数。
+    /// </summary>
+    public string CoverCacheHint =>
+        $"位置: {AppPaths.CacheDir}\n" +
+        $"自动清理: 超 {CoverCachePrune.MaxAge.TotalDays:0} 天 / {CoverCachePrune.MaxFiles} 个 / " +
+        $"{FormatBytes(CoverCachePrune.MaxTotalBytes)} 时按最久未使用的先删 (启动时也会清一次)";
+
     // ------------------------------------------------------------ 下载/缓存位置
 
     /// <summary>
