@@ -53,6 +53,10 @@ public partial class SettingsPage : UserControl
         const double fadeEnd = 80;
         var t = System.Math.Clamp((e.VerticalOffset - fadeStart) / (fadeEnd - fadeStart), 0, 1);
         StickyHeader.Opacity = t;
+        // ★★★ 透明 ≠ 不挡鼠标: WPF 的命中测试不看 Opacity, Opacity=0 的 Border 照样会吃掉
+        //   它 44px 高度内的所有点击。滚回顶部时原头部(标题 + Tab)正好从 y=20 开始、Tab 胶囊
+        //   上半部分落在 0~44 这条带里 —— 不关掉命中测试的话, 用户点 Tab 上半截是没反应的。
+        StickyHeader.IsHitTestVisible = t > 0.01;
         // ★★★ 关键: 吸顶栏跨在窗口标题栏边界上(主窗口 CaptionHeight=20), 标题栏内的点击
         //   会被 WindowChrome 当成"拖动窗口"吞掉 —— 用户实测"吸顶后点不动/碰撞体积不一致"
         //   就是这个(点击点正好落在标题栏那 20px 上)。IsHitTestVisibleInChrome 让吸顶栏

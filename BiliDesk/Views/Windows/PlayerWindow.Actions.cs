@@ -104,10 +104,10 @@ public partial class PlayerWindow : FluentWindow
     {
         // ★ 长按已经触发三连时, 松手这一刻还会再走一次 Click —— 不能让它把刚点上的赞取消掉。
         //   用时间戳而不是布尔标记: 长按后鼠标移出按钮再松手时 Click 根本不触发,
-        //   布尔标记会留在原地把**下一次**正常点赞吞掉(见 OnLikeButtonPreviewMouseDown)。
+        //   布尔标记会留在原地把**下一次**正常点赞吞掉(见 OnTripleButtonPreviewMouseDown)。
         if (_tripleComboAt != 0 && Environment.TickCount64 - _tripleComboAt < 1500) return;
         // ★ 长按中途松手(超过点击阈值、但没到 2 秒): 只取消长按, 不点赞。
-        if (_likePressCancelled) { _likePressCancelled = false; return; }
+        if (ConsumeLikePressCancel()) return;
         if (!Svc.Session.HasLogin) { Svc.Toast.Show("点赞需要先登录"); return; }
         if (string.IsNullOrEmpty(_currentBvid)) return;
         // 按当前状态切换: 已赞 -> 取消, 未赞 -> 点赞
@@ -154,8 +154,11 @@ public partial class PlayerWindow : FluentWindow
     /// 超过这个按住时长再松手, 就按"长按取消"处理, **不再点赞**。
     /// ★ 用户按下看到进度环起来, 中途(比如 1 秒)松手只是想放弃这次三连 ——
     ///   以前这条路径会走按钮的 Click 变成点赞, 用户反馈"取消长按反而点了个赞"。
+    /// ★ 必须与 <see cref="LikeConfirmMs"/> 对齐: 确认期(0.5 秒)内根本没有可见反馈,
+    ///   若在这里设更小的阈值(原 300ms), 按住 300~500ms 松手会变成"环没出现、赞也没点上"
+    ///   的无声死区。取消区 = 进度环可见区, 用户看到的和代码判定的一致。
     /// </summary>
-    private const int LikeClickMaxMs = 300;
+    private const int LikeClickMaxMs = LikeConfirmMs;
 
     /// <summary>
     /// 最近一次"长按触发三连"的时刻(TickCount64); 0 = 从未触发。
@@ -169,8 +172,13 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>本次按下的时刻(TickCount64); 0 = 没按下</summary>
     private long _likeDownTick;
 
-    /// <summary>本次松开是否应按"长按取消"处理(按住超过 LikeClickMaxMs, 不点赞)</summary>
-    private bool _likePressCancelled;
+    /// <summary>
+    /// 最近一次"长按取消"的时刻(TickCount64); 0 = 没有待消费的取消。
+    /// 只用来吞掉长按松手后紧跟的那一次 Click, 语义同 <see cref="_tripleComboAt"/>。
+    /// ★ 用时间戳而不是布尔标记: 按住后**移出按钮**再松手时 Click 根本不触发,
+    ///   布尔标记会永久留在原地, 把下一次键盘 L 点赞也吞掉(实测会"点赞没反应")。
+    /// </summary>
+    private long _likePressCancelAt;
 
     /// <summary>当前长按的是哪个按钮(点赞/投币/收藏): 决定进度环挂在哪、初始用什么色相</summary>
     private Button? _pressedTripleButton;
@@ -192,7 +200,7 @@ public partial class PlayerWindow : FluentWindow
     {
         // 按下就把计时起点记下来(即使后面因未登录/本地播放提前 return, Click 的判定也不受影响)
         _likeDownTick = Environment.TickCount64;
-        _likePressCancelled = false;
+        _likePressCancelAt = 0;
         if (_closing) return;
         if (sender is not Button btn) return;
         // 与按钮可用性同一套前提(见 UpdateButtonState): 本地文件/直播/未登录没有三连
@@ -205,11 +213,26 @@ public partial class PlayerWindow : FluentWindow
 
     private void OnTripleButtonPreviewMouseUp(object sender, MouseButtonEventArgs e)
     {
-        // ★ 按住不到 LikeClickMaxMs 才算"点击"; 超过(哪怕还没到 500ms 确认)一律按"取消长按"处理。
-        //   Click 在 Up 之后才触发, 所以这里先落标记, 各按钮的 Click 再读它。
-        _likePressCancelled = _likeDownTick != 0 &&
-                              Environment.TickCount64 - _likeDownTick >= LikeClickMaxMs;
+        // ★ 按住不到 LikeClickMaxMs 才算"点击"; 超过一律按"取消长按"处理。
+        //   Click 在 Up 之后才触发, 所以这里先落时间戳, 各按钮的 Click 再取走它。
+        //   (Click 没触发时时间戳会自行过期, 见 ConsumeLikePressCancel)
+        if (_likeDownTick != 0 && Environment.TickCount64 - _likeDownTick >= LikeClickMaxMs)
+            _likePressCancelAt = Environment.TickCount64;
         CancelLikePressProgress();
+    }
+
+    /// <summary>
+    /// 取走"这一次松手属于长按取消"的标记 —— 只对紧随其后的那一次 Click 生效。
+    /// ★ 时间窗 1 秒: Click 是同步跟在 MouseUp 后面的, 留足余量即可;
+    ///   超时说明那次 Click 根本没发生(鼠标移出了按钮), 标记必须自行作废,
+    ///   否则会吞掉下一次正常点赞(例如键盘 L)。
+    /// </summary>
+    private bool ConsumeLikePressCancel()
+    {
+        if (_likePressCancelAt == 0) return false;
+        var pending = Environment.TickCount64 - _likePressCancelAt < 1000;
+        _likePressCancelAt = 0;
+        return pending;
     }
 
     /// <summary>指针离开按钮: 松手位置不在按钮上时 Click 不会触发, 取消长按。</summary>
@@ -644,7 +667,7 @@ public partial class PlayerWindow : FluentWindow
     {
         // 长按触发/取消过三连时, 松开这一刻的 Click 不能再去弹投币窗
         if (_tripleComboAt != 0 && Environment.TickCount64 - _tripleComboAt < 1500) return;
-        if (_likePressCancelled) { _likePressCancelled = false; return; }
+        if (ConsumeLikePressCancel()) return;
         if (!Svc.Session.HasLogin) { Svc.Toast.Show("投币需要先登录"); return; }
         if (string.IsNullOrEmpty(_currentBvid) || _aid <= 0) return;
         if (_isCoined) { Svc.Toast.Show("这个视频已经投过币了"); return; }

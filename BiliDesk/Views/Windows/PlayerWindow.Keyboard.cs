@@ -125,8 +125,8 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// → 键按下(非自动重复):
-    ///   短按(≤350ms) = 立即跳 5 秒(Shift 30 秒), 保持原来的即时手感;
-    ///   继续按住 350ms 以上 = 切到 3 倍速播放(与 B 站一致), 松开恢复按下前的倍速。
+    ///   短按(不到 <see cref="RightKeyLongPressMs"/> 毫秒) = 松开时跳 5 秒(Shift 30 秒), 保持原来的即时手感;
+    ///   继续按住超过阈值 = 切到 3 倍速播放(与 B 站一致), 松开恢复按下前的倍速。
     /// </summary>
     private void OnRightKeyPressed()
     {
@@ -156,6 +156,10 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>→ 键松开: 若是键盘长按触发的 3x, 恢复按下前的速率。</summary>
     private void OnPreviewKeyUp(object sender, KeyEventArgs e)
     {
+        // ★ 必须与 OnPreviewKeyDown 用同一条输入框判据: 焦点在可编辑 TextBox 里时,
+        //   KeyDown 被放行(不启计时器), 而 KeyUp 若照常走到 "短按 → 跳 5 秒",
+        //   就会变成"在弹幕/评论输入框里按 → 视频往前跳" —— 按住方向键移光标更是一路狂跳。
+        if (Keyboard.FocusedElement is TextBox { IsReadOnly: false }) return;
         if (e.Key != Key.Right) return;
         _rightKeyTimer?.Stop();
 
@@ -172,6 +176,28 @@ public partial class PlayerWindow : FluentWindow
         // 没到长按阈值就松开 = 短按: 现在才跳, 长按不会先跳一次
         SeekRelative(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? 30 : 5);
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// 窗口失去激活(Alt+Tab / 点了别的窗口): 结束所有"按住才成立"的加速态。
+    /// ★ 按住 → 时切走窗口, KeyUp 会送到新窗口, 播放器永远收不到 —— 不在这里兜底,
+    ///   切回来画面会一直停在 3x("3.0x 快进中"不消失)。鼠标长按快进同理(Up 丢失)。
+    /// ★★★ 必须延迟一拍再判定: 点视频区/控制栏时焦点会交给播放器自己的**覆盖层窗口**
+    ///   (见 HookOverlayKeyboard), 本窗口同样会收到 Deactivated —— 若在这里同步收尾,
+    ///   用户刚按下起步的长按快进、长按三连进度环会被立刻掐掉。
+    ///   延迟后检查"是否还在播放器体系内"(本窗口或覆盖层窗口处于激活), 都不在才算真离开。
+    /// </summary>
+    private void OnPlayerDeactivated(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_closing) return;
+            if (IsActive) return;                                  // 又切回来了
+            if (_overlayKeyboardWindow?.IsActive == true) return;  // 焦点在视频区覆盖层上, 没离开播放器
+            _rightKeyTimer?.Stop();
+            _rightKeyFast = false;
+            StopFastForward();
+        }), DispatcherPriority.Input);
     }
 
     private void SeekRelative(double seconds)

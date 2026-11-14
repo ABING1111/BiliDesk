@@ -23,8 +23,45 @@ public static class WatchLaterState
     private static bool _loaded;
     private static int _loading;
 
+    /// <summary>
+    /// 集合代次: <see cref="Reset"/> 与 <see cref="SetAll"/> 会自增。
+    /// <see cref="EnsureLoadedAsync"/> 在发请求时记下代次, 回来时对不上就丢弃结果 ——
+    /// 否则"登出瞬间还有一个在途请求"会把它抓到的**旧账号列表**重新写回集合,
+    /// 刚清掉的对勾又冒出来(直到下一次会话变更为止)。
+    /// </summary>
+    private static int _version;
+
     /// <summary>集合变化(加入/移除/整表重载)时触发, 总是在 UI 线程。</summary>
     public static event Action? Changed;
+
+    static WatchLaterState()
+    {
+        // ★ 登录 / 退出登录 / 切账号: 本地集合整份作废, 再按服务端重新拉一次。
+        //   不这么做的话, "登出后用另一个账号登录"会继续沿用上一个账号的 aid 集合:
+        //   _loaded 仍为 true ⇒ EnsureLoadedAsync 直接短路 ⇒ 所有卡片显示旧账号的对勾,
+        //   直到重启才恢复。
+        Svc.Session.Changed += OnSessionChanged;
+    }
+
+    /// <summary>
+    /// 会话变了: 清空集合, 已登录就按服务端重拉。
+    /// ★ 必须编组到 UI 线程: SessionManager.Changed 的触发点不只有 UI 线程上的登录/登出,
+    ///   启动时线程池上的 buvid 预热也会走 Save() → Changed(见 SessionManager 的 _gate 说明);
+    ///   而 <see cref="Changed"/> 的订阅者(视频卡片)会直接改 WPF 控件。
+    /// </summary>
+    private static void OnSessionChanged()
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+        if (dispatcher.CheckAccess()) { ResetAndReload(); return; }
+        dispatcher.BeginInvoke(new Action(ResetAndReload));
+    }
+
+    private static void ResetAndReload()
+    {
+        Reset();
+        if (Svc.Session.HasLogin) _ = EnsureLoadedAsync();
+    }
 
     /// <summary>是否已经从服务端拉到过一次列表(用于按钮在"未知"时不显示错误状态)。</summary>
     public static bool IsLoaded { get { lock (Gate) return _loaded; } }
@@ -40,10 +77,12 @@ public static class WatchLaterState
     {
         if (!Svc.Session.HasLogin) return;
 
+        int version;
         lock (Gate)
         {
             if (_loaded || _loading > 0) return;
             _loading++;
+            version = _version;   // 记下代次: 期间登出/切账号则本次结果作废
         }
 
         try
@@ -53,6 +92,7 @@ public static class WatchLaterState
 
             lock (Gate)
             {
+                if (version != _version) return;   // 会话已变, 这份属于旧账号, 丢掉
                 Ids.Clear();
                 foreach (var item in items)
                 {
@@ -77,6 +117,7 @@ public static class WatchLaterState
     {
         lock (Gate)
         {
+            _version++;   // 在途的旧请求结果作废
             _loaded = false;
         }
         await EnsureLoadedAsync();
@@ -87,6 +128,7 @@ public static class WatchLaterState
     {
         lock (Gate)
         {
+            _version++;   // 这份是权威列表, 期间在途的旧请求结果一律作废
             Ids.Clear();
             foreach (var id in aids)
             {
@@ -117,6 +159,7 @@ public static class WatchLaterState
         lock (Gate)
         {
             any = Ids.Count > 0;
+            _version++;   // 让在途请求的结果作废(见 _version)
             Ids.Clear();
             _loaded = false;
         }

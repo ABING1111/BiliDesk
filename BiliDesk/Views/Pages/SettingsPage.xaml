@@ -104,7 +104,7 @@
         <Border x:Name="StickyHeader" VerticalAlignment="Top" Height="44"
                 Background="{DynamicResource AppBackgroundBrush}"
                 BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1"
-                Opacity="0"
+                Opacity="0" IsHitTestVisible="False"
                 Panel.ZIndex="10"
                 shell:WindowChrome.IsHitTestVisibleInChrome="False">
             <Grid Margin="36,0,36,0">

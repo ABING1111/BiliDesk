@@ -1757,15 +1757,14 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <!-- 点赞: 点过 = 图标和数字一起变红 -->
-                                    <!-- ★ 2026-11-12: 长按 = 一键三连(点赞 + 投币 + 收藏), 见 OnLikeButtonPreviewMouseDown。
+                                    <!-- ★ 2026-11-12: 长按 = 一键三连(点赞 + 投币 + 收藏), 见 OnTripleButtonPreviewMouseDown。
                                          短按仍然只是点赞/取消点赞。
                                          ★ 按钮外框那圈描边是长按反馈(见 StartLikePressProgress):
                                            按住前 0.5 秒只做"长按确认"(不显示动画), 确认后环才开始扫,
                                            1.5 秒扫满(合计约 2 秒)触发三连; 三连演出中三个按钮依次弹跳、
-                                           环按「点赞(红) → 投币(金) → 收藏(蓝)」换色, 随后徽章浮现并淡出。 -->
-                                    <!-- ★ 进度条必须放在 Button 的 Content **里面**: 作为 Grid 的兄弟放在按钮外面时
-                                         实测被按钮覆盖(位置/尺寸/Opacity 全对, 就是画不出来)。
-                                         放进 Content 后由 ContentPresenter 内部渲染, 层级稳定。 -->
+                                           环按「点赞(红) → 投币(金) → 收藏(蓝)」换色, 随后徽章浮现并淡出。
+                                         ★ 进度环用 PressRingAdorner 画在按钮**外框**上(不参与布局);
+                                           这里 Content 里只放图标/数字和「一键三连」徽章。 -->
                                     <Button x:Name="BtnLike" Style="{StaticResource PlayerActionBtn}" Grid.Column="0"
                                             Click="OnLikeClick" ToolTip="点赞 (L)；长按一键三连"
                                             PreviewMouseLeftButtonDown="OnTripleButtonPreviewMouseDown"

@@ -620,6 +620,8 @@ public partial class PlayerWindow : FluentWindow
         // 点赞会被 OnLikeClick 当成"长按三连松手那次 Click"吞掉(见 OnLikeClick)。
         _tripleComboAt = 0;
         _tripleComboBusy = false;
+        // "长按取消"的时间戳同理: 留着会让新片 1 秒内的第一次点赞被当成取消后的余波吞掉。
+        _likePressCancelAt = 0;
         // 进度条立即归零(不走淡出): 新片子的第一次长按必须从 0 开始画(含确认阶段复位)。
         ResetLikePressProgress();
         // 激活点击补偿同理: 轮询计时器与按压起点都属于"这一次点击", 换片一律收掉。
@@ -819,9 +821,9 @@ public partial class PlayerWindow : FluentWindow
         nameof(_tripleComboAt), nameof(_tripleComboBusy),
         // 长按进度条的两个量(2026-11-12): 按压起点与"已提交给三连"标记都是这一次点击的瞬时态。
         nameof(_likePressStartTick), nameof(_likePressCommitted),
-        // 点击/长按取消判定: 按下时刻、"本次松手算取消"标记、是否通过 0.5 秒确认,
-        // 同属"这一次点击"的瞬时态。
-        nameof(_likeDownTick), nameof(_likePressCancelled), nameof(_likeConfirmed),
+        // 点击/长按取消判定: 按下时刻、"最近一次长按取消"时间戳、是否通过 0.5 秒确认,
+        // 同属"这一次点击"的瞬时态(时间戳必须清掉, 否则新片的第一次点击会被旧时刻吞掉)。
+        nameof(_likeDownTick), nameof(_likePressCancelAt), nameof(_likeConfirmed),
         // 激活点击补偿(覆盖层第一次点击被吞, 见 PlayerWindow.VideoArea.cs): 三个量都是
         // "这一次点击"的瞬时态, 换片时鼠标多半早已抬起, 复位成初值即可。
         nameof(_activationClickPending), nameof(_activationLongPress), nameof(_activationClickStartTick),
