@@ -748,6 +748,8 @@ public partial class PlayerWindow : FluentWindow
             VolumeSliderHost.BeginAnimation(FrameworkElement.WidthProperty, null);
             VolumeSliderHost.Width = 0;
         }
+        // 字幕的字号/最大宽跟着视频区尺寸走(全屏/铺满/窄窗都要重算)(2026-11-15)
+        ApplySubtitleStyle();
     }
 
     /// <summary>

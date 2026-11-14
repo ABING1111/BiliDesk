@@ -342,6 +342,27 @@ public class SettingsStore
     public bool ShowRelatedVideos { get; set; } = true;
 
     /// <summary>
+    /// 字幕: 有字幕的视频自动显示(默认**关** —— 字幕是"有人要"的增强功能, 默认开会对
+    /// "只看画面"的用户多一层遮挡; 想要的用户在播放器点一次 CC 就记住了)。
+    /// ★ 老配置缺这个字段 ⇒ false ⇒ 与"从未开启"一致, 不需要版本兼容。
+    /// ★ 与 <see cref="Models.AppSettings.SubtitleEnabled"/> 是读写契约。
+    /// </summary>
+    public bool SubtitleEnabled { get; set; }
+
+    /// <summary>字幕语言偏好(lan 代码)。空串 = 还没选过, 自动选轨走 PickPreferred 的默认序。</summary>
+    /// <summary>★ 与 <see cref="Models.AppSettings.SubtitleLan"/> 是读写契约。</summary>
+    public string SubtitleLan { get; set; } = "";
+
+    /// <summary>字幕字号(缩放百分比, 80~160)。默认 100。★ 与 <see cref="Models.AppSettings.SubtitleFontPercent"/> 是读写契约。</summary>
+    public int SubtitleFontPercent { get; set; } = 100;
+
+    /// <summary>字幕字号的合法下限(与播放器弹层滑杆的 Minimum 保持一致, 别各写一个)</summary>
+    public const int SubtitleFontMinPercent = 80;
+
+    /// <summary>字幕字号的合法上限</summary>
+    public const int SubtitleFontMaxPercent = 160;
+
+    /// <summary>
     /// 是否记住播放器窗口大小**和位置**(默认开)。
     ///
     /// ★ 关掉后: 播放器每次打开都用 XAML 里的默认 1280×760 并按 CenterScreen 居中,
@@ -755,6 +776,15 @@ public class SettingsStore
         // 显示相关视频(2026-11-14): 老配置缺字段 ⇒ AppSettings 的初始化值 true(保持原有行为)。
         ShowRelatedVideos = s.ShowRelatedVideos;
 
+        // 字幕(2026-11-15): 老配置缺字段 ⇒ 关闭 + 空语言 + 默认字号, 正是"从未用过"的语义。
+        // ★ 语言串要清洗: 手改配置可能塞进超长垃圾 —— 存的值会被拿去和轨道的 lan 做
+        //   等值比较, 垃圾串只会匹配不上, 没有崩溃风险, 但限长能防配置文件被无限撑大。
+        // ★ 字号要夹取: 越界值直接拿去乘会算出离谱字号(0% = 不可见)。
+        SubtitleEnabled = s.SubtitleEnabled;
+        SubtitleLan = SanitizeSubtitleLan(s.SubtitleLan);
+        SubtitleFontPercent = Math.Clamp(s.SubtitleFontPercent,
+            SubtitleFontMinPercent, SubtitleFontMaxPercent);
+
         // 音质档位: 手改配置可能塞进 30251 之外的数字 ⇒ 一律落回「自动」。
         PreferredAudioTier = AudioPreference.Normalize(s.PreferredAudioTier);
 
@@ -965,6 +995,9 @@ public class SettingsStore
         PreferredAudioTier = PreferredAudioTier,
         AutoResume = AutoResume,
         ShowRelatedVideos = ShowRelatedVideos,
+        SubtitleEnabled = SubtitleEnabled,
+        SubtitleLan = SubtitleLan,
+        SubtitleFontPercent = SubtitleFontPercent,
         RememberPlayerWindowSize = RememberPlayerWindowSize,
         PlayerWindowWidth = PlayerWindowWidth,
         PlayerWindowHeight = PlayerWindowHeight,
@@ -1183,6 +1216,56 @@ public class SettingsStore
         ShowRelatedVideos = value;
         Save();
         RelatedVideosChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// 字幕设置变更。播放器据此即时同步(开关状态/当前语言/字号)。
+    /// ★ 与 DanmakuSettingsChanged 同款语义: 设置页改动要立刻反映到正在播放的窗口。
+    /// </summary>
+    public event Action? SubtitleSettingsChanged;
+
+    /// <summary>语言串的清洗: 去空白、限长。空/超长一律归空串(= 没选过)。</summary>
+    private static string SanitizeSubtitleLan(string? lan)
+    {
+        var v = (lan ?? "").Trim();
+        return v.Length is > 0 and <= 64 ? v : "";
+    }
+
+    /// <summary>
+    /// 改字幕开关/语言偏好并落盘(播放器的弹层与设置页共用这一个入口)。
+    /// ★ 两个参数都允许传 null = "保持不变" —— 调用方只改其中一项时不必把另一项也读出来。
+    /// ★ 广播不带具体值: 订阅方(播放器)自己读设置即可, 免得签名跟着字段清单膨胀。
+    /// </summary>
+    public void UpdateSubtitleSettings(bool? enabled = null, string? lan = null)
+    {
+        var changed = false;
+        if (enabled.HasValue && SubtitleEnabled != enabled.Value)
+        {
+            SubtitleEnabled = enabled.Value;
+            changed = true;
+        }
+        if (lan != null)
+        {
+            var next = SanitizeSubtitleLan(lan);
+            if (!string.Equals(SubtitleLan, next, StringComparison.Ordinal))
+            {
+                SubtitleLan = next;
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        Save();
+        SubtitleSettingsChanged?.Invoke();
+    }
+
+    /// <summary>改字幕字号并落盘。越界值夹回合法区间(与弹层滑杆/设置页滑杆同一套上下限)。</summary>
+    public void SetSubtitleFontPercent(int percent)
+    {
+        var v = Math.Clamp(percent, SubtitleFontMinPercent, SubtitleFontMaxPercent);
+        if (SubtitleFontPercent == v) return;
+        SubtitleFontPercent = v;
+        Save();
+        SubtitleSettingsChanged?.Invoke();
     }
 
     /// <summary>改"自动检查更新"并落盘</summary>

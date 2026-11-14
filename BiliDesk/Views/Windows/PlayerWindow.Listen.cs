@@ -162,6 +162,9 @@ public partial class PlayerWindow : FluentWindow
     {
         if (ListenOverlay != null)
             ListenOverlay.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        // 字幕跟着藏/还(2026-11-15): 听视频只有声音, 字幕挂在聆听画面上是噪音;
+        // 退出聆听态时不在这里硬还原 —— RefreshSubtitleNow 的下一跳心跳(100ms 内)
+        // 会按 _subtitleOn 与当前文本自行决定显隐, 这里抢写会跟它打架。
         if (BtnListen != null)
             BtnListen.Tag = on ? "on" : "off";   // 驱动 ListenGhostBtn 的琥珀 DataTrigger
         if (ListenHeadIcon != null)
@@ -190,6 +193,8 @@ public partial class PlayerWindow : FluentWindow
         else
         {
             StopListenWave();
+            // 退出聆听态: 字幕开着的话立刻按当前时间刷一次(否则要等下一跳心跳才回来)
+            if (_subtitleOn) RefreshSubtitleNow();
         }
     }
 

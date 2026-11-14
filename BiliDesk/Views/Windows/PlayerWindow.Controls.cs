@@ -832,7 +832,8 @@ public partial class PlayerWindow : FluentWindow
     private bool AnyPlayerPopupOpen
         => (QualityPopup != null && QualityPopup.IsOpen)
         || (DanmakuAreaPopup != null && DanmakuAreaPopup.IsOpen)
-        || (SpeedPopup != null && SpeedPopup.IsOpen);
+        || (SpeedPopup != null && SpeedPopup.IsOpen)
+        || (SubtitlePopup != null && SubtitlePopup.IsOpen);
 
     /// <summary>
     /// 视频区手势是否已经由一次 **Down** 正式起步。

@@ -1162,6 +1162,33 @@
                             <Canvas x:Name="DanmakuCanvas" Background="Transparent" IsHitTestVisible="False"
                                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
 
+                            <!-- ============ 字幕层(2026-11-15 新增) ============
+                                 底部居中的字幕胶囊: WPF 浮层渲染, 不走 LibVLC 的原生字幕
+                                 (那个要先把 JSON 转成临时 SRT 文件, 样式还不可调)。
+                                 ★ 必须放在弹幕层之后、ListenOverlay/LoadingOverlay **之前**:
+                                   聆听/加载/失败/播完遮罩都在它之后声明, 会自然盖住字幕 ——
+                                   "正在加载"或"已播完"的字幕还挂在屏幕上就是 bug。
+                                 ★ IsHitTestVisible=False: 绝不能吃掉视频区的手势(单击暂停/
+                                   双击全屏/长按快进/滚轮调音量) —— 与弹幕层同一条铁律。
+                                 ★ 底色写死深色 + 白字: 压在视频画面上, 跟主题走的话浅色主题下
+                                   就是深字压亮画面, 直接看不见(音量/倍速提示的老坑)。
+                                 ★ 字号/最大宽/边距由代码按视频区尺寸算(见 ApplySubtitleStyle),
+                                   全屏与铺满窗口下自动放大, XAML 里只给初值。
+                                 ★ 悬挂高度 92: 控制栏(悬浮玻璃面板)高约 76 + 底部外边距 14,
+                                   再留一点呼吸空隙; 控制栏隐藏时字幕会显得偏上, 但
+                                   "字幕跟着控制栏跳上跳下"更糟, 固定不动。 -->
+                            <Border x:Name="SubtitleLayer" HorizontalAlignment="Center"
+                                    VerticalAlignment="Bottom"
+                                    Margin="24,0,24,92" Padding="12,6"
+                                    CornerRadius="6" Background="#B30A0B0F"
+                                    BorderBrush="#1FFFFFFF" BorderThickness="1"
+                                    IsHitTestVisible="False" Visibility="Collapsed">
+                                <TextBlock x:Name="SubtitleText"
+                                           Foreground="White" FontSize="20" FontWeight="SemiBold"
+                                           TextWrapping="Wrap" TextAlignment="Center"
+                                           MaxWidth="900" />
+                            </Border>
+
                             <!-- ===== 「听视频」聆听态画面(2026-10-06 新增) =====
                                  ★ 为什么必须是**一层盖住视频的浮层**而不是"隐藏 VideoView":
                                    视频区被两层原生 HWND 占着(见 VideoAreaRoot 的说明), 把
@@ -1427,6 +1454,7 @@
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
 
                                             <!-- 播放/暂停。★ Content 由代码替换(见 UpdatePlayButton):
@@ -1512,12 +1540,99 @@
                                                 </Grid>
                                             </Button>
 
-                                            <Border Grid.Column="6" Width="1" Height="16" Background="#1FFFFFFF"
+                                            <!-- 字幕开关(2026-11-15): 图标态 "CC" 字样 + 关闭斜线(与弹幕关同一套语义)。
+                                                 ★ 不用 Segoe Fluent Icons 的 CC 字形: 该字体里字幕字形不稳定,
+                                                   两个字母直接排出来反而最直观、且不依赖字体集是否齐全。
+                                                 ★ 状态表达与弹幕开关同款: 开=接近纯白无斜线, 关=压暗 + 斜线,
+                                                   无字幕=整颗置灰(UpdateSubtitleButton)。 -->
+                                            <Button Grid.Column="6" x:Name="BtnSubtitle" Style="{StaticResource PlayerIconBtn}"
+                                                    Margin="2,0,0,0" Click="OnSubtitleClick" ToolTip="字幕">
+                                                <Grid Width="16" Height="16">
+                                                    <TextBlock x:Name="SubtitleBtnText" Text="CC"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               FontSize="10.5" FontWeight="SemiBold"
+                                                               Foreground="#F2FFFFFF" />
+                                                    <Line x:Name="SubtitleOffSlash" X1="1.5" Y1="1.5" X2="14.5" Y2="14.5"
+                                                          Stroke="#99FFFFFF" StrokeThickness="1.4"
+                                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                          Visibility="Collapsed" />
+                                                </Grid>
+                                            </Button>
+                                            <Popup x:Name="SubtitlePopup"
+                                                   Placement="Top" StaysOpen="False" AllowsTransparency="True"
+                                                   PopupAnimation="Fade">
+                                                <Border Style="{StaticResource PlayerGlassPopupStyle}" Width="250" Padding="12,10">
+                                                    <StackPanel>
+                                                        <TextBlock Text="字幕" Foreground="#E6FFFFFF" FontSize="12" />
+                                                        <ListBox x:Name="SubtitleList" Background="Transparent"
+                                                                 BorderThickness="0" Foreground="White"
+                                                                 ItemContainerStyle="{StaticResource PlayerPopupItemStyle}"
+                                                                 MaxHeight="220" Margin="0,6,0,0"
+                                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                                 SelectionChanged="OnSubtitleSelected">
+                                                        </ListBox>
+
+                                                        <Border Height="1" Background="#1FFFFFFF" Margin="2,8" />
+
+                                                        <!-- 字号: 与弹幕外观那组同款排版(标签 | 滑杆 | 数值) -->
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="40" />
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="42" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="字号" Foreground="#E6FFFFFF" FontSize="12"
+                                                                       VerticalAlignment="Center" />
+                                                            <Slider Grid.Column="1" x:Name="SubtitleFontSlider"
+                                                                    Style="{StaticResource PlayerSlider}"
+                                                                    Minimum="80" Maximum="160" Value="100"
+                                                                    IsSnapToTickEnabled="True" TickFrequency="10"
+                                                                    Margin="8,0,8,0" ValueChanged="OnSubtitleFontChanged" />
+                                                            <TextBlock Grid.Column="2" x:Name="SubtitleFontValue" Text="100%"
+                                                                       Foreground="#99FFFFFF" FontSize="11"
+                                                                       HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                                        </Grid>
+
+                                                        <!-- 延迟: 字幕比声音慢/快时手动补(直播录像/AI 字幕常见 ±几秒) -->
+                                                        <Grid Margin="0,10,0,0">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="40" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="延迟" Foreground="#E6FFFFFF" FontSize="12"
+                                                                       VerticalAlignment="Center" />
+                                                            <Button Grid.Column="1" x:Name="SubtitleDelayMinus"
+                                                                    Style="{StaticResource PlayerGhostTextBtn}"
+                                                                    Padding="8,2" Click="OnSubtitleDelayMinusClick"
+                                                                    ToolTip="字幕提前(画面还没说到, 字幕先出)">
+                                                                <TextBlock Text="−0.2s" Foreground="#F2FFFFFF" FontSize="11" />
+                                                            </Button>
+                                                            <TextBlock Grid.Column="2" x:Name="SubtitleDelayValue" Text="0.0s"
+                                                                       Foreground="#99FFFFFF" FontSize="11"
+                                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                            <Button Grid.Column="3" x:Name="SubtitleDelayPlus"
+                                                                    Style="{StaticResource PlayerGhostTextBtn}"
+                                                                    Padding="8,2" Click="OnSubtitleDelayPlusClick"
+                                                                    ToolTip="字幕延后(声音说完了字幕才出)">
+                                                                <TextBlock Text="+0.2s" Foreground="#F2FFFFFF" FontSize="11" />
+                                                            </Button>
+                                                        </Grid>
+
+                                                        <TextBlock x:Name="SubtitleHintText" Text=""
+                                                                   Foreground="#99FFFFFF" FontSize="10.5"
+                                                                   Margin="2,8,2,0" TextWrapping="Wrap" MaxWidth="226" />
+                                                    </StackPanel>
+                                                </Border>
+                                            </Popup>
+
+                                            <Border Grid.Column="7" Width="1" Height="16" Background="#1FFFFFFF"
                                                     Margin="7,0,7,0" VerticalAlignment="Center" />
 
                                             <!-- 倍速: 点开弹层选预设或输入自定义值(0.25x ~ 4.0x)。
                                                  文字按钮保留 —— 当前倍速必须一眼可读, 图标表达不了 "1.5x"。 -->
-                                            <Button Grid.Column="7" x:Name="SpeedBtn" Style="{StaticResource PlayerGhostTextBtn}"
+                                            <Button Grid.Column="8" x:Name="SpeedBtn" Style="{StaticResource PlayerGhostTextBtn}"
                                                     Click="OnSpeedClick" ToolTip="设置播放速度">
                                                 <TextBlock x:Name="SpeedText" Text="1.0x" Foreground="#F2FFFFFF" />
                                             </Button>
@@ -1566,7 +1681,7 @@
                                             </Popup>
 
                                             <!-- 清晰度: 文字按钮(1080P / 4K / 直播 / 本地 都必须可读) -->
-                                            <Button Grid.Column="8" x:Name="BtnQuality" Style="{StaticResource PlayerGhostTextBtn}"
+                                            <Button Grid.Column="9" x:Name="BtnQuality" Style="{StaticResource PlayerGhostTextBtn}"
                                                     Margin="2,0,0,0" Click="OnQualityClick" ToolTip="切换清晰度">
                                                 <TextBlock x:Name="QualityText" Text="1080P" Foreground="#F2FFFFFF" />
                                             </Button>
@@ -1582,11 +1697,11 @@
                                                 </Border>
                                             </Popup>
 
-                                            <Border Grid.Column="9" Width="1" Height="16" Background="#1FFFFFFF"
+                                            <Border Grid.Column="10" Width="1" Height="16" Background="#1FFFFFFF"
                                                     Margin="7,0,7,0" VerticalAlignment="Center" />
 
                                             <!-- 全屏 -->
-                                            <Button Grid.Column="10" x:Name="BtnFullscreen2" Style="{StaticResource PlayerIconBtn}"
+                                            <Button Grid.Column="11" x:Name="BtnFullscreen2" Style="{StaticResource PlayerIconBtn}"
                                                     Click="OnFullscreenClick" ToolTip="全屏 (F)">
                                                 <TextBlock Text="&#xE740;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                            FontSize="15" Foreground="White" />

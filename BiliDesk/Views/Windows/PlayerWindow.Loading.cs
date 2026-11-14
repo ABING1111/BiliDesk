@@ -640,6 +640,9 @@ public partial class PlayerWindow : FluentWindow
         // ★ 渲染层虽然会按 _isLive 判断, 但不主动断开就会白占一条 WS 连接,
         //   切走之后还在持续收别人的弹幕。
         StopLiveDanmaku();
+        // 字幕同属"上一条视频": 轨道/时间轴/开关态/延迟全部清掉, 在飞的请求立刻掐。
+        // (自动显示偏好是跨片的设置值, 不在这里动 —— 新片加载后按它重新起显。)
+        ResetSubtitleForNewMedia();
         // 清掉屏幕上残留的弹幕(防泄漏)并重置泳道占用
         DanmakuCanvas.Children.Clear();
         ResetLanes();
@@ -816,6 +819,15 @@ public partial class PlayerWindow : FluentWindow
         // 「听视频」的音轨地址与恢复进度: 换片后要重新取, 留着上一条的会播错东西
         nameof(_listenAudioUrl), nameof(_listenResumeMs), nameof(_listenWaveTick),
         nameof(_lastPlayUrl), nameof(_lastAudioUrl),   // 出错诊断日志要打"当时正在播的地址"
+        // 字幕(2026-11-15): 轨道/时间轴/开关态/延迟/加载标志全部属于"这一片" ——
+        //   换片后必须重取, 留着上一条的时间轴会把 A 视频的字幕打在 B 视频画面上。
+        //   ★ _subtitleLan 与 _subtitleDelayMs 也在清单里: 前者的持久偏好存在
+        //     SettingsStore.SubtitleLan(跨片), 这里这个实例值换片时由
+        //     SelectSubtitleTrackAsync 重新落定; 延迟几乎总是"这一片"的特性(不持久化)。
+        nameof(_subtitleOn), nameof(_subtitleLoadingTracks), nameof(_subtitleLoadingCues),
+        nameof(_subtitleNeedsLogin), nameof(_fillingSubtitleMenu), nameof(_subtitleError),
+        nameof(_subtitleLan), nameof(_subtitleDelayMs), nameof(_subtitleLastText),
+        nameof(_subtitleFontSliderSyncing),
         // 进度 / 时长 / EOF 自救
         nameof(_totalMs), nameof(_lastKnownMs), nameof(_eofResumeCount), nameof(_lastEofResumeMs),
         nameof(_resumeAfterSwitchMs), nameof(_ended), nameof(_eofBlackActive), nameof(_anchorMs), nameof(_anchorWall),
@@ -1191,6 +1203,11 @@ public partial class PlayerWindow : FluentWindow
             // 起播**不等它**(服务端首包实测 2.6s, 等了也拿不到); 回来得早才做开场空降,
             // 否则由 500ms 心跳补跳(见 BeforePlayApplySponsorAsync)。
             var sponsorTask = FetchSponsorSegmentsAsync();
+
+            // ★ 字幕轨查询同样并行发起(2026-11-15): 用的是刚定下来的 cid, 且**不 await** ——
+            //   轨道列表晚几秒到完全没关系(字幕本来就该等画面出来), 绝不能挡在起播前面。
+            //   传本代次 gen: 用户连点两个视频时, 慢的那个字幕响应不能盖到新视频上。
+            _ = LoadSubtitleTracksAsync(gen);
 
             SetLoadingText("正在获取播放地址…");
             // 默认请求 1080P(qn=80), B 站会按登录态/大会员返回实际可用的清晰度

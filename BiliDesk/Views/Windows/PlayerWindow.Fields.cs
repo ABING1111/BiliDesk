@@ -40,6 +40,7 @@ namespace BiliDesk.Views;
 //     .Season.cs      合集与分P               .CommentActions.cs 评论互动
 //     .Sponsor.cs     Toast + 赞助片段        .VideoArea.cs  视频区 HWND/背景
 //     .Lifetime.cs    关闭/定时器清理/诊断    .Recovery.cs   卡顿自愈/地址保鲜
+//     .Subtitle.cs    字幕(CC/AI)全链路
 /// <summary>
 /// 原生视频播放器窗口 (LibVLC 内核): 不再使用 WebView2, 视频流由 B 站 playurl 接口获取
 /// 周边 UI 仍然是 WPF 原生(标题/UP 主卡片/点赞/收藏/评论/弹幕层), 视觉与应用主题一致

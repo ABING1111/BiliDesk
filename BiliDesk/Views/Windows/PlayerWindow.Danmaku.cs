@@ -518,6 +518,7 @@ public partial class PlayerWindow : FluentWindow
         if (QualityPopup != null && QualityPopup.IsOpen) return false;
         if (DanmakuAreaPopup != null && DanmakuAreaPopup.IsOpen) return false;
         if (SpeedPopup != null && SpeedPopup.IsOpen) return false;
+        if (SubtitlePopup != null && SubtitlePopup.IsOpen) return false;   // 字幕弹层开着别藏(2026-11-15)
         if (_isSeeking) return false;                       // 拖进度条时别藏
         if (ControlBar.IsMouseOver) return false;           // 鼠标停在控制栏上(即使不动)也别藏
         if (LoadingOverlay != null && LoadingOverlay.Visibility == Visibility.Visible) return false;

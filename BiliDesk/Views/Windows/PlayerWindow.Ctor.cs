@@ -67,6 +67,8 @@ public partial class PlayerWindow : FluentWindow
         DanmakuAreaPopup.PlacementTarget = BtnDanmakuArea;
         // 倍速弹层(2026-11-03 自定义倍速): 与清晰度弹层同款, 右缘对齐 SpeedBtn。
         SpeedPopup.PlacementTarget = SpeedBtn;
+        // 字幕弹层(2026-11-15): 同款, 右缘对齐 BtnSubtitle。
+        SubtitlePopup.PlacementTarget = BtnSubtitle;
         // 右缘对齐(弹层右缘 = 按钮右缘)。注意必须等弹层布局完成后再量宽:
         // Opened 那一刻 ActualWidth 还是 0, 偏移会算成正数把弹层推出窗口右缘(真机实证)。
         // Loaded 优先级在 Popup 自身布局跑完之后, 那时 ActualWidth 才可信。
@@ -76,6 +78,9 @@ public partial class PlayerWindow : FluentWindow
         DanmakuAreaPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
                 RightAlignPopup(DanmakuAreaPopup, BtnDanmakuArea)));
+        SubtitlePopup.Opened += (_, _) => Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+                RightAlignPopup(SubtitlePopup, BtnSubtitle)));
         SpeedPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
             {
@@ -91,6 +96,7 @@ public partial class PlayerWindow : FluentWindow
         HookPopupToggle(QualityPopup, BtnQuality);
         HookPopupToggle(DanmakuAreaPopup, BtnDanmakuArea);
         HookPopupToggle(SpeedPopup, SpeedBtn);
+        HookPopupToggle(SubtitlePopup, BtnSubtitle);
         HookPopupToggle(PagesPopup, BtnPages);
         // ★ 视频区手势判定仍直接用"是否开着"作判据(见 AnyPlayerPopupOpen), 不订阅 Closed:
         //   2026-10-13 第一版在这里订阅过 Closed 记时间窗, 实测证明 Closed 晚于视频区的
@@ -125,7 +131,10 @@ public partial class PlayerWindow : FluentWindow
         DescText.SizeChanged += (_, _) => UpdateDescFold();
 
         // 跳过赞助片段: 开关/类别一变就重算(关掉要立刻停, 改类别要立刻生效)
-        Svc.Settings.SponsorBlockChanged += OnSponsorSettingsChanged;        // 进度条色块是按像素摆的, 控件一改宽度就得重画(窗口缩放、切全屏、控制栏重排都会触发)。
+        Svc.Settings.SponsorBlockChanged += OnSponsorSettingsChanged;
+        // 字幕设置(2026-11-15): 字号/开关在设置页改了要立刻反映到播放中的窗口
+        Svc.Settings.SubtitleSettingsChanged += OnSubtitleSettingsChanged;
+        // 进度条色块是按像素摆的, 控件一改宽度就得重画(窗口缩放、切全屏、控制栏重排都会触发)。
         // 重画成本只有几个 Rectangle, 不必做节流。
         SponsorMarks.SizeChanged += (_, _) => RenderSponsorMarks();
         // 显示相关视频: 开关一变, 已打开的信息栏立即隐藏/重新加载(2026-11-14)
@@ -136,6 +145,19 @@ public partial class PlayerWindow : FluentWindow
         //   Value(25/80/100/2)会在 InitializeComponent() 时把用户设置整个覆写成默认。
         _syncingDanmakuLook = false;
         UpdateDanmakuButton();
+
+        // 字幕(2026-11-15): 字号滑杆初值 + 按钮初始态(轨道要等换片加载, 这里只摆外观)。
+        // ★ 必须在打开回灌闸门前完成: 与弹幕滑杆同理, XAML 的初始 Value(100)不能把
+        //   用户设置(比如 140%)覆写回默认。
+        if (SubtitleFontSlider != null)
+        {
+            _subtitleFontSliderSyncing = true;
+            try { SubtitleFontSlider.Value = Svc.Settings.SubtitleFontPercent; }
+            finally { _subtitleFontSliderSyncing = false; }
+        }
+        if (SubtitleFontValue != null) SubtitleFontValue.Text = Svc.Settings.SubtitleFontPercent + "%";
+        UpdateSubtitleDelayText();
+        UpdateSubtitleButton();
 
         // LibVLC 走进程级共享单例(见 VlcCore): 初始化全进程只做一次, 且永不在这里释放。
         // 反复 new/Dispose 原生库会引发 Windows 级访问违例弹窗:

@@ -992,6 +992,52 @@ public class SettingsViewModel : ObservableObject
         ? "播放器右侧简介下方显示相关推荐; 关闭后不再加载相关视频"
         : "已关闭, 播放器不再请求与显示相关视频";
 
+    // ----------------- 字幕(2026-11-15) -----------------
+
+    /// <summary>有字幕的视频自动显示(默认关; 在播放器点一次 CC 也会记住)</summary>
+    public bool SubtitleEnabled
+    {
+        get => Svc.Settings.SubtitleEnabled;
+        set
+        {
+            if (value == Svc.Settings.SubtitleEnabled) return;
+            Svc.Settings.UpdateSubtitleSettings(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SubtitleEnabledHint));
+        }
+    }
+
+    /// <summary>副标题: 说清"AI 字幕需要登录"这个最常见的困惑</summary>
+    public string SubtitleEnabledHint => Svc.Settings.SubtitleEnabled
+        ? "有字幕的视频自动显示(优先上次选择的语言); AI 字幕需要登录后才能获取"
+        : "已关闭; 在播放器点「CC」或按 C 键可临时开启, 开过的语言会被记住";
+
+    /// <summary>字幕字号缩放(80~160)。即时生效, 播放中的字幕立刻跟着变。</summary>
+    public int SubtitleFontPercent
+    {
+        get => Svc.Settings.SubtitleFontPercent;
+        set
+        {
+            if (value == Svc.Settings.SubtitleFontPercent) return;
+            Svc.Settings.SetSubtitleFontPercent(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SubtitleFontText));
+        }
+    }
+
+    public string SubtitleFontText
+    {
+        get
+        {
+            var p = SubtitleFontPercent;
+            if (p == 100) return "默认大小";
+            return p > 100 ? $"放大到 {p}%" : $"缩小到 {p}%";
+        }
+    }
+
+    public int SubtitleFontMin => Services.SettingsStore.SubtitleFontMinPercent;
+    public int SubtitleFontMax => Services.SettingsStore.SubtitleFontMaxPercent;
+
     // ----------------- 起播缓冲(网络缓存) -----------------
 
     /// <summary>

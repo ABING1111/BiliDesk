@@ -637,7 +637,49 @@
                                   IsChecked="{Binding ShowRelatedVideos, Mode=TwoWay}" />
                     </Grid>
 
-                    <!-- ★ 组五: 缓冲(上一组末尾的行分隔线同样去掉, 理由见「播放进度」) -->
+                    <!-- ★ 组五: 字幕(2026-11-15)
+                         B 站的 CC/AI 字幕是"有人要"的增强功能, 默认关 —— 想要的用户
+                         在播放器点一次 CC 就会记住语言, 这里给"找回入口"一个总开关。 -->
+                    <Border Style="{StaticResource SettingsGroupDivider}" />
+                    <ContentControl Content="字幕" Style="{StaticResource SettingsGroupHeaderStyle}" />
+
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="自动显示字幕" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding SubtitleEnabledHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding SubtitleEnabled, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 字幕字号: 与播放器弹层里的字号滑杆读写同一个配置, 即时生效。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="240" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="字幕字号" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding SubtitleFontText}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                            <TextBlock Text="播放器里的字幕会立即跟着变"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <Slider Grid.Column="1" Style="{StaticResource SettingsSliderStyle}"
+                                Width="240" VerticalAlignment="Center"
+                                Minimum="{Binding SubtitleFontMin}" Maximum="{Binding SubtitleFontMax}"
+                                IsSnapToTickEnabled="True" TickFrequency="10"
+                                Value="{Binding SubtitleFontPercent, Mode=TwoWay}" />
+                    </Grid>
+
+                    <!-- ★ 组六: 缓冲(上一组末尾的行分隔线同样去掉, 理由见「播放进度」) -->
                     <Border Style="{StaticResource SettingsGroupDivider}" />
                     <ContentControl Content="缓冲" Style="{StaticResource SettingsGroupHeaderStyle}" />
 

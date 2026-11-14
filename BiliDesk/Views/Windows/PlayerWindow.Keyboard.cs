@@ -58,6 +58,9 @@ public partial class PlayerWindow : FluentWindow
             case Key.L: OnLikeClick(this, new RoutedEventArgs()); e.Handled = true; return;
             case Key.U: OnUpPageClick(this, new RoutedEventArgs()); e.Handled = true; return;
             case Key.D: ToggleDanmaku(); e.Handled = true; return;
+            // 字幕开关(2026-11-15): 与 B 站 web 端一致用 C。关→开走"上次语言/自动选轨";
+            // 开→关只关显示(轨道数据留着, 再按一下 C 就回来)。
+            case Key.C: ToggleSubtitleByKey(); e.Handled = true; return;
             case Key.Escape: HandleBackRequest(); e.Handled = true; return;
         }
     }

@@ -100,6 +100,25 @@ public class AppSettings
     public bool ShowRelatedVideos { get; set; } = true;
 
     /// <summary>
+    /// 字幕自动显示(2026-11-15 新增, 默认关)。开启后播放器加载到字幕轨就自动按上次语言起显。
+    /// ★ 老配置缺这个字段 ⇒ false ⇒ 与"从未开启"一致, 不需要版本兼容。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool SubtitleEnabled { get; set; }
+
+    /// <summary>
+    /// 字幕语言偏好(lan 代码, 如 zh-Hans / ai-zh)。空串 = 未选过。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public string SubtitleLan { get; set; } = "";
+
+    /// <summary>
+    /// 字幕字号缩放(80~160, 默认 100)。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public int SubtitleFontPercent { get; set; } = 100;
+
+    /// <summary>
     /// 是否记住播放器窗口大小**和位置**(默认开)。关闭后播放器每次都用 XAML 默认尺寸并居中.
     /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
     /// </summary>

@@ -1255,6 +1255,9 @@ public partial class PlayerWindow : FluentWindow
             //   后果是 seek 静音提前解除、缓冲提示提前消失(画面没回来声音先到)。
             //   定时器全程在跑(构造里 Start, 等待期 100ms / 平时 500ms), 少这一个调用不丢刷新。
             DispatchDanmaku();
+            // 字幕同样要在这对齐一次(2026-11-15): 心跳是 100ms 粒度, seek 后靠 TimeChanged
+            // 立即把字幕切到新位置 —— 否则拖完进度条字幕还会挂在旧画面上最多 100ms。
+            RefreshSubtitleNow();
             MaybeSyncProgress();
         }));
 
@@ -1416,6 +1419,8 @@ public partial class PlayerWindow : FluentWindow
         _pendingSeekMs = -1;
         _seekObservedMs = -1;
         if (_progressTimer != null) _progressTimer.Interval = ProgressTickIdle;
+        // 字幕必须藏: "已播完"遮罩下面还挂着最后一行字幕, 起重播后又会闪出旧文本
+        HideSubtitleLayer();
         EndOverlay.Visibility = Visibility.Visible;
         // 进度条钉在满格 + 时间显示成总时长, 否则 Position 可能报 0, 看起来像"回到开头了"
         UpdateProgressUi();
