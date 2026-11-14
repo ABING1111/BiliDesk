@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
@@ -17,7 +17,7 @@ using BiliDesk.ViewModels;
 
 namespace BiliDesk.Views.Pages;
 
-public partial class HomePage : UserControl
+public partial class HomePage : UserControl, IRefreshable
 {
     private HomeViewModel? Vm => DataContext as HomeViewModel;
     private const double AutoLoadThreshold = 240;
@@ -554,6 +554,9 @@ public partial class HomePage : UserControl
 
     /// <summary>工具栏刷新键 + 错误条里的「重试」都走这一条</summary>
     private void OnRefreshClick(object sender, RoutedEventArgs e) => _ = RefreshCurrentTabAsync();
+
+    /// <summary>F5: 刷新当前 Tab(与右上角刷新按钮同一条路径, 刷完滚回顶部)。</summary>
+    public void Refresh() => _ = RefreshCurrentTabAsync();
 
     /// <summary>
     /// 「分区」入口(2026-10-12 用户要求"放左下角", 入口与展开位置一致)。

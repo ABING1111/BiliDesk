@@ -52,7 +52,7 @@
                     <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
                 </Button>
                 <Button Style="{StaticResource IconButtonStyle}"
-                        Command="{Binding ReloadCommand}" ToolTip="刷新">
+                        Command="{Binding ReloadCommand}" ToolTip="刷新（F5）">
                     <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
                 </Button>
             </StackPanel>
@@ -99,7 +99,7 @@
                 <TextBlock Text="{Binding Error}" Foreground="{DynamicResource TextSecondaryBrush}"
                            FontSize="13" HorizontalAlignment="Center" TextWrapping="Wrap"
                            TextAlignment="Center" Margin="0,14,0,0" />
-                <Button Content="刷新" Style="{StaticResource AccentButtonStyle}"
+                <Button Content="刷新（F5）" Style="{StaticResource AccentButtonStyle}"
                         HorizontalAlignment="Center" Margin="0,16,0,0" Padding="24,7"
                         Command="{Binding ReloadCommand}"
                         Visibility="{Binding Loading, Converter={StaticResource InvBoolToVis}}" />

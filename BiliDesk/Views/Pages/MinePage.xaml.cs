@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
 using BiliDesk.ViewModels;
@@ -12,7 +13,7 @@ namespace BiliDesk.Views.Pages;
 /// 页面实例被 MainWindow 缓存, 每次切进来 Loaded 都会重拉一次数据 ——
 /// 硬币/经验/粉丝这类数字过期了看着难受, 而且本页请求量小, 重拉没有成本压力。
 /// </summary>
-public partial class MinePage : UserControl
+public partial class MinePage : UserControl, IRefreshable
 {
     private MineViewModel? Vm => DataContext as MineViewModel;
 
@@ -45,6 +46,9 @@ public partial class MinePage : UserControl
     {
         if (Vm != null) _ = Vm.LoadFoldersAsync(force: true);
     }
+
+    /// <summary>F5: 刷新收藏夹(与右上角刷新按钮同一条路径, 强制拉取)。</summary>
+    public void Refresh() => OnRefreshFoldersClick(this, new RoutedEventArgs());
 
     /// <summary>点收藏夹卡片 → 收藏页并选中那个夹(经 MainWindow.OpenFavFolder 落地)</summary>
     private void OnFolderClick(object sender, MouseButtonEventArgs e)

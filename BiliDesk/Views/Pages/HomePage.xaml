@@ -1,4 +1,4 @@
-﻿
+
 <UserControl x:Class="BiliDesk.Views.Pages.HomePage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -345,7 +345,7 @@
             <!-- 刷新: 走 code-behind 的 OnRefreshClick 而不是直接绑命令 —— 刷完要把列表滚回顶部
                  (见 HomePage.RefreshCurrentTabAsync 的说明), 那是"视图"的事, VM 不该管。 -->
             <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
-                    Click="OnRefreshClick" ToolTip="刷新">
+                    Click="OnRefreshClick" ToolTip="刷新（F5）">
                 <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
             </Button>
 

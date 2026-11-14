@@ -9,6 +9,7 @@ using System.Windows.Input;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
+using BiliDesk.Views.Windows;
 
 namespace BiliDesk.ViewModels;
 
@@ -149,10 +150,10 @@ public class CacheViewModel : ObservableObject
     private void Delete(CacheEntry entry)
     {
         if (entry == null) return;
-        var r = MessageBox.Show(
-            $"确定要删除这个离线文件吗?\n\n{entry.Name}\n{entry.SizeText}",
-            "BiliDesk", MessageBoxButton.YesNo, MessageBoxImage.Question);
-        if (r != MessageBoxResult.Yes) return;
+        if (!ConfirmDialog.Show(
+                $"确定要删除这个离线文件吗?\n\n{entry.Name}\n{entry.SizeText}",
+                "删除离线文件", "删除"))
+            return;
 
         try
         {

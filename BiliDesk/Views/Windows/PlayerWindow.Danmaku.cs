@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -308,6 +308,8 @@ public partial class PlayerWindow : FluentWindow
         //   这是整套防护的地基(见 _videoGestureActive 的说明): 不起步, 随后漏进来的
         //   那个孤立 Up 才会因为"没有配对 Down"而被丢掉。
         if (AnyPlayerPopupOpen) { _videoGestureActive = false; return; }
+        // 正常手势起步 ⇒ 撤掉"激活点击补偿"(见 PlayerWindow.VideoArea.cs 的 OnOverlayActivated)
+        StopActivationClickCompensation();
         // 记下"这一下是我起的" —— Up 里靠它识别弹层余波
         _videoGestureActive = true;
 
@@ -466,6 +468,8 @@ public partial class PlayerWindow : FluentWindow
         // ★ 手势状态一并复位: 鼠标移出去了, 这一次按下就不再属于视频区,
         //   之后即使漏一个 Up 进来也会因为"没有配对 Down"被正确丢掉。
         _videoGestureActive = false;
+        // 激活点击补偿也一并撤掉: 指针已经离开视频区, 这一下不再属于它
+        StopActivationClickCompensation();
         // 右键那一路同样复位: 按下后拖到视频区外再松手, Up 不会再来 ——
         // 不复位的话下一次孤立的 Up 会被误当成"配对成功"而切一次铺满。
         _rightGestureActive = false;
@@ -1486,6 +1490,77 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>控制栏上的弹幕开关按钮</summary>
     private void OnDanmakuToggleClick(object sender, RoutedEventArgs e) => ToggleDanmaku();
+
+    // ------------------------------------------------------------ 弹幕输入框(2026-11-12 用户要求)
+
+    /// <summary>点「发弹幕」: 展开输入条并聚焦。</summary>
+    private void OnDanmakuComposerOpenClick(object sender, RoutedEventArgs e)
+    {
+        DanmakuComposer.Visibility = Visibility.Visible;
+        BtnDanmakuComposerOpen.Visibility = Visibility.Collapsed;
+        DanmakuInput.Focus();
+        UpdateDanmakuInputHint();
+    }
+
+    private void OnDanmakuComposerCloseClick(object sender, RoutedEventArgs e)
+    {
+        DanmakuComposer.Visibility = Visibility.Collapsed;
+        BtnDanmakuComposerOpen.Visibility = Visibility.Visible;
+    }
+
+    private void OnDanmakuInputChanged(object sender, TextChangedEventArgs e) => UpdateDanmakuInputHint();
+
+    /// <summary>TextBox 没有占位文案: 用叠在上面的 TextBlock 模拟, 有字时隐藏。</summary>
+    private void UpdateDanmakuInputHint()
+    {
+        if (DanmakuInputHint == null) return;
+        DanmakuInputHint.Visibility = string.IsNullOrEmpty(DanmakuInput?.Text)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void OnDanmakuInputKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        _ = SendDanmakuAsync();
+    }
+
+    private void OnDanmakuSendClick(object sender, RoutedEventArgs e) => _ = SendDanmakuAsync();
+
+    /// <summary>
+    /// 发送输入框里的弹幕: 带上当前播放位置作为出现时间点。
+    /// 成功后清空输入框并提示; 失败保留内容, 方便重试。
+    /// </summary>
+    private async System.Threading.Tasks.Task SendDanmakuAsync()
+    {
+        if (_closing) return;
+        if (_isLocalPlayback) { Svc.Toast.Show("本地文件没有弹幕"); return; }
+        if (!Svc.Session.HasLogin) { Svc.Toast.Show("发弹幕需要先登录"); return; }
+
+        var text = (DanmakuInput?.Text ?? "").Trim();
+        if (text.Length == 0) { Svc.Toast.Show("先写点什么再发送吧"); return; }
+        if (_currentCid <= 0) { Svc.Toast.Show("弹幕参数还没准备好, 稍等一下"); return; }
+
+        long progress = 0;
+        try
+        {
+            if (_mp != null && _mp.Length > 0) progress = Math.Max(0, _mp.Time);
+        }
+        catch { }
+
+        var (ok, err) = await Svc.Api.SendDanmakuAsync(_currentCid, text, progress);
+        if (_closing) return;
+        if (!ok)
+        {
+            Svc.Toast.Show("发送失败: " + (err ?? "未知错误"));
+            return;
+        }
+
+        if (DanmakuInput != null) DanmakuInput.Text = "";
+        UpdateDanmakuInputHint();
+        Svc.Toast.Show("弹幕已发送");
+    }
 
     /// <summary>
     /// 刷新弹幕按钮的文案与可用状态。

@@ -142,8 +142,8 @@
                长得不一样会像是两种东西。 -->
         <Style x:Key="DanmakuPillToggleStyle" TargetType="Border">
             <Setter Property="Background" Value="#40000000" />
-            <Setter Property="BorderBrush" Value="#22FFFFFF" />
-            <Setter Property="BorderThickness" Value="1" />
+            <!-- 与控制栏按钮保持一致: 去描边 -->
+            <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="5" />
             <Setter Property="Padding" Value="10,4" />
             <Setter Property="Cursor" Value="Hand" />
@@ -188,8 +188,10 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
+                        <!-- ★ 2026-11-12 去掉 1px 描边(用户反馈控制栏按钮有边框影响观感):
+                             只保留半透明底衬 + 圆角, 悬停/按下只加深底色。 -->
                         <Border x:Name="Bd" Background="#40000000" CornerRadius="5"
-                                BorderBrush="#22FFFFFF" BorderThickness="1"
+                                BorderThickness="0"
                                 Padding="{TemplateBinding Padding}">
                             <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Center" />
                         </Border>
@@ -1193,6 +1195,57 @@
                                         <TextBlock x:Name="TimeText" Grid.Column="1" Foreground="#E6FFFFFF" FontSize="12"
                                                    VerticalAlignment="Center" Margin="10,0,0,0" Text="00:00 / 00:00" />
 
+                                        <!-- ============ 弹幕输入条(2026-11-12 用户要求: 在播放器下方增加弹幕发送的输入框) ============
+                                             收起态只占一个「发弹幕」按钮; 点开后变成 B 站同款输入条(输入框 + 发送 + 收起)。
+                                             ★ 放在 Column 2(伸缩列): 宽度随窗口自适应, 不会把右侧清晰度/倍速按钮挤出去。
+                                             ★ 深色半透明底 + 白字: 控制栏永远压在视频画面上, 不能跟主题色走。 -->
+                                        <Grid Grid.Column="2" Margin="14,0,10,0" VerticalAlignment="Center">
+                                            <Button x:Name="BtnDanmakuComposerOpen" Style="{StaticResource PlayerTextBtn}"
+                                                    HorizontalAlignment="Left" Click="OnDanmakuComposerOpenClick"
+                                                    ToolTip="发弹幕">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xE8D2;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                               FontSize="12" VerticalAlignment="Center" Foreground="#F2FFFFFF" />
+                                                    <TextBlock Text="发弹幕" Margin="6,0,0,0" Foreground="#F2FFFFFF" />
+                                                </StackPanel>
+                                            </Button>
+
+                                            <Grid x:Name="DanmakuComposer" Visibility="Collapsed">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <Border Grid.Column="0" Background="#40000000" CornerRadius="5"
+                                                        Height="26" Padding="10,0" VerticalAlignment="Center">
+                                                    <Grid>
+                                                        <TextBox x:Name="DanmakuInput" Background="Transparent"
+                                                                 BorderThickness="0" Foreground="#F2FFFFFF"
+                                                                 CaretBrush="#F2FFFFFF" FontSize="12"
+                                                                 VerticalAlignment="Center" MaxLength="100"
+                                                                 KeyDown="OnDanmakuInputKeyDown"
+                                                                 TextChanged="OnDanmakuInputChanged" />
+                                                        <!-- TextBox 没有占位文案: 用一层不可命中的 TextBlock 叠在上面, 有字时隐藏 -->
+                                                        <TextBlock x:Name="DanmakuInputHint" Text="发个友善的弹幕见证当下"
+                                                                   Foreground="#66FFFFFF" FontSize="12"
+                                                                   IsHitTestVisible="False" VerticalAlignment="Center" />
+                                                    </Grid>
+                                                </Border>
+
+                                                <Button Grid.Column="1" Style="{StaticResource PlayerTextBtn}"
+                                                        Content="发送" Margin="8,0,0,0" Padding="12,4"
+                                                        Click="OnDanmakuSendClick" ToolTip="发送弹幕 (Enter)" />
+
+                                                <Button Grid.Column="2" Style="{StaticResource PlayerTextBtn}"
+                                                        Margin="6,0,0,0" Padding="6,4"
+                                                        Click="OnDanmakuComposerCloseClick" ToolTip="收起输入框">
+                                                    <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                               FontSize="11" VerticalAlignment="Center" Foreground="#F2FFFFFF" />
+                                                </Button>
+                                            </Grid>
+                                        </Grid>
+
                                         <!-- 音量 -->
                                         <TextBlock x:Name="VolumeIcon" Grid.Column="3" Text="&#xE767;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                    Foreground="#E6FFFFFF" FontSize="14" VerticalAlignment="Center" Margin="10,0,6,0" />
@@ -1704,17 +1757,42 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <!-- 点赞: 点过 = 图标和数字一起变红 -->
-                                    <Button x:Name="BtnLike" Style="{StaticResource PlayerActionBtn}"  Grid.Column="0"
-                                            Click="OnLikeClick" ToolTip="点赞 (L)">
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Grid x:Name="LikeIconBox" Style="{StaticResource ActionIconBox}">
-                                                <Path Data="{StaticResource LikeIconGeometry}"
-                                                      Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                                      Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center" />
-                                            </Grid>
-                                            <TextBlock x:Name="LikeLabel" Text="--"
-                                                       Style="{StaticResource ActionCountText}" />
-                                        </StackPanel>
+                                    <!-- ★ 2026-11-12: 长按 = 一键三连(点赞 + 投币 + 收藏), 见 OnTripleButtonPreviewMouseDown。
+                                         短按仍然只是点赞/取消点赞。
+                                         ★ 按钮外框那圈描边是长按反馈(见 StartLikePressProgress):
+                                           按住前 0.5 秒只做"长按确认"(不显示动画), 确认后环才开始扫,
+                                           1.5 秒扫满(合计约 2 秒)触发三连; 三连演出中三个按钮依次弹跳、
+                                           环按「点赞(红) → 投币(金) → 收藏(蓝)」换色, 随后徽章浮现并淡出。
+                                         ★ 进度环用 PressRingAdorner 画在按钮**外框**上(不参与布局);
+                                           这里 Content 里只放图标/数字和「一键三连」徽章。 -->
+                                    <Button x:Name="BtnLike" Style="{StaticResource PlayerActionBtn}" Grid.Column="0"
+                                            Click="OnLikeClick" ToolTip="点赞 (L)；长按一键三连"
+                                            PreviewMouseLeftButtonDown="OnTripleButtonPreviewMouseDown"
+                                            PreviewMouseLeftButtonUp="OnTripleButtonPreviewMouseUp"
+                                            MouseLeave="OnTripleButtonMouseLeave">
+                                        <Grid>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Grid x:Name="LikeIconBox" Style="{StaticResource ActionIconBox}">
+                                                    <Path Data="{StaticResource LikeIconGeometry}"
+                                                          Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                          Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center" />
+                                                </Grid>
+                                                <TextBlock x:Name="LikeLabel" Text="--"
+                                                           Style="{StaticResource ActionCountText}" />
+                                            </StackPanel>
+                                            <!-- 长按进度环由 PressRingAdorner 绘制在按钮外框上(不参与布局, 不会撑大按钮)。 -->
+                                            <!-- 「一键三连」徽章: 三连演出最后约 1 秒浮现在按钮上方, 之后随演出淡出。 -->
+                                            <Border x:Name="TripleComboBadge"
+                                                    HorizontalAlignment="Center" VerticalAlignment="Top"
+                                                    Margin="0,-24,0,0" Padding="8,2" CornerRadius="9"
+                                                    Background="#F43F5E" Opacity="0" IsHitTestVisible="False"
+                                                    RenderTransformOrigin="0.5,0.5">
+                                                <Border.RenderTransform>
+                                                    <ScaleTransform x:Name="TripleComboBadgeScale" ScaleX="0.8" ScaleY="0.8" />
+                                                </Border.RenderTransform>
+                                                <TextBlock Text="一键三连" FontSize="10" Foreground="White" />
+                                            </Border>
+                                        </Grid>
                                     </Button>
                                     <!-- 投币 -->
                                     <Button x:Name="BtnCoin" Style="{StaticResource PlayerActionBtn}"  Grid.Column="1"

@@ -11,6 +11,7 @@ using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
+using BiliDesk.Views.Windows;
 
 namespace BiliDesk.ViewModels;
 
@@ -210,6 +211,8 @@ public class WatchLaterViewModel : VideoListSelectionViewModel
             }
             _all.AddRange(items);
             _total = count;
+            // 列表就是"稍后再看"的真相: 全部卡片上的悬浮按钮按这份集合刷新图标
+            WatchLaterState.SetAll(items.Select(i => i.Aid));
             if (_all.Count == 0)
             {
                 Error = "稍后再看是空的";
@@ -263,6 +266,7 @@ public class WatchLaterViewModel : VideoListSelectionViewModel
                 return;
             }
             RemoveEverywhere(item);
+            WatchLaterState.Set(item.Aid, false);
             if (_total > 0) _total--;
             if (_all.Count == 0) Error = "稍后再看是空的";
         }
@@ -284,9 +288,10 @@ public class WatchLaterViewModel : VideoListSelectionViewModel
             return;
         }
 
-        var r = MessageBox.Show($"确定要从「稍后再看」移出选中的 {targets.Count} 个视频吗?", "BiliDesk",
-            MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (r != MessageBoxResult.Yes) return;
+        if (!ConfirmDialog.Show(
+                $"确定要从「稍后再看」移出选中的 {targets.Count} 个视频吗?",
+                "移出稍后再看", "移出"))
+            return;
 
         Busy = true;
         var done = 0;
@@ -298,7 +303,7 @@ public class WatchLaterViewModel : VideoListSelectionViewModel
                 if (it.Aid <= 0) { fail++; continue; }
                 BusyText = $"正在移出 {done + fail + 1}/{targets.Count}…";
                 var (ok, _) = await Svc.Api.RemoveWatchLaterAsync(it.Aid);
-                if (ok) { RemoveEverywhere(it); done++; if (_total > 0) _total--; }
+                if (ok) { RemoveEverywhere(it); WatchLaterState.Set(it.Aid, false); done++; if (_total > 0) _total--; }
                 else fail++;
             }
             OnPropertyChanged(nameof(CountText));
@@ -325,10 +330,10 @@ public class WatchLaterViewModel : VideoListSelectionViewModel
             return;
         }
 
-        var r = MessageBox.Show(
-            "确定要清空**全部**「稍后再看」吗?\n\n这会删除账号下整个列表, 且无法撤销。",
-            "BiliDesk", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (r != MessageBoxResult.Yes) return;
+        if (!ConfirmDialog.Show(
+                "确定要清空全部「稍后再看」吗?\n\n这会删除账号下整个列表, 且无法撤销。",
+                "清空稍后再看", "清空"))
+            return;
 
         Busy = true;
         BusyText = "正在清空…";
@@ -350,6 +355,7 @@ public class WatchLaterViewModel : VideoListSelectionViewModel
         }
 
         Reset();
+        WatchLaterState.Reset();
         IsEditMode = false;
         Error = "稍后再看是空的";
         Svc.Toast.Show("已清空稍后再看");

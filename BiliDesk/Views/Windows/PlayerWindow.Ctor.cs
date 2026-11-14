@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -42,6 +42,10 @@ public partial class PlayerWindow : FluentWindow
         Closed += OnClosed;
         Loaded += OnLoaded;
         PreviewKeyDown += OnPreviewKeyDown;
+        // 松开 → 时结束"长按 3 倍速"(见 OnPreviewKeyUp)
+        PreviewKeyUp += OnPreviewKeyUp;
+        // 切窗口时兜底结束所有"按住才成立"的加速态(见 OnPlayerDeactivated)
+        Deactivated += OnPlayerDeactivated;
         // 鼠标侧键返回: 挂在窗口上, 也挂在视频区那层浮动覆盖窗口上(见 HookOverlayKeyboard)
         PreviewMouseDown += OnPreviewMouseDown;
         Svc.Toast.Shown += OnToast;

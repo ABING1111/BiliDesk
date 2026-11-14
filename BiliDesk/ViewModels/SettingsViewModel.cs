@@ -5,6 +5,7 @@ using System.Windows.Media;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
+using BiliDesk.Views.Windows;
 
 namespace BiliDesk.ViewModels;
 
@@ -1585,12 +1586,10 @@ public class SettingsViewModel : ObservableObject
     /// <summary>退出登录: 清除会话 + 清除 WebView2 中的 Cookie</summary>
     private async System.Threading.Tasks.Task LogoutAsync()
     {
-        var r = System.Windows.MessageBox.Show(
-            "退出登录后需要重新扫码才能登录, 确定退出吗?",
-            "BiliDesk",
-            System.Windows.MessageBoxButton.YesNo,
-            System.Windows.MessageBoxImage.Question);
-        if (r != System.Windows.MessageBoxResult.Yes) return;
+        if (!ConfirmDialog.Show(
+                "退出登录后需要重新扫码才能登录, 确定退出吗?",
+                "退出登录", "退出登录"))
+            return;
 
         Svc.Session.Clear();
         try

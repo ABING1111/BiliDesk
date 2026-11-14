@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -87,9 +87,17 @@ public partial class PlayerWindow : FluentWindow
             if (ReferenceEquals(fw, _overlayKeyboardWindow)) return;
             _overlayKeyboardWindow = fw;
             fw.PreviewKeyDown += OnPreviewKeyDown;
+            // ★ 长按 → 的"松开"也挂上来: 键盘焦点压在视频区时, KeyDown/KeyUp 都属于这层
+            //   浮动窗口(WPF 跨 HWND 不会把 KeyUp 送到播放器主窗口)。漏了这条, 长按会一直
+            //   停在 3 倍速上(用户实测"3.0x 快进中"不消失)。
+            fw.PreviewKeyUp += OnPreviewKeyUp;
             fw.PreviewMouseDown += OnPreviewMouseDown;
             // 滚轮也要挂上来: 鼠标压在视频画面上时事件属于这层浮动窗口(见 OnVideoAreaMouseWheel)
             fw.PreviewMouseWheel += OnVideoAreaMouseWheel;
+            // ★ 激活点击补偿(2026-11-12): 这层窗口不是激活窗口时, 用户点视频区的
+            //   **第一次点击只会把它激活**, WPF 不会把这次点击报成鼠标事件 ——
+            //   表现就是"点一下只是把播放器叫到前面, 再点一下才暂停"。见 OnOverlayActivated。
+            fw.Activated += OnOverlayActivated;
             // 这个窗口不该出现在任务栏里(它是跟随主窗口的装饰层)
             fw.ShowInTaskbar = false;
         }
@@ -249,6 +257,98 @@ public partial class PlayerWindow : FluentWindow
         }
         catch { /* 忽略 */ }
     }
+
+    // ------------------------------------------------------------ 激活点击补偿
+
+    /// <summary>
+    /// 覆盖层窗口被"点击"激活时, 补一次被它吞掉的视频区手势。
+    ///
+    /// ★★★ 根因(2026-11-12 实测, 用户报"第一次点击只是把窗口叫到前面, 第二次才暂停"):
+    ///   弹幕层 + 控制栏渲染在 LibVLCSharp 的 ForegroundWindow 里 —— 那是**独立的顶层窗口**
+    ///   (见 HookOverlayKeyboard)。它不是激活窗口时, 用户点视频区的**第一次点击只用于把它激活**,
+    ///   WPF 不会把这次点击报成 MouseDown/MouseUp(实测: 点击后 GetForegroundWindow 立刻变成
+    ///   "LibVLCSharp.WPF", 播放状态不变; 第二次点击才暂停)。
+    ///
+    /// ★ 修法: 激活事件里若左键正按着、指针在视频区(且不在控制栏/跳过条/弹层上), 就起一个
+    ///   40ms 的轮询:
+    ///     · 正常手势一旦起步(第二下点击/双击) ⇒ 立即让位(_videoGestureActive/_suppressSingleClick);
+    ///     · 按住不到 500ms 就松手 ⇒ 按单击处理, 播放/暂停;
+    ///     · 按住 ≥ 500ms ⇒ 按长按快进处理(与 OnVideoAreaMouseLeftDown 同一阈值), 松手恢复速率。
+    ///   轮询而不是"等一个 Up": 激活点击的 Up 也可能一起被吞, 不能依赖它。
+    /// </summary>
+    private void OnOverlayActivated(object? sender, EventArgs e)
+    {
+        if (_closing || _mp == null) return;
+        // 只认"鼠标按着把窗口激活": Alt+Tab / 程序自己激活时左键是松开的
+        if (Mouse.LeftButton != MouseButtonState.Pressed) return;
+        // 控制栏按钮 / 跳过提示条 / 弹层上的点击有各自的处理, 不能补成"暂停"
+        if (ControlBar != null && ControlBar.IsMouseOver) return;
+        if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
+        if (AnyPlayerPopupOpen) return;
+        if (VideoAreaRoot != null && !VideoAreaRoot.IsMouseOver) return;
+
+        _activationClickPending = true;
+        _activationLongPress = false;
+        _activationClickStartTick = Environment.TickCount64;
+        _activationClickTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
+        _activationClickTimer.Tick -= OnActivationClickTick;
+        _activationClickTimer.Tick += OnActivationClickTick;
+        _activationClickTimer.Start();
+    }
+
+    private void OnActivationClickTick(object? sender, EventArgs e)
+    {
+        if (!_activationClickPending) { StopActivationClickCompensation(); return; }
+        // 正常手势已经起步(第二下点击会置 _videoGestureActive / _suppressSingleClick) ⇒ 让位
+        if (_videoGestureActive || _suppressSingleClick) { StopActivationClickCompensation(); return; }
+
+        var held = Environment.TickCount64 - _activationClickStartTick;
+        if (Mouse.LeftButton == MouseButtonState.Pressed)
+        {
+            if (!_activationLongPress && held >= 500)
+            {
+                _activationLongPress = true;
+                StartFastForward();
+                ShowSpeedHint(FormatRate(_fastForwardTarget) + " 快进中", hold: true);
+            }
+            return;
+        }
+
+        // 已经松手: 短按补一次播放/暂停, 长按补一次"结束快进"
+        if (_activationLongPress)
+        {
+            StopFastForward();
+            ShowSpeedHint("已结束快进", hold: false);
+        }
+        else if (held < 500)
+        {
+            OnPlayPauseClick(this, new RoutedEventArgs());
+        }
+        StopActivationClickCompensation();
+    }
+
+    /// <summary>结束激活点击补偿(正常手势接管 / 鼠标离开 / 关窗)。长按态要先恢复速率。</summary>
+    private void StopActivationClickCompensation()
+    {
+        if (_activationLongPress)
+        {
+            _activationLongPress = false;
+            StopFastForward();
+        }
+        _activationClickPending = false;
+        _activationClickTimer?.Stop();
+    }
+
+    /// <summary>是否有一笔"被激活吞掉、等待补偿"的点击</summary>
+    private bool _activationClickPending;
+
+    /// <summary>这笔激活点击已经进入长按快进(见 <see cref="OnActivationClickTick"/>)</summary>
+    private bool _activationLongPress;
+
+    /// <summary>激活点击按下的时刻(TickCount64)</summary>
+    private long _activationClickStartTick;
+
+    private DispatcherTimer? _activationClickTimer;
 
     /// <summary>已经挂过键盘处理的覆盖层窗口(避免重复订阅)</summary>
     private Window? _overlayKeyboardWindow;

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -93,6 +93,8 @@ public partial class PlayerWindow : FluentWindow
                 return;
             }
             SetInWatchLater(target);
+            // 同步全局集合: 列表页卡片上的悬浮按钮也要跟着变(对勾 ↔ 旗帜)
+            WatchLaterState.Set(_aid, target);
             PlayActionPop(LaterIconBox);
             if (!target) LockActionHoverPreview();   // 移出后锁 hover 预览(同点赞的坑)
             Svc.Toast.Show(target ? "已加入稍后再看" : "已从稍后再看移出");
@@ -110,6 +112,9 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private async void OnFavoriteClick(object sender, RoutedEventArgs e)
     {
+        // 长按触发/取消过三连时, 松开这一刻的 Click 不能再去弹收藏夹窗
+        if (_tripleComboAt != 0 && Environment.TickCount64 - _tripleComboAt < 1500) return;
+        if (ConsumeLikePressCancel()) return;
         if (!Svc.Session.HasLogin) { Svc.Toast.Show("收藏需要先登录"); return; }
         if (_aid <= 0 || _favBusy) return;
 

@@ -94,7 +94,7 @@
 
 
                 <Button Style="{StaticResource IconButtonStyle}" Margin="0,0,8,0"
-                        Command="{Binding ReloadCommand}" ToolTip="重新同步云端历史">
+                        Command="{Binding ReloadCommand}" ToolTip="重新同步云端历史（F5）">
                     <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
                 </Button>
                 <Button Style="{StaticResource IconButtonStyle}" Margin="0,0,8,0"

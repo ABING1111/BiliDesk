@@ -1,0 +1,26 @@
+<views:FluentWindow x:Class="BiliDesk.Views.Windows.ConfirmDialog"
+                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:views="clr-namespace:BiliDesk.Views"
+                    Title="BiliDesk" Width="440" SizeToContent="Height"
+                    ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <!--
+        通用确认框(替代系统 MessageBox): 内容与按钮都走应用主题, 与其它 Fluent 窗口一致。
+        调用方只需要给"正文 / 标题 / 确定按钮文案"。
+    -->
+    <Grid Background="{DynamicResource AppBackgroundBrush}">
+        <StackPanel Margin="24,20,24,20">
+            <TextBlock x:Name="TitleText" FontSize="16" FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
+            <TextBlock x:Name="MessageText" Margin="0,10,0,0" TextWrapping="Wrap"
+                       FontSize="13" LineHeight="22"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+                <Button x:Name="BtnCancel" Content="取消" Style="{StaticResource SubtleButtonStyle}"
+                        Padding="18,8" Click="OnCancelClick" IsCancel="True" />
+                <Button x:Name="BtnOk" Content="确定" Style="{StaticResource AccentButtonStyle}"
+                        Margin="10,0,0,0" Padding="18,8" Click="OnOkClick" IsDefault="True" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</views:FluentWindow>

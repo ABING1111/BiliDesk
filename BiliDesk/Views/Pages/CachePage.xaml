@@ -38,7 +38,7 @@
                     <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
                 </Button>
                 <Button Style="{StaticResource IconButtonStyle}" Margin="8,0,0,0"
-                        Command="{Binding RefreshCommand}" ToolTip="刷新">
+                        Command="{Binding RefreshCommand}" ToolTip="刷新（F5）">
                     <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
                 </Button>
             </StackPanel>

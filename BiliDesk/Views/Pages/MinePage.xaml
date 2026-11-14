@@ -249,7 +249,7 @@
                         </Button>
                     </StackPanel>
                     <Button Style="{StaticResource IconButtonStyle}" HorizontalAlignment="Right"
-                            VerticalAlignment="Center" Click="OnRefreshFoldersClick" ToolTip="刷新收藏夹">
+                            VerticalAlignment="Center" Click="OnRefreshFoldersClick" ToolTip="刷新收藏夹（F5）">
                         <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                    FontSize="15" />
                     </Button>
