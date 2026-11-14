@@ -100,6 +100,9 @@ public partial class PlayerWindow : FluentWindow
         _danmakuColorful = Svc.Settings.DanmakuColorful;
         _danmakuAreaRatio = Svc.Settings.DanmakuAreaPercent / 100.0;
         Svc.Settings.DanmakuSettingsChanged += OnDanmakuSettingsChanged;
+        // 界面字体(2026-11-14): 弹幕层在独立浮层可视树里, 不跟窗口字体继承走,
+        // 换字体时要显式走一遍外观重算(见 OnUiFontChanged)。窗口本体由 FluentWindow 基类负责。
+        Helpers.UiFont.Changed += OnUiFontChanged;
         // 外观三项(不透明度/字号/速度)在此**首次**从设置里读出来。
         // 构造函数里字段还是编译期默认值(80% / 100% / 适中), 不走这一步的话,
         // 那些把旧值存进配置的用户(比如不透明度存的是 40%)开播放器会先按默认值起播,

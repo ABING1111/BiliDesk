@@ -334,6 +334,15 @@ public class AppSettings
     public string AccentColor { get; set; } = "";
 
     /// <summary>
+    /// 界面字体(2026-11-14 新增)。空串 = 默认字体栈; 普通字体名 = 系统已安装字体;
+    /// "file:目录名" = 导入的字体文件(存在 %LocalAppData%\BiliDesk\fonts 下)。
+    /// 存储语义与清洗见 Helpers.UiFont。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// 老配置缺这个字段 ⇒ 空串 ⇒ 默认字体, 不需要版本兼容。
+    /// </summary>
+    public string UiFontFamily { get; set; } = "";
+
+    /// <summary>
     /// 关闭主窗口时最小化到托盘(默认 true)。
     /// 关掉之后点右上角关闭键就是真的退出程序, 不再收到托盘里。
     /// 属性初始化就是 true —— 老配置缺这个字段时会保持初始化值, 于是"默认打开"自动成立。

@@ -147,6 +147,40 @@
                     </StackPanel>
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
+                    <!-- 界面字体(2026-11-14 新增): 全局文字字体, 弹幕跟随同一字体, 图标不受影响。
+                         ★ 下拉每一项用该项自己的字体渲染(所见即所得); 系统字体列表懒加载
+                           (打开设置页才枚举, 见 Helpers.UiFont.SystemFonts), 不拖启动。
+                         ★ 导入的字体文件复制到数据目录(fonts), 不依赖原文件位置、无需安装到系统;
+                           存储语义/生命周期见 Helpers.UiFont 类注释。
+                         ★ 排版与「主题色」同款竖排: 标题 + 说明 + 一排控件(下拉/导入/恢复默认)。 -->
+                    <StackPanel Style="{StaticResource SettingsRowStyle}">
+                        <TextBlock Text="界面字体" Style="{StaticResource SettingsRowTitleStyle}" />
+                        <TextBlock Text="{Binding FontHint}"
+                                   Style="{StaticResource SettingsRowDescStyle}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <ComboBox Style="{StaticResource SettingsComboStyle}"
+                                      Width="240" VerticalAlignment="Center"
+                                      ItemsSource="{Binding FontOptions}"
+                                      SelectedItem="{Binding FontSelected, Mode=TwoWay}"
+                                      VirtualizingStackPanel.IsVirtualizing="True"
+                                      VirtualizingStackPanel.VirtualizationMode="Recycling">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Label}" FontFamily="{Binding Preview}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <Button Content="导入字体文件…" Style="{StaticResource SubtleButtonStyle}"
+                                    Margin="10,0,0,0" Padding="12,5" VerticalAlignment="Center"
+                                    Command="{Binding ImportFontCommand}" />
+                            <Button Content="恢复默认" Style="{StaticResource SubtleButtonStyle}"
+                                    Margin="8,0,0,0" Padding="12,5" VerticalAlignment="Center"
+                                    Command="{Binding ResetFontCommand}"
+                                    IsEnabled="{Binding IsDefaultFont, Converter={StaticResource InvBool}}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
                     <!-- 窗口背景材质(2026-10-06 合并为四选一):
                          原来"亚克力背景"是个开关、云母/云母Alt 是它下面的子选项 —— 语义是错的
                          (云母根本不是亚克力), 而且"关掉开关就选不了云母"很别扭。

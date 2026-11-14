@@ -647,6 +647,15 @@ public partial class PlayerWindow : FluentWindow
     private double _danmakuFixedSeconds = Helpers.DanmakuMotion.FixedSeconds(2);    // 固定停留时长
 
     /// <summary>
+    /// 弹幕字体(2026-11-14 新增): 跟随全局界面字体(Helpers.UiFont)。
+    /// ★ 必须显式设到每条弹幕的 TextBlock 上(见 AddDanmaku): 弹幕层在 LibVLC 的独立浮层
+    ///   可视树里, 不跟 FluentWindow 的字体继承走。
+    /// ★ 与字号同一类是**设置驱动的派生量**: 字体变了字宽就变, 泳道追尾校验失效,
+    ///   所以 ApplyDanmakuLook 把它归入"清屏重建"那一档。
+    /// </summary>
+    private FontFamily _danmakuFont = Helpers.UiFont.Current;
+
+    /// <summary>
     /// 是否给弹幕加**半透明圆角胶囊底衬**(2026-11-05 新增)。
     ///
     /// ★ 默认开 —— 纯白字压在明亮画面上会看不清, 这正是底衬要解决的问题。
@@ -1223,7 +1232,9 @@ public partial class PlayerWindow : FluentWindow
             {
                 Text = text,
                 Foreground = DanmakuBrush(color),
-                FontSize = _danmakuFontSize
+                FontSize = _danmakuFontSize,
+                // 跟随全局界面字体(2026-11-14): 弹幕层不跟窗口继承走, 必须显式设(见 _danmakuFont)
+                FontFamily = _danmakuFont
             }
         };
 
@@ -1549,17 +1560,18 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 把「不透明度 / 字号 / 速度 / 胶囊底衬」四项设置落到运行时, 并只做**必要**的重算。
+    /// 把「不透明度 / 字号 / 速度 / 胶囊底衬 / 字体」五项设置落到运行时, 并只做**必要**的重算。
     ///
     /// ★ 为什么不一律"改了就清屏重建":
     ///   · 不透明度: 就地改每个在飞弹幕的 Opacity 即可。不清屏 ——
     ///     用户是**拖着滑杆**在调的, 每动一格就闪一次是不能接受的。
-    ///   · 字号/速度/胶囊底衬: 会让泳道表与追尾校验失效, 必须重建并清掉旧弹幕,
+    ///   · 字号/速度/胶囊底衬/字体: 会让泳道表与追尾校验失效, 必须重建并清掉旧弹幕,
     ///     否则要么弹幕叠在一起, 要么新弹幕被旧判定整批丢弃(看起来就是"弹幕没了")。
     ///     ★ 胶囊底衬也在这一档: 它的**内边距/宽度/圆角**都变了, 在飞的那些按旧尺寸
     ///       继续飞会与新弹幕重叠(底衬还比原来宽, 追尾校验的宽度也不准了)。
+    ///     ★ 字体(2026-11-14)同理: 换字体后字宽变了, 在飞弹幕的实测宽度全部作废。
     ///
-    /// 四项都没变时直接返回 —— 设置页里改"关键词屏蔽"也会走到这里, 不该白清一次屏。
+    /// 五项都没变时直接返回 —— 设置页里改"关键词屏蔽"也会走到这里, 不该白清一次屏。
     /// </summary>
     private void ApplyDanmakuLook()
     {
@@ -1569,11 +1581,14 @@ public partial class PlayerWindow : FluentWindow
         var nextLevel = Math.Clamp(s.DanmakuSpeedLevel,
             Helpers.DanmakuMotion.MinSpeedLevel, Helpers.DanmakuMotion.MaxSpeedLevel);
         var nextPill = s.DanmakuPillBackground;
+        var nextFamily = Helpers.UiFont.Current;
 
         var opacityChanged = Math.Abs(nextOpacity - _danmakuOpacity) > 0.001;
         var fontChanged = Math.Abs(nextFont - _danmakuFontSize) > 0.01;
         var speedChanged = nextLevel != _danmakuSpeedLevel;
         var pillChanged = nextPill != _danmakuPill;
+        // UiFont 每次换字体都 new 一个 FontFamily, 引用不同即变化(同值时 SetFromSettings 不会广播)
+        var familyChanged = !ReferenceEquals(nextFamily, _danmakuFont);
 
         // ★★★ 泳道高是"字号 × 胶囊开关"的**派生量**, 所以这里**无条件**同步 ——
         //   放在早退之前是关键: 否则"设置恰好等于默认值"时会早退, 泳道高就停在字段
@@ -1581,7 +1596,7 @@ public partial class PlayerWindow : FluentWindow
         //   会上下压在一起 —— 正是"字号改了泳道没跟着改"那类历史 bug 的同一形状。
         _laneHeight = Helpers.DanmakuMotion.LaneHeight(nextFont, nextPill);
 
-        if (!opacityChanged && !fontChanged && !speedChanged && !pillChanged) return;
+        if (!opacityChanged && !fontChanged && !speedChanged && !pillChanged && !familyChanged) return;
 
         _danmakuOpacity = nextOpacity;
         _danmakuFontSize = nextFont;
@@ -1589,11 +1604,12 @@ public partial class PlayerWindow : FluentWindow
         _danmakuScrollSeconds = Helpers.DanmakuMotion.ScrollSeconds(nextLevel);
         _danmakuFixedSeconds = Helpers.DanmakuMotion.FixedSeconds(nextLevel);
         _danmakuPill = nextPill;
+        _danmakuFont = nextFamily;
 
         // 不透明度不需要清屏: 基线字段改完, 在飞的弹幕在下一帧自然按新基线渲染
         // (固定弹幕的 Opacity 每帧被"基线 × 淡出系数"覆写, 所以只改基线就够)。
 
-        if (fontChanged || speedChanged || pillChanged)
+        if (fontChanged || speedChanged || pillChanged || familyChanged)
         {
             // 布局变了, 在飞的那些按旧尺寸/旧速度继续飞会突然错位, 一并清掉
             ResetLanes();
@@ -1601,5 +1617,16 @@ public partial class PlayerWindow : FluentWindow
             _flying.Clear();
             if (_danmakuOn) StartDanmakuClock();
         }
+    }
+
+    /// <summary>
+    /// 全局界面字体变化(2026-11-14, 来自设置页): 弹幕跟随同一字体。
+    /// 窗口本体的字体由 FluentWindow 基类重设; 弹幕层在独立浮层可视树里不跟继承走,
+    /// 所以这里显式走一遍外观重算(字宽变了 ⇒ 清屏重建, 见 ApplyDanmakuLook)。
+    /// </summary>
+    private void OnUiFontChanged()
+    {
+        if (_closing) return;
+        ApplyDanmakuLook();
     }
 }

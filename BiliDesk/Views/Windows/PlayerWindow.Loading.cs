@@ -852,6 +852,9 @@ public partial class PlayerWindow : FluentWindow
         //   与 _danmakuAreaRatio 同一类, 三项+泳道高都是设置驱动的派生量。
         nameof(_danmakuFontSize), nameof(_danmakuOpacity), nameof(_danmakuSpeedLevel),
         nameof(_danmakuScrollSeconds), nameof(_danmakuFixedSeconds),
+        // 弹幕字体(2026-11-14)同理是设置驱动的派生量(跟随全局界面字体): 换片必须保持。
+        // 引用类型自检本来不审, 登记在这里是把"跨片保持"的语义固化下来。
+        nameof(_danmakuFont),
         // 胶囊底衬开关(2026-11-05)同理是**用户偏好**: 换片必须保持,
         // 清了就等于"换个视频弹幕又变回纯文字" —— 那是用户马上会报上来的 bug。
         nameof(_danmakuPill),

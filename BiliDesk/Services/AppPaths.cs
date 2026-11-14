@@ -27,6 +27,12 @@ public static class AppPaths
     public static string VideoCacheDir => Path.Combine(CacheRoot, "vcache");
 
     /// <summary>
+    /// 用户导入的字体文件(2026-11-14 新增, 见 Helpers.UiFont)。
+    /// 每次导入一个独立子目录, 同一时刻只有一个生效; 内部目录, 不暴露给用户。
+    /// </summary>
+    public static string FontDir => Path.Combine(DataDir, "fonts");
+
+    /// <summary>
     /// 用户「图片另存为 / 下载视频」的存放目录 —— **设置页「缓存位置」管的就是这里**。
     ///
     /// ★ 语义澄清(2026-10-11 用户指出): 界面上叫"缓存位置"、离线缓存页也写"缓存位置",
@@ -100,6 +106,7 @@ public static class AppPaths
             Directory.CreateDirectory(CacheDir);
             Directory.CreateDirectory(VideoCacheDir);
             Directory.CreateDirectory(WebView2Dir);
+            Directory.CreateDirectory(FontDir);
         }
         catch
         {

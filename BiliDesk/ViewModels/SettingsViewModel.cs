@@ -475,6 +475,135 @@ public class SettingsViewModel : ObservableObject
     /// <summary>深色透明度滑杆上限</summary>
     public double AcrylicOpacityDarkMax => SettingsStore.AcrylicOpacityDarkMax;
 
+    // ---------------- 界面字体(2026-11-14) ----------------
+    //
+    // ★ 全局文字字体: 所有窗口继承 FluentWindow, 选中即生效(不用重启); 弹幕跟随同一字体。
+    //   图标字体不受影响(元素局部值优先于继承)。存储语义/导入生命周期见 Helpers/UiFont 类注释。
+    // ★ 系统字体列表**懒加载**: 第一次打开设置页才枚举(进程级缓存), 不拖启动。
+
+    private readonly System.Collections.ObjectModel.ObservableCollection<FontOption> _fontOptions = new();
+    private bool _fontOptionsBuilt;
+
+    /// <summary>字体下拉数据源(首次访问时构建 —— 那一刻正是设置页模板装载)</summary>
+    public System.Collections.ObjectModel.ObservableCollection<FontOption> FontOptions
+    {
+        get { EnsureFontOptions(); return _fontOptions; }
+    }
+
+    private void EnsureFontOptions()
+    {
+        if (_fontOptionsBuilt) return;
+        _fontOptionsBuilt = true;
+        RebuildFontOptions();
+    }
+
+    /// <summary>
+    /// 重建下拉: 「默认」+ 当前导入的字体(若有) + 系统已安装字体。
+    /// ★ 每一项用自己的字体渲染(Preview) —— 所见即所得, 不用逐个试。
+    /// </summary>
+    private void RebuildFontOptions()
+    {
+        _fontOptions.Clear();
+        _fontOptions.Add(new FontOption("默认", "", new FontFamily(UiFont.DefaultSource)));
+        var (kind, name) = UiFont.ParseStored(Svc.Settings.UiFontFamily);
+        if (kind == UiFont.StoredKind.File && UiFont.TryGetImport(name, out var importFamily, out var importDisplay))
+            _fontOptions.Add(new FontOption(importDisplay + "（已导入）", Svc.Settings.UiFontFamily, importFamily));
+        foreach (var (source, display) in UiFont.SystemFonts)
+            _fontOptions.Add(new FontOption(display, source, new FontFamily(UiFont.BuildSystemSource(source))));
+    }
+
+    /// <summary>
+    /// 当前选中的字体项(字符串投影思路同 ThemeSelected: 存储层没有变化通知, 靠显式推)。
+    /// getter 按存储值在列表里找; 找不到(理论上不会, 存储值已清洗)回落「默认」。
+    /// </summary>
+    public FontOption? FontSelected
+    {
+        get
+        {
+            EnsureFontOptions();
+            var stored = Svc.Settings.UiFontFamily;
+            return _fontOptions.FirstOrDefault(o => string.Equals(o.Stored, stored, StringComparison.Ordinal))
+                   ?? _fontOptions[0];
+        }
+        set
+        {
+            if (value == null) return;
+            if (string.Equals(value.Stored, Svc.Settings.UiFontFamily, StringComparison.Ordinal)) return;
+            var hadImport = HasImportOption;
+            Svc.Settings.SetUiFont(value.Stored);
+            // 「已导入」项的存在性变了才重建(从导入字体切到系统字体时它该消失, 文件也已被清理);
+            // 其余情况不动集合 —— 避免下拉正在选择时做无谓的 Clear/Add。
+            var wantImport = UiFont.ParseStored(Svc.Settings.UiFontFamily).Kind == UiFont.StoredKind.File;
+            if (hadImport != wantImport) RebuildFontOptions();
+            RaiseFontChanged();
+        }
+    }
+
+    private bool HasImportOption => _fontOptions.Any(o =>
+        o.Stored.StartsWith(UiFont.FilePrefix, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>是否用的默认字体(决定「恢复默认」按钮是否可点)</summary>
+    public bool IsDefaultFont => Svc.Settings.UiFontFamily.Length == 0;
+
+    /// <summary>字体行说明: 当前生效的字体名 + 作用范围(弹幕跟随、图标不受影响)</summary>
+    public string FontHint => IsDefaultFont
+        ? "默认字体（Segoe UI Variable / 微软雅黑）；弹幕跟随同一字体，图标不受影响"
+        : $"当前：{UiFont.CurrentDisplay}；弹幕跟随同一字体，图标不受影响";
+
+    /// <summary>导入字体文件(.ttf / .otf / .ttc): 复制到数据目录, 无需安装到系统</summary>
+    public ICommand ImportFontCommand { get; }
+
+    /// <summary>恢复默认字体</summary>
+    public ICommand ResetFontCommand { get; }
+
+    /// <summary>强类型引用: 可用性随 IsDefaultFont 变, 状态变化时要显式 RaiseCanExecuteChanged</summary>
+    private RelayCommand? _resetFontCommand;
+
+    private void ImportFont()
+    {
+        try
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "选择字体文件",
+                Filter = "字体文件 (*.ttf;*.otf;*.ttc)|*.ttf;*.otf;*.ttc",
+                Multiselect = false
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            var stored = UiFont.ImportFile(dialog.FileName, out var display);
+            if (stored == null)
+            {
+                Svc.Toast.Show("导入失败: 不是可用的字体文件(支持 .ttf / .otf / .ttc)");
+                return;
+            }
+            Svc.Settings.SetUiFont(stored);
+            RebuildFontOptions();   // 把新导入的项加进下拉
+            RaiseFontChanged();
+            Svc.Toast.Show($"已导入并启用字体: {display}");
+        }
+        catch (Exception ex)
+        {
+            Svc.Toast.Show("导入字体失败: " + ex.Message);
+        }
+    }
+
+    private void ResetFont()
+    {
+        Svc.Settings.SetUiFont("");
+        RebuildFontOptions();   // 移除「已导入」项(文件已由存储层清理)
+        RaiseFontChanged();
+    }
+
+    /// <summary>换字体后一整组相关属性都要通知一遍(思路同 RaiseAccentChanged)</summary>
+    private void RaiseFontChanged()
+    {
+        OnPropertyChanged(nameof(FontSelected));
+        OnPropertyChanged(nameof(FontHint));
+        OnPropertyChanged(nameof(IsDefaultFont));
+        _resetFontCommand?.RaiseCanExecuteChanged();
+    }
+
     // ---------------- 软件缩放(2026-10-06) ----------------
     //
     // ★ 与"系统 DPI 缩放"是两件事: 那个由 Windows 管、作用于所有程序; 这个是本程序自己缩界面。
@@ -1420,6 +1549,13 @@ public class SettingsViewModel : ObservableObject
         // 恢复默认 = 落回空串(存"没自定义过", 而不是存 "#FB7299" —— 这样默认色以后调了会跟着变)
         ResetAccentCommand = new RelayCommand(() => AccentColor = "");
 
+        // 界面字体(2026-11-14): 导入文件 / 恢复默认。下拉选择走 FontSelected(TwoWay)。
+        ImportFontCommand = new RelayCommand(ImportFont);
+        _resetFontCommand = new RelayCommand(ResetFont,
+            // 已经是默认字体时按钮置灰(与"缓存位置恢复默认"同款)
+            canExecute: () => !IsDefaultFont);
+        ResetFontCommand = _resetFontCommand;
+
         CheckUpdateCommand = new AsyncRelayCommand(CheckUpdateAsync);
 
         // CDN 手动重测: 换网络后排名会变, 而自动测速结果有 10 分钟缓存
@@ -1651,4 +1787,43 @@ public sealed class SponsorCategoryOption : ObservableObject
             _onChanged();
         }
     }
+}
+
+/// <summary>
+/// 界面字体下拉的一项(2026-11-14): 显示名 + 存储值 + 预览字体。
+/// ★ Preview 让每一项用自己的字体渲染(所见即所得); 「默认」项用默认字体栈。
+/// ★ 相等性只看 Stored: 下拉重建后新旧实例仍能匹配成同一项 ——
+///   否则 ComboBox.SelectedItem 在重建后找不到相等项, 选中显示会落空。
+/// </summary>
+public sealed class FontOption : IEquatable<FontOption>
+{
+    public FontOption(string label, string stored, FontFamily preview)
+    {
+        Label = label;
+        Stored = stored;
+        Preview = preview;
+    }
+
+    /// <summary>界面显示名(系统字体优先中文名; 导入项带"（已导入）"后缀)</summary>
+    public string Label { get; }
+
+    /// <summary>存储值(空串 = 默认; 字体名 = 系统字体; "file:目录名" = 导入), 见 Helpers.UiFont</summary>
+    public string Stored { get; }
+
+    /// <summary>预览用字体(下拉项与选中框都用它渲染)</summary>
+    public FontFamily Preview { get; }
+
+    public bool Equals(FontOption? other)
+        => other != null && string.Equals(Stored, other.Stored, StringComparison.Ordinal);
+
+    public override bool Equals(object? obj) => Equals(obj as FontOption);
+
+    public override int GetHashCode() => Stored.GetHashCode();
+
+    /// <summary>
+    /// ★ 必须重写: SettingsComboStyle 关闭态的选中框是 `Text="{Binding SelectionBoxItem}"`
+    ///   (为字符串数组写的模板), 对象项不重写就会显示成类名。下拉项本身仍走 ItemTemplate
+    ///   用各自字体渲染; 选中框显示字体名(用当前界面字体), 不改共享模板免得波及其它下拉。
+    /// </summary>
+    public override string ToString() => Label;
 }

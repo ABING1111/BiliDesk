@@ -249,6 +249,15 @@ public class SettingsStore
     /// </summary>
     public string AccentColor { get; set; } = "";
 
+    /// <summary>
+    /// 界面字体(2026-11-14 新增)。存储语义(单字段 + 哨兵):
+    /// 空串 = 默认字体栈; 普通字体名 = 系统已安装字体; "file:目录名" = 导入的字体文件。
+    /// 详见 Helpers.UiFont 的类注释。
+    /// ★ 与 <see cref="Models.AppSettings.UiFontFamily"/> 是读写契约, 两处必须一致。
+    /// 老配置没有这个字段 → 反序列化保持初始化值(空串) → 自动落到默认字体。
+    /// </summary>
+    public string UiFontFamily { get; set; } = "";
+
     /// <summary>关闭主窗口时是否最小化到托盘。
     ///
     /// 默认 **true**: 点右上角关闭键只是把窗口收进托盘(进程继续跑, 双击托盘图标恢复),
@@ -579,6 +588,9 @@ public class SettingsStore
         AppPaths.SetDownloadDir(DownloadDir);
         // 内部缓存根目录固定回数据目录(2026-10-11 起不再暴露给用户, 见 AppPaths.CacheRoot)。
         AppPaths.ResetCacheRoot();
+        // ★ 同理(第五处): 界面字体也是静态的(UiFont.Current), 窗口构造时直接读它 ——
+        //   漏了这一步的表现是"设置里存着自定义字体, 重启后界面又变回默认字体"。
+        Helpers.UiFont.SetFromSettings(UiFontFamily);
     }
 
     /// <summary>
@@ -676,6 +688,11 @@ public class SettingsStore
 
         // 主题色: 老配置没有这个字段(空串) → 保持默认的 B 站粉
         AccentColor = s.AccentColor ?? "";
+
+        // 界面字体: 老配置没有这个字段(空串) → 保持默认字体栈。
+        // ★ 要清洗: 字体可能已被卸载、导入文件可能已丢失/损坏 —— 一律回落默认,
+        //   与 DownloadDir 非法路径回落同一思路(不让脏值流到下游)。
+        UiFontFamily = Helpers.UiFont.SanitizeStored(s.UiFontFamily);
 
         // 类别串要 Sanitize: 配置里可能留着本应用不做的 interaction, 或被手改坏 ——
         // 不清掉就会出现"界面上一个都没勾、后台却还在按旧类别跳"的矛盾。
@@ -908,6 +925,7 @@ public class SettingsStore
         PreferredQualityQn = PreferredQualityQn,
         RecommendSource = RecommendSource,
         AccentColor = AccentColor,
+        UiFontFamily = UiFontFamily,
         SponsorBlockEnabled = SponsorBlockEnabled,
         SponsorBlockCategories = SponsorBlockCategories,
         CloseToTray = CloseToTray,
@@ -1239,6 +1257,21 @@ public class SettingsStore
         if (WheelSpeedPercent == v) return;
         WheelSpeedPercent = v;
         Helpers.WheelScroll.SetPercent(v);
+        Save();
+    }
+
+    /// <summary>
+    /// 设置界面字体并落盘, 广播给所有已打开的窗口(见 Helpers.UiFont.Changed)。
+    /// 传空串 = 恢复默认。存储值先过清洗: 已卸载的字体/丢失的导入文件回落默认。
+    /// ★ 与列数/缩放同理: 生效值落在静态的 UiFont.Current 上, 各窗口各自持有 FontFamily,
+    ///   所以必须通知每个窗口重设一次(见 FluentWindow.OnUiFontChanged)。
+    /// </summary>
+    public void SetUiFont(string? stored)
+    {
+        var next = Helpers.UiFont.SanitizeStored(stored);
+        if (string.Equals(UiFontFamily, next, StringComparison.Ordinal)) return;
+        UiFontFamily = next;
+        Helpers.UiFont.SetFromSettings(next);
         Save();
     }
 

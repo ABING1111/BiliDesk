@@ -24,8 +24,11 @@ public class FluentWindow : Window
 
     public FluentWindow()
     {
-        FontFamily = new System.Windows.Media.FontFamily(
-            "Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI, Microsoft YaHei");
+        // ★ 全局界面字体的唯一入口(2026-11-14 起可自定义, 见 Helpers.UiFont):
+        //   所有窗口都继承本类, 构造时读当前生效值; 运行中换字体由 UiFont.Changed 通知重设。
+        //   图标字体不受影响 —— 它们是元素上的局部值, 优先级高于这里的继承值
+        //   (Styles.xaml 隐式 TextBlock 样式那段长注释说的就是这件事)。
+        FontFamily = UiFont.Current;
         SourceInitialized += OnSourceInitialized;
         // ★ 软件缩放(2026-10-06): 内容一就绪就登记进 UiScale。
         //   用 Loaded 而不是 SourceInitialized —— 那时 Content 才真正挂上可视树,
@@ -35,6 +38,8 @@ public class FluentWindow : Window
         {
             var root = ScaleRoot;
             if (root != null) UiScale.Register(root);
+            // 启动即最大化(或从上次状态恢复成最大化)时也要补内缩 —— 见 SyncMaximizedContentInset
+            SyncMaximizedContentInset();
         };
     }
 
@@ -128,11 +133,15 @@ public class FluentWindow : Window
             ThemeService.Instance.ThemeChanged += OnThemeChanged;
             Svc.Settings.AcrylicChanged += OnAcrylicChanged;
             Svc.Settings.LayoutChanged += OnLayoutChanged;
+            UiFont.Changed += OnUiFontChanged;
         }
         ApplyChrome();
     }
 
     private void OnThemeChanged() => ApplyChrome();
+
+    /// <summary>全局界面字体变化(来自设置页): 重设本窗口字体, 子元素靠继承自动跟随</summary>
+    private void OnUiFontChanged() => FontFamily = UiFont.Current;
 
     /// <summary>全局亚克力开关变化(来自设置页): 所有已开窗口都要立刻跟着换背景</summary>
     private void OnAcrylicChanged() => ApplyChrome();
@@ -384,6 +393,7 @@ public class FluentWindow : Window
         if (_hooked) ThemeService.Instance.ThemeChanged -= OnThemeChanged;
         Svc.Settings.AcrylicChanged -= OnAcrylicChanged;
         Svc.Settings.LayoutChanged -= OnLayoutChanged;
+        UiFont.Changed -= OnUiFontChanged;
         UiScale.Unregister(ScaleRoot);
         base.OnClosed(e);
     }
@@ -415,6 +425,11 @@ public class FluentWindow : Window
     {
         base.OnStateChanged(e);
 
+        // ★ 必须先补内容内缩, 再让卡片墙按"缩小后的真实宽度"重排:
+        //   最大化窗口本身比工作区每边大一圈(见 SyncMaximizedContentInset),
+        //   不补的话最外圈内容落在屏幕外, 正是"全屏后窗口边缘少了一点点"。
+        SyncMaximizedContentInset();
+
         // 启动阶段(IsLoaded 之前)不处理; 最小化不处理(窗口本来就不可见)
         if (!IsLoaded) return;
         if (WindowState == WindowState.Minimized) return;
@@ -423,6 +438,13 @@ public class FluentWindow : Window
         // 只需置位"缩放中": 真正的收敛由稳定后的 ResizeSettled 触发。
         // 系统动画期间每帧的 SizeChanged 会继续把这个状态续期(见 CardWall.OnWallSizeChanged)。
         CardWall.NotifyLayoutResize();
+    }
+
+    /// <summary>跨屏/改缩放后目标矩形与 DPI 都变了, 内缩量要按新值重算</summary>
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        SyncMaximizedContentInset();
     }
 
     // ------------------------------------------------------------ 拖动缩放: 让重活先让路

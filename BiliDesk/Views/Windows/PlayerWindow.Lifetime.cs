@@ -211,6 +211,7 @@ public partial class PlayerWindow : FluentWindow
         Svc.Toast.Shown -= OnToast;
         Svc.Session.Changed -= UpdateButtonState;
         Svc.Settings.DanmakuSettingsChanged -= OnDanmakuSettingsChanged;
+        Helpers.UiFont.Changed -= OnUiFontChanged;
         // 跳过赞助片段: 退订 + 掐掉还没回来的查询
         Svc.Settings.SponsorBlockChanged -= OnSponsorSettingsChanged;
         CancelSponsorFetch();
