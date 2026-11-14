@@ -44,7 +44,10 @@ public class SelectableText : TextBox
     /// <summary>
     /// 拖选时不要触发卡片的"点击打开详情"。
     /// ★ 只标记 handled、**不吞掉**鼠标按下: 吞掉的话 TextBox 自己的选词/拖动选择就不工作了。
-    ///   卡片那边另有判据(见 DynamicCard.OnCardClick 里对 SelectableText 祖先的检查)。
+    ///   卡片那边另有判据(见 DynamicCard.OnCardClick 里对正文控件的祖先检查)。
+    /// ★ 2026-11-14 起动态正文改用 <see cref="LinkText"/> / <see cref="LinkTextBlock"/>
+    ///   (要能点链接), 本控件暂无用武之地; 保留是因为"纯文本、不需要链接"的轻量场景
+    ///   仍然该用它 —— RichTextBox 的开销明显更大。
     /// </summary>
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {

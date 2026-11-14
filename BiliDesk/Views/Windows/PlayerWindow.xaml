@@ -677,6 +677,9 @@
 
                 <!-- ===== 楼中楼预览方框 =====
                      整框可点 → 进"详情"页看这条评论的全部回复(唯一的楼中楼入口)。
+                     ★ 2026-11-14: 预览正文里的链接也能点(点链接 = 开链接, 不跳详情)。
+                       为此把事件改成 **Preview**(隧道): RichTextBox(CommentText) 自己会处理
+                       MouseLeftButtonUp 做拖选, 冒泡那份有时收不到。
                      ★ 框内只列**前 3 条预览**(PreviewReplies), 不再直接绑 Replies:
                        详情页会自动补齐到上百条, 绑同一个集合的话从详情返回后,
                        这条评论底下会突然挂着一整屏回复、不会自动收起来(2026-11-04 用户报)。
@@ -686,7 +689,8 @@
                         Background="{DynamicResource ControlFillDefaultBrush}"
                         BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1"
                         Cursor="Hand"
-                        MouseLeftButtonUp="OnReplyBoxClick"
+                        PreviewMouseLeftButtonDown="OnReplyBoxPress"
+                        PreviewMouseLeftButtonUp="OnReplyBoxClick"
                         ToolTip="查看这条评论的全部回复"
                         Visibility="{Binding HasReplies, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
@@ -1706,7 +1710,8 @@
                             <!-- ★ 2026-11-09 用户要求"评论区标题自由复制": 原来用 TextBlock,
                                  整段标题只能看、不能选。改成**只读 TextBox** —— 视觉上仍是
                                  透明底/无边框/同样的字号字重, 但支持鼠标拖选 + Ctrl+C,
-                                 右键也有系统自带的复制菜单(与简介的 DescText 同一套做法)。
+                                 右键也有系统自带的复制菜单(与简介的 DescText 同一套做法 ——
+                                 DescText 已换成 LinkText, 同样支持拖选/Ctrl+C/右键复制)。
                                  ★ IsTabStop=False: 不参与 Tab 键遍历, 免得用户按 Tab 时焦点
                                    莫名停到标题上; 鼠标点选仍然可以(需要焦点才能拖选)。
                                  ★ 键盘快捷键不受影响: OnPreviewKeyDown 只对
@@ -2178,10 +2183,14 @@
                                            用户得滚很久才看得到推荐列表。
                                          ★ MaxHeight 判据选的是"折起来大约 6 行"(12px 字号 + 行高):
                                            低于它就没必要折, 多出的展开按钮是纯噪音。 -->
-                                    <TextBox x:Name="DescText" TextWrapping="Wrap" IsReadOnly="True"
+                                    <!-- ★ 2026-11-14 换掉原来的只读 TextBox: 简介里的链接要能点,
+                                         而 TextBox 放不了 Hyperlink。LinkText 是只读 RichTextBox,
+                                         保留拖选/Ctrl+C/右键复制与"高度由内容撑开", 只是多了链接识别。 -->
+                                    <controls:LinkText x:Name="DescText"
                                              Background="Transparent" BorderThickness="0" Padding="0"
                                              Foreground="{DynamicResource TextSecondaryBrush}"
-                                             FontSize="12" Cursor="IBeam" Text="加载中…"
+                                             FontSize="12" Cursor="IBeam"
+                                             Text="加载中…"
                                              MaxHeight="{StaticResource DescCollapsedHeight}" />
                                     <!-- 展开/收起(2026-10-12 用户要求"加粗、居中、加展开/收起符号"):
                                          ★ 加粗 + 居中: 它是简介的唯一操作入口, 之前是 12px 普通体

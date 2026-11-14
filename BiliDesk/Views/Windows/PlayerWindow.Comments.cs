@@ -1131,7 +1131,28 @@ public partial class PlayerWindow : FluentWindow
     private void OnReplyBoxClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (_closing || (sender as FrameworkElement)?.DataContext is not CommentItem item) return;
+        // ★ 点在预览里的链接上: 那是"打开链接", 不是"看这条评论的全部回复"。
+        //   Hyperlink 已经自己处理了 Click, 这里必须让路, 否则一次点击会开两个东西。
+        if (VisualTreeUtil.FindAncestor<System.Windows.Documents.Hyperlink>(
+                e.OriginalSource as DependencyObject) != null)
+            return;
+        // ★ 拖选正文后松手不算"点框"(预览里的 CommentText 是可拖选的 RichTextBox)。
+        if (_replyBoxPressPoint is { } down && e.GetPosition(this) is var up
+            && (Math.Abs(up.X - down.X) > ReplyBoxClickTolerance
+                || Math.Abs(up.Y - down.Y) > ReplyBoxClickTolerance))
+            return;
         ShowCommentDetail(threadRoot: item, focus: item);
+    }
+
+    /// <summary>楼中楼预览框里"按下 → 松开"位移超过它就算拖选, 不当点击。</summary>
+    private const double ReplyBoxClickTolerance = 4;
+
+    /// <summary>预览框按下的位置。用于区分"点一下"与"拖选一段文字"。</summary>
+    private Point? _replyBoxPressPoint;
+
+    private void OnReplyBoxPress(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        _replyBoxPressPoint = e.GetPosition(this);
     }
 
     private void ShowCommentDetail(CommentItem threadRoot, CommentItem focus)

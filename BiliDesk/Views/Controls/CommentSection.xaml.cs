@@ -101,8 +101,28 @@ public partial class CommentSection : UserControl
     private void OnReplyBoxClick(object sender, MouseButtonEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not CommentItem c) return;
+        // ★ 点在预览里的链接上: 那是"打开链接", 不是"看这条评论的全部回复"。
+        if (VisualTreeUtil.FindAncestor<System.Windows.Documents.Hyperlink>(
+                e.OriginalSource as DependencyObject) != null)
+            return;
+        // ★ 拖选正文后松手不算"点框": 预览里的 CommentText 是 RichTextBox, 可以拖选,
+        //   松手时也会走到这里。按下/松开的距离超过阈值就当"选完了", 不跳详情。
+        if (_replyBoxPressPoint is { } down && e.GetPosition(this) is var up
+            && (Math.Abs(up.X - down.X) > ReplyBoxClickTolerance
+                || Math.Abs(up.Y - down.Y) > ReplyBoxClickTolerance))
+            return;
         OpenThreadAndScroll(c);
         e.Handled = true;
+    }
+
+    /// <summary>楼中楼预览框里"按下 → 松开"位移超过它就算拖选, 不当点击。</summary>
+    private const double ReplyBoxClickTolerance = 4;
+
+    private Point? _replyBoxPressPoint;
+
+    private void OnReplyBoxPress(object sender, MouseButtonEventArgs e)
+    {
+        _replyBoxPressPoint = e.GetPosition(this);
     }
 
     private void OnBackToCommentsClick(object sender, RoutedEventArgs e)

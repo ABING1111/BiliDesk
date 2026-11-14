@@ -7,7 +7,9 @@
     <UserControl.Resources>
         <!-- ===== 简介: 默认两行, 点「详情」展开 =====
              ★ 用 MaxHeight 而不是单独维护一份截断文本: 展开/收起只改一个属性,
-               也不会出现"截断位置随窗口宽度变化但缓存文本没更新"的问题。 -->
+               也不会出现"截断位置随窗口宽度变化但缓存文本没更新"的问题。
+             ★ 2026-11-14: 承载控件换成 LinkTextBlock(TextBlock 的子类),
+               签名里的链接同样可点; MaxHeight/TextTrimming 那套截断逻辑原样保留。 -->
         <Style x:Key="SpaceSignStyle" TargetType="TextBlock" BasedOn="{StaticResource MetaTextStyle}">
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="MaxHeight" Value="38" />
@@ -231,7 +233,8 @@
                                Margin="0,4,0,0" />
 
                     <StackPanel Margin="0,8,0,0">
-                        <TextBlock Text="{Binding Sign}" Style="{StaticResource SpaceSignStyle}"
+                        <controls:LinkTextBlock SourceText="{Binding Sign}"
+                                   Style="{StaticResource SpaceSignStyle}"
                                    MaxWidth="620" HorizontalAlignment="Left" />
                         <Button Content="{Binding SignDetailText}" Command="{Binding ToggleSignCommand}"
                                 Style="{StaticResource LinkButtonStyle}" FontSize="12" Padding="0,2"

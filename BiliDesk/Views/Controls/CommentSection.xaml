@@ -176,14 +176,20 @@
                                            FontSize="12" />
                             </Button>
                         </StackPanel>
-                        <!-- 楼中楼预览: **整框可点** → 打开评论详情页(与视频评论区一致) -->
+                        <!-- 楼中楼预览: **整框可点** → 打开评论详情页(与视频评论区一致)
+                             ★ 2026-11-14: 去掉 IsHitTestVisible=False, 让预览正文里的链接也能点。
+                               点非链接处仍打开详情 —— 但事件必须走 **Preview**(隧道):
+                               RichTextBox(CommentText) 会自己吃掉 MouseLeftButtonUp 做拖选,
+                               冒泡到 Border 的普通 MouseLeftButtonUp 根本收不到。
+                               见 OnReplyBoxClick。 -->
                         <Border Margin="0,8,0,0" Padding="8,6" CornerRadius="6"
                                 Background="{DynamicResource ControlFillDefaultBrush}"
                                 BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1"
                                 Cursor="Hand" ToolTip="查看这条评论的全部回复"
-                                MouseLeftButtonUp="OnReplyBoxClick"
+                                PreviewMouseLeftButtonDown="OnReplyBoxPress"
+                                PreviewMouseLeftButtonUp="OnReplyBoxClick"
                                 Visibility="{Binding HasReplies, Converter={StaticResource BoolToVis}}">
-                            <StackPanel IsHitTestVisible="False">
+                            <StackPanel>
                                 <ItemsControl ItemsSource="{Binding PreviewReplies}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>

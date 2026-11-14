@@ -90,18 +90,22 @@
             </Grid>
 
             <!-- ===== 正文(图文/纯文字/转发才有) =====
-                 ★ 2026-11-14: 展开态换成 SelectableText(只读 TextBox), 支持自由拖选 + Ctrl+C;
-                   收起态仍用 TextBlock —— 只有它能做 "MaxHeight + 省略号" 的干净截断。 -->
+                 ★ 2026-11-14: 展开态换成 LinkText(只读 RichTextBox), 支持自由拖选 + Ctrl+C,
+                   并把正文里的链接渲染成可点入口(点开走内置浏览器);
+                   收起态用 LinkTextBlock(TextBlock) —— 只有它能做 "MaxHeight + 省略号" 的干净截断,
+                   而 TextBlock 的 Inlines 同样放得下 Hyperlink, 链接照样能点。 -->
             <StackPanel Margin="0,10,0,0"
                         Visibility="{Binding HasText, Converter={StaticResource BoolToVis}}">
-                <TextBlock x:Name="ContentTextBlock" Text="{Binding ContentText}"
-                           FontSize="14" LineHeight="22" TextWrapping="Wrap"
-                           Foreground="{DynamicResource TextPrimaryBrush}"
-                           MaxHeight="176" TextTrimming="CharacterEllipsis" />
-                <controls:SelectableText x:Name="ContentSelectable" Text="{Binding ContentText}"
-                                         FontSize="14"
-                                         Foreground="{DynamicResource TextPrimaryBrush}"
-                                         Visibility="Collapsed" />
+                <controls:LinkTextBlock x:Name="ContentTextBlock" SourceText="{Binding ContentText}"
+                                        FontSize="14" LineHeight="22" TextWrapping="Wrap"
+                                        Foreground="{DynamicResource TextPrimaryBrush}"
+                                        MaxHeight="176" TextTrimming="CharacterEllipsis" />
+                <!-- ★ 展开态的 RichTextBox 不带 Text 绑定: 卡片收起时(绝大多数时候)不建 FlowDocument,
+                     点「全文」时由 OnExpandClick 再灌文本 —— 一屏十几张卡, 每张都提前建文档太浪费。 -->
+                <controls:LinkText x:Name="ContentRichText"
+                                   FontSize="14"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   Visibility="Collapsed" />
                 <Button x:Name="ExpandButton" Content="全文" Style="{StaticResource LinkButtonStyle}"
                         HorizontalAlignment="Left" Margin="0,4,0,0" FontSize="12"
                         Visibility="Collapsed" Click="OnExpandClick" />
@@ -190,10 +194,10 @@
                                    Foreground="{DynamicResource TextTertiaryBrush}"
                                    VerticalAlignment="Center" />
                     </StackPanel>
-                    <controls:SelectableText Text="{Binding ContentText}" FontSize="13"
-                                             Margin="0,6,0,0"
-                                             Foreground="{DynamicResource TextPrimaryBrush}"
-                                             Visibility="{Binding HasText, Converter={StaticResource BoolToVis}}" />
+                    <controls:LinkText Text="{Binding ContentText}" FontSize="13"
+                                       Margin="0,6,0,0"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       Visibility="{Binding HasText, Converter={StaticResource BoolToVis}}" />
                     <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold"
                                Margin="0,6,0,0" TextWrapping="Wrap" MaxHeight="40"
                                TextTrimming="CharacterEllipsis"

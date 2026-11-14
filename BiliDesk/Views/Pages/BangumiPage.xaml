@@ -127,8 +127,9 @@
                                    Foreground="{DynamicResource AccentTextBrush}"
                                    Visibility="{Binding MetaLine, Converter={StaticResource StrToVis}}" />
 
-                        <TextBlock Text="{Binding Evaluate}" FontSize="12" Margin="0,14,0,0"
-                                   TextWrapping="Wrap" MaxHeight="84"
+                        <!-- 简介: 2026-11-14 换 LinkTextBlock, 简介里的链接也能点(点开走内置浏览器) -->
+                        <controls:LinkTextBlock SourceText="{Binding Evaluate}" FontSize="12"
+                                   Margin="0,14,0,0" TextWrapping="Wrap" MaxHeight="84"
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    Visibility="{Binding Evaluate, Converter={StaticResource StrToVis}}" />
                     </StackPanel>

@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using BiliDesk.Helpers;
@@ -62,7 +63,12 @@ public partial class DynamicCard : UserControl
             ContextMenu = null;
             // 虚拟化回收: 上一条是展开态时, 复用到下一条必须复位, 否则新卡片一进来就是"全文"态
             if (ContentTextBlock != null) ContentTextBlock.Visibility = Visibility.Visible;
-            if (ContentSelectable != null) ContentSelectable.Visibility = Visibility.Collapsed;
+            if (ContentRichText != null)
+            {
+                ContentRichText.Visibility = Visibility.Collapsed;
+                // 富文本是按需灌的: 回收时一并清掉, 免得下一条卡片展开瞬间闪一下旧正文
+                ContentRichText.Text = "";
+            }
         };
         // 鼠标在卡片上真实移动 = 可能要看视频: 预热 LibVLC。
         MouseMove += (_, _) =>
@@ -105,8 +111,14 @@ public partial class DynamicCard : UserControl
     private void OnCardClick(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
-        // 正文是可拖选的 SelectableText: 在它上面松手是"选完文字", 不是"点卡片"
-        if (VisualTreeUtil.FindAncestor<SelectableText>(e.OriginalSource as DependencyObject) != null)
+        // 正文是可拖选的富文本(LinkText): 在它上面松手是"选完文字", 不是"点卡片"
+        if (VisualTreeUtil.FindAncestor<LinkText>(e.OriginalSource as DependencyObject) != null)
+            return;
+        // 点在正文的链接上: 那是"打开这个链接", 别顺手把详情面板也拉出来。
+        // (Hyperlink 自己会处理 Click, 但卡片的 MouseLeftButtonUp 挂在 Border 上,
+        //  两件事必须在这里明确分开。收起态的 LinkTextBlock 不是可拖选控件,
+        //  点在它身上仍应打开详情 —— 所以这里只挡 Hyperlink, 不挡 LinkTextBlock。)
+        if (VisualTreeUtil.FindAncestor<Hyperlink>(e.OriginalSource as DependencyObject) != null)
             return;
         if (!TakePress()) return;
         if (Current is not { } item) return;
@@ -262,9 +274,11 @@ public partial class DynamicCard : UserControl
     private void OnExpandClick(object sender, RoutedEventArgs e)
     {
         _expanded = !_expanded;
-        // 展开态切到 SelectableText(可拖选复制), 收起态切回 TextBlock(可做省略号截断)
+        // 展开态切到 LinkText(可拖选复制 + 链接可点), 收起态切回 LinkTextBlock(可做省略号截断)
         ContentTextBlock.Visibility = _expanded ? Visibility.Collapsed : Visibility.Visible;
-        ContentSelectable.Visibility = _expanded ? Visibility.Visible : Visibility.Collapsed;
+        ContentRichText.Visibility = _expanded ? Visibility.Visible : Visibility.Collapsed;
+        // 富文本是按需灌的(见 XAML 注释): 展开时才把正文交过去
+        if (_expanded) ContentRichText.Text = Current?.ContentText ?? "";
         ExpandButton.Content = _expanded ? "收起" : "全文";
     }
 
@@ -290,7 +304,9 @@ public partial class DynamicCard : UserControl
         {
             _expanded = false;
             ContentTextBlock.Visibility = Visibility.Visible;
-            ContentSelectable.Visibility = Visibility.Collapsed;
+            ContentRichText.Visibility = Visibility.Collapsed;
+            // 富文本是按需灌的: 收回时一并清掉, 与虚拟化回收那条路保持一致
+            ContentRichText.Text = "";
             ExpandButton.Content = "全文";
         }
     }
