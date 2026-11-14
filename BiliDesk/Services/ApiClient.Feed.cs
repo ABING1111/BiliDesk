@@ -817,6 +817,16 @@ public partial class ApiClient
             // 发布时间: 热门/收藏用 pubdate, 空间投稿用 created
             item.Pubdate = GetLong(e, "pubdate");
             if (item.Pubdate <= 0) item.Pubdate = GetLong(e, "created");
+
+            // aid: 卡片右上角「稍后再看」的选中态靠它判断(WatchLaterState.Contains(item.Aid)),
+            //   漏解析的话热门/排行这些页的按钮永远不亮、加入后也不变成对勾
+            //   (2026-11-15 用户报"热门页和排行榜页没有选中态", 实测两个接口都给顶层 aid)。
+            //   顺序: 顶层 aid -> stat.aid(部分接口放这里) -> 按 bvid 本地换算兜底。
+            //   搜索接口那种真没有 aid 的条目换算后为 0, 卡片侧会再补查一次详情(见 VideoCard.ResolveAidAsync)。
+            item.Aid = GetLongSafe(e, "aid");
+            if (item.Aid <= 0 && st.ValueKind == JsonValueKind.Object)
+                item.Aid = GetLongSafe(st, "aid");
+            if (item.Aid <= 0) item.Aid = VideoItem.ResolveAid(0, item.Bvid);
             return item;
         }
         catch

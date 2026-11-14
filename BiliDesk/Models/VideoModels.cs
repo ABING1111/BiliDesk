@@ -70,8 +70,19 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
     /// 顺手把它带上; 为 0 表示这条来源没有提供(例如搜索接口), 用到时再按 bvid 补查。
     /// ★ 2026-11-08: 首页推荐流也有 aid —— 它放在 `id` 字段里(不是 `aid`)。
     ///   推荐流的翻页游标要用它拼 `last_showlist=av_{aid}`, 缺了就少一层服务端避重。
+    /// ★ 2026-11-15: 热门/排行/分区/空间/相关这些列表接口都给 aid(或能按 bvid 换算),
+    ///   解析侧已兜底(见 ApiClient.ParseVideoItem) —— 卡片右上角「稍后再看」的选中态
+    ///   就是拿它比对全局集合的, 缺了按钮永远不亮。
     /// </summary>
     public long Aid { get; set; }
+
+    /// <summary>
+    /// 补齐 avid: 接口给了就用接口的, 没给就按 bvid 本地换算(见 UrlParser.BvToAv,
+    /// 算法已用热门 + 排行榜真实数据双向校验), 换不出来(空/非法 bvid)返回 0。
+    /// ★ 抽成纯函数是为了能单测 —— 换算错了「稍后再看」会把对勾加到别的视频头上。
+    /// </summary>
+    public static long ResolveAid(long aid, string? bvid)
+        => aid > 0 ? aid : Utils.UrlParser.BvToAv(bvid);
 
     /// <summary>
     /// 直播间号。&gt;0 表示这条是**直播间**而不是视频稿件:

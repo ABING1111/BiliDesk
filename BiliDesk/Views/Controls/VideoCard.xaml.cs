@@ -342,7 +342,11 @@ public partial class VideoCard : UserControl
 
     private void OnLaterDataContextChanged(object sender, DependencyPropertyChangedEventArgs e) => RefreshLaterState();
 
-    /// <summary>已加入 = 对勾 + 强调色底; 未加入 = 旗帜图标 + 半透明黑底。</summary>
+    /// <summary>
+    /// 已加入 = 对勾 + 强调色底; 未加入 = 旗帜图标 + 半透明黑底。
+    /// 判定用 item.Aid —— 解析侧已按接口 aid / bvid 换算兜底(见 VideoItem.ResolveAid),
+    /// 热门/排行这类页不再是恒 0, 否则按钮永远不亮(2026-11-15 用户报的问题)。
+    /// </summary>
     private void RefreshLaterState()
     {
         var item = DataContext as VideoItem;
@@ -571,8 +575,9 @@ public partial class VideoCard : UserControl
     /// <summary>
     /// 把这条视频加进 B 站账号的「稍后再看」。
     ///
-    /// 接口只认 avid, 而搜索/推荐这类列表不下发 avid(见 VideoItem.Aid 的说明),
-    /// 所以先看列表有没有给, 没有就补查一次详情 —— 否则这些页面上右键点了会一直报"缺 avid"。
+    /// 接口只认 avid。以前"搜索/推荐这类列表不下发 avid"要补查详情, 现在解析侧
+    ///   已按接口 aid / bvid 换算兜底(见 VideoItem.ResolveAid), ResolveAidAsync 只在
+    ///   两者都拿不到时才真正打一次 view 接口。
     /// 服务端对"已经在列表里"再调一次是幂等的(code 0), 所以不需要先去查列表。
     ///
     /// ★ 用 async 方法体 + Forget 而不是 async void: await 期间卡片可能已被虚拟化回收
@@ -652,10 +657,18 @@ public partial class VideoCard : UserControl
         }
     }
 
-    /// <summary>列表没下发 avid(搜索/推荐等页面)时补查一次视频详情。</summary>
+    /// <summary>
+    /// 列表没下发 avid(搜索等页面)时补一次: 先按 bvid **本地换算**(热门/排行这些页
+    ///   解析侧已经兜过底, 一般走不到这里), 换不出来再补查一次视频详情。
+    /// </summary>
     private static async System.Threading.Tasks.Task<long> ResolveAidAsync(VideoItem v)
     {
-        if (v.Aid > 0) return v.Aid;
+        var aid = VideoItem.ResolveAid(v.Aid, v.Bvid);
+        if (aid > 0)
+        {
+            v.Aid = aid;   // 回填, 免得同一条反复换算(与 FavoritesViewModel.EnsureAidAsync 同款)
+            return aid;
+        }
         if (string.IsNullOrEmpty(v.Bvid)) return 0;
         var (_, _, vd) = await Svc.Api.GetVideoAsync(v.Bvid);
         return vd?.Aid ?? 0;
