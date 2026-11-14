@@ -14,6 +14,9 @@ namespace BiliDesk.Views.Pages;
 /// 收藏页: 只展示 B 站账号的云端收藏夹。
 /// 本机收藏夹(本地 JSON)已整体移除 —— 两套互不相通的数据源只会让人困惑,
 /// 播放页的"收藏"现在也直接保存到云端。
+///
+/// 2026-11-14 改版: 整页一个 ScrollViewer, 标题随内容滚走、收藏夹胶囊吸顶
+/// (见 <see cref="StickyPin"/>); 头部右上角的操作组搬到右下角竖列工具栏。
 /// </summary>
 public partial class FavoritesPage : UserControl
 {
@@ -25,11 +28,21 @@ public partial class FavoritesPage : UserControl
     /// <summary>夹子集合变化的订阅目标(切 DataContext 时退订旧的)</summary>
     private System.Collections.ObjectModel.ObservableCollection<FavFolder>? _observedFolders;
 
+    /// <summary>
+    /// 收藏夹胶囊的吸顶(2026-11-14): 与设置页顶部 Tab 同一套效果, 算法在 <see cref="StickyPin"/>。
+    /// 构造时就要建好 —— 它从胶囊的 XAML Margin 里取水平边距与初始自然顶边。
+    /// </summary>
+    private readonly StickyPin _sticky;
+
     public FavoritesPage()
     {
         InitializeComponent();
+        _sticky = new StickyPin(PageScroll, FolderBarSlot, StickyFolderBar, StickyFolderShift);
         Loaded += OnLoaded;
         SizeChanged += (_, _) => ScheduleOverflowUpdate();
+        // 页面常驻 PageLayer、只切 Visibility: 切回来时 Loaded 不会再发,
+        // 而折叠期间量到的是过期版式 —— 变可见时补量一次。
+        IsVisibleChanged += (_, e) => { if (e.NewValue is true) _sticky.SyncDeferred(); };
         // 纳入全局屏蔽(命中关键词的内容会被隐藏), 见 FilterService
         DataContextChanged += (_, e) =>
         {
@@ -45,6 +58,7 @@ public partial class FavoritesPage : UserControl
         if (Vm == null) return;
         HookFolderCollection();
         ScheduleOverflowUpdate();
+        _sticky.SyncDeferred();
         // 已经拿到内容就不再重复请求(页面会被主窗口反复挂载/卸载);
         // 但"上次没登录 / 请求失败"这两种情况要再给一次机会, 否则用户登录后回到这一页
         // 只能看到旧错误提示, 必须手动点刷新。
@@ -88,6 +102,9 @@ public partial class FavoritesPage : UserControl
         {
             _overflowUpdatePending = false;
             UpdateFolderOverflow();
+            // 夹子条从无到有(或整条消失)会改变占位块的高度/可见性, 顺带把胶囊的
+            // 自然顶边重新量一次 —— 否则第一次进页面时量到的是"还没有夹子"的版式。
+            _sticky.Sync();
         }));
     }
 
@@ -198,17 +215,20 @@ public partial class FavoritesPage : UserControl
     private void OnFolderPopupChipClick(object sender, RoutedEventArgs e)
         => FolderMorePopup.IsOpen = false;
 
-    /// <summary>右上角返回按钮: 历史/收藏/缓存的入口都在「我的」页, 统一回那里</summary>
+    /// <summary>右下角工具列的返回按钮: 历史/收藏/缓存的入口都在「我的」页, 统一回那里</summary>
     private void OnBackToMineClick(object sender, RoutedEventArgs e)
         => App.MainVm.Navigate(PageKey.Mine);
 
     /// <summary>自动加载的公共闸门: 缩放/布局变化时不立即翻页(见 <see cref="AutoLoadThrottle"/>)。</summary>
     private readonly AutoLoadThrottle _autoLoadThrottle = new();
 
-    /// <summary>列表滚动到底部自动加载下一页</summary>
+    /// <summary>列表滚动: 先算吸顶位移, 再判"到底自动加载下一页"</summary>
     private void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (sender is not ScrollViewer sv) return;
+        // ★ 吸顶要在**任何**滚动事件上都算(包括布局变化那几拍), 否则缩放窗口时胶囊会脱钉。
+        //   它只改 RenderTransform, 不参与下面的翻页闸门。
+        _sticky.Update();
         // ★ 缩放/布局变化期间不要立即判; 交给 AutoLoadThrottle 在稳定后补一次(短列表也能补上)。
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = MaybeLoadMoreAsync(sv))) return;
         _ = MaybeLoadMoreAsync(sv);

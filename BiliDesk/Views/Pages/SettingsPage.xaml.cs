@@ -12,10 +12,19 @@ public partial class SettingsPage : UserControl
     private SettingsViewModel? _vm;
     private bool _subscribed;
 
+    /// <summary>
+    /// 顶部 Tab 胶囊的折叠吸顶。算法抽在 <see cref="StickyPin"/>(收藏页/历史页共用同一份),
+    /// 构造时就要建好 —— 它从胶囊的 XAML Margin 里取水平边距与初始自然顶边。
+    /// </summary>
+    private readonly StickyPin _sticky;
+
     public SettingsPage()
     {
         InitializeComponent();
+        _sticky = new StickyPin(PageScroll, CapsuleSlot, StickyCapsule, StickyCapsuleShift);
         Loaded += OnLoaded;
+        // 页面常驻 PageLayer、只切 Visibility: 切回来时 Loaded 不会再发, 补量一次自然位置。
+        IsVisibleChanged += (_, e) => { if (e.NewValue is true) _sticky.SyncDeferred(); };
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -37,60 +46,17 @@ public partial class SettingsPage : UserControl
         }
         _ = LoadAvatarAsync(_vm.UserFace);
         HookPalette();
-        // 吸顶胶囊: 等布局落定后量一次它的自然位置(见 SyncCapsuleRestTop)
-        Dispatcher.BeginInvoke(new System.Action(SyncCapsuleRestTop),
-            System.Windows.Threading.DispatcherPriority.Loaded);
+        // 吸顶胶囊: 等布局落定后量一次它的自然位置(见 StickyPin.Sync)
+        _sticky.SyncDeferred();
     }
-
-    /// <summary>胶囊在"未滚动内容坐标"里的自然顶边(默认 = 标题行的 20px 上边距)</summary>
-    private double _capsuleRestTop = 20;
-
-    /// <summary>
-    /// 吸顶后胶囊距窗口顶端留多少(逻辑像素)。
-    /// ★ 不要贴到 0: 胶囊带 DropShadowEffect, 贴边时阴影会在窗口顶边被切掉, 看着很"顶";
-    ///   8px 既留出呼吸空间, 又能让整圈阴影完整露出来(阴影外扩约 7px)。
-    /// </summary>
-    private const double PinnedTopGap = 8;
 
     /// <summary>
     /// Tab 胶囊吸顶(2026-11-14 用户要求"只折叠吸顶胶囊, 且不要改变胶囊的大小"):
     /// 胶囊是滚动内容里的**唯一实例**, 滚动多少就用 TranslateTransform 反向抵消多少 ——
-    /// 视觉上先跟着内容一起上滑, 到距顶端 <see cref="PinnedTopGap"/> 处钉住; 大标题照常滚走。
-    /// ★ 只改 RenderTransform, 不碰布局: 每帧不触发测量/排版。
+    /// 视觉上先跟着内容一起上滑, 到距顶端 8px 处钉住; 大标题照常滚走。
+    /// ★ 只改 RenderTransform, 不碰布局: 每帧不触发测量/排版。实现在 <see cref="StickyPin"/>。
     /// </summary>
-    private void OnSettingsScrollChanged(object sender, ScrollChangedEventArgs e) => UpdateStickyCapsule();
-
-    private void UpdateStickyCapsule()
-    {
-        if (StickyCapsuleShift == null) return;
-        var offset = System.Math.Max(0, PageScroll.VerticalOffset);
-        // 位移 = max(0, 已滚动 - (自然位置 - 吸顶留白)):
-        //   滚动不到 restTop-gap 时位移为 0(跟着内容走), 之后正好停在距顶端 gap 处。
-        StickyCapsuleShift.Y = System.Math.Max(0, offset - (_capsuleRestTop - PinnedTopGap));
-    }
-
-    /// <summary>
-    /// 量一次胶囊在内容里的自然位置并写回上边距。
-    /// ★ 不硬编码 20: 标题字号/行高变化、或胶囊比标题矮时, 胶囊的垂直位置会变;
-    ///   用占位块 (CapsuleSlot) 的实际位置更稳 —— 加回滚动偏移就是"未滚动时"的坐标。
-    /// </summary>
-    private void SyncCapsuleRestTop()
-    {
-        if (CapsuleSlot == null || StickyCapsule == null) return;
-        try
-        {
-            var y = CapsuleSlot.TransformToAncestor(this).Transform(new Point(0, 0)).Y;
-            var rest = System.Math.Max(0, y + PageScroll.VerticalOffset);
-            if (System.Math.Abs(rest - _capsuleRestTop) < 0.5) return;   // 常见情况(20): 不动布局
-            _capsuleRestTop = rest;
-            StickyCapsule.Margin = new Thickness(0, rest, 0, 0);
-            UpdateStickyCapsule();
-        }
-        catch
-        {
-            // 还没进可视树: 保持默认值, 滚动时照样能钉住
-        }
-    }
+    private void OnSettingsScrollChanged(object sender, ScrollChangedEventArgs e) => _sticky.Update();
 
     /// <summary>在当前可视树里找调色盘并接上拖动事件(找不到就是"通用"Tab 不在前, 静默跳过)。</summary>
     private void HookPalette()

@@ -18,9 +18,11 @@
                约 x≈316 —— 横向必然重叠。这里直接绑继承来的档位，而不是走 VisualState：
                这个状态只有一个离散的 Visibility 动画，在当前"带过渡进入 Compact"的路径下
                实测不会真正落值（标签一直不消失）；绑到 Class 上则宽窄切换和切页回来都可靠。 -->
+        <!-- ★ 底色用 FrostedPanelBrush(磨砂浮层): 这排标签浮在搜索结果卡片墙上,
+             亚克力下半透明但把封面压住保证标签可读(太透糊字 / 全不透明死白都不行, 见 ThemeService)。 -->
         <Border x:Name="KindTabs" HorizontalAlignment="Left" VerticalAlignment="Top"
                 Margin="36,24,0,0" Panel.ZIndex="5"
-                Background="{DynamicResource PanelBackgroundBrush}"
+                Background="{DynamicResource FrostedPanelBrush}"
                 BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
                 CornerRadius="22" Padding="5">
             <Border.Style>
@@ -255,6 +257,9 @@
                 <!-- ===== ② 内容框(与搜索框分开的另一个方框, 隔开 10px) ===== -->
                 <!-- 默认 Hidden 而不是 Auto: 展开动画期间高度在变, Auto 会中途闪一下滚动条。
                      动画结束由代码切回 Auto(那时内容已按最终高度排好, 需要才出现)。 -->
+                <!-- ★ 底色用 FlyoutBackgroundBrush(恒不透明): 展开面板里是历史词条**正文**,
+                     亚克力下半透明底会把底下结果墙透上来糊字, 所以保持实色
+                     (2026-11-14 用户要求改回实色; 磨砂半透明档只给胶囊用)。 -->
                 <Border x:Name="SearchContentBox" Grid.Row="1" Margin="0,10,0,0" Opacity="0"
                         CornerRadius="10"
                         Background="{DynamicResource FlyoutBackgroundBrush}"

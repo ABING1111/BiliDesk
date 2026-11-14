@@ -22,6 +22,18 @@
           普通/云母下两者同值, 观感无差。大面板直接坐在页面底上, 底下透出的是材质
           不是文字, 半透明不会糊 —— 与 OverlaySurfaceBrush 防的"浮层压文字"是两回事。 -->
     <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#FFFFFF" />
+    <!--
+        磨砂浮层底色(吸顶 Tab 胶囊 / 搜索页类别栏这类**浮在滚动内容上**的小面):
+        普通/云母下与 PanelBackgroundBrush 同值(实色); 亚克力下由 ThemeService 覆盖成
+        **半透明但明显比面板实**的一档 —— 既要透出材质, 又要把底下的卡片封面压住,
+        保证胶囊标签读得清。
+        ★ 为什么不用 PanelBackgroundBrush: 那一档与页面底同透明度(默认滑杆下合成仅约两成),
+          浮在封面上时图案整片透上来糊字(用户截图反馈"亚克力下过于透明")。
+        ★ 为什么不用 FlyoutBackgroundBrush: 那一档恒为全不透明, 亚克力下成了死白一块,
+          用户又要"半透明但不要全透明"。这一档正是两者之间的平衡(见 ComputeSurfaceColors)。
+        ★ 搜索页**展开的历史面板不用它**: 那里是词条正文, 半透明会糊字, 用恒不透明的
+          FlyoutBackgroundBrush(2026-11-14 用户要求改回实色)。 -->
+    <SolidColorBrush x:Key="FrostedPanelBrush" Color="#FFFFFF" />
     <!-- 悬停色。浅色主题下原来是纯白(= 和常态一样, 等于没有反馈), 压暗一点点才看得出来 -->
     <SolidColorBrush x:Key="CardBorderBrush" Color="#14000000" />
     <!-- 悬停时的描边: 比常态深一档, 是"鼠标在手边"的主要视觉提示 -->

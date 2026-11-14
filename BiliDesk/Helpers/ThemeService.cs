@@ -493,7 +493,7 @@ public class ThemeService
     private static readonly string[] SurfaceKeys =
     {
         "AppBackgroundBrush", "SideBarBackgroundBrush", "CardBackgroundBrush",
-        "PanelBackgroundBrush",
+        "PanelBackgroundBrush", "FrostedPanelBrush",
         "InfoBarBackgroundBrush", "InputBackgroundBrush", "FlyoutBackgroundBrush",
         "ToastBackgroundBrush", "FloatingFillBrush", "FloatingFillHoverBrush",
         "FloatingFillPressedBrush"
@@ -791,6 +791,17 @@ public class ThemeService
         //   滑杆因此同时控制页面底与面板, 调一处两边一起变。
         // ★ 卡片(CardBackgroundBrush)比面板再实一档, 见上面那组覆盖。
         into["PanelBackgroundBrush"] = WithAlpha(acrylicBase, alpha);
+
+        // ★★ 磨砂浮层(吸顶 Tab 胶囊 / 搜索页类别栏): 浮在**滚动内容**上, 亚克力下
+        //   要"半透明但不要全透明"(2026-11-14 用户先报胶囊透底糊字、改全不透明后又嫌死白)。
+        //   取比卡片(alpha+38)再实一大档(alpha+130), 并设**可读下限 175(≈69%)**:
+        //   滑杆拧到最透也不会变成玻璃(那正是"过于透明"的根因), 拧到最实也只到 235(≈92%),
+        //   始终留一点材质透出来。默认滑杆档下约 69% —— 封面被压住、标签文字清晰。
+        // ★ 搜索页**展开的历史面板不含在内**: 那里是词条正文, 用恒不透明的 FlyoutBackgroundBrush
+        //   (用户随后要求改回实色)。
+        // ★ 普通/云母: 不写覆盖项, 回落到色板原值(实色), 与面板观感一致。
+        var frostedAlpha = (byte)Math.Clamp(alpha + 130, 175, 235);
+        into["FrostedPanelBrush"] = WithAlpha(acrylicBase, frostedAlpha);
 
         // 浮层/输入框/Toast: 保持不透明(浮层要压住底下内容; 输入框/Toast 接近色板原值)
         into["InputBackgroundBrush"] = IsDark

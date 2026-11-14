@@ -13,6 +13,9 @@
     <!-- 板块面板底色: 普通/云母下与卡片同值, 亚克力下被覆盖成半透明。
          用途与"为什么和 CardBackgroundBrush 分开"见 Colors.Light.xaml 的同名注释。 -->
     <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#2E2E2E" />
+    <!-- 磨砂浮层底色: 普通/云母下与面板同值, 亚克力下覆盖成"半透明但比面板实"的一档。
+         用途与取舍见 Colors.Light.xaml 的同名注释。 -->
+    <SolidColorBrush x:Key="FrostedPanelBrush" Color="#2E2E2E" />
     <SolidColorBrush x:Key="CardBorderBrush" Color="#14FFFFFF" />
     <!-- 悬停时的描边(深色主题往亮的一档走) -->
     <SolidColorBrush x:Key="DividerBrush" Color="#14FFFFFF" />

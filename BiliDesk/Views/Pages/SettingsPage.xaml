@@ -11,7 +11,8 @@
             只有那颗 Tab 胶囊吸顶 —— 它先跟着内容一起上滑, 碰到视口顶部后钉住;
             大标题照常滚走, 没有整条吸顶栏、没有背景色块/分隔线(之前那套"缩小版头部"
             会露出半透明画幅, 已删除)。胶囊只有一个实例, 尺寸/字号/内边距全程不变,
-            滚动时由 code-behind 用 TranslateTransform 抵消滚动量(见 UpdateStickyCapsule)。
+            滚动时由 code-behind 用 TranslateTransform 抵消滚动量(见 Helpers/StickyPin,
+            收藏页/历史页共用同一份)。
           · 区块标题: 左侧一根强调色竖条 + 加粗小标题。
           · 卡片: 白底大圆角(SettingsCardStyle), 一行一设置项 —— 左标题+描述, 右控件,
             行间用更淡的分隔线。布尔项用 SettingsToggleStyle 开关,
@@ -84,14 +85,17 @@
                 <!-- ============ 吸顶 Tab 胶囊 ============
                      ★ 只有一个实例: 不再有"缩小版"副本, 尺寸/样式与原来的胶囊完全一致。
                      ★ 必须放在滚动内容的**最后一个子元素**: 它要画在卡片之上; 滚动过程中由
-                       code-behind 反向平移抵消滚动量, 到距顶端 8px 处钉住(见 UpdateStickyCapsule)。
+                       code-behind 反向平移抵消滚动量, 到距顶端 8px 处钉住(见 Helpers/StickyPin)。
                      ★ 只有这颗胶囊, 没有整条背景/分隔线 —— 内容从它两侧与下方正常经过。
                      ★ 钉住后顶端会进入窗口标题栏区域(CaptionHeight=20):
                        IsHitTestVisibleInChrome 让那块区域里的点击仍然落到 Tab 上,
                        而不是被 WindowChrome 当成"拖动窗口"吞掉。 -->
+                <!-- ★ 底色用 FrostedPanelBrush(磨砂浮层): 胶囊吸顶后压在卡片封面上,
+                     亚克力下要半透明、又要把封面压住保证标签可读 —— PanelBackgroundBrush 太透会糊字,
+                     FlyoutBackgroundBrush 又全不透明成死白。这一档是两者的平衡(见 ThemeService)。 -->
                 <Border x:Name="StickyCapsule" VerticalAlignment="Top" HorizontalAlignment="Center"
                         Margin="0,20,0,0"
-                        Background="{DynamicResource PanelBackgroundBrush}"
+                        Background="{DynamicResource FrostedPanelBrush}"
                         BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
                         CornerRadius="22" Padding="5"
                         shell:WindowChrome.IsHitTestVisibleInChrome="True">
