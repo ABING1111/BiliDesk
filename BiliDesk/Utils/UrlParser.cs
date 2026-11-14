@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace BiliDesk.Utils;
@@ -128,6 +129,42 @@ public static class UrlParser
         {
             // 查询串里的转义是坏的(非法百分号编码): 当作"没提取到关键词", 让调用方走普通搜索
             return null;
+        }
+    }
+
+    /// <summary>
+    /// 从 URL 的查询串里取一个**整数**参数(找不到 / 不是整数 / 解析失败都返回 0)。
+    ///
+    /// 目前只服务一件事: 读 B 站 playurl 地址里的 <c>deadline</c>(Unix 秒) ——
+    /// 播放器据此在签名过期前刷新播放地址(2026-11-14, issue #81: 播几个小时后卡死)。
+    /// ★ 手写解析而不是 HttpUtility: 本工程不引 System.Web, 而且这里只认
+    ///   "key=十进制整数" 这一种形状(URL 里的值都没有转义)。
+    /// </summary>
+    public static long ExtractQueryLong(string? urlOrUri, string key)
+    {
+        if (string.IsNullOrEmpty(urlOrUri) || string.IsNullOrEmpty(key)) return 0;
+        try
+        {
+            var q = urlOrUri.IndexOf('?');
+            if (q < 0 || q == urlOrUri.Length - 1) return 0;
+
+            var query = urlOrUri[(q + 1)..];
+            var hash = query.IndexOf('#');
+            if (hash >= 0) query = query[..hash];
+
+            foreach (var pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var eq = pair.IndexOf('=');
+                if (eq <= 0) continue;
+                if (!pair[..eq].Equals(key, StringComparison.OrdinalIgnoreCase)) continue;
+                return long.TryParse(pair[(eq + 1)..], NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out var v) ? v : 0;
+            }
+            return 0;
+        }
+        catch
+        {
+            return 0;
         }
     }
 }

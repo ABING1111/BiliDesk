@@ -692,11 +692,18 @@ public partial class PlayerWindow : FluentWindow
     //    代价只有松手后零点几秒静音 —— 换 seek 式反而会把顺滑度整个丢掉(实测用户反馈"画面和音频均卡顿")。
 
 
-    /// <summary>当前遮罩是不是我们自己弹的"正在缓冲"(据此判断能不能收掉)</summary>
+    /// <summary>当前遮罩是不是我们自己弹的"正在缓冲"/"正在重连"(据此判断能不能收掉)</summary>
     private bool IsShowingBuffering()
         => LoadingOverlay != null && LoadingText != null &&
            LoadingOverlay.Visibility == Visibility.Visible &&
-           LoadingText.Text == BufferingText;
+           IsStallOverlayText(LoadingText.Text);
+
+    /// <summary>
+    /// 这两条文案都是"卡顿"这套机制自己弹的: 普通缓冲与"网络卡顿，正在重连…"。
+    /// 收遮罩、遮罩安全网、文案升级都以它为准 —— 别去动"正在切换清晰度…"那些有自己生命周期的提示。
+    /// </summary>
+    private static bool IsStallOverlayText(string? text)
+        => text == BufferingText || text == StallReconnectingText;
 
     /// <summary>
     /// 收起"正在缓冲"遮罩 —— **只收这一种**。
@@ -729,32 +736,72 @@ public partial class PlayerWindow : FluentWindow
 
     private void UpdateStallDetector(bool inSeekGrace)
     {
+        if (_closing || _mp == null) return;
+
         // 直播/本地文件没有"缓冲卡顿"这回事; 播完了也不算
-        if (_isLive || _isLocalPlayback || _ended || _mp == null || _mp.Length <= 0)
+        if (_isLive || _isLocalPlayback || _ended)
         {
-            _stallTicks = 0;
+            EndStallWatch();
             return;
         }
 
-        // 暂停时位置本来就不动; 拖动/跳转宽限期内同理 —— 都不算卡顿
+        // 暂停/停止/出错: 位置本来就不动, 不是网络卡顿。
+        // ★★ 2026-11-14(issue #81): 这里以前是 `!_mp.IsPlaying` 就直接 return(既不清计数
+        //   也不收遮罩), 于是 LibVLC 一旦翻成 buffering/stopped, 那张"正在缓冲…"就永久挂在
+        //   屏幕上 —— 用户看到的就是"卡在正在缓冲"。现在按**播放器状态**分流:
+        //   暂停/停止是正常态, Playing/Buffering 才是可疑态(继续观察)。
+        // ★★★ 这里**只能**清位置基线, 绝不能重置自愈预算: 自愈重建走的正是
+        //   Stop() → Opening → Playing, 途中状态必然不是 Playing。把预算一起清了
+        //   就会变成"重建 → 归零 → 再重建"的无限循环(与 _seekRebuildTried 同一个坑)。
+        var state = SafePlayerState();
+        if (state != VLCState.Playing && state != VLCState.Buffering)
+        {
+            ClearStallBaseline();
+            // 遮罩只在"确定不会自己起来"的状态下收: 暂停/出错/已结束。
+            // Stopped/Opening 是重建途中的过渡态, 遮罩必须继续盖着(否则用户看到的是一块黑屏)。
+            if (state == VLCState.Paused || state == VLCState.Error || state == VLCState.Ended)
+                HideBufferingIfShown();
+            return;
+        }
+
+        // 起播/重建过渡期拿不到时长: 既判不了"剩余多少", 也判不了卡顿。
+        // 同样只清基线(不清预算), 原因见上面那段。
+        if (_mp.Length <= 0)
+        {
+            ClearStallBaseline();
+            return;
+        }
+
+        // ★ 起播阶段(这条 input 还从来没产生过时间推进)不参与自愈:
+        //   "打开视频一直转圈"属于加载链的问题(它有失败提示/重试), 而 10 秒以上的慢起播
+        //   在弱网下是常态 —— 这时候重建 input 只会把正在灌的缓冲全部丢掉, 越救越慢。
+        //   ★ 已经自愈重建过则例外: 否则重建后卡在 0 会永远等不到"放弃"那一步。
+        if (_lastKnownMs <= 0 && _stallPolicy.Rebuilds == 0)
+        {
+            ClearStallBaseline();
+            return;
+        }
+
+        // 拖动/跳转宽限期内同理 —— 都不算卡顿
         // ★ 2026-10-16: 这里**不再**豁免长按快进。那条豁免是 seek 式方案加的(那时我们自己
         //   每 400ms 发一次 seek, 位置会一阵阵停住)。改回 SetRate 后位置照常推进
         //   (只是快 2 倍)—— 与"倍速按钮 2x"完全同款, 那个从来没豁免过。
         //   留着反而会掩盖长按期间真实的卡顿。
-        if (!_mp.IsPlaying || _isSeeking || inSeekGrace || _pendingSeekMs >= 0)
+        if (_isSeeking || inSeekGrace || _pendingSeekMs >= 0)
         {
-            _stallTicks = 0;
+            ClearStallBaseline();
             return;
         }
 
         // ★ 2026-11-05: 刚发过 seek 的 2 秒内不参与"中途卡顿"判定。
         //   seek 落地后解码器/音频输出都要重启, 这段短暂停顿属于"跳转尾巴";
         //   它已经由 seek 看门狗统一负责提示, 两套逻辑抢同一张遮罩就是用户看到的闪烁。
+        //   ★ 只清位置基线、**不重置自愈预算**: 卡顿自愈的重建本身就会打 MarkSeekIssued,
+        //     把预算一起清了就会"重建 → 归零 → 再重建"无限循环。
         if (_seekIssuedAt >= 0 &&
             Environment.TickCount64 - _seekIssuedAt < 2_000)
         {
-            _stallTicks = 0;
-            _stallLastMs = -1;
+            ClearStallBaseline();
             return;
         }
 
@@ -763,12 +810,14 @@ public partial class PlayerWindow : FluentWindow
         // 短的那路数据先耗尽时 Time 会停几秒等另一路 —— 这是"快播完了"的正常形态,
         // 不是网络卡顿(三分钟以下的视频走本地合流单文件没有双流, 所以从来不出这个提示)。
         // 就算真是网络慢, 结尾几秒也没有"等它缓冲好"的价值, EndReached 马上会来收场。
+        // ★ 2026-11-14: 尾部也不做自愈 —— 只有几秒了, 重建一次(必然黑屏缓冲一趟)比少几秒更糟。
         var now = _mp.Time;
         var remainingMs = _mp.Length - now;
         if (remainingMs < TailQuietZoneMs)
         {
             _stallTicks = 0;
             _stallLastMs = now;
+            _stallPolicy.Reset();
             HideBufferingIfShown();
             return;
         }
@@ -777,21 +826,57 @@ public partial class PlayerWindow : FluentWindow
         {
             _stallTicks++;
             if (_stallTicks >= StallTicksToReport && LoadingOverlay != null &&
-                LoadingOverlay.Visibility != Visibility.Visible)
+                LoadingOverlay.Visibility != Visibility.Visible &&
+                // 失败遮罩(含"自动重连失败，请点重试")已经在屏幕上时不要再弹缓冲遮罩
+                (FailOverlay == null || FailOverlay.Visibility != Visibility.Visible))
             {
                 // 遮罩上已经有别的内容(切清晰度等)就不抢, 免得把对方的文案顶掉
                 ShowLoading(BufferingText);
                 // 给 BufferPolicy 记一笔(按 CDN host 归因): 同一线路 60s 内卡 2 次,
                 // 后续媒体自动加深 1s 预读 —— 只影响下一条, 不动当前在播的源。
-                BufferPolicy.ReportStall(_lastPlayUrl);
+                // ★ 用"真正在拉的那条流": 聆听态是音轨 host, 拿视频地址归因会记错 CDN。
+                BufferPolicy.ReportStall(CurrentMediaUrl);
+                // 诊断: 用户报"卡住"时, 这行能说明是"位置冻住了"(而不是没起播)
+                WriteLibVLCDebug(
+                    $"[Stall] 播放位置冻结 pos={now}ms listen={_isListenMode} " +
+                    $"host={HostOf(CurrentMediaUrl)}\n");
             }
+
+            // ---- 卡顿自愈(2026-11-14, issue #81) ----
+            // 位置冻结得够久就重建一次 input —— 这正是用户手动"切一下听视频"做的事。
+            // 决策(阈值/退避/上限)全在 StallRecoveryPolicy, 这里只负责执行动作。
+            // ★ 正在换清晰度/音质时不算"可救": 那条路自己会重建 input, 两边一起动手会互相打断。
+            var recoverable = !_stallRecoveryInFlight && !_switchingQuality && !_switchingAudio;
+            var action = _stallPolicy.Tick(Environment.TickCount64, frozen: true, recoverable: recoverable);
+            HandleStallAction(action, now);
             return;
         }
 
         // 位置推进了 -> 卡顿结束。只收我们自己弹的那张遮罩
         _stallLastMs = now;
-        if (_stallTicks >= StallTicksToReport) HideBufferingIfShown();
         _stallTicks = 0;
+        _stallPolicy.OnAdvance();
+        HideBufferingIfShown();
+    }
+
+    /// <summary>
+    /// 位置基线归零(下一次心跳重新取参照), 但**保留**自愈预算与退避。
+    /// 用在暂停/拖动/刚 seek 完这些"暂时判断不了"的窗口里 —— 见 StallRecoveryPolicy.OnUnfrozen。
+    /// </summary>
+    private void ClearStallBaseline()
+    {
+        _stallTicks = 0;
+        _stallLastMs = -1;
+        _stallPolicy.OnUnfrozen();
+    }
+
+    /// <summary>卡顿这段彻底结束(暂停 / 停止 / 播完 / 换片): 基线、预算、遮罩一起收。</summary>
+    private void EndStallWatch()
+    {
+        _stallTicks = 0;
+        _stallLastMs = -1;
+        _stallPolicy.Reset();
+        HideBufferingIfShown();
     }
 
     /// <summary>把一次跳转记下来: 打上宽限期, 并立刻把进度条/时间钉到目标位置</summary>
@@ -968,7 +1053,11 @@ public partial class PlayerWindow : FluentWindow
     ///     已经压着"正在跳转…"遮罩, 用户感知是"缓冲了一下", 可接受; 但**绝不能让它在
     ///     常规操作里反复触发** —— 那才会变成"卡死"。这正是长跳不再一律走这里的理由。
     /// </summary>
-    private void RebuildMediaAndSeek(long targetMs)
+    /// <param name="stallRecovery">
+    /// 这次重建是不是"播放中途卡顿自愈"发起的。失败时的收尾不同:
+    /// 卡顿自愈要引导用户点「重试」, 而不是退回"已播完/重播"态(那会误导成片子看完了)。
+    /// </param>
+    private void RebuildMediaAndSeek(long targetMs, bool stallRecovery = false)
     {
         if (_closing) return;
 
@@ -1007,9 +1096,23 @@ public partial class PlayerWindow : FluentWindow
         if (string.IsNullOrEmpty(url))
         {
             // 地址没了(直播失效/切走了): 同样别把重播入口弄丢
-            RestoreEndedOverlay();
+            if (stallRecovery) ShowFail("播放地址已失效, 请点击重试重新获取");
+            else RestoreEndedOverlay();
             return;
         }
+
+        // ★★★ 2026-11-14(issue #81): 聆听态必须用**音轨地址**重建。
+        //   原来固定拿 `_lastPlayUrl`(视频流)再传 `audioUrl: null`, 于是聆听态下一旦
+        //   走重建(卡顿自愈 / seek 看门狗), 就会建出一条"只有画面没有声音"的 input ——
+        //   而顶栏还写着"正在聆听"。这和 EnterListenMode/重播/切清晰度的约定相反。
+        var audioForRebuild = _isListenMode ? null : _lastAudioUrl;
+        var urlForRebuild = _isListenMode && !string.IsNullOrEmpty(_listenAudioUrl)
+            ? _listenAudioUrl!
+            : url;
+        WriteLibVLCDebug(
+            $"[Seek] 重建 Media url={(urlForRebuild == url ? "video" : "listen-audio")} " +
+            $"audio={(!string.IsNullOrEmpty(audioForRebuild) ? "slave" : "none")} " +
+            $"stall={stallRecovery} start-time={targetMs}ms\n");
         ShowLoading("正在跳转…");
         // ★ 重建前把"最后已知位置"清掉: 它记的是**旧 input** 的位置(比如 72 万 ms),
         //   留着的话补跳会拿它当"当前位置"算出荒谬的下一段(2026-10-17 实测踩到)。
@@ -1018,7 +1121,6 @@ public partial class PlayerWindow : FluentWindow
         // (原因见 _resumeByStartTime 的说明)。
         _resumeAfterSwitchMs = targetMs;
         _resumeByStartTime = true;
-        WriteLibVLCDebug($"[Seek] 重建 Media 追目标 start-time={targetMs}ms\n");
         // ★★ 必须先 Stop: LibVLC 3 里已有 input 在播时 play() 会被**直接忽略**
         //    —— 漏掉这一步就是"黑屏 + 恢复进度丢失"(见方法说明)。
         // ★ 2026-11-05: 播完之后那条 input 已经停在 ENDED(EOF 时刻意不 Stop),
@@ -1030,17 +1132,17 @@ public partial class PlayerWindow : FluentWindow
         //   阶段直接定位, 而不是"从 0 起播后再设一次 Time"。实测(探针 bd-probe-seekmode):
         //   起播即落在目标附近(偏差 ~1.8s)且位置持续推进, 比"Playing 里的二次 seek"稳,
         //   后者在 input 尚未稳定的窗口里设 Time 会再次落回开头 —— 正是用户报的"回到 8 秒"。
-        // ★ 2026-11-01: 聆听态下重建必须继续播**音轨单流**(audioUrl 传 null) ——
-        //   与 EnterListenMode/重播/切清晰度那几条路的既有约定一致; 传 _lastAudioUrl
-        //   会把"视频+音轨"的组合塞回聆听态, 画面直接复活。
-        if (!PlayMedia(BuildMedia(url, _isListenMode ? null : _lastAudioUrl, targetMs)))
+        if (!PlayMedia(BuildMedia(urlForRebuild, audioForRebuild, targetMs)))
         {
             _resumeAfterSwitchMs = 0;
             _resumeByStartTime = false;
             WriteLibVLCDebug("[Seek] 重建后 play() 未被接受(远端流)\n");
             // 起播没被接受 ⇒ 屏幕上不会有画面。此时必须把"重播"入口还回去,
             // 否则用户面对的是"遮罩收掉了但什么都没有"(这正是本次要修的那个症状)。
-            RestoreEndedOverlay();
+            // ★ 卡顿自愈发起的重建: 退回"已播完"是误导(用户会以为片子看完了),
+            //   应该给出可重试的失败态。
+            if (stallRecovery) ShowFail("网络卡顿，自动重连失败，请检查网络后重试");
+            else RestoreEndedOverlay();
         }
     }
 
@@ -1138,7 +1240,8 @@ public partial class PlayerWindow : FluentWindow
                 if (_lastLoadingRevealMs >= 0 && e.Time > _lastLoadingRevealMs &&
                     LoadingOverlay != null && LoadingOverlay.Visibility == Visibility.Visible &&
                     LoadingText != null &&
-                    (LoadingText.Text == BufferingText || LoadingText.Text.StartsWith("正在跳转", StringComparison.Ordinal)))
+                    (IsStallOverlayText(LoadingText.Text) ||
+                     LoadingText.Text.StartsWith("正在跳转", StringComparison.Ordinal)))
                 {
                     HideLoading();
                 }
@@ -1257,7 +1360,18 @@ public partial class PlayerWindow : FluentWindow
             // 起播后由 Playing 事件恢复到断点(见 _resumeAfterSwitchMs 那套机制)
             _resumeAfterSwitchMs = resume;
             _resumeByStartTime = false;
-            try { PlayMedia(BuildMedia(_lastPlayUrl, _lastAudioUrl)); } catch { }
+            // ★ 2026-11-14(issue #81): 聆听态只能续音轨。原来无条件用
+            //   BuildMedia(_lastPlayUrl, _lastAudioUrl) —— 在聆听态下会把"视频+音轨"
+            //   整个塞回来(画面突然复活、还多拉一路视频流)。与 EnterListenMode /
+            //   RebuildMediaAndSeek 的约定保持一致。
+            try
+            {
+                if (_isListenMode && !string.IsNullOrEmpty(_listenAudioUrl))
+                    PlayMedia(BuildMedia(_listenAudioUrl!, null));
+                else
+                    PlayMedia(BuildMedia(_lastPlayUrl!, _lastAudioUrl));
+            }
+            catch { }
             return;
         }
 

@@ -49,6 +49,14 @@ public partial class PlayerWindow : FluentWindow
     private void OnRetryClick(object sender, RoutedEventArgs e)
     {
         FailOverlay.Visibility = Visibility.Collapsed;
+        // ★ 2026-11-14(issue #81): 卡顿放弃时, 旧 input 可能还停在"假播放"状态
+        //   (VLC 认为还在播, 实际读线程已经死了)。LibVLC 3 里**已有 input 时 play()
+        //   会被直接忽略** —— 不先 Stop 的话用户点了「重试」什么也不会发生。
+        //   Stop() 会阻塞约 1 秒, 但这是用户主动操作(与切清晰度/重建同款), 可接受。
+        if (!_isLocalPlayback)
+        {
+            try { _mp?.Stop(); } catch { /* 已经停了/正在拆解 */ }
+        }
         // 直播失败要重连直播, 不能落回点播那条路(那时 _currentBvid 是空的)
         if (_isLive) _ = LoadLiveAsync(_liveRoomId);
         else _ = LoadVideoAsync();

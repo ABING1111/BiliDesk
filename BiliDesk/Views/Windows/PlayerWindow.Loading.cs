@@ -400,6 +400,8 @@ public partial class PlayerWindow : FluentWindow
             ":no-video-title-show",
             ":http-referrer=https://live.bilibili.com/" + roomId,
             ":http-user-agent=" + PlayerUserAgent,
+            // 直播同样是长连接: 断了以后自己重连(同 BuildMedia 里那条说明)
+            ":http-reconnect",
             // 直播是持续流: 加大缓存, 别让 LibVLC 因为"看起来卡住"就早早判定结束
             ":network-caching=" + liveCaching,
             ":live-caching=" + liveCaching
@@ -639,6 +641,18 @@ public partial class PlayerWindow : FluentWindow
         // 卡顿检测状态同样要清: 换片后上一片"时间停在哪"的参照已经没意义, 留着会立刻误判成卡顿
         _stallLastMs = -1;
         _stallTicks = 0;
+        // 卡顿自愈的预算与地址保鲜信息同属"这一片": 重建次数、签名到期时间、候选线路全部重来。
+        // ★ _stallRecoveryInFlight 也要清: 上一片的自愈任务可能还挂在 await 上, 它自己会用
+        //   _loadGen 作废旧结果; 但闸门留着会让新片的第一次卡顿永远等不到重建。
+        _stallPolicy.Reset();
+        _stallRecoveryInFlight = false;
+        _backups.Clear();
+        _playUrlDeadline = 0;
+        _playUrlFetchedAt = 0;
+        _urlRefreshAttemptAt = 0;
+        _urlRefreshInFlight = false;
+        _playUrlRefreshedAt = 0;
+        _errorRecoveryTried = false;
         // 进度显示的两个基线一并清: 不清的话"尾部只进不退"钳制会把新片钉在上一片的旧进度上
         _anchorMs = -1;
         _displayedMs = -1;
@@ -764,6 +778,12 @@ public partial class PlayerWindow : FluentWindow
         nameof(_lastLoadingRevealMs),
         // 卡顿检测
         nameof(_stallLastMs), nameof(_stallTicks),
+        // 卡顿自愈与播放地址保鲜(2026-11-14, issue #81): 都属于"这一片" ——
+        // 换片后重建预算、地址到期时间、在途闸全部要重来。
+        nameof(_stallRecoveryInFlight),
+        nameof(_playUrlDeadline), nameof(_playUrlFetchedAt),
+        nameof(_urlRefreshAttemptAt), nameof(_urlRefreshInFlight),
+        nameof(_playUrlRefreshedAt), nameof(_errorRecoveryTried),
         // 弹幕
         nameof(_indexInLib), nameof(_audioStateLogged), nameof(_lastLaneCalcWidth),
         nameof(_lastLaneCalcHeight),
@@ -1214,6 +1234,16 @@ public partial class PlayerWindow : FluentWindow
             //   存 audioUrl 之后: 聆听态播纯音轨(省流量), 退出时用 _lastPlayUrl(本地文件)
             //   原样拼回 —— 两条路各用各的地址, 互不干扰。
             _listenAudioUrl = audioUrl;
+
+            // ---- 播放地址保鲜(2026-11-14, issue #81) ----
+            // B 站 playurl 签名实测只有约 2 小时有效期(URL 里的 deadline, Unix 秒),
+            // 而"挂着听几个小时"必然跨过它。记下有效期与候选线路, 由进度心跳在到期前
+            // 后台换一条新地址 —— 只换"将来重建用"的那一份, 当前在播的 input 一个字节不动。
+            RememberPlayUrlFreshness(url, backups);
+            _urlRefreshAttemptAt = 0;
+            _playUrlRefreshedAt = 0;
+            _errorRecoveryTried = false;
+            _stallPolicy.Reset();
             WriteLibVLCDebug(
                 $"\n[LoadVideo] bvid={_currentBvid} cid={_currentCid} qn={actualQn} url={url} audio={playAudio}\n");
 
@@ -1336,7 +1366,17 @@ public partial class PlayerWindow : FluentWindow
         var options = new List<string>
         {
             ":http-referrer=https://www.bilibili.com/",
-            ":http-user-agent=" + PlayerUserAgent
+            ":http-user-agent=" + PlayerUserAgent,
+            // ★★★ 2026-11-14(issue #81): 长连接被 CDN 静默掐断后自己重连。
+            //   VLC 3 的 http access **默认不重连**(libhttp_plugin 里这个选项默认关),
+            //   连接一断读线程就永久阻塞 —— 表现就是"正在缓冲"卡死, 而且因为 access 没
+            //   报错, EncounteredError 也不会来, 上层连失败提示都拿不到。
+            //   ★ 对 DASH 同样有效: `:demux=avformat` 解析到的是 VLC 的 avcodec 模块
+            //     (shortcut=avformat, 已用 libvlc 3.0.24 原生日志实测确认), 它的 AVIO
+            //     桥仍然走 VLC 的 access, 不是 ffmpeg 自己的 http。
+            //   ★ 它只是"第一道保险": 真正静默(没有 RST)的断流它也无能为力,
+            //     兜底由 UpdateStallDetector 的卡顿自愈负责。
+            ":http-reconnect"
         };
 
         // ★★ 2026-11-05: 重建 Media 追 seek 目标时, 用 **:start-time** 让解复用器
@@ -1398,7 +1438,12 @@ public partial class PlayerWindow : FluentWindow
         // ★ 2026-11-01: 值不再直接取用户设置 —— 统一走 BufferPolicy(自动/手动两档),
         //   直播/自动档的规则见 Services/BufferPolicy.cs。
         var isShortVideo = _totalMs > 0 && _totalMs <= 60_000;
-        var kind = string.IsNullOrEmpty(audioUrl) ? BufferMediaKind.VodSingle : BufferMediaKind.VodDash;
+        // ★ 2026-11-14(issue #81): 「听视频」单独一档 —— 以前它因为 audioUrl==null 被
+        //   当成 VodSingle, 自动档在带宽富余时只给 500ms 预读, 挂着听几小时时一碰抖动
+        //   就 underrun(用户的报告正是"听视频时更容易卡")。音频的 2 秒缓存只有几十 KB。
+        var kind = isListenAudio ? BufferMediaKind.ListenAudio
+                 : string.IsNullOrEmpty(audioUrl) ? BufferMediaKind.VodSingle
+                 : BufferMediaKind.VodDash;
         var cachingMs = BufferPolicy.Resolve(kind, url, isShortVideo,
             Svc.Settings.NetworkCachingMs, Svc.Settings.AutoBufferPolicy);
         WriteLibVLCDebug($"[BufferPolicy] kind={kind} short={isShortVideo} nc={cachingMs}ms " +

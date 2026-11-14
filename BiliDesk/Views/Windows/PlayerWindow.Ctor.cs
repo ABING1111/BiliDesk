@@ -269,13 +269,15 @@ public partial class PlayerWindow : FluentWindow
         _mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
         {
             if (_closing) return;
-            HideLoading();
-            FailOverlay.Visibility = Visibility.Visible;
-            var msg = "视频播放出错, 请检查网络或尝试其他清晰度";
-            FailText.Text = msg;
             // 诊断: 把出错时正在播的 URL 也写进 debug 文件
             WriteLibVLCDebug(
                 $"\n[EncounteredError] bvid={_currentBvid} cid={_currentCid} lastUrl={_lastPlayUrl}\n");
+            // ★ 2026-11-14(issue #81): 地址过期导致的重连 403 —— 手里有新地址就先自救一次,
+            //   救不了(或与过期无关)再弹失败遮罩, 不打断几个小时的连续播放。
+            if (TryAutoRecoverFromError()) return;
+            HideLoading();
+            FailOverlay.Visibility = Visibility.Visible;
+            FailText.Text = "视频播放出错, 请检查网络或尝试其他清晰度";
         }));
 
         // ★★★ vout 建立/重建的那一刻就把原生窗口底色处理掉(2026-10-17, 修"最大化/还原后白块")。
@@ -327,6 +329,9 @@ public partial class PlayerWindow : FluentWindow
             // 必须在 UpdateProgressUi 之后 —— 后者在"跳转等待期"会提前 return, 而这里的
             // 判据(_pendingSeekMs)本来就要求"上一次跳转已经确认", 顺序正好对得上。
             MaybeSkipSponsorSegment();
+            // 播放地址保鲜(2026-11-14, issue #81): B 站 playurl 签名只有约 2 小时,
+            // 长播放必须在到期前后台换一条新地址, 否则断流后重建会直接 403。
+            MaybeRefreshPlayUrl();
         };
         _progressTimer.Start();
 

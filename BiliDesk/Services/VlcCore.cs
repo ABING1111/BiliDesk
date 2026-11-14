@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -83,10 +84,36 @@ public static class VlcCore
             //   ⇒ 保持这里不传全局选项, 各片源在 BuildMedia 里自行决定。
             var caching = BufferPolicy.Resolve(BufferMediaKind.VodSingle, null, shortVideo: false,
                 SettingsStore.Instance.NetworkCachingMs, SettingsStore.Instance.AutoBufferPolicy);
-            _instance = new LibVLC(
+
+            var args = new List<string>
+            {
                 "--intf=dummy",
                 "--no-osd",
-                "--network-caching=" + caching);
+                "--network-caching=" + caching
+            };
+            // ★ 2026-11-14(issue #81): 原生日志开关。
+            //   排查"播放几小时后卡死/断流"时必须看 libvlc 自己怎么说 ——
+            //   "got disconnected, trying to reconnect" / "reconnection failed" /
+            //   HTTP 403 这些只存在于原生日志里, 上层代码完全看不到。
+            //   ⇒ 设 BILIDESK_VLC_DEBUG=1 就把原生日志落到 %LocalAppData%\BiliDesk\vlc-native.log。
+            //   ★ 默认**不开**: debug 级别的日志很啰嗦, 挂一晚上能写几十 MB。
+            if (Environment.GetEnvironmentVariable("BILIDESK_VLC_DEBUG") == "1")
+            {
+                try
+                {
+                    args.Add("--file-logging");
+                    args.Add("--logfile=" + Path.Combine(AppPaths.DataDir, "vlc-native.log"));
+                    args.Add("--verbose=2");
+                }
+                catch
+                {
+                    // 数据目录不可写: 宁可不记日志, 也不能让播放器起不来
+                    args.Remove("--file-logging");
+                    args.Remove("--verbose=2");
+                }
+            }
+
+            _instance = new LibVLC(args.ToArray());
 
             return _instance;
         }

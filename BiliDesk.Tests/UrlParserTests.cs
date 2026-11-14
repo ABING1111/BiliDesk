@@ -124,4 +124,35 @@ public class UrlParserTests
     {
         Assert.Null(UrlParser.ExtractKeyword("https://search.bilibili.com/all?order=click"));
     }
+
+    // ------------------------------------------------------------ ExtractQueryLong
+
+    [Fact]
+    public void ExtractQueryLong_读出playurl的deadline()
+    {
+        // 真实形状(节选): B 站 playurl 地址的签名有效期就在 deadline(Unix 秒)里
+        const string url = "https://upos-sz-mirrorcoso1.bilivideo.com/upgcxcode/14/22/1/1-1-30077.m4s" +
+                           "?e=ig8euxZM2rNcNbdlhoNvNC8BqJIzNbfqXBvEqxTEto8BTrNvN0GvT90W5JZMkX" +
+                           "&uipk=5&oi=665884983&deadline=1794634123&upsig=d220e0ed&uparams=e,uipk,deadline";
+        Assert.Equal(1794634123, UrlParser.ExtractQueryLong(url, "deadline"));
+    }
+
+    [Fact]
+    public void ExtractQueryLong_没有该参数或不是数字时返回0()
+    {
+        Assert.Equal(0, UrlParser.ExtractQueryLong("https://x.com/a.m4s?deadline=abc", "deadline"));
+        Assert.Equal(0, UrlParser.ExtractQueryLong("https://x.com/a.m4s?other=1", "deadline"));
+        Assert.Equal(0, UrlParser.ExtractQueryLong("https://x.com/a.m4s", "deadline"));
+        Assert.Equal(0, UrlParser.ExtractQueryLong("", "deadline"));
+        Assert.Equal(0, UrlParser.ExtractQueryLong(null, "deadline"));
+        Assert.Equal(0, UrlParser.ExtractQueryLong("C:\\videos\\a.mp4", "deadline"));
+    }
+
+    [Fact]
+    public void ExtractQueryLong_参数名大小写不敏感且取完整值()
+    {
+        Assert.Equal(42, UrlParser.ExtractQueryLong("https://x.com/a?Deadline=42", "deadline"));
+        Assert.Equal(7, UrlParser.ExtractQueryLong("https://x.com/a?deadline=7&deadline=9", "deadline"));
+        Assert.Equal(8, UrlParser.ExtractQueryLong("https://x.com/a?deadline=8#frag", "deadline"));
+    }
 }

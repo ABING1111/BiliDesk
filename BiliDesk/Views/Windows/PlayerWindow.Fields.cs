@@ -39,7 +39,7 @@ namespace BiliDesk.Views;
 //     .States.cs      互动状态刷新            .Comments.cs   评论加载与排序
 //     .Season.cs      合集与分P               .CommentActions.cs 评论互动
 //     .Sponsor.cs     Toast + 赞助片段        .VideoArea.cs  视频区 HWND/背景
-//     .Lifetime.cs    关闭/定时器清理/诊断
+//     .Lifetime.cs    关闭/定时器清理/诊断    .Recovery.cs   卡顿自愈/地址保鲜
 /// <summary>
 /// 原生视频播放器窗口 (LibVLC 内核): 不再使用 WebView2, 视频流由 B 站 playurl 接口获取
 /// 周边 UI 仍然是 WPF 原生(标题/UP 主卡片/点赞/收藏/评论/弹幕层), 视觉与应用主题一致
@@ -339,6 +339,63 @@ public partial class PlayerWindow : FluentWindow
     /// 而且收起时要用它判断"这张遮罩是不是我弹的"(别误收"正在切换清晰度"那种)。
     /// </summary>
     private const string BufferingText = "正在缓冲…";
+
+    // ------------------------------------------------------------ 播放中途卡顿的自愈
+    //
+    // ★★★ 2026-11-14(issue #81「长时间播放/听视频后卡在正在缓冲」):
+    //   以前卡顿检测只负责**弹提示**, 从不尝试救 —— 而真正卡住的是 LibVLC 那条
+    //   HTTP/fMP4 input(长连接被 CDN 静默掐断后读线程永久阻塞, 连 EncounteredError
+    //   都不会来)。用户唯一能自救的办法就是切一下「听视频」(内部是 Stop + 新 Media),
+    //   这个类就是把那套手动操作自动化。决策逻辑在 Services/StallRecoveryPolicy.cs。
+
+    /// <summary>卡顿提示的"进阶"文案: 已经卡了 6 秒以上, 正在自动重连。(与 BufferingText 同属"我们自己弹的遮罩")</summary>
+    private const string StallReconnectingText = "网络卡顿，正在重连…";
+
+    /// <summary>卡顿自愈的决策状态机(阈值/退避/上限全在里面, 纯逻辑可单测)</summary>
+    private readonly StallRecoveryPolicy _stallPolicy = new();
+
+    /// <summary>一次自愈重建(含可能的重取地址)是否正在进行 —— 防同一段卡顿叠出两条重建</summary>
+    private bool _stallRecoveryInFlight;
+
+    // ------------------------------------------------------------ 播放地址保鲜
+    //
+    // ★ B 站 playurl 地址里带 deadline(Unix 秒), 实测有效期只有**约 2 小时**
+    //   (本机日志: 取流 03:29 UTC, deadline 05:28 UTC)。而用户"挂着听几个小时"的
+    //   场景必然跨过它 —— 一旦过期, 任何需要新建连接的动作(reconnect / 重建 / seek
+    //   触发的 Range 请求)都会 403, 且没有任何恢复手段(项目从不重取 playurl)。
+    //   ⇒ 这里记下有效期, 由 500ms 心跳在到期前**只更新"将来重建用"的那份地址**,
+    //     绝不动当前在播的 input(见 CdnService 里"播放中途不换源"的约定)。
+
+    /// <summary>当前片源的候选线路(playurl 的 backups)。卡顿重建时可以换一条试试。</summary>
+    private readonly List<string> _backups = new();
+
+    /// <summary>当前播放地址的签名到期时刻(Unix 秒; 0 = 地址里没有 deadline / 已失效)</summary>
+    private long _playUrlDeadline;
+
+    /// <summary>最近一次取到播放地址的时刻(Environment.TickCount64)。地址里没有 deadline 时的兜底计时。</summary>
+    private long _playUrlFetchedAt;
+
+    /// <summary>最近一次触发"重取地址"的时刻(Environment.TickCount64), 用来节流失败重试</summary>
+    private long _urlRefreshAttemptAt;
+
+    /// <summary>是否有一轮"重取地址"正在飞(防连点/防与卡顿自愈叠在一起)</summary>
+    private bool _urlRefreshInFlight;
+
+    /// <summary>最近一次**成功**换到新地址的时刻(Environment.TickCount64; 0 = 本次播放还没换过)。
+    /// 只在"真的拿到新地址"时更新 —— EncounteredError 的自救靠它判断"错误可能与地址过期有关"。</summary>
+    private long _playUrlRefreshedAt;
+
+    /// <summary>本次播放是否已经用过"出错后自动重建"那一次预算(防无限循环)</summary>
+    private bool _errorRecoveryTried;
+
+    /// <summary>签名到期前多久开始刷新地址(秒)。10 分钟足够一次请求往返 + 一次重建</summary>
+    private const long UrlRefreshLeadSeconds = 600;
+
+    /// <summary>地址里没有 deadline 时的兜底刷新间隔(90 分钟) —— 宁可多换一次, 不能让长播放裸奔</summary>
+    private const long UrlRefreshFallbackMs = 90 * 60 * 1000;
+
+    /// <summary>重取地址失败后的重试间隔(60 秒), 避免每个心跳都打一次接口</summary>
+    private const long UrlRefreshRetryMs = 60 * 1000;
 
     // --- 提前结束的自救(片源在离结尾不远处 EOF) ---
     // 历史上这条逻辑是为"DASH 音轨(input-slave)先于视频 EOF"写的。2026-11-05 查明:

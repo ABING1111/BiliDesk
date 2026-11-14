@@ -970,6 +970,8 @@ public partial class PlayerWindow : FluentWindow
             _lastPlayUrl = url;
             _lastAudioUrl = local != null ? null : audioUrl;
             _listenAudioUrl = audioUrl;
+            // 地址保鲜信息随新地址一起更新(否则会拿上一条地址的 deadline 做判断)
+            RememberPlayUrlFreshness(url, backups);
             try { _mp.Stop(); } catch { }
             if (_isListenMode && !string.IsNullOrEmpty(_listenAudioUrl))
                 PlayMedia(BuildMedia(_listenAudioUrl!, null));
@@ -1052,6 +1054,8 @@ public partial class PlayerWindow : FluentWindow
             // ★ 必须取 **audioUrl** 而不是 _lastAudioUrl: 后者在本地合流那条路上是 null
             //   (单文件源不挂 input-slave), 而音轨本身是好的。理由同 LoadVideoAsync 里那段。
             _listenAudioUrl = audioUrl;
+            // 地址保鲜信息随新档位一起更新(否则会拿上一条地址的 deadline 做判断)
+            RememberPlayUrlFreshness(url, backups);
             // 必须先 Stop: LibVLC 3 里已有 input 在播时 play() 会被**直接忽略**,
             // 不 Stop 的话新 Media 根本不会起播 —— 这就是"切换清晰度没反应"
             try { _mp.Stop(); } catch { }
