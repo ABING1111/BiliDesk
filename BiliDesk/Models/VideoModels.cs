@@ -39,12 +39,24 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
     /// <summary>
     /// 当前登录用户**是否已关注**该 UP 主。
     ///
-    /// ★ 只有首页推荐流会填: `wbi/index/top/feed/rcmd` 的每条 item 自带 `is_followed`
+    /// ★ 首页推荐流: `wbi/index/top/feed/rcmd` 的每条 item 自带 `is_followed`
     ///   (0 未关注 / 1 已关注), 推荐理由 `rcmd_reason.reason_type == 1` 也是同一个含义。
-    ///   其它列表(热门/排行/搜索/收藏/动态/空间)不下发这个信息, 保持 false ——
-    ///   所以卡片上那枚「已关注」标签只会出现在推荐页, 不需要页面再传标志。
+    /// ★ 搜索页: 搜索接口不下发这个信息, 由 SearchViewModel 在结果展示后拿本页作者 mid
+    ///   批量查 `/x/relation/relations`, 再回来置 true(见 MarkFollowedAuthorsAsync)。
+    ///   所以这里必须带变更通知: 值是在条目已经绑到卡片上之后才改的, 没有 INPC 标签不会出现。
+    ///   其它列表(热门/排行/收藏/动态/空间)不下发也不回填, 保持 false 自动隐藏。
     /// </summary>
-    public bool IsAuthorFollowed { get; set; }
+    private bool _isAuthorFollowed;
+    public bool IsAuthorFollowed
+    {
+        get => _isAuthorFollowed;
+        set
+        {
+            if (_isAuthorFollowed == value) return;
+            _isAuthorFollowed = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsAuthorFollowed)));
+        }
+    }
 
     /// <summary>
     /// 点赞数。**当前卡片上不显示**(用户要求把"N点赞"从卡片撤掉), 但解析照旧保留 ——

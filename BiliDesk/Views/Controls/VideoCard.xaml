@@ -124,7 +124,9 @@
             <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                 <!-- 「已关注」标签(2026-11-08): 放在第二行**行首**, 即 UP 主名左边 ——
                      与 B 站网页版/用户给的参考图一致(「[已关注] 差评君 · 10-24」)。
-                     只有首页推荐流会给 IsAuthorFollowed=true, 其它列表恒为 false 自动隐藏。 -->
+                     首页推荐流由接口的 is_followed 直接给出; 搜索页由 SearchViewModel
+                     在结果展示后批量查 /x/relation/relations 回填(2026-11-14)。
+                     其它列表恒为 false, 标签自动隐藏。 -->
                 <Border Style="{StaticResource FollowedBadgeStyle}"
                         Visibility="{Binding IsAuthorFollowed, Converter={StaticResource BoolToVis}}">
                     <TextBlock Text="已关注" FontSize="10" FontWeight="SemiBold"

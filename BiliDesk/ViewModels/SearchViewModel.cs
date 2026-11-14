@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using BiliDesk.Helpers;
@@ -320,7 +322,12 @@ public class SearchViewModel : ObservableObject
                 //   都不在 data.Items 里。灌错集合的后果是"界面一片空白 / 点开走错路"。
                 if (IsBangumiSearch) AppendBangumiDistinct(BangumiResults, data.BangumiItems);
                 else if (IsUserSearch) AppendUserDistinct(UserResults, data.UserItems);
-                else VideoList.AppendDistinct(Results, data.Items);
+                else
+                {
+                    VideoList.AppendDistinct(Results, data.Items);
+                    // 搜索接口不带 is_followed: 卡片先出来, 再异步补「已关注」标签
+                    MarkFollowedAuthorsAsync(data.Items, gen).Forget();
+                }
                 HasMore = data.HasMore;
                 Blocked = data.Blocked;
                 Error = data.Error ?? "";
@@ -370,7 +377,11 @@ public class SearchViewModel : ObservableObject
                 // ★ 同样按类别分流(见 SearchAsync 里那条注释): 翻页追加的也是各自那个集合。
                 if (IsBangumiSearch) AppendBangumiDistinct(BangumiResults, data.BangumiItems);
                 else if (IsUserSearch) AppendUserDistinct(UserResults, data.UserItems);
-                else VideoList.AppendDistinct(Results, data.Items);   // ★ 去重: 搜索排序会变, 同一稿件可能又给一遍
+                else
+                {
+                    VideoList.AppendDistinct(Results, data.Items);   // ★ 去重: 搜索排序会变, 同一稿件可能又给一遍
+                    MarkFollowedAuthorsAsync(data.Items, gen).Forget();
+                }
                 HasMore = data.HasMore;
                 OnPropertyChanged(nameof(ResultCount));
             });
@@ -381,5 +392,39 @@ public class SearchViewModel : ObservableObject
             LoadingMore = false;
             Error = ex.Message;
         }
+    }
+
+    /// <summary>
+    /// 结果展示后, 异步给卡片补「已关注」标签(2026-11-14)。
+    ///
+    /// 搜索接口(search/type)不下发 `is_followed`, 只能拿本页作者的 mid 去
+    /// `/x/relation/relations` 批量问一次。由此有两个约束:
+    ///   · **不挡结果**: 卡片先出来, 关注状态回来后再改 IsAuthorFollowed ——
+    ///     VideoItem 带 INPC, 标签会自己出现, 不需要重刷列表;
+    ///   · **按代次丢弃**: 重搜/翻页期间旧请求才回来时, 那批条目可能已经不在列表里, 直接跳过。
+    /// 失败静默: 未登录时这个接口本来就是 -101, 标签只是装饰, 不能打断搜索。
+    /// </summary>
+    private async Task MarkFollowedAuthorsAsync(IReadOnlyList<VideoItem> items, int generation)
+    {
+        if (!Svc.Session.HasLogin || items.Count == 0) return;
+
+        var mids = items.Where(i => i.OwnerMid > 0)
+                        .Select(i => i.OwnerMid)
+                        .Distinct()
+                        .ToList();
+        if (mids.Count == 0) return;
+
+        var (ok, _, followed) = await Svc.Api.GetFollowedMidsAsync(mids);
+        if (!ok || followed.Count == 0) return;
+
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            if (generation != _generation) return;
+            foreach (var item in items)
+            {
+                // 只置 true: 搜索条目初始都是 false, 没有"取消关注"需要同步回去的场景。
+                if (followed.Contains(item.OwnerMid)) item.IsAuthorFollowed = true;
+            }
+        });
     }
 }

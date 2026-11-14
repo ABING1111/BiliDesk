@@ -340,6 +340,59 @@ public partial class ApiClient
         }
     }
 
+    /// <summary>
+    /// 批量查询与一批 UP 主的关系, 只挑出**已关注**的 mid(2026-11-14, 搜索页「已关注」标签用)。
+    ///
+    /// 接口: GET /x/relation/relations?fids=a,b,c —— 需要登录 Cookie, 未登录回 -101。
+    /// ★ 搜索接口(search/type)的字段表里**没有** `is_followed`(只有首页推荐流带),
+    ///   所以搜索页想显示卡片上那枚「已关注」标签, 只能拿当前页作者的 mid 来这里批量问一次;
+    ///   逐个调 /x/relation 会把一页拆成 20 个请求, 更容易踩风控。
+    /// ★ data 有两种形状: 有关系时是 `{ "123": { attribute: 2, ... } }`, 一个都没有时
+    ///   服务端给的是 `[]` 而不是 `{}` —— 只按 Object 读, 其它形状一律当"没人被关注"。
+    /// ★ attribute: 0 未关注 / 2 已关注 / 3、6 互关 / 128 拉黑。只看 &gt;0 会把拉黑过的人
+    ///   也算成"已关注", 所以显式排除 128。
+    /// ★ 失败一律静默: 标签只是装饰, 不能因为关注查询失败打断搜索结果(未登录就是最常见的失败)。
+    /// </summary>
+    public async Task<(bool ok, string? err, HashSet<long> followed)> GetFollowedMidsAsync(
+        IReadOnlyCollection<long> mids)
+    {
+        var followed = new HashSet<long>();
+        var list = mids.Where(m => m > 0).Distinct().ToList();
+        if (list.Count == 0) return (true, null, followed);
+
+        try
+        {
+            // fids 用逗号拼, 一次最多 40 个(社区实测上限; 直播一页正好 40 条)。
+            for (var i = 0; i < list.Count; i += 40)
+            {
+                var chunk = list.Skip(i).Take(40);
+                var (code, msg, data) = await GetJsonAsync(
+                    "https://api.bilibili.com/x/relation/relations",
+                    new Dictionary<string, string> { ["fids"] = string.Join(",", chunk) },
+                    referer: "https://space.bilibili.com/");
+                if (code != 0 || data == null)
+                    return (false, msg ?? $"查询关注状态失败 (code {code})", followed);
+
+                if (data.Value.ValueKind != JsonValueKind.Object) continue;
+                foreach (var p in data.Value.EnumerateObject())
+                {
+                    if (p.Value.ValueKind != JsonValueKind.Object) continue;
+                    if (!p.Value.TryGetProperty("attribute", out var attr) ||
+                        attr.ValueKind != JsonValueKind.Number) continue;
+                    var value = attr.GetInt32();
+                    if (value > 0 && value != 128 && long.TryParse(p.Name, out var mid))
+                        followed.Add(mid);
+                }
+            }
+            return (true, null, followed);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "查询关注状态失败: " + ex.Message, followed);
+        }
+    }
+
     /// <summary>关注/取消关注 UP 主。act=1 关注, act=2 取消关注</summary>
     public Task<(bool ok, string? err)> FollowUpAsync(long mid, bool follow)
     {
