@@ -21,9 +21,13 @@
           · 「跳过赞助片段」从**最下面提到最上面** —— 它是整个播放页唯一一个用户会主动
             去开的功能, 且默认关; 放在最底下等于要一路滚到底才看得见, 常常就此错过。
           · 区块顺序改为: 跳过赞助片段 → 播放 → 弹幕。
-          · 卡片内按"组"分组, 组间用 SettingsGroupHeaderStyle 的小标题隔开
-            (播放页: 画质 / 缓冲 / 网络线路; 弹幕页: 显示与过滤 / 外观)。
+          · 卡片内按"组"分组, 组间用 SettingsGroupHeaderStyle 的分组标题隔开
+            (播放页: 画质 / 音质 / 播放进度 / 播放页 / 缓冲 / 网络线路;
+             弹幕页: 显示与过滤 / 外观)。
             原来十几行同权重地堆在一张卡里, 用户分不清哪几行是一回事。
+          · 2026-11-14: 分组标题从"12.5px 次级灰字"改成"淡强调色胶囊标签",
+            并在非首组前加 SettingsGroupDivider 全宽细线 —— 旧的小标题比行标题
+            更小更淡, 用户反馈"容易和功能看混"。详见 Themes/Styles.xaml 的注释。
           · 删掉了「按类型过滤」后面那条**重复的分隔线**(原来连着两条)。
     -->
 
@@ -408,8 +412,9 @@
                  而且默认关 —— 放在最下面意味着用户要一路滚到底才看得见它, 常常就此错过。
                  区块顺序改为: 跳过赞助片段 → 播放 → 弹幕。
                  同一次重整还做了:
-                   · 「播放」区按"画质 / 缓冲 / 网络线路"三组分组, 每组加小标题,
-                     不再是十来个同权重行堆在一张卡里;
+                   · 「播放」区按"画质 / 音质 / 播放进度 / 播放页 / 缓冲 / 网络线路"分组,
+                     每组一个胶囊标题(2026-11-14 前是灰色小字), 不再是十来个同权重行
+                     堆在一张卡里;
                    · 「弹幕」区的"智能屏蔽"提到"显示弹幕"旁边(都是开关, 归在一起),
                      外观三项与过滤项分开;
                    · 删掉了一行重复的分隔线(原来"按类型过滤"后面连着两条)。 -->
@@ -485,13 +490,13 @@
                  默认档是 1080P —— 与播放器改动前写死的 qn=80 一致, 老用户升级后画质不变。
 
                  ★ 2026-11-05 排版重整: 原来这十几行同权重地堆在一张卡里, 用户分不清
-                   哪几行是一回事。现在按"画质 / 缓冲 / 网络线路"分三组, 组间用小标题
-                   (SettingsGroupHeaderStyle)隔开。 -->
+                   哪几行是一回事。现在按"画质 / 音质 / 播放进度 / 播放页 / 缓冲 / 网络线路"
+                   分六组, 组间用胶囊标题 + 分隔线隔开(2026-11-14 由灰色小字改为胶囊)。 -->
             <Border Style="{StaticResource SettingsCardStyle}">
                 <StackPanel>
-                    <!-- ★ 组一: 画质 -->
-                    <TextBlock Text="画质" Style="{StaticResource SettingsGroupHeaderStyle}"
-                               Margin="0,10,0,0" />
+                    <!-- ★ 组一: 画质(卡片首组, 顶部只留一点内边距; 胶囊样式见 Styles.xaml) -->
+                    <ContentControl Content="画质" Style="{StaticResource SettingsGroupHeaderStyle}"
+                                    Margin="0,10,0,2" />
 
                     <!-- 播放器窗口大小/位置记忆(2026-11-03 新增大小, 2026-11-07 增加位置)。
                          关闭后播放器每次都回到 XAML 的默认 1280×760 并居中, 也不再写盘。 -->
@@ -547,7 +552,8 @@
                     </Grid>
 
                     <!-- ★ 组二: 音质(2026-11-06) -->
-                    <TextBlock Text="音质" Style="{StaticResource SettingsGroupHeaderStyle}" />
+                    <Border Style="{StaticResource SettingsGroupDivider}" />
+                    <ContentControl Content="音质" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
                     <!-- 音质档位: 与播放器控制栏那枚音质按钮读写同一个配置。
                          ★ 只影响音轨, 不改画面清晰度。 -->
@@ -584,10 +590,12 @@
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding PreferHighQualityAudio, Mode=TwoWay}" />
                     </Grid>
-                    <Border Style="{StaticResource SettingsRowDivider}" />
 
-                    <!-- ★ 组三: 播放进度(2026-11-06) -->
-                    <TextBlock Text="播放进度" Style="{StaticResource SettingsGroupHeaderStyle}" />
+                    <!-- ★ 组三: 播放进度(2026-11-06)
+                         上一组末尾不再放行分隔线: 组间由 SettingsGroupDivider 统一一条,
+                         两条线相距十几像素会看成"排版出错了"。 -->
+                    <Border Style="{StaticResource SettingsGroupDivider}" />
+                    <ContentControl Content="播放进度" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
                     <!-- 自动续播: 打开视频时跳到此前的本机 / B 站云端进度。
                          ★ 关闭后仍然记录, 只是不自动跳转。 -->
@@ -609,7 +617,8 @@
                     <!-- ★ 组四: 播放页(2026-11-14)
                          相关视频是信息栏里的补充内容, 不属于画质/缓冲/网络任何一组;
                          单独成组, 用户找"播放器里显示什么"时不用在播放进度里翻。 -->
-                    <TextBlock Text="播放页" Style="{StaticResource SettingsGroupHeaderStyle}" />
+                    <Border Style="{StaticResource SettingsGroupDivider}" />
+                    <ContentControl Content="播放页" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
                     <!-- 显示相关视频: 关闭后播放器不再请求相关视频接口, 信息栏也不显示该区块。
                          ★ 已打开的播放器会立即生效(见 SettingsStore.RelatedVideosChanged)。 -->
@@ -627,10 +636,10 @@
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding ShowRelatedVideos, Mode=TwoWay}" />
                     </Grid>
-                    <Border Style="{StaticResource SettingsRowDivider}" />
 
-                    <!-- ★ 组五: 缓冲 -->
-                    <TextBlock Text="缓冲" Style="{StaticResource SettingsGroupHeaderStyle}" />
+                    <!-- ★ 组五: 缓冲(上一组末尾的行分隔线同样去掉, 理由见「播放进度」) -->
+                    <Border Style="{StaticResource SettingsGroupDivider}" />
+                    <ContentControl Content="缓冲" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
                     <!-- 缓冲策略(2026-11-01 新增): 自动按带宽/码率挑预读深度, 还是手动固定值。
                          ★ 默认自动: 依据见 Services/BufferPolicy.cs —— 缓冲值对起播几乎无影响,
@@ -675,8 +684,9 @@
                                   SelectedItem="{Binding NetworkCachingSelected, Mode=TwoWay}" />
                     </Grid>
 
-                    <!-- ★ 组三: 网络线路 -->
-                    <TextBlock Text="网络线路" Style="{StaticResource SettingsGroupHeaderStyle}" />
+                    <!-- ★ 组六: 网络线路 -->
+                    <Border Style="{StaticResource SettingsGroupDivider}" />
+                    <ContentControl Content="网络线路" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
                     <!-- CDN 线路: 跟随服务端(默认) / 自动测速挑最快 / 手动指定一家。
                          自动测速虽能挑到瞬时最快, 但换 host 后部分线路持续吞吐/抖动更差,
@@ -764,9 +774,9 @@
                  "显示与过滤"(开关 + 滑杆 + 类型胶囊)与"外观"(不透明度/字号/速度)。 -->
             <Border Style="{StaticResource SettingsCardStyle}">
                 <StackPanel>
-                    <!-- ★ 组一: 显示与过滤 -->
-                    <TextBlock Text="显示与过滤" Style="{StaticResource SettingsGroupHeaderStyle}"
-                               Margin="0,10,0,0" />
+                    <!-- ★ 组一: 显示与过滤(弹幕卡片首组) -->
+                    <ContentControl Content="显示与过滤" Style="{StaticResource SettingsGroupHeaderStyle}"
+                                    Margin="0,10,0,2" />
 
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
@@ -844,7 +854,8 @@
                     </StackPanel>
 
                     <!-- ★ 组二: 外观 -->
-                    <TextBlock Text="外观" Style="{StaticResource SettingsGroupHeaderStyle}" />
+                    <Border Style="{StaticResource SettingsGroupDivider}" />
+                    <ContentControl Content="外观" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
                     <!-- ===== 外观三项(2026-10-12 新增): 不透明度 / 字号 / 速度 =====
                          ★ 为什么单独一块而不是塞进「显示弹幕」那一行:

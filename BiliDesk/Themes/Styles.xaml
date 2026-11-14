@@ -766,17 +766,54 @@
         <Setter Property="Opacity" Value="0.7" />
     </Style>
 
-    <!-- 卡片内的**分组小标题**(2026-11-05 新增)。
+    <!-- 卡片内的**分组标题**(2026-11-05 新增, 2026-11-14 改成胶囊标签)。
          ★ 为什么需要它: 一张卡片里塞十几行同权重的行时, 用户看不出哪几行是一回事。
-           "画质 / 缓冲 / 网络线路"三组各配一个浅色小标题, 扫一眼就知道该往哪看。
-         ★ 与页级区块标题(SettingsSectionHeaderStyle, 带强调色竖条)的区别:
-           那个是**大分组**(整张卡片), 这个是**卡片内的小分组**(只有一行字, 没有竖条),
-           靠字号与颜色的层级差区分, 不抢卡片标题的视觉重心。 -->
-    <Style x:Key="SettingsGroupHeaderStyle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-        <Setter Property="FontSize" Value="12.5" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-        <Setter Property="Margin" Value="0,20,0,0" />
+           "画质 / 缓冲 / 网络线路"三组各配一个分组标题, 扫一眼就知道该往哪看。
+         ★ 2026-11-14 为什么改: 旧版是 12.5px 次级灰字, 比行标题(14px SemiBold 主色)
+           **更小更淡**, 又紧贴着一行同样浅灰的描述 —— 用户反馈"分组标题不显眼,
+           容易和功能看混", 实际读起来像下一条功能的副标题。
+           现在改成"淡强调色底 + 强调色文字"的小胶囊: 颜色/底色/字号三重区分,
+           一眼就知道是**标签**而不是功能项; 胶囊只占左侧一小块, 也不会像大区块标题
+           (SettingsSectionHeaderStyle 的竖条 + 14px Bold)那样抢视觉重心。
+         ★ 为什么是 ContentControl 而不是 TextBlock: TextBlock 没有 Padding,
+           文字会顶在底色边缘; 用 ControlTemplate 才能套出胶囊的内边距。
+           调用处写法: <ContentControl Content="画质" Style="{StaticResource SettingsGroupHeaderStyle}" />
+         ★ 颜色全部走 DynamicResource 的 Accent* 键, 自定义主题色/深色模式自动跟随。 -->
+    <Style x:Key="SettingsGroupHeaderStyle" TargetType="ContentControl">
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="Margin" Value="0,12,0,2" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContentControl">
+                    <!-- ★ 底色/文字用"强调色淡底 + 深一档强调文字"这一对(AccentSoftFillStrongBrush /
+                         AccentTextStrongBrush), 与胶囊 Tab、过滤胶囊的选中态**同一套观感**:
+                         浅色下是淡粉底 + 深玫瑰字(能看清), 深色下是提亮的粉底 + 深字
+                         (用 0x1C 的 AccentSoftFillBrush 在深灰卡片上几乎看不出底色)。 -->
+                    <Border CornerRadius="7" Padding="9,3,9,4"
+                            Background="{DynamicResource AccentSoftFillStrongBrush}">
+                        <!-- ★ 必须直接写 TextBlock 并就地设 Foreground:
+                             全局隐式 TextBlock 样式带 Foreground setter, ContentPresenter
+                             里的文字会被它盖成主色(与 SettingsFilterChipStyle 踩过同一个坑)。
+                             本地值优先于样式, 所以这里写在 TextBlock 上最稳。 -->
+                        <TextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}"
+                                   FontSize="12" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource AccentTextStrongBrush}" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 组间分隔线(2026-11-14 新增): 分组标题之外再给一条全宽的线,
+         让"上一组到此结束、下一组从这里开始"有个物理边界 ——
+         只靠留白的话, 十几行堆在一张卡里仍然容易看串(行间本身已有很淡的分隔线,
+         这里用同色但更高不透明度的线做出层级差)。卡片里的**第一组不加**。 -->
+    <Style x:Key="SettingsGroupDivider" TargetType="Border">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Background" Value="{DynamicResource DividerBrush}" />
+        <Setter Property="Margin" Value="0,16,0,0" />
     </Style>
 
     <!-- 行标题(粗体 14)与行描述(12 次级色) -->
