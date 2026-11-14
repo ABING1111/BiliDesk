@@ -314,10 +314,10 @@ public partial class PlayerWindow : FluentWindow
     private void OnPagesToggleClick(object sender, RoutedEventArgs e)
     {
         if (_closing || !_hasPages || PagesPopup == null) return;
-        var open = PagesPopup.IsOpen;
-        PagesPopup.IsOpen = !open;
-        BtnPages.Tag = !open ? "on" : "off";
-        if (!open)
+        // ★ 不能直接取反 IsOpen(2026-11-14 修"点击一律是打开"): StaysOpen=False 的弹层
+        //   在"再点按钮"那一下的 MouseDown 阶段就被 WPF 自动收起了, Click 到达时 IsOpen
+        //   恒为 false, 取反永远走"展开"。统一走 TogglePlayerPopup 的收起时刻判定。
+        TogglePlayerPopup(PagesPopup, onOpen: () =>
         {
             if (PagesList != null)
             {
@@ -325,7 +325,9 @@ public partial class PlayerWindow : FluentWindow
                 PagesList.SelectedItem = _pages.FirstOrDefault(p => p.Cid == _currentCid);
             }
             PagesMetaText.Text = $"共 {_pages.Count} 个分P";
-        }
+        });
+        // 高亮态跟随最终开关态(收起那条路 OnPagesPopupClosed 也会置 off, 两边一致)
+        if (BtnPages != null) BtnPages.Tag = PagesPopup.IsOpen ? "on" : "off";
     }
 
     /// <summary>弹层外点/按 Esc 关掉弹层时, 把按钮的高亮态一并收回</summary>

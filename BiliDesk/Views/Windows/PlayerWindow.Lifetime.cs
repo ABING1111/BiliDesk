@@ -212,6 +212,9 @@ public partial class PlayerWindow : FluentWindow
         Svc.Session.Changed -= UpdateButtonState;
         Svc.Settings.DanmakuSettingsChanged -= OnDanmakuSettingsChanged;
         Helpers.UiFont.Changed -= OnUiFontChanged;
+        // 弹层开关的 IsOpen 订阅挂在进程级静态描述符上, 必须摘掉, 否则窗口无法 GC
+        // (见 PlayerWindow.Controls.cs 的 _popupToggleHooks 说明)
+        UnhookPopupToggles();
         // 跳过赞助片段: 退订 + 掐掉还没回来的查询
         Svc.Settings.SponsorBlockChanged -= OnSponsorSettingsChanged;
         CancelSponsorFetch();

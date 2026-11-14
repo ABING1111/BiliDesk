@@ -448,8 +448,8 @@ public partial class PlayerWindow : FluentWindow
     private void OnSpeedClick(object sender, RoutedEventArgs e)
     {
         if (_mp == null) return;
-        FillSpeedMenu();
-        SpeedPopup.IsOpen = true;
+        // 点一下展开, 再点一下收起(见 HookPopupToggle): 只有展开时才灌列表
+        TogglePlayerPopup(SpeedPopup, FillSpeedMenu);
     }
 
     /// <summary>
@@ -585,6 +585,114 @@ public partial class PlayerWindow : FluentWindow
         popup.HorizontalOffset = target.ActualWidth - w;
     }
 
+    // ------------------------------------------------------------ 弹层开关: 点一下展开, 再点一下收起(2026-11-14)
+
+    /// <summary>
+    /// 各弹层最近一次"被入口按钮点击收起"的时刻(Environment.TickCount64)。
+    /// 判定逻辑见 <see cref="Helpers.PopupToggle"/>。
+    ///
+    /// ★ 为什么用 IsOpen 的依赖属性变更回调记时刻, 而不是订阅 Closed 事件:
+    ///   本项目实测(见 <see cref="AnyPlayerPopupOpen"/> 里的探针记录)Closed 事件可能**晚于**
+    ///   IsOpen 的实际收起(视频区那次晚了 20ms)。等 Closed 记时刻的话, Click 到达时时刻可能
+    ///   还没记上, 抑制窗口就成了死代码 —— 2026-10-13 第一版正是栽在这里。
+    ///   DP 变更回调与 IsOpen 赋值**同步**触发, 不受事件先后影响。
+    /// ★ 为什么只记"光标正压在入口按钮上"的那次收起: 那才是"再点一下收起"。
+    ///   点别处/选条目/Esc 引起的收起不记 —— 否则"点别处收起后立刻点入口"会被误吞一下。
+    /// </summary>
+    private readonly Dictionary<Popup, long> _popupClosedTicks = new();
+
+    /// <summary>
+    /// 经 DependencyPropertyDescriptor.AddValueChanged 登记的 IsOpen 订阅, 关窗时逐一摘除。
+    /// ★ 必须摘: AddValueChanged 把回调挂在**进程级静态**的描述符上, 不摘的话关闭后的
+    ///   PlayerWindow 会被它一直引用、永远无法 GC(与当年 ThemeChanged 多订阅一次是同一种泄漏,
+    ///   见构造函数里的说明)。播放器是"看完就关、下次新建"的, 漏一个就永久漏一个窗口。
+    /// </summary>
+    private readonly List<(Popup Popup, System.ComponentModel.DependencyPropertyDescriptor Descriptor, EventHandler Handler)> _popupToggleHooks = new();
+
+    /// <summary>
+    /// 给一个弹层 + 它的入口按钮登记「点一下展开, 再点一下收起」(构造函数里五个弹层各调一次)。
+    ///
+    /// ★ 两层防线, 覆盖 WPF 自动收起的两种时序:
+    ///   ① 按钮的 PreviewMouseLeftButtonDown 到达时弹层**还开着** → 直接收起并吞掉这一下
+    ///     (Handled ⇒ Click 不再触发)。这条路不依赖任何时间戳, 是确定性收起;
+    ///   ② WPF 在按钮收到 MouseDown **之前**就已自动收起(更常见的时序: 弹层握着鼠标捕获,
+    ///     外部点击先触发收起, 再把 Down 重投给按钮) → Click 照样触发,
+    ///     由 <see cref="TogglePlayerPopup"/> 用收起时刻认出"这一下就是收起它的点击", 不重开。
+    /// </summary>
+    private void HookPopupToggle(Popup popup, Button trigger)
+    {
+        var descriptor = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(Popup.IsOpenProperty, typeof(Popup));
+        EventHandler onIsOpenChanged = (_, _) =>
+        {
+            if (popup.IsOpen) return;
+            // 收起这一刻光标正压在入口按钮上 ⇒ 这次收起就是"再点一下收起"的那次按压,
+            // 记下时刻供 Click 判定; 点别处/选条目/Esc 的收起不记(见 _popupClosedTicks 说明)。
+            // 回调与 IsOpen 赋值同步, 光标还停在按压位置, 物理像素比较不受 WPF 输入态影响。
+            if (IsCursorOverElement(trigger)) _popupClosedTicks[popup] = Environment.TickCount64;
+        };
+        descriptor.AddValueChanged(popup, onIsOpenChanged);
+        _popupToggleHooks.Add((popup, descriptor, onIsOpenChanged));
+
+        trigger.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            if (_closing || !popup.IsOpen) return;
+            popup.IsOpen = false;
+            // 吞掉这一下: 不吞的话 Click 还会走一遍开关判定, 白白多一次状态翻转
+            e.Handled = true;
+        };
+    }
+
+    /// <summary>
+    /// 光标此刻是否落在元素范围内(GetCursorPos + PointToScreen, 都是屏幕物理像素)。
+    /// 与 HitTestResizeEdge 同款理由: 判定发生在弹层收起的回调里, 事件可能来自另一层
+    /// 浮动窗口, WPF 的 IsMouseOver/命中测试此刻未必刷新, 直接比物理坐标最稳。
+    /// </summary>
+    private static bool IsCursorOverElement(FrameworkElement element)
+    {
+        try
+        {
+            if (!GetCursorPos(out var pt)) return false;
+            var tl = element.PointToScreen(new Point(0, 0));
+            var br = element.PointToScreen(new Point(element.ActualWidth, element.ActualHeight));
+            return pt.X >= tl.X && pt.X <= br.X && pt.Y >= tl.Y && pt.Y <= br.Y;
+        }
+        catch { return false; /* 元素已脱离可视树(窗口正在关): 不记时刻即可 */ }
+    }
+
+    /// <summary>
+    /// 弹层入口按钮的统一开关入口(倍速/清晰度/音质/弹幕区域/分P 共用)。
+    /// <paramref name="onOpen"/> 只在判定为"展开"时执行(灌列表等); 收起时不动内容。
+    /// </summary>
+    private void TogglePlayerPopup(Popup popup, Action? onOpen = null)
+    {
+        if (_closing || popup == null) return;
+        long? closedAt = _popupClosedTicks.TryGetValue(popup, out var tick) ? tick : null;
+        switch (Helpers.PopupToggle.Decide(popup.IsOpen, closedAt, Environment.TickCount64))
+        {
+            case Helpers.PopupToggle.Action.Close:
+                popup.IsOpen = false;
+                break;
+            case Helpers.PopupToggle.Action.StayClosed:
+                // 这一下正是"再点一下收起": WPF 已在 MouseDown 阶段收起, 保持收起不重开
+                break;
+            default:
+                onOpen?.Invoke();
+                popup.IsOpen = true;
+                break;
+        }
+    }
+
+    /// <summary>关窗时摘掉全部 IsOpen 订阅(为什么必须摘, 见 <see cref="_popupToggleHooks"/>)。</summary>
+    private void UnhookPopupToggles()
+    {
+        foreach (var (popup, descriptor, handler) in _popupToggleHooks)
+        {
+            try { descriptor.RemoveValueChanged(popup, handler); } catch { /* 窗口正在销毁 */ }
+        }
+        _popupToggleHooks.Clear();
+        _popupClosedTicks.Clear();
+    }
+
     // ------------------------------------------------------------ 清晰度
 
     /// <summary>填充清晰度菜单并高亮当前项(以 B 站实际返回的清晰度为准)</summary>
@@ -680,7 +788,8 @@ public partial class PlayerWindow : FluentWindow
 
     private void OnQualityClick(object sender, RoutedEventArgs e)
     {
-        QualityPopup.IsOpen = true;
+        // 点一下展开, 再点一下收起(见 HookPopupToggle)。菜单内容在起播/换档时已灌好, 这里不重灌
+        TogglePlayerPopup(QualityPopup);
     }
 
     private void OnQualitySelected(object sender, SelectionChangedEventArgs e)
@@ -782,8 +891,8 @@ public partial class PlayerWindow : FluentWindow
 
     private void OnAudioClick(object sender, RoutedEventArgs e)
     {
-        FillAudioMenu(_currentAudioId);
-        AudioPopup.IsOpen = true;
+        // 点一下展开, 再点一下收起(见 HookPopupToggle): 只有展开时才灌列表
+        TogglePlayerPopup(AudioPopup, () => FillAudioMenu(_currentAudioId));
     }
 
     private void OnAudioSelected(object sender, SelectionChangedEventArgs e)

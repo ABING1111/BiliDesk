@@ -89,9 +89,21 @@ public partial class PlayerWindow : FluentWindow
                 // 否则用户看到的永远是列表顶部, 以为没选中。
                 if (SpeedList.SelectedItem != null) SpeedList.ScrollIntoView(SpeedList.SelectedItem);
             }));
-        // ★ 两个弹层的"开着"状态本身就是判据(见 AnyPlayerPopupOpen), 不需要订阅 Closed。
+        // ★ 弹层「点一下展开, 再点一下收起」(2026-11-14): 五个入口统一登记。
+        //   StaysOpen=False 的弹层在"再点入口按钮"那一下会被 WPF 先行自动收起,
+        //   Click 到达时 IsOpen 恒为 false —— 旧写法(无条件置 true / 取反 IsOpen)一律展开,
+        //   用户报的"点击一律是打开"就是它。两层防线的接线见 HookPopupToggle。
+        HookPopupToggle(QualityPopup, BtnQuality);
+        HookPopupToggle(AudioPopup, BtnAudio);
+        HookPopupToggle(DanmakuAreaPopup, BtnDanmakuArea);
+        HookPopupToggle(SpeedPopup, SpeedBtn);
+        HookPopupToggle(PagesPopup, BtnPages);
+        // ★ 视频区手势判定仍直接用"是否开着"作判据(见 AnyPlayerPopupOpen), 不订阅 Closed:
         //   2026-10-13 第一版在这里订阅过 Closed 记时间窗, 实测证明 Closed 晚于视频区的
         //   Up(70ms), 时间窗一次都没生效过 —— 已删除。
+        //   ★ 别与上面入口按钮的"再点收起"混为一谈: 那条路记收起时刻用的是 IsOpen 的
+        //   依赖属性变更回调(与赋值同步触发, 不等 Closed 事件), 正是为了绕开这里记录的
+        //   "Closed 迟到"坑 —— 两种机制各管各的判定, 互不依赖。
         // 主题无需在此订阅: FluentWindow 基类已监听 ThemeChanged 并重建窗体 chrome,
         // 播放器自身的 DynamicResource 会随之自动刷新。之前这里多订阅了一次且从不退订,
         // 导致每个关闭过的播放器窗口都无法被 GC 回收。

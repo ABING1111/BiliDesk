@@ -32,7 +32,8 @@ public partial class PlayerWindow : FluentWindow
 
     private void OnDanmakuAreaClick(object sender, RoutedEventArgs e)
     {
-        DanmakuAreaPopup.IsOpen = true;
+        // 点一下展开, 再点一下收起(见 PlayerWindow.Controls.cs 的 HookPopupToggle)
+        TogglePlayerPopup(DanmakuAreaPopup);
     }
 
     /// <summary>调整弹幕显示区域占比(弹幕只在画面上方 ratio 比例内滚动)</summary>
