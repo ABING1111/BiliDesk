@@ -79,6 +79,8 @@ public partial class MainWindow : FluentWindow
         PreviewKeyDown += OnUserActivity;
         // F5 = 刷新当前页面(2026-11-12 用户要求"所有的刷新绑定到 F5")
         PreviewKeyDown += OnRefreshKey;
+        // Esc 关闭动态详情 / 评论输入面板
+        PreviewKeyDown += OnDynamicDetailKeyDown;
         Loaded += (_, _) => StartForegroundIdleTimer();
         Closed += (_, _) => _foregroundIdleTimer?.Stop();
     }
@@ -444,6 +446,9 @@ public partial class MainWindow : FluentWindow
     /// </summary>
     private void ShowPage(PageKey key, bool animate)
     {
+        // 切页时详情遮罩必须收掉, 否则会盖在新页面上
+        if (_dynamicDetailOpen) CloseDynamicDetail(immediate: true);
+
         // 在途过渡先立即落定, 再建页/换页: 否则"建一个很重的页面"会卡住正在跑的动画
         // (首次建页要解析整棵 XAML, 首页实测 ~360ms)。
         if (NavTransition.InFlight) NavTransition.FinishNow();
@@ -671,6 +676,161 @@ public partial class MainWindow : FluentWindow
         ClosePartition();
         // 原生分区页(与首页同一套卡片墙), 不再落网页版
         _ = NavigateToRegion(item.Name, item.Tid);
+    }
+
+    // ------------------------------------------------------------ 动态详情(应用级遮罩)
+
+    private bool _dynamicDetailOpen;
+    private int _dynamicDetailAnimGen;
+    private Point _dynamicDetailOrigin = new(0.5, 0.5);
+
+    /// <summary>
+    /// 打开动态详情。
+    /// ★ 遮罩挂在 MainWindow 根 Grid 上(而不是 FollowPage 里), 所以左侧导航栏也会一起变暗;
+    ///   面板居中、底色恒不透明(亚克力下也读得清)。
+    /// ★ source = 触发它的动态卡: 打开时把缩放原点放到卡片中心, 动画看起来就是"从卡片长出来";
+    ///   关闭时从同一个原点缩回去。source 为 null(或卡片已被虚拟化回收)时退化为居中缩放。
+    /// </summary>
+    public void ShowDynamicDetail(DynamicItem item, bool focusComments, FrameworkElement? source = null)
+    {
+        if (item == null) return;
+
+        _dynamicDetailOpen = true;
+        var gen = ++_dynamicDetailAnimGen;
+
+        DynamicDetailHost.SetItem(item, focusComments);
+
+        // 先取消上一轮关闭动画, 并把视觉状态复位到"隐藏但可见"的起点
+        StopDynamicDetailAnimations();
+        DynamicDetailOverlay.Visibility = Visibility.Visible;
+        DynamicDetailOverlay.Opacity = 0;
+        DynamicDetailPanel.Opacity = 0;
+        DynamicDetailScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+        DynamicDetailScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+        DynamicDetailScale.ScaleX = 1;
+        DynamicDetailScale.ScaleY = 1;
+
+        // 等布局完成后才知道面板真实位置/尺寸, 才能把缩放原点算成卡片在面板里的相对坐标
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (!_dynamicDetailOpen || gen != _dynamicDetailAnimGen) return;
+
+            _dynamicDetailOrigin = ComputeDynamicDetailOrigin(source);
+            DynamicDetailPanel.RenderTransformOrigin = _dynamicDetailOrigin;
+            DynamicDetailScale.ScaleX = 0.16;
+            DynamicDetailScale.ScaleY = 0.16;
+
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            DynamicDetailOverlay.BeginAnimation(OpacityProperty,
+                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)) { EasingFunction = ease });
+            DynamicDetailPanel.BeginAnimation(OpacityProperty,
+                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200)) { EasingFunction = ease });
+            var scale = new DoubleAnimation(0.16, 1, TimeSpan.FromMilliseconds(300)) { EasingFunction = ease };
+            DynamicDetailScale.BeginAnimation(ScaleTransform.ScaleXProperty, scale);
+            DynamicDetailScale.BeginAnimation(ScaleTransform.ScaleYProperty, scale);
+        }));
+    }
+
+    /// <summary>关闭动态详情。immediate=true 用于切页等打断场景(不播动画)。</summary>
+    public void CloseDynamicDetail(bool immediate = false)
+    {
+        if (!_dynamicDetailOpen) return;
+        _dynamicDetailOpen = false;
+        var gen = ++_dynamicDetailAnimGen;
+
+        if (immediate)
+        {
+            StopDynamicDetailAnimations();
+            DynamicDetailOverlay.Visibility = Visibility.Collapsed;
+            DynamicDetailOverlay.Opacity = 0;
+            DynamicDetailPanel.Opacity = 1;
+            DynamicDetailScale.ScaleX = 1;
+            DynamicDetailScale.ScaleY = 1;
+            return;
+        }
+
+        var ease = new CubicEase { EasingMode = EasingMode.EaseIn };
+        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(260)) { EasingFunction = ease };
+        fade.Completed += (_, _) =>
+        {
+            if (gen != _dynamicDetailAnimGen || _dynamicDetailOpen) return;
+            StopDynamicDetailAnimations();
+            DynamicDetailOverlay.Visibility = Visibility.Collapsed;
+            DynamicDetailOverlay.Opacity = 0;
+            DynamicDetailPanel.Opacity = 1;   // 复位, 下次打开从 0 淡入
+            DynamicDetailScale.ScaleX = 1;
+            DynamicDetailScale.ScaleY = 1;
+        };
+
+        DynamicDetailOverlay.BeginAnimation(OpacityProperty, fade);
+        DynamicDetailPanel.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = ease });
+        var scale = new DoubleAnimation(1, 0.16, TimeSpan.FromMilliseconds(260)) { EasingFunction = ease };
+        DynamicDetailScale.BeginAnimation(ScaleTransform.ScaleXProperty, scale);
+        DynamicDetailScale.BeginAnimation(ScaleTransform.ScaleYProperty, scale);
+    }
+
+    private void StopDynamicDetailAnimations()
+    {
+        DynamicDetailOverlay.BeginAnimation(OpacityProperty, null);
+        DynamicDetailPanel.BeginAnimation(OpacityProperty, null);
+        DynamicDetailScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+        DynamicDetailScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+    }
+
+    /// <summary>
+    /// 计算"卡片中心"在详情面板内的相对坐标(RenderTransformOrigin)。
+    /// ★ 用 RootGrid 当共同祖先: 卡片在 PageLayer 里、面板在根 Grid 上, 二者不是父子关系,
+    ///   直接 TransformToAncestor(面板) 会抛异常。
+    /// </summary>
+    private Point ComputeDynamicDetailOrigin(FrameworkElement? source)
+    {
+        try
+        {
+            if (source == null || !source.IsLoaded) return new Point(0.5, 0.5);
+            var panelW = DynamicDetailPanel.ActualWidth;
+            var panelH = DynamicDetailPanel.ActualHeight;
+            if (panelW <= 0 || panelH <= 0) return new Point(0.5, 0.5);
+
+            var sourceCenter = source.TransformToAncestor(RootGrid)
+                .Transform(new Point(source.ActualWidth / 2, source.ActualHeight / 2));
+            var panelTopLeft = DynamicDetailPanel.TransformToAncestor(RootGrid)
+                .Transform(new Point(0, 0));
+
+            var ox = (sourceCenter.X - panelTopLeft.X) / panelW;
+            var oy = (sourceCenter.Y - panelTopLeft.Y) / panelH;
+            // 卡片在列表很左边/很下边时原点可能超出面板, 留一点余量即可, 不要拉得太夸张
+            ox = Math.Clamp(ox, -0.4, 1.4);
+            oy = Math.Clamp(oy, -0.4, 1.4);
+            return new Point(ox, oy);
+        }
+        catch
+        {
+            return new Point(0.5, 0.5);
+        }
+    }
+
+    private void OnDynamicDetailScrimClick(object sender, MouseButtonEventArgs e)
+    {
+        if (DynamicDetailPanel != null && DynamicDetailPanel.IsMouseOver) return;
+        CloseDynamicDetail();
+        e.Handled = true;
+    }
+
+    private void OnDynamicDetailCloseClick(object sender, RoutedEventArgs e) => CloseDynamicDetail();
+
+    private void OnDynamicDetailKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape || !_dynamicDetailOpen) return;
+        if (DynamicDetailHost.IsComposerOpen)
+        {
+            DynamicDetailHost.CloseComposer();
+        }
+        else
+        {
+            CloseDynamicDetail();
+        }
+        e.Handled = true;
     }
 
     // ------------------------------------------------------------ Toast

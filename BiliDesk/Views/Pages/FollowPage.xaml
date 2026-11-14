@@ -475,7 +475,7 @@
                                     VerticalAlignment="Center">
                             <Button x:Name="BtnLayoutCards" Style="{StaticResource FeedLayoutChipStyle}"
                                     Content="动态卡" Click="OnLayoutCardsClick"
-                                    ToolTip="单列动态卡: 头像 + 发布时间 + 视频" />
+                                    ToolTip="单列综合动态卡: 视频 + 图文 + 文字 + 转发" />
                             <Button x:Name="BtnLayoutWall" Style="{StaticResource FeedLayoutChipStyle}"
                                     Content="卡片墙" Margin="6,0,0,0" Click="OnLayoutWallClick"
                                     ToolTip="多列卡片墙(一屏铺更多, 但没有头像与发布时间)" />
@@ -642,7 +642,7 @@
                                      Visibility="{Binding UseCardWall, Converter={StaticResource InvBoolToVis}}">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <controls:DynamicCard />
+                                        <controls:DynamicCard DetailRequested="OnDynamicCardDetailRequested" />
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                             </ListBox>

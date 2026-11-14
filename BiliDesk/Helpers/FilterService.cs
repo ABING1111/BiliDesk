@@ -460,25 +460,46 @@ public sealed class FilterService : INotifyPropertyChanged
 
     /// <summary>
     /// 屏蔽谓词。**命中条件的返回 false(隐藏)**, 其余放行。
-    /// 只认 VideoItem —— 其它类型一律放行, 免得在没想到的集合上把内容屏蔽没了。
+    /// 认 VideoItem 与 DynamicItem(综合动态卡) —— 其它类型一律放行,
+    /// 免得在没想到的集合上把内容屏蔽没了。
     /// </summary>
     private bool Matches(object? item)
     {
         if (!HasFilter) return true;
+
+        if (item is DynamicItem d)
+        {
+            // 转发动态: 转发者与被转发原作者都纳入屏蔽
+            if (UpBlocked(d.AuthorMid, d.AuthorName)) return false;
+            if (d.Orig != null && UpBlocked(d.Orig.AuthorMid, d.Orig.AuthorName)) return false;
+
+            var title = d.VideoTitle?.Trim();
+            if (string.IsNullOrEmpty(title)) title = d.Title?.Trim();
+            if (!string.IsNullOrEmpty(title) && _titleSet.Contains(title)) return false;
+            if (ContainsAny(title ?? "", _titleTerms)) return false;
+            if (ContainsAny(d.AuthorName ?? "", _upTerms)) return false;
+            return true;
+        }
+
         if (item is not VideoItem v) return true;
 
         // 一键屏蔽: 先 UID(最稳), 再精确同名
-        if (v.OwnerMid > 0 && _upMids.Contains(v.OwnerMid)) return false;
-        var author = v.Author?.Trim();
-        if (!string.IsNullOrEmpty(author) && _upNames.Contains(author)) return false;
+        if (UpBlocked(v.OwnerMid, v.Author)) return false;
 
-        var title = v.Title?.Trim();
-        if (!string.IsNullOrEmpty(title) && _titleSet.Contains(title)) return false;
+        var vtitle = v.Title?.Trim();
+        if (!string.IsNullOrEmpty(vtitle) && _titleSet.Contains(vtitle)) return false;
 
         // 关键词: 包含匹配
-        if (ContainsAny(title ?? "", _titleTerms)) return false;
-        if (ContainsAny(author ?? "", _upTerms)) return false;
+        if (ContainsAny(vtitle ?? "", _titleTerms)) return false;
+        if (ContainsAny(v.Author ?? "", _upTerms)) return false;
         return true;
+    }
+
+    private bool UpBlocked(long mid, string? author)
+    {
+        if (mid > 0 && _upMids.Contains(mid)) return true;
+        var name = author?.Trim();
+        return !string.IsNullOrEmpty(name) && _upNames.Contains(name);
     }
 
     private static bool ContainsAny(string text, string[] terms)

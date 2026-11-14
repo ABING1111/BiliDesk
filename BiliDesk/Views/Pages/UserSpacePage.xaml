@@ -89,6 +89,66 @@
             <Setter Property="Width" Value="74" />
             <Setter Property="Padding" Value="10,0" />
         </Style>
+
+        <!-- 空间页 Tab(投稿 / 图文): 底部强调色下划线, 选中态由 code-behind 写 Tag="on" 驱动。 -->
+        <Style x:Key="SpaceTabStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <StackPanel>
+                            <Border Padding="6,8" Background="{TemplateBinding Background}">
+                                <ContentPresenter HorizontalAlignment="Center"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}" />
+                            </Border>
+                            <Border x:Name="Underline" Height="2" CornerRadius="1" Margin="6,2,6,0"
+                                    Background="Transparent" />
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Tag" Value="on">
+                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                                <Setter TargetName="Underline" Property="Background"
+                                        Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 图文 Tab 的动态卡列表: 去掉 ListBox 自带选中高亮, 打开虚拟化。 -->
+        <Style x:Key="SpaceDynamicListStyle" TargetType="ListBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+            <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Focusable" Value="False" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <ContentPresenter />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
     <Grid>
@@ -97,12 +157,18 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- ======== 顶部 UP 主信息区(2026-11-08 按参考图重排) ========
-             从左到右: 头像(带 LV) / 昵称 + 大会员 + UID + 简介 / 关注·粉丝·获赞 / 关注按钮
-             ★ 底色用 PanelBackgroundBrush: 通栏大面板, 亚克力下跟着半透明透出材质。 -->
-        <Border Grid.Row="0" Background="{DynamicResource PanelBackgroundBrush}"
-                BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1">
-            <Grid Margin="36,22,36,16">
+        <!-- ======== 可折叠的 UP 主信息区 + Tab ========
+             2026-11-14 用户要求"往下滑自动隐藏 UP 信息, 往顶上滑再显示":
+             把信息区和 Tab 一起放进 HeaderHost, 由 code-behind 按滚动方向动画它的 Height
+             (0 ↔ 自然高度), 这样列表能真正多出一块显示空间, 而不只是把内容淡掉。 -->
+        <Border x:Name="HeaderHost" Grid.Row="0" ClipToBounds="True"
+                Background="{DynamicResource PanelBackgroundBrush}">
+            <StackPanel>
+                <!-- ======== 顶部 UP 主信息区(2026-11-08 按参考图重排) ========
+                     从左到右: 头像(带 LV) / 昵称 + 大会员 + UID + 简介 / 关注·粉丝·获赞 / 关注按钮 -->
+                <Border Background="{DynamicResource PanelBackgroundBrush}"
+                        BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1">
+                    <Grid Margin="36,22,36,16">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
@@ -211,8 +277,20 @@
             </Grid>
         </Border>
 
+        <!-- ======== Tab: 投稿 / 图文 ======== -->
+        <Grid Margin="36,6,36,0">
+            <StackPanel Orientation="Horizontal">
+                <Button x:Name="TabVideos" Content="投稿" Style="{StaticResource SpaceTabStyle}"
+                        Click="OnVideosTabClick" />
+                <Button x:Name="TabImages" Content="图文" Style="{StaticResource SpaceTabStyle}"
+                        Margin="18,0,0,0" Click="OnImagesTabClick" />
+            </StackPanel>
+        </Grid>
+            </StackPanel>
+        </Border>
+
         <!-- ======== 视频列表区 ======== -->
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="1" Visibility="{Binding IsVideosTab, Converter={StaticResource BoolToVis}}">
             <!-- 首次加载的居中大菊花(仅无内容时显示, 避免与错误提示同屏) -->
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
                         Visibility="{Binding Loading, Converter={StaticResource BoolToVis}}">
@@ -234,7 +312,8 @@
                         Command="{Binding RefreshCommand}" />
             </StackPanel>
 
-            <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto"
+                          ScrollChanged="OnListScrollChanged">
                 <StackPanel Margin="36,16,36,24">
                     <!-- 投稿区标题: 让页码栏的"共 N 页"有对照 -->
                     <TextBlock Text="{Binding PageSummary}" FontSize="15" FontWeight="SemiBold"
@@ -298,6 +377,54 @@
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
+        </Grid>
+
+        <!-- ======== 图文 Tab: 该 UP 发的图文动态 ======== -->
+        <Grid Grid.Row="1" Visibility="{Binding IsImagesTab, Converter={StaticResource BoolToVis}}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Text="{Binding ImageSummary}" FontSize="15" FontWeight="SemiBold"
+                       Margin="36,16,36,8" />
+
+            <Grid Grid.Row="1">
+                <ListBox x:Name="ImageList" Style="{StaticResource SpaceDynamicListStyle}"
+                         Margin="4,0,8,0"
+                         ItemsSource="{Binding ImageDynamics}"
+                         ScrollViewer.ScrollChanged="OnImageListScrollChanged">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <controls:DynamicCard DetailRequested="OnDynamicCardDetailRequested" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding ImagesLoading, Converter={StaticResource BoolToVis}}">
+                    <controls:LoadingRing Width="28" Height="28" HorizontalAlignment="Center" />
+                    <TextBlock Text="加载图文动态…" Style="{StaticResource MetaTextStyle}"
+                               Margin="0,10,0,0" HorizontalAlignment="Center" />
+                </StackPanel>
+
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding ShowImagesErrorOverlay, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding ImagesError}" FontSize="13" TextWrapping="Wrap"
+                               MaxWidth="420" HorizontalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                            HorizontalAlignment="Center" Margin="0,14,0,0" Padding="22,7"
+                            Click="OnImagesRetryClick" />
+                </StackPanel>
+
+                <!-- 自动续载的轻量反馈: 浮在列表底部, **不占一行、不带背景板**
+                     (2026-11-14 用户要求删掉原来那条"加载更多图文"提示 —— 它后面那块
+                      不透明底衬在亚克力/浅色主题下很显眼)。 -->
+                <controls:LoadingRing Width="16" Height="16" HorizontalAlignment="Center"
+                                      VerticalAlignment="Bottom" Margin="0,0,0,14"
+                                      Visibility="{Binding ImagesLoadingMore, Converter={StaticResource BoolToVis}}" />
+            </Grid>
         </Grid>
     </Grid>
 </UserControl>

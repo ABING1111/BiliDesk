@@ -421,5 +421,47 @@
                 </Grid>
             </Grid>
         </Border>
+
+        <!-- ============ 动态详情(应用级遮罩, 覆盖左侧导航 + 内容区) ============
+             2026-11-14 用户要求:
+               · 打开详情后左侧 tab 栏也要变暗 ⇒ 遮罩必须挂在 MainWindow 根 Grid 上,
+                 不能只挂在 FollowPage 里;
+               · 亚克力模式下详情页几乎透明 ⇒ 面板底色用**恒不透明**的 OverlaySurfaceBrush;
+               · 详情页居中显示;
+               · 打开/关闭播放"从卡片长出来 / 收回卡片"的缩放动画(见 ShowDynamicDetail)。
+             点遮罩空白处 / 右上角 X / Esc 关闭; 点面板内部不关闭。 -->
+        <Grid x:Name="DynamicDetailOverlay" Grid.ColumnSpan="2" Panel.ZIndex="50"
+              Background="#73000000" Opacity="0" Visibility="Collapsed"
+              MouseLeftButtonDown="OnDynamicDetailScrimClick">
+            <Border x:Name="DynamicDetailPanel" Width="820"
+                    HorizontalAlignment="Center" VerticalAlignment="Stretch"
+                    Margin="0,32" CornerRadius="12" ClipToBounds="True"
+                    Background="{DynamicResource OverlaySurfaceBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                    Opacity="0" RenderTransformOrigin="0.5,0.5">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="28" ShadowDepth="4" Opacity="0.32" Color="#000000" />
+                </Border.Effect>
+                <Border.RenderTransform>
+                    <ScaleTransform x:Name="DynamicDetailScale" ScaleX="1" ScaleY="1" />
+                </Border.RenderTransform>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Margin="18,12,12,4">
+                        <TextBlock Text="动态详情" FontSize="15" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   VerticalAlignment="Center" />
+                        <Button HorizontalAlignment="Right" Style="{StaticResource IconButtonStyle}"
+                                Content="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                FontSize="12" Width="32" Height="32"
+                                Click="OnDynamicDetailCloseClick" ToolTip="关闭 (Esc)" />
+                    </Grid>
+                    <controls:DynamicDetailView x:Name="DynamicDetailHost" Grid.Row="1" />
+                </Grid>
+            </Border>
+        </Grid>
     </Grid>
 </views:FluentWindow>

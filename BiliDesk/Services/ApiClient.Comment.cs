@@ -43,7 +43,8 @@ public partial class ApiClient
     ///   ★ `next` 的优先级高于已弃用的 `pagination_str`, 也高于 `pn`; 首屏不传 `next` 即可。
     /// </summary>
     public async Task<(bool ok, string? err, List<CommentItem> items, long total, long next, bool isEnd)>
-        GetCommentsAsync(long aid, int count = 20, int mode = 3, long next = 0)
+        GetCommentsAsync(long aid, int count = 20, int mode = 3, long next = 0,
+            int type = 1, long upperMid = 0)
     {
         var result = new List<CommentItem>();
         var total = 0L;
@@ -54,7 +55,7 @@ public partial class ApiClient
             var ps = new Dictionary<string, string>
             {
                 ["oid"] = aid.ToString(),
-                ["type"] = "1",
+                ["type"] = type.ToString(),
                 ["mode"] = mode.ToString(),
                 ["ps"] = count.ToString()
             };
@@ -73,7 +74,8 @@ public partial class ApiClient
             // 于是: 登录了就带(拿得到 IP 属地), 没登录就不带(保住 20 条不被降级)。
             var (code, msg, data) = await GetJsonAsync(
                 "https://api.bilibili.com/x/v2/reply/main", ps,
-                fingerprint: SessionManager.Instance.HasLogin);
+                fingerprint: SessionManager.Instance.HasLogin,
+                referer: type is 11 or 17 ? "https://t.bilibili.com/" : null);
             if (code != 0 || data == null)
                 return (false, msg ?? $"获取评论失败 (code {code})", result, 0, 0, true);
 
@@ -89,10 +91,11 @@ public partial class ApiClient
                          (ie.ValueKind == JsonValueKind.Number && ie.GetInt32() == 1));
             }
 
-            // 本稿件的 UP 主 mid: 用来给"UP 主自己的评论"打 [UP] 标
-            var upperMid = data.Value.TryGetProperty("upper", out var up) &&
-                           up.ValueKind == JsonValueKind.Object
-                ? GetLongSafe(up, "mid") : 0L;
+            // 本稿件的 UP 主 mid: 用来给"UP 主自己的评论"打 [UP] 标。
+            // 动态评论区(type=17)接口不一定带 upper, 调用方可以直接把动态作者 mid 传进来。
+            if (upperMid <= 0 &&
+                data.Value.TryGetProperty("upper", out var up) && up.ValueKind == JsonValueKind.Object)
+                upperMid = GetLongSafe(up, "mid");
 
             // ★★★ 置顶评论(2026-10-03 修"置顶评论不可见"): 置顶那条**不在 replies 里**,
             //   而是在 `data.top.upper`(UP 主置顶)或 `data.top.admin`(管理员置顶)。
@@ -140,11 +143,12 @@ public partial class ApiClient
 
     /// <summary>
     /// 取某条评论下的**全部**回复(楼中楼)。
-    /// 接口: /x/v2/reply/reply —— root 传顶层评论的 rpid, oid 是视频 aid, type=1。
-    /// 首页接口 /x/v2/reply/main 只内联前 3 条回复, 要看全就只能走这个接口,
-    /// 否则用户会觉得"别人回复的内容看不到"。
+    /// 接口: /x/v2/reply/reply —— root 传顶层评论的 rpid, oid 是视频 aid / 动态 id,
+    /// type=1(稿件) / 17(动态)。首页接口 /x/v2/reply/main 只内联前 3 条回复,
+    /// 要看全就只能走这个接口, 否则用户会觉得"别人回复的内容看不到"。
     /// </summary>
-    public async Task<(bool ok, string? err, List<CommentItem> items)> GetReplyRepliesAsync(long aid, long rootRpid, int pn = 1, int ps = 20)
+    public async Task<(bool ok, string? err, List<CommentItem> items)> GetReplyRepliesAsync(
+        long aid, long rootRpid, int pn = 1, int ps = 20, int type = 1, long upperMid = 0)
     {
         var result = new List<CommentItem>();
         try
@@ -153,20 +157,21 @@ public partial class ApiClient
             var ps2 = new Dictionary<string, string>
             {
                 ["oid"] = aid.ToString(),
-                ["type"] = "1",
+                ["type"] = type.ToString(),
                 ["root"] = rootRpid.ToString(),
                 ["ps"] = ps.ToString(),
                 ["pn"] = pn.ToString()
             };
             var (code, msg, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/v2/reply/reply", ps2);
+                "https://api.bilibili.com/x/v2/reply/reply", ps2,
+                referer: type is 11 or 17 ? "https://t.bilibili.com/" : null);
             if (code != 0 || data == null)
                 return (false, msg ?? $"获取楼中楼失败 (code {code})", result);
 
             // 楼中楼里 UP 主自己的回复同样要打 [UP] 标 —— reply/reply 的 data 里也带 upper
-            var upperMid = data.Value.TryGetProperty("upper", out var up) &&
-                           up.ValueKind == JsonValueKind.Object
-                ? GetLongSafe(up, "mid") : 0L;
+            if (upperMid <= 0 &&
+                data.Value.TryGetProperty("upper", out var up) && up.ValueKind == JsonValueKind.Object)
+                upperMid = GetLongSafe(up, "mid");
 
             if (data.Value.TryGetProperty("replies", out var arr) && arr.ValueKind == JsonValueKind.Array)
             {

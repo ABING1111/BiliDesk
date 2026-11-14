@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
@@ -45,6 +46,19 @@ public class UserSpaceViewModel : ObservableObject
     private int _loadGen;
 
     public ObservableCollection<VideoItem> Videos { get; } = new();
+
+    /// <summary>UP 主页「图文」Tab: 该 UP 发的图文/纯文字动态(视频动态不混进来)。</summary>
+    public ObservableCollection<DynamicItem> ImageDynamics { get; } = new();
+
+    // ---------------- 图文 Tab 状态 ----------------
+    private bool _isVideosTab = true;
+    private bool _imagesLoaded;
+    private bool _imagesLoading;
+    private bool _imagesLoadingMore;
+    private bool _imagesHasMore = true;
+    private string _imagesError = "";
+    private string? _imagesOffset;
+    private int _imagesGen;
 
     /// <summary>底部页码栏的条目(数字页或省略号)</summary>
     public ObservableCollection<PageItem> PageItems { get; } = new();
@@ -111,6 +125,54 @@ public class UserSpaceViewModel : ObservableObject
     public string PageSummary => TotalVideos > 0
         ? $"投稿 · 共 {VideoItem.FormatCount(TotalVideos)} 个视频"
         : "投稿";
+
+    // ---------------- 图文 Tab ----------------
+    public bool IsVideosTab
+    {
+        get => _isVideosTab;
+        private set
+        {
+            if (!SetProperty(ref _isVideosTab, value)) return;
+            OnPropertyChanged(nameof(IsImagesTab));
+        }
+    }
+
+    public bool IsImagesTab => !IsVideosTab;
+
+    public bool ImagesLoading
+    {
+        get => _imagesLoading;
+        private set => SetProperty(ref _imagesLoading, value);
+    }
+
+    public bool ImagesLoadingMore
+    {
+        get => _imagesLoadingMore;
+        private set => SetProperty(ref _imagesLoadingMore, value);
+    }
+
+    public bool ImagesHasMore
+    {
+        get => _imagesHasMore;
+        private set => SetProperty(ref _imagesHasMore, value);
+    }
+
+    public string ImagesError
+    {
+        get => _imagesError;
+        private set
+        {
+            if (!SetProperty(ref _imagesError, value)) return;
+            OnPropertyChanged(nameof(ShowImagesErrorOverlay));
+        }
+    }
+
+    /// <summary>只有列表为空时才用整块错误/空态提示盖住列表, 加载更多失败不影响已加载内容。</summary>
+    public bool ShowImagesErrorOverlay => ImagesError.Length > 0 && ImageDynamics.Count == 0;
+
+    public string ImageSummary => ImageDynamics.Count > 0
+        ? $"图文 · 已加载 {ImageDynamics.Count} 条"
+        : "图文";
 
     // ---------------- 简介展开 ----------------
     private bool _signExpanded;
@@ -209,6 +271,9 @@ public class UserSpaceViewModel : ObservableObject
     public ICommand PrevPageCommand { get; }
     public ICommand NextPageCommand { get; }
     public ICommand ToggleSignCommand { get; }
+    public ICommand ShowVideosTabCommand { get; }
+    public ICommand ShowImagesTabCommand { get; }
+    public ICommand LoadMoreImagesCommand { get; }
 
     public UserSpaceViewModel()
     {
@@ -227,6 +292,112 @@ public class UserSpaceViewModel : ObservableObject
         });
         ToggleFollowCommand = new AsyncRelayCommand(ToggleFollowAsync);
         ToggleSignCommand = new RelayCommand(() => IsSignExpanded = !IsSignExpanded);
+        ShowVideosTabCommand = new RelayCommand(ShowVideosTab);
+        ShowImagesTabCommand = new AsyncRelayCommand(ShowImagesTabAsync);
+        LoadMoreImagesCommand = new AsyncRelayCommand(LoadMoreImagesAsync);
+    }
+
+    /// <summary>切到「投稿」Tab(视频列表已有, 不重新加载)</summary>
+    public void ShowVideosTab() => IsVideosTab = true;
+
+    /// <summary>切到「图文」Tab: 首次进入才拉数据</summary>
+    public async Task ShowImagesTabAsync()
+    {
+        IsVideosTab = false;
+        if (_imagesLoaded) return;
+        _imagesLoaded = true;
+        await LoadImagesPageAsync(reset: true);
+        if (ImageDynamics.Count == 0 && ImagesError.Length > 0) _imagesLoaded = false;
+    }
+
+    public Task LoadMoreImagesAsync() => LoadImagesPageAsync(reset: false);
+
+    /// <summary>
+    /// 一次「加载更多」最多翻几页、目标补多少条图文。
+    /// ★ 2026-11-14 用户报"每次只加载几条, 要一直点加载更多":
+    ///   服务端一页 20 条里往往只有 1~3 条图文(其余是视频投稿), 只翻 3 页就停 ⇒ 一次只进几条。
+    ///   现在按"目标条数"扫: 一直往后翻, 直到凑够 <see cref="TargetImagesPerLoad"/> 条
+    ///   或翻满 <see cref="MaxScanPagesPerLoad"/> 页或没有更多为止。
+    /// </summary>
+    private const int TargetImagesPerLoad = 12;
+    private const int MaxScanPagesPerLoad = 8;
+
+    /// <summary>
+    /// 拉一页 UP 主动态, 只挑图文进 ImageDynamics。
+    /// ★ 服务端一页可能全是视频动态(投稿), 所以这里按"凑够目标条数"连续翻页。
+    /// </summary>
+    private async Task LoadImagesPageAsync(bool reset)
+    {
+        if (_mid <= 0) return;
+        if (reset)
+        {
+            _imagesGen++;
+            _imagesOffset = null;
+            _imagesHasMore = true;
+            ImagesError = "";
+            ImageDynamics.Clear();
+            ImagesLoading = true;
+            OnPropertyChanged(nameof(ImageSummary));
+            OnPropertyChanged(nameof(ShowImagesErrorOverlay));
+        }
+        else
+        {
+            if (ImagesLoadingMore || !ImagesHasMore) return;
+            ImagesLoadingMore = true;
+        }
+
+        var gen = _imagesGen;
+        var scanned = 0;
+        var added = 0;
+        try
+        {
+            while (_imagesHasMore && scanned < MaxScanPagesPerLoad && added < TargetImagesPerLoad)
+            {
+                var (ok, err, items, next, hasMore) = await Svc.Api.GetSpaceDynamicsAsync(_mid, _imagesOffset);
+                if (gen != _imagesGen) return;
+                if (!ok)
+                {
+                    ImagesError = err ?? "图文动态加载失败";
+                    break;
+                }
+
+                scanned++;
+                var seen = new HashSet<string>(ImageDynamics.Select(x => x.Id));
+                if (items != null)
+                {
+                    foreach (var it in items)
+                    {
+                        if (it.Kind is not DynamicKind.ImageText) continue;
+                        if (string.IsNullOrEmpty(it.Id) || !seen.Add(it.Id)) continue;
+                        ImageDynamics.Add(it);
+                        added++;
+                    }
+                }
+
+                var advanced = !string.IsNullOrEmpty(next) && next != _imagesOffset;
+                _imagesOffset = next;
+                _imagesHasMore = hasMore && advanced;
+                if (!_imagesHasMore) break;
+                // 还没凑够目标条数: 继续翻下一页(这一页可能全是视频动态)
+            }
+
+            if (added == 0 && ImageDynamics.Count == 0 && ImagesError.Length == 0)
+                ImagesError = "该 UP 主暂时没有图文动态";
+            OnPropertyChanged(nameof(ImageSummary));
+            OnPropertyChanged(nameof(ShowImagesErrorOverlay));
+        }
+        catch (Exception ex)
+        {
+            if (gen == _imagesGen) ImagesError = ex.Message;
+        }
+        finally
+        {
+            if (gen == _imagesGen)
+            {
+                ImagesLoading = false;
+                ImagesLoadingMore = false;
+            }
+        }
     }
 
     public async Task InitAsync(long mid)
@@ -303,6 +474,17 @@ public class UserSpaceViewModel : ObservableObject
         {
             _initializing = false;
             Loading = false;
+        }
+
+        // 在「图文」Tab 上按 F5: 图文列表也要跟着刷新, 否则刷新后看到的还是旧内容
+        if (IsImagesTab)
+        {
+            _imagesLoaded = true;
+            await LoadImagesPageAsync(reset: true);
+        }
+        else
+        {
+            _imagesLoaded = false;
         }
     }
 

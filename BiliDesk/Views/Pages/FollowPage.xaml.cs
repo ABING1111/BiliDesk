@@ -7,7 +7,9 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
+using BiliDesk.Services;
 using BiliDesk.ViewModels;
+using BiliDesk.Views.Controls;
 
 namespace BiliDesk.Views.Pages;
 
@@ -145,7 +147,20 @@ public partial class FollowPage : UserControl, IRefreshable
     private async void OnPageVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (IsVisible) await OnEnteredPage();
-        else _liveBoardTimer?.Stop();
+        else
+        {
+            _liveBoardTimer?.Stop();
+            // 离开动态页时收起详情(正常情况下遮罩会先挡住导航, 这里兜底)
+            SvcWindow.Main?.CloseDynamicDetail(immediate: true);
+        }
+    }
+
+    // ------------------------------------------------------------ 动态详情右侧面板
+
+    private void OnDynamicCardDetailRequested(object sender, DynamicDetailRequestedEventArgs e)
+    {
+        if (e.Item == null) return;
+        SvcWindow.Main?.ShowDynamicDetail(e.Item, e.FocusComments, e.Source);
     }
 
     private async Task OnEnteredPage()

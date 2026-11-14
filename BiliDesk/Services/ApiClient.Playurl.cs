@@ -39,69 +39,9 @@ public partial class ApiClient
     private const long ShortVideoRemuxThresholdMs = 60_000;
 
     /// <summary>
-    /// 关注 UP 的动态时间线(「动态」页的"全部动态")。
-    ///
-    /// 接口: <c>GET /x/polymer/web-dynamic/v1/feed/nav</c>(需 WBI 签名 + 登录态)。
-    /// 动态的种类很多(视频/图文/纯文字/转发/直播开播...), 这个页面只关心**视频投稿**:
-    ///   · type = DYNAMIC_TYPE_AV 且 major 里带 archive —— 直接映射成 VideoItem 走通用卡片;
-    ///   · 转发(DYNAMIC_TYPE_FORWARD)里嵌的视频(orig)也算 —— 用户想看的是"UP 发了什么视频";
-    ///   · 图文/纯文字/投票等没有可播对象, 跳过。
-    /// 分页是游标式的: 响应里的 offset 原样带给下一页, has_more=false 就是到底了。
-    ///
-    /// ★ 实测(2026-10-17, 6 页真实样本):
-    ///   · has_more 是 **bool**(true/false), 不是 0/1 数字 —— 按 Number 读会恒得 false;
-    ///   · 扁平条目的字段只有 id_str/author/pub_time/type/rid/title/cover/jump_url/visible/fold,
-    ///     **没有** stat / play / duration / length / pub_ts ⇒ 卡片上没有计数与时长可显示;
-    ///   · author.mid 是**字符串**("1255510247") ⇒ 必须走 GetLongLoose;
-    ///   · 6 页共 104 条里 91 条 type=8(视频)、2 条 type=64(专栏, 无可播对象, 跳过是对的),
-    ///     其余为图文/转发等。
-    /// </summary>
-    public async Task<(bool ok, string? err, List<VideoItem>? items, string? nextOffset, bool hasMore)>
-        GetDynamicFeedAsync(string? offset = null)
-    {
-        var items = new List<VideoItem>();
-        try
-        {
-            await EnsureBuvidAsync();
-            var ps = new Dictionary<string, string>();
-            if (!string.IsNullOrEmpty(offset)) ps["offset"] = offset;
-
-            var (code, msg, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/nav", ps,
-                sign: true, referer: "https://t.bilibili.com/");
-            if (code != 0 || data == null)
-                return (false, code == -101 ? "请先登录后查看动态" : (msg ?? "动态加载失败"), null, null, false);
-
-            var d = data.Value;
-            // ★ has_more 实测是 bool; 但早期/其它形态见过 0/1, 两种都认(与消息页/收藏页的
-            //   `ValueKind == True` 写法对齐, 那边只认 bool)。
-            var hasMore = d.TryGetProperty("has_more", out var hm) &&
-                          (hm.ValueKind == JsonValueKind.True ||
-                           (hm.ValueKind == JsonValueKind.Number && hm.GetInt32() == 1));
-            var next = d.TryGetProperty("offset", out var off) && off.ValueKind == JsonValueKind.String
-                ? off.GetString() : null;
-
-            if (d.TryGetProperty("items", out var list) && list.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var e in list.EnumerateArray())
-                {
-                    var item = ParseDynamicVideo(e);
-                    if (item != null) items.Add(item);
-                }
-            }
-            return (true, null, items, next, hasMore);
-        }
-        catch (Exception ex)
-        {
-            App.ReportError(ex);
-            return (false, ex.Message, null, null, false);
-        }
-    }
-
-    /// <summary>
     /// 动态导航接口的**增量**查询(2026-11-06 新动态红点用)。
     ///
-    /// 与 <see cref="GetDynamicFeedAsync"/> 打同一个端点, 但:
+    /// 接口仍是 feed/nav(扁平、轻量), 与综合动态列表(feed/all, 见 ApiClient.Dynamic.cs)分开:
     ///   · 可以带 `update_baseline` —— 接口会按这个基线返回 `update_num`(基线以上的新动态数),
     ///     这是 B 站自己统计的"有多少条新动态", 比本地拿 bvid 逐个比对可靠;
     ///   · 解析的是轻量的 <see cref="DynamicNavEntry"/>(id/mid/时间), 不需要视频卡片字段。
@@ -196,7 +136,7 @@ public partial class ApiClient
             else if (e.TryGetProperty("type", out var tv) && tv.ValueKind == JsonValueKind.Number)
                 flatType = tv.GetInt32();
 
-            var bvid = flatType == 8 ? ExtractBvidFromJumpUrl(GetStr(e, "jump_url")) : "";
+            var bvid = flatType == 8 ? DynamicParser.ExtractBvidFromJumpUrl(GetStr(e, "jump_url")) : "";
             if (bvid.Length == 0) bvid = GetStr(e, "bvid");
 
             // 复用视频那边的 pub_time 解析(相对时间反推 + 原文), 返回的 Pubdate 是近似秒。
@@ -217,105 +157,6 @@ public partial class ApiClient
         catch
         {
             return null;
-        }
-    }
-
-    /// <summary>
-    /// 把一条动态卡映射成 VideoItem(只取"能播的视频"), 不是视频动态就返回 null。
-    ///
-    /// **实测的返回是扁平结构**(2026-09-25, 带 WBI + 登录态):
-    ///   { id_str, type, rid, title, cover, jump_url, pub_time,
-    ///     author: { mid, name, face } }
-    ///   · type=8 是视频投稿, rid 即 avid, bvid 要从 jump_url 里截出来;
-    ///   · type=1 是转发, 内容嵌在 orig 里(递归取);
-    ///   · 图文(2)/纯文字(4) 等没有可播对象, 跳过。
-    /// 注: 服务端对某些客户端形态会返回 modules 嵌套结构, 这里两种都兼容 ——
-    ///     扁平优先, 取不到再走 modules 路径。
-    /// </summary>
-    private static VideoItem? ParseDynamicVideo(JsonElement e)
-    {
-        try
-        {
-            // ---- 扁平结构(实测主路径) ----
-            var type = GetStr(e, "type");
-            var flatType = 0;
-            int.TryParse(type, out flatType);
-            if (flatType == 0 && type.Length == 0 &&
-                e.TryGetProperty("type", out var tv) && tv.ValueKind == JsonValueKind.Number)
-                flatType = tv.GetInt32();
-
-            // 转发: 递归取被转发的原动态
-            if (flatType == 1 && e.TryGetProperty("orig", out var orig) &&
-                orig.ValueKind == JsonValueKind.Object)
-                return ParseDynamicVideo(orig);
-
-            var hasFlatVideo = flatType == 8 || (flatType == 0 &&
-                e.TryGetProperty("cover", out var cv) && cv.ValueKind == JsonValueKind.String &&
-                e.TryGetProperty("title", out var tt) && tt.ValueKind == JsonValueKind.String);
-            if (hasFlatVideo)
-            {
-                var bvid = ExtractBvidFromJumpUrl(GetStr(e, "jump_url"));
-                if (string.IsNullOrEmpty(bvid)) bvid = GetStr(e, "bvid");
-                if (string.IsNullOrEmpty(bvid)) return null;
-
-                var item = new VideoItem
-                {
-                    Bvid = bvid,
-                    Title = GetStr(e, "title"),
-                    Cover = GetStr(e, "cover"),
-                };
-                if (long.TryParse(GetStr(e, "rid"), out var rid)) item.Aid = rid;
-                if (e.TryGetProperty("author", out var au) && au.ValueKind == JsonValueKind.Object)
-                {
-                    item.Author = GetStr(au, "name");
-                    // ★ mid 是**字符串**("1255510247"), 必须走 Loose 版, 否则恒为 0
-                    item.OwnerMid = GetLongLoose(au, "mid");
-                    // 头像只有动态流给(动态卡片顶部要摆) —— 见 VideoItem.AuthorFace
-                    item.AuthorFace = UrlUtil.Normalize(GetStr(au, "face"));
-                }
-                // 旧版扁平结构把作者 mid 放在顶层 uid
-                if (item.OwnerMid <= 0) item.OwnerMid = GetLongLoose(e, "uid");
-                ReadDynamicPubTime(e, item);
-                return item;
-            }
-
-            // ---- modules 嵌套结构(兼容路径) ----
-            var arcJson = FindArchiveJson(e);
-            if (arcJson == null) return null;
-            using var doc = JsonDocument.Parse(arcJson);
-            var a = doc.RootElement;
-            var bvid2 = GetStr(a, "bvid");
-            if (string.IsNullOrEmpty(bvid2)) return null;
-            var item2 = new VideoItem
-            {
-                Bvid = bvid2,
-                Aid = GetLong(a, "aid"),
-                Title = GetStr(a, "title"),
-                Cover = GetStr(a, "cover"),
-                Duration = GetStr(a, "duration_text"),
-            };
-            if (a.TryGetProperty("stat", out var st) && st.ValueKind == JsonValueKind.Object)
-            {
-                // ★ 这里的 play/danmaku 是**展示串**("1.4万" / "217"), 不是数字 ——
-                //   原来按 Number 取, 字符串一律取不到, 封面上的播放/弹幕角标永远是空的。
-                item2.ViewCount = GetLong(st, "view");
-                if (item2.ViewCount <= 0) item2.ViewCount = ParseCountText(GetStr(st, "play"));
-                item2.DanmakuCount = GetLong(st, "danmaku");
-                if (item2.DanmakuCount <= 0) item2.DanmakuCount = ParseCountText(GetStr(st, "danmaku"));
-            }
-            if (e.TryGetProperty("modules", out var mods) &&
-                mods.TryGetProperty("module_author", out var au2))
-            {
-                item2.Author = GetStr(au2, "name");
-                item2.OwnerMid = GetLongLoose(au2, "mid");   // 同扁平路径: mid 可能是字符串
-                item2.AuthorFace = UrlUtil.Normalize(GetStr(au2, "face"));
-                ReadDynamicPubTime(au2, item2);
-            }
-            return item2;
-        }
-        catch
-        {
-            return null;   // 单条动态结构异常只丢这一条, 不影响整页
         }
     }
 
@@ -413,57 +254,6 @@ public partial class ApiClient
 
     private static long ToEpoch(DateTime local)
         => new DateTimeOffset(local).ToUnixTimeSeconds();
-
-    // ★ 这里原本还有一个 ReadDynamicArchiveStats(在扁平条目里试着捞 duration/stat)。
-    //   已删除(2026-10-15): 扁平结构的动态条目**实测没有**这些字段 —— 那条兜底在真实数据上
-    //   一次都不会命中, 是纯粹的猜字段; modules 路径的时长/播放量在它自己那段里已经解析过。
-
-    /// <summary>
-    /// 把接口给的**展示串**计数还原成数字: "1.4万" → 14000, "12.3亿" → 1230000000, "217" → 217。
-    ///
-    /// ★ 动态接口的 stat.play / stat.danmaku 就是这种**已缩写**的字符串(不是数字),
-    ///   直接 GetInt64 会得 0(ValueKind 不是 Number)。还原成数字后再统一走
-    ///   VideoItem.FormatCount 显示 —— 这样"接口给 1.4万"和"接口给 14000"在界面上是同一个样子,
-    ///   不会出现第三种写法。
-    /// ★ 用 InvariantCulture: 小数点必须是 "." —— 在某些区域设置下 "1.4" 会被当成千分位。
-    /// </summary>
-    private static long ParseCountText(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return 0;
-        s = s.Trim();
-        double mul = 1;
-        if (s.EndsWith("万", StringComparison.Ordinal)) { mul = 10_000; s = s[..^1]; }
-        else if (s.EndsWith("亿", StringComparison.Ordinal)) { mul = 100_000_000; s = s[..^1]; }
-        return double.TryParse(s, System.Globalization.NumberStyles.Float,
-                               System.Globalization.CultureInfo.InvariantCulture, out var v)
-            ? (long)(v * mul) : 0;
-    }
-
-    /// <summary>jump_url 形如 "//www.bilibili.com/video/BV1VfaT6ZELT" → 截出 bvid</summary>
-    private static string ExtractBvidFromJumpUrl(string jumpUrl)
-    {
-        var i = jumpUrl.IndexOf("/video/", StringComparison.Ordinal);
-        if (i < 0) return "";
-        var rest = jumpUrl[(i + "/video/".Length)..];
-        var end = rest.IndexOf('?');
-        return end < 0 ? rest : rest[..end];
-    }
-
-    /// <summary>modules 嵌套结构里找 archive(兼容转发), 返回其原文 JSON</summary>
-    private static string? FindArchiveJson(JsonElement el)
-    {
-        if (!el.TryGetProperty("modules", out var mods)) return null;
-        if (!mods.TryGetProperty("module_dynamic", out var dyn)) return null;
-        if (!dyn.TryGetProperty("major", out var major)) return null;
-        var majorType = GetStr(major, "type");
-        if (majorType == "MAJOR_TYPE_ARCHIVE" &&
-            major.TryGetProperty("archive", out var arc) && arc.ValueKind == JsonValueKind.Object)
-            return arc.ToString();
-        if (majorType == "MAJOR_TYPE_FORWARD" &&
-            major.TryGetProperty("orig", out var orig) && orig.ValueKind == JsonValueKind.Object)
-            return FindArchiveJson(orig);
-        return null;
-    }
 
     /// <summary>一条 DASH 音轨候选(普通 AAC / 杜比 / Hi-Res 无损)。</summary>
     private sealed class AudioCandidate

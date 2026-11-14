@@ -1,0 +1,346 @@
+<UserControl x:Class="BiliDesk.Views.Controls.DynamicDetailView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             Background="Transparent" Focusable="False">
+    <UserControl.Resources>
+        <Style x:Key="DetailActionButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="8" Padding="10,6"
+                                Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ControlFillHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="DetailCommentFabStyle" TargetType="Button">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="46" />
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="14"
+                                Background="{TemplateBinding Background}">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.28"
+                                                  Direction="270" Color="#000000" />
+                            </Border.Effect>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource AccentHoverBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <ScrollViewer x:Name="ContentScroll" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="20,16,20,80">
+            <!-- ===== 动态内容 ===== -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Width="44" Height="44" CornerRadius="22" ClipToBounds="True"
+                        Background="{DynamicResource AccentSoftFillBrush}"
+                        Cursor="Hand" MouseLeftButtonUp="OnAuthorClick"
+                        helpers:Cover.Source="{Binding Item.AuthorFace}">
+                    <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="18" Foreground="{DynamicResource AccentTextBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Item.AuthorName}" FontSize="15" FontWeight="SemiBold"
+                               Foreground="{DynamicResource AccentTextBrush}"
+                               Cursor="Hand" MouseLeftButtonUp="OnAuthorClick" />
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                        <TextBlock Text="{Binding Item.PubText, Mode=OneWay}" FontSize="12"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                        <TextBlock Text="·" Margin="6,0" FontSize="12"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   Visibility="{Binding Item.ActionLabel, Converter={StaticResource StrToVis}}" />
+                        <TextBlock Text="{Binding Item.ActionLabel, Mode=OneWay}" FontSize="12"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+
+            <controls:SelectableText Text="{Binding Item.ContentText}" FontSize="14"
+                                     Margin="0,12,0,0"
+                                     Foreground="{DynamicResource TextPrimaryBrush}"
+                                     Visibility="{Binding Item.HasText, Converter={StaticResource BoolToVis}}" />
+
+            <TextBlock Text="{Binding Error}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"
+                       Foreground="{DynamicResource DangerBrush}"
+                       Visibility="{Binding Error, Converter={StaticResource StrToVis}}" />
+
+            <!-- 视频(仅本条自身是视频) -->
+            <StackPanel Margin="0,12,0,0"
+                        Visibility="{Binding Item.HasPlayableVideo, Converter={StaticResource BoolToVis}}">
+                <Border x:Name="DetailVideoHost" CornerRadius="8" ClipToBounds="True"
+                        Background="{DynamicResource PlaceholderBrush}"
+                        Cursor="Hand" MouseLeftButtonUp="OnVideoClick">
+                    <Grid>
+                        <Border CornerRadius="8" helpers:Cover.Source="{Binding Item.VideoCover}" />
+                        <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                Margin="0,0,8,8" CornerRadius="4" Padding="6,2"
+                                Background="{DynamicResource DurationBadgeBackgroundBrush}"
+                                Visibility="{Binding Item.VideoDuration, Converter={StaticResource StrToVis}}">
+                            <TextBlock Text="{Binding Item.VideoDuration}" Foreground="White" FontSize="11" />
+                        </Border>
+                    </Grid>
+                </Border>
+                <TextBlock Text="{Binding Item.VideoTitle}" FontSize="15" FontWeight="SemiBold"
+                           Margin="0,8,0,0" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           Cursor="Hand" MouseLeftButtonUp="OnVideoClick" />
+            </StackPanel>
+
+            <TextBlock Text="{Binding Item.Title}" FontSize="15" FontWeight="SemiBold"
+                       Margin="0,12,0,0" TextWrapping="Wrap"
+                       Foreground="{DynamicResource TextPrimaryBrush}"
+                       Visibility="{Binding Item.ShowArticleTitle, Converter={StaticResource BoolToVis}}" />
+
+            <controls:DynamicImageGrid Margin="0,12,0,0" UseDetail="True"
+                                       ItemsSource="{Binding Item.Images}"
+                                       Visibility="{Binding Item.HasImages, Converter={StaticResource BoolToVis}}" />
+
+            <!-- 直播 -->
+            <StackPanel Margin="0,12,0,0"
+                        Visibility="{Binding Item.IsLive, Converter={StaticResource BoolToVis}}">
+                <Border CornerRadius="8" ClipToBounds="True" Height="200"
+                        Background="{DynamicResource PlaceholderBrush}"
+                        Cursor="Hand" MouseLeftButtonUp="OnLiveClick">
+                    <Grid>
+                        <Border CornerRadius="8" helpers:Cover.Source="{Binding Item.Cover}" />
+                        <Border HorizontalAlignment="Left" VerticalAlignment="Top"
+                                Margin="8,8,0,0" CornerRadius="4" Padding="6,2"
+                                Background="{DynamicResource DangerBrush}">
+                            <TextBlock Text="直播中" FontSize="10" FontWeight="SemiBold" Foreground="White" />
+                        </Border>
+                    </Grid>
+                </Border>
+                <TextBlock Text="{Binding Item.Title}" FontSize="15" FontWeight="SemiBold"
+                           Margin="0,8,0,0" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           Cursor="Hand" MouseLeftButtonUp="OnLiveClick" />
+            </StackPanel>
+
+            <!-- 转发原文 -->
+            <Border Margin="0,12,0,0" Padding="12" CornerRadius="8"
+                    Background="{DynamicResource ControlFillDefaultBrush}"
+                    Visibility="{Binding Item.IsForward, Converter={StaticResource BoolToVis}}">
+                <StackPanel DataContext="{Binding Item.Orig}">
+                    <TextBlock Text="{Binding AuthorName}" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{DynamicResource AccentTextBrush}" />
+                    <controls:SelectableText Text="{Binding ContentText}" FontSize="13"
+                                             Margin="0,6,0,0"
+                                             Foreground="{DynamicResource TextPrimaryBrush}"
+                                             Visibility="{Binding HasText, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold"
+                               Margin="0,6,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Visibility="{Binding HasTitle, Converter={StaticResource BoolToVis}}" />
+                    <Border Margin="0,8,0,0" CornerRadius="6" ClipToBounds="True" Height="160"
+                            Background="{DynamicResource PlaceholderBrush}"
+                            Cursor="Hand" MouseLeftButtonUp="OnOrigVideoClick"
+                            Visibility="{Binding HasPlayableVideo, Converter={StaticResource BoolToVis}}">
+                        <Grid>
+                            <Border CornerRadius="6" helpers:Cover.Source="{Binding Cover}" />
+                            <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                    Margin="0,0,6,6" CornerRadius="4" Padding="5,1"
+                                    Background="{DynamicResource DurationBadgeBackgroundBrush}"
+                                    Visibility="{Binding Duration, Converter={StaticResource StrToVis}}">
+                                <TextBlock Text="{Binding Duration}" Foreground="White" FontSize="10" />
+                            </Border>
+                        </Grid>
+                    </Border>
+                    <controls:DynamicImageGrid Margin="0,8,0,0" UseDetail="True"
+                                               ItemsSource="{Binding Images}"
+                                               Visibility="{Binding HasImages, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
+            </Border>
+
+            <!-- 操作栏 -->
+            <Grid Margin="0,16,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Style="{StaticResource DetailActionButtonStyle}"
+                        Command="{Binding CopyLinkCommand}" ToolTip="复制动态链接">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE72D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="15" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding Item.ForwardLabel, Mode=OneWay}" Margin="6,0,0,0"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button Grid.Column="1" Style="{StaticResource DetailActionButtonStyle}"
+                        Click="OnScrollToCommentsClick" ToolTip="查看评论">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE90A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="15" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding Item.CommentLabel, Mode=OneWay}" Margin="6,0,0,0"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button Grid.Column="2" Click="OnLikeClick"
+                        IsEnabled="{Binding Item.LikeBusy, Converter={StaticResource InvBool}}"
+                        ToolTip="点赞 / 取消点赞">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource DetailActionButtonStyle}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Item.IsLiked}" Value="True">
+                                    <Setter Property="Foreground" Value="#F43F5E" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                    <StackPanel Orientation="Horizontal">
+                        <Grid x:Name="LikeIconBox" Width="20" Height="20"
+                              RenderTransformOrigin="0.5,0.5" VerticalAlignment="Center">
+                            <Path Data="{StaticResource LikeIconGeometry}"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center" />
+                        </Grid>
+                        <TextBlock Text="{Binding Item.LikeLabel, Mode=OneWay}" Margin="6,0,0,0"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+
+            <!-- ===== 评论(与视频评论区同一套逻辑) ===== -->
+            <controls:CommentSection x:Name="Comments" Margin="0,8,0,0" />
+        </StackPanel>
+        </ScrollViewer>
+
+        <!-- ===== 右下角评论 FAB + 浮动输入面板(与播放器评论区一致) ===== -->
+        <Grid x:Name="ComposerLayer" Panel.ZIndex="20">
+            <Border x:Name="CommentComposerPanel" Visibility="Collapsed" Opacity="0"
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="16,0,72,16" Width="560"
+                    Background="{DynamicResource OverlaySurfaceBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                    CornerRadius="10" Padding="14">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.25"
+                                      Direction="270" Color="#000000" />
+                </Border.Effect>
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,6">
+                        <Button DockPanel.Dock="Right" x:Name="BtnComposerExpand"
+                                Style="{StaticResource SubtleButtonStyle}"
+                                Width="26" Height="26" Padding="0" Margin="0"
+                                Click="OnComposerExpandClick"
+                                ToolTip="展开输入框, 写长评时能通读全文">
+                            <TextBlock x:Name="ComposerExpandIcon" Text="&#xE70D;"
+                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="11"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                        </Button>
+                        <TextBlock Text="发表评论" FontSize="12" FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </DockPanel>
+                    <Border Background="{DynamicResource AccentSoftFillBrush}"
+                            CornerRadius="4" Padding="8,3" Margin="0,0,0,6"
+                            Visibility="{Binding DataContext.IsReplying, ElementName=Comments,
+                                                 Converter={StaticResource BoolToVis}}">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource LinkButtonStyle}"
+                                    Content="取消" FontSize="11" Padding="4,0"
+                                    Click="OnCancelReplyClick" />
+                            <TextBlock Text="{Binding DataContext.ComposerHint, ElementName=Comments}"
+                                       FontSize="11" TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource AccentTextBrush}" />
+                        </DockPanel>
+                    </Border>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="CommentDraft" Grid.Column="0"
+                                 Style="{StaticResource FluentTextBoxStyle}"
+                                 Height="80" MaxLength="1000"
+                                 TextWrapping="Wrap" AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Text="{Binding DataContext.ComposerText, ElementName=Comments,
+                                                UpdateSourceTrigger=PropertyChanged}"
+                                 IsEnabled="{Binding DataContext.IsNotLoggedIn, ElementName=Comments,
+                                                     Converter={StaticResource InvBool}}"
+                                 KeyDown="OnComposerKeyDown" />
+                        <Button x:Name="PostCommentButton" Grid.Column="1"
+                                Content="{Binding DataContext.PostButtonText, ElementName=Comments}"
+                                Margin="8,0,0,0" Padding="16,8"
+                                VerticalAlignment="Bottom"
+                                Style="{StaticResource AccentButtonStyle}"
+                                IsEnabled="{Binding DataContext.CanPost, ElementName=Comments}"
+                                Click="OnPostCommentClick"
+                                ToolTip="发表评论 (Enter)" />
+                    </Grid>
+                    <Grid Margin="0,6,0,0">
+                        <TextBlock Text="Enter 发布 · Shift+Enter 换行" FontSize="11"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Text="登录后才能评论" FontSize="11" HorizontalAlignment="Right"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   Visibility="{Binding DataContext.IsNotLoggedIn, ElementName=Comments,
+                                                        Converter={StaticResource BoolToVis}}" />
+                    </Grid>
+                    <TextBlock Text="{Binding DataContext.Error, ElementName=Comments}"
+                               FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource DangerBrush}"
+                               Visibility="{Binding DataContext.Error, ElementName=Comments,
+                                                    Converter={StaticResource StrToVis}}" />
+                </StackPanel>
+            </Border>
+
+            <Button x:Name="CommentFab" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="0,0,16,16" Style="{StaticResource DetailCommentFabStyle}"
+                    Click="OnCommentFabClick" ToolTip="写评论">
+                <TextBlock x:Name="CommentFabIcon" Text="&#xE70F;"
+                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="18"
+                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+            </Button>
+        </Grid>
+    </Grid>
+</UserControl>

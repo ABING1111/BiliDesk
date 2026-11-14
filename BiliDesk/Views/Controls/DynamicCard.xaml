@@ -2,104 +2,273 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
              Background="Transparent" Focusable="False"
              PreviewMouseLeftButtonDown="OnCardPress">
-    <!--
-        动态流里的一条视频动态卡(用户 2026-10-15 要求"右侧不要全是视频卡片,
-        要有视频结合时间和头像的卡片"):
+    <UserControl.Resources>
+        <!-- 底部操作按钮: 常态透明、悬停铺淡底, 图标 + 计数横排。
+             与播放器评论区的小动作按钮同一套观感, 不另造语言。 -->
+        <Style x:Key="DynamicActionButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="8" Padding="8,6"
+                                Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ControlFillHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
 
-            ⭕ 某UP主  · 2小时前
-            ┌────────┐ 视频标题……
-            │  封面  │ 1.2万 播放 · 345 弹幕
-            └────────┘
-
-        ★ 为什么另起一个控件而不是给 VideoCard 加开关: 两者版式是**方向相反的** ——
-          VideoCard 是"封面在上、文字在下"的网格卡, 这里是"头像抬头 + 封面在左、文字在右"的
-          列表卡; 行高、点击区域、角标位置全不一样, 塞进一个控件只会让两边互相迁就。
-          (动态页两档排版并存, 由右上角开关切, 见 FollowPage。)
-    -->
-    <Border Margin="0,0,0,12" CornerRadius="10" Padding="14,12"
+    <!-- 综合动态卡: 视频 / 图文 / 纯文字 / 专栏 / 转发共用一张卡。
+         最大宽度 720 居中, 避免右栏很宽时封面/图片被拉得过大(参考 B 站动态页)。 -->
+    <Border x:Name="CardBorder" MaxWidth="720" HorizontalAlignment="Center"
+            Margin="0,0,0,12" CornerRadius="12" Padding="18,16"
             Background="{DynamicResource CardBackgroundBrush}"
-            BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1">
+            BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+            MouseLeftButtonUp="OnCardClick">
         <StackPanel>
-            <!-- ===== 头部: UP 头像 + 昵称 + 发布时间 =====
-                 头像与昵称都可点, 进 UP 主主页(与点卡片墙的 UP 名是同一条路)。 -->
+            <!-- ===== 头部: 头像 + 昵称 + 时间 · 发布动作 + 更多菜单 ===== -->
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <!-- 头像。写法与左栏 UP 列表、我的页头像**完全一致**: 显式 36x36 + 兜底人形。
-                     ★ 兜底人形不需要自己管显隐 —— Cover 贴图成功后会把 Border 的子元素收起来
-                       (见 CoverLoader.ApplyDecoded 里那句), 贴图失败时它则留在原地当占位,
-                       两种情况都正好是想要的。 -->
-                <Border Grid.Column="0" Width="36" Height="36" CornerRadius="18" ClipToBounds="True"
+
+                <Border Grid.Column="0" Width="40" Height="40" CornerRadius="20" ClipToBounds="True"
                         Background="{DynamicResource AccentSoftFillBrush}"
                         Cursor="Hand" MouseLeftButtonUp="OnUpClick" ToolTip="进入 UP 主主页"
                         helpers:Cover.Source="{Binding AuthorFace}">
                     <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                               FontSize="16" Foreground="{DynamicResource AccentTextBrush}"
+                               FontSize="17" Foreground="{DynamicResource AccentTextBrush}"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0"
-                            VerticalAlignment="Center">
-                    <TextBlock Text="{Binding Author}" FontSize="13" FontWeight="SemiBold"
+
+                <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding AuthorName}" FontSize="14" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
                                Cursor="Hand" MouseLeftButtonUp="OnUpClick"
-                               TextTrimming="CharacterEllipsis" MaxWidth="200"
-                               ToolTip="{Binding Author, Mode=OneWay}" />
-                    <!-- 间隔点只在有时间时显示, 否则名字后面挂一个孤零零的"·"。
-                         时间同理: 接口没给就整段藏起来(见 VideoItem.PubText)。 -->
-                    <TextBlock Text="·" Margin="6,0" VerticalAlignment="Center"
-                               Foreground="{DynamicResource TextTertiaryBrush}"
-                               Visibility="{Binding PubText, Converter={StaticResource StrToVis}}" />
-                    <TextBlock Text="{Binding PubText, Mode=OneWay}" FontSize="12"
-                               VerticalAlignment="Center"
-                               Foreground="{DynamicResource TextTertiaryBrush}"
-                               ToolTip="{Binding PubFullText, Mode=OneWay}" />
+                               TextTrimming="CharacterEllipsis" MaxWidth="320"
+                               ToolTip="{Binding AuthorName, Mode=OneWay}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                        <TextBlock Text="{Binding PubText, Mode=OneWay}" FontSize="12"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   ToolTip="{Binding PubFullText, Mode=OneWay}" />
+                        <TextBlock Text="·" Margin="6,0" FontSize="12"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   Visibility="{Binding ActionLabel, Converter={StaticResource StrToVis}}" />
+                        <TextBlock Text="{Binding ActionLabel, Mode=OneWay}" FontSize="12"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </StackPanel>
                 </StackPanel>
+
+                <Button Grid.Column="2" Style="{StaticResource IconButtonStyle}"
+                        Content="&#xE712;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                        FontSize="14" Width="30" Height="30"
+                        ToolTip="更多操作" Click="OnMoreClick" />
             </Grid>
 
-            <!-- ===== 正文: 左封面 + 右标题/数据 ===== -->
-            <Grid Margin="0,10,0,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
+            <!-- ===== 正文(图文/纯文字/转发才有) =====
+                 ★ 2026-11-14: 展开态换成 SelectableText(只读 TextBox), 支持自由拖选 + Ctrl+C;
+                   收起态仍用 TextBlock —— 只有它能做 "MaxHeight + 省略号" 的干净截断。 -->
+            <StackPanel Margin="0,10,0,0"
+                        Visibility="{Binding HasText, Converter={StaticResource BoolToVis}}">
+                <TextBlock x:Name="ContentTextBlock" Text="{Binding ContentText}"
+                           FontSize="14" LineHeight="22" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           MaxHeight="176" TextTrimming="CharacterEllipsis" />
+                <controls:SelectableText x:Name="ContentSelectable" Text="{Binding ContentText}"
+                                         FontSize="14"
+                                         Foreground="{DynamicResource TextPrimaryBrush}"
+                                         Visibility="Collapsed" />
+                <Button x:Name="ExpandButton" Content="全文" Style="{StaticResource LinkButtonStyle}"
+                        HorizontalAlignment="Left" Margin="0,4,0,0" FontSize="12"
+                        Visibility="Collapsed" Click="OnExpandClick" />
+            </StackPanel>
 
-                <!-- 封面 200x112(16:9)。点击播放, 与卡片墙点封面是同一个入口。 -->
-                <Border Grid.Column="0" CornerRadius="8" Height="112" ClipToBounds="True"
+            <!-- ===== 视频块: 16:9 大封面 + 时长 + 标题(仅本条自身是视频; 转发的视频在内嵌原文块里) ===== -->
+            <StackPanel Margin="0,12,0,0"
+                        Visibility="{Binding HasPlayableVideo, Converter={StaticResource BoolToVis}}">
+                <Border x:Name="VideoHost" CornerRadius="8" ClipToBounds="True"
                         Background="{DynamicResource PlaceholderBrush}"
-                        Cursor="Hand" MouseLeftButtonUp="OnOpenClick">
+                        Cursor="Hand" MouseLeftButtonUp="OnVideoClick"
+                        MouseEnter="OnVideoEnter" MouseLeave="OnVideoLeave">
                     <Grid>
-                        <!-- 圆角必须写在图自己身上: 外层 Border 的圆角不裁子元素 -->
-                        <Border CornerRadius="8" helpers:Cover.Source="{Binding Cover}" />
-
-                        <!-- 右下: 时长。读不到就整枚藏起来(StrToVis 对空串给 Collapsed) ——
-                             扁平结构的动态条目**不给时长**(实测 2026-10-15), 只有 modules 那条
-                             兼容路径会带 duration_text, 所以多数卡片这里没有角标。 -->
+                        <Border CornerRadius="8" helpers:Cover.Source="{Binding VideoCover}" />
                         <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                Margin="0,0,6,6" CornerRadius="4" Padding="6,2"
+                                Margin="0,0,8,8" CornerRadius="4" Padding="6,2"
                                 Background="{DynamicResource DurationBadgeBackgroundBrush}"
-                                Visibility="{Binding Duration, Converter={StaticResource StrToVis}}">
-                            <TextBlock Text="{Binding Duration}" Foreground="White" FontSize="11" />
+                                Visibility="{Binding VideoDuration, Converter={StaticResource StrToVis}}">
+                            <TextBlock Text="{Binding VideoDuration}" Foreground="White" FontSize="11" />
+                        </Border>
+                        <Border x:Name="PlayOverlay" CornerRadius="8"
+                                Background="#33000000" Opacity="0" IsHitTestVisible="False">
+                            <Border Width="52" Height="52" CornerRadius="26"
+                                    Background="#99000000"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock Text="&#xE768;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="22" Foreground="White"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
                         </Border>
                     </Grid>
                 </Border>
+                <TextBlock Text="{Binding VideoTitle}" FontSize="15" FontWeight="SemiBold"
+                           Margin="0,8,0,0" TextWrapping="Wrap" LineHeight="21"
+                           MaxHeight="44" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           Cursor="Hand" MouseLeftButtonUp="OnVideoClick"
+                           ToolTip="{Binding VideoTitle, Mode=OneWay}" />
+            </StackPanel>
 
-                <StackPanel Grid.Column="1" Margin="12,0,0,0">
-                    <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold"
-                               TextWrapping="Wrap" LineHeight="20" MaxHeight="40"
+            <!-- ===== 专栏标题(封面走下面的图片网格) ===== -->
+            <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="SemiBold"
+                       Margin="0,12,0,0" TextWrapping="Wrap" LineHeight="21"
+                       MaxHeight="44" TextTrimming="CharacterEllipsis"
+                       Foreground="{DynamicResource TextPrimaryBrush}"
+                       Cursor="Hand" MouseLeftButtonUp="OnArticleClick"
+                       Visibility="{Binding ShowArticleTitle, Converter={StaticResource BoolToVis}}" />
+
+            <!-- ===== 图片网格(图文/专栏) ===== -->
+            <controls:DynamicImageGrid Margin="0,12,0,0"
+                                       ItemsSource="{Binding Images}"
+                                       Visibility="{Binding HasImages, Converter={StaticResource BoolToVis}}" />
+
+            <!-- ===== 直播块 ===== -->
+            <StackPanel Margin="0,12,0,0"
+                        Visibility="{Binding IsLive, Converter={StaticResource BoolToVis}}">
+                <Border CornerRadius="8" ClipToBounds="True" Height="180"
+                        Background="{DynamicResource PlaceholderBrush}"
+                        Cursor="Hand" MouseLeftButtonUp="OnLiveClick">
+                    <Grid>
+                        <Border CornerRadius="8" helpers:Cover.Source="{Binding Cover}" />
+                        <Border HorizontalAlignment="Left" VerticalAlignment="Top"
+                                Margin="8,8,0,0" CornerRadius="4" Padding="6,2"
+                                Background="{DynamicResource DangerBrush}">
+                            <TextBlock Text="直播中" FontSize="10" FontWeight="SemiBold" Foreground="White" />
+                        </Border>
+                    </Grid>
+                </Border>
+                <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="SemiBold"
+                           Margin="0,8,0,0" TextWrapping="Wrap" MaxHeight="44"
+                           TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           Cursor="Hand" MouseLeftButtonUp="OnLiveClick" />
+            </StackPanel>
+
+            <!-- ===== 转发原动态(内嵌浅色块) ===== -->
+            <Border Margin="0,12,0,0" Padding="12" CornerRadius="8"
+                    Background="{DynamicResource ControlFillDefaultBrush}"
+                    Visibility="{Binding IsForward, Converter={StaticResource BoolToVis}}">
+                <StackPanel DataContext="{Binding Orig}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding AuthorName}" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource AccentTextBrush}"
+                                   Cursor="Hand" MouseLeftButtonUp="OnOrigUpClick" />
+                        <TextBlock Text="{Binding PubText, Mode=OneWay}" FontSize="12" Margin="8,0,0,0"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <controls:SelectableText Text="{Binding ContentText}" FontSize="13"
+                                             Margin="0,6,0,0"
+                                             Foreground="{DynamicResource TextPrimaryBrush}"
+                                             Visibility="{Binding HasText, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold"
+                               Margin="0,6,0,0" TextWrapping="Wrap" MaxHeight="40"
                                TextTrimming="CharacterEllipsis"
-                               Cursor="Hand" MouseLeftButtonUp="OnOpenClick"
-                               ToolTip="{Binding Title, Mode=OneWay}" />
-                    <!-- 播放/弹幕("1.2万 播放 · 345 弹幕")。★ 实测动态接口的扁平条目
-                         **不给计数**(见 VideoItem.DynamicStatText 的说明), 所以这行在动态页
-                         实际上一直是收起的; 留着是为了 modules 形态能带出数据。 -->
-                    <TextBlock Text="{Binding DynamicStatText, Mode=OneWay}" FontSize="11"
-                               Margin="0,8,0,0"
-                               Foreground="{DynamicResource TextSecondaryBrush}"
-                               Visibility="{Binding DynamicStatText, Converter={StaticResource StrToVis}}" />
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Visibility="{Binding HasTitle, Converter={StaticResource BoolToVis}}" />
+                    <Border Margin="0,8,0,0" CornerRadius="6" ClipToBounds="True" Height="120"
+                            Background="{DynamicResource PlaceholderBrush}"
+                            Cursor="Hand" MouseLeftButtonUp="OnOrigVideoClick"
+                            Visibility="{Binding HasPlayableVideo, Converter={StaticResource BoolToVis}}">
+                        <Grid>
+                            <Border CornerRadius="6" helpers:Cover.Source="{Binding Cover}" />
+                            <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                    Margin="0,0,6,6" CornerRadius="4" Padding="5,1"
+                                    Background="{DynamicResource DurationBadgeBackgroundBrush}"
+                                    Visibility="{Binding Duration, Converter={StaticResource StrToVis}}">
+                                <TextBlock Text="{Binding Duration}" Foreground="White" FontSize="10" />
+                            </Border>
+                        </Grid>
+                    </Border>
+                    <controls:DynamicImageGrid Margin="0,8,0,0"
+                                               ItemsSource="{Binding Images}"
+                                               Visibility="{Binding HasImages, Converter={StaticResource BoolToVis}}" />
                 </StackPanel>
+            </Border>
+
+            <!-- ===== 底部操作栏: 转发 / 评论 / 点赞 ===== -->
+            <Grid Margin="0,14,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Button Grid.Column="0" Style="{StaticResource DynamicActionButtonStyle}"
+                        Click="OnForwardClick" ToolTip="复制动态链接">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE72D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="15" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ForwardLabel, Mode=OneWay}" Margin="6,0,0,0"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="1" Style="{StaticResource DynamicActionButtonStyle}"
+                        Click="OnCommentClick" ToolTip="查看评论">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE90A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="15" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding CommentLabel, Mode=OneWay}" Margin="6,0,0,0"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="2" Click="OnLikeClick" ToolTip="点赞 / 取消点赞"
+                        IsEnabled="{Binding LikeBusy, Converter={StaticResource InvBool}}">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource DynamicActionButtonStyle}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsLiked}" Value="True">
+                                    <Setter Property="Foreground" Value="#F43F5E" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                    <StackPanel Orientation="Horizontal">
+                        <Grid x:Name="LikeIconBox" Width="20" Height="20"
+                              RenderTransformOrigin="0.5,0.5" VerticalAlignment="Center">
+                            <Path Data="{StaticResource LikeIconGeometry}"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center" />
+                        </Grid>
+                        <TextBlock Text="{Binding LikeLabel, Mode=OneWay}" Margin="6,0,0,0"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
             </Grid>
         </StackPanel>
     </Border>

@@ -18,7 +18,7 @@ namespace BiliDesk.ViewModels;
 ///   · 左栏 = 搜索关注的 UP + 「全部动态」入口 + 关注的 UP 主列表
 ///     (有未读时头像左侧显示红点、头像右下角显示条数角标);
 ///   · 右栏 = 当前选中对象的内容, 两档排版由 <see cref="UseCardWall"/> 切:
-///       - 全部动态: 关注的所有 UP 近期的**视频投稿**(动态时间线接口, 游标分页);
+///       - 全部动态: 关注的所有 UP 近期的**综合动态**(视频/图文/文字/专栏/转发, feed/all 游标分页);
 ///       - 具体某 UP: 该 UP 的投稿视频(空间投稿接口, 页码分页)。
 ///
 /// ★ 2026-11-06 关注 2790+ UP 的性能重做:
@@ -61,8 +61,8 @@ public class FollowViewModel : ObservableObject
     /// <summary>左栏搜索结果(只含已关注的 UP)。非空时替代普通关注列表显示。</summary>
     public ObservableCollection<FollowUser> FollowingSearchResults { get; } = new();
 
-    /// <summary>右栏内容(视频卡片)。切选择时整体换血。</summary>
-    public ObservableCollection<VideoItem> FeedItems { get; } = new();
+    /// <summary>右栏内容(综合动态: 视频/图文/文字/专栏/转发)。切选择时整体换血。</summary>
+    public ObservableCollection<DynamicItem> FeedItems { get; } = new();
 
     /// <summary>
     /// 卡片墙显示用的条目。CardWallPanel 不会虚拟化, 这里最多放 300 条,
@@ -377,6 +377,12 @@ public class FollowViewModel : ObservableObject
     /// </summary>
     private readonly HashSet<string> _seenBvid = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// 图文/文字/转发没有 bvid, 按动态 id 去重。视频动态也先过这一道,
+    /// 防止同一条动态被接口重复下发。reset 时清空。
+    /// </summary>
+    private readonly HashSet<string> _seenDynamicId = new(StringComparer.Ordinal);
+
     public FollowViewModel()
     {
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
@@ -670,6 +676,7 @@ public class FollowViewModel : ObservableObject
             // 这里是**一次性**清空, 不是逐条事件, 代价只有一次。
             if (UseCardWall) SyncWallItems();
             _seenBvid.Clear();
+            _seenDynamicId.Clear();
             _feedOffset = null;
             _emptyFeedPages = 0;
             LoadMoreError = false;
@@ -688,7 +695,7 @@ public class FollowViewModel : ObservableObject
         var generation = _feedGeneration;   // 快照: 期间发生过 reset 时, 本次结果作废
         bool ok;
         string? err = null;
-        List<VideoItem>? items = null;
+        List<DynamicItem>? items = null;
         var hasMore = false;
 
         try
@@ -710,7 +717,8 @@ public class FollowViewModel : ObservableObject
             {
                 if (reset) _upVideoPage = 1;
                 var r = await Svc.Api.GetSpaceVideosAsync(forUp.Mid, _upVideoPage, 30);
-                ok = r.Item1; err = r.Item2; items = r.Item3;
+                ok = r.Item1; err = r.Item2;
+                var videoItems = r.Item3;
                 // ★★ 2026-11-06: "到底"改用接口给的**总条数**判断, 不再用"本页 &lt; 30"。
                 //   旧判据不成立(实测): 降级接口 recArchivesByKeywords 自己按 17/22 这种
                 //   零头分页, 952 投稿的 UP 在第 31 页只给 17 条 —— 于是第 31 页就被
@@ -718,8 +726,8 @@ public class FollowViewModel : ObservableObject
                 //   total 是权威的总投稿数(来自 arc/search 的 page.count);
                 //   ★ 降级路径(被风控时)拿不到 total ⇒ 改用"空页才到底": 本页非空就继续翻,
                 //     翻到接口真的返回 0 条才是底 —— 这比"条数不足 30"准得多。
-                var loaded = FeedItems.Count + (items?.Count ?? 0);
-                hasMore = ok && items != null && items.Count > 0 &&
+                var loaded = FeedItems.Count + (videoItems?.Count ?? 0);
+                hasMore = ok && videoItems != null && videoItems.Count > 0 &&
                           (r.Item4 > 0 ? loaded < r.Item4 : true);
                 if (ok) _upVideoPage++;
 
@@ -728,13 +736,15 @@ public class FollowViewModel : ObservableObject
                 //   空间投稿的两个接口**都不下发头像**; 风控降级接口连 UP 名都没有(只有 upMid)。
                 //   但这两样我们本来就知道 —— 左侧那一条 UP 上就摆着 —— 抄过去即可,
                 //   不必为此再发请求, 更不该让卡片空着。
-                if (items != null)
+                if (videoItems != null)
                 {
-                    foreach (var it in items)
+                    foreach (var it in videoItems)
                     {
                         if (string.IsNullOrEmpty(it.Author)) it.Author = forUp.Name;
                         if (string.IsNullOrEmpty(it.AuthorFace)) it.AuthorFace = forUp.Face;
                     }
+                    // 单 UP 视图只有视频, 包成 DynamicItem 以复用同一张综合动态卡
+                    items = videoItems.Select(DynamicItem.FromVideo).ToList();
                 }
             }
 
@@ -755,17 +765,28 @@ public class FollowViewModel : ObservableObject
 
                 var added = 0;
                 foreach (var it in items)
-                    if (!string.IsNullOrEmpty(it.Bvid) && _seenBvid.Add(it.Bvid))
+                {
+                    // 先按动态 id 去重(图文/文字/转发没有 bvid, 只能靠它)
+                    if (!string.IsNullOrEmpty(it.Id) && !_seenDynamicId.Add(it.Id))
+                        continue;
+
+                    // 视频再按 bvid 去重: 同一条视频可能被原投稿 + 多人转发重复下发
+                    if (it.HasAnyVideo)
                     {
-                        FeedItems.Add(it);
-                        added++;
+                        var v = it.AsVideoItem();
+                        if (v != null && !string.IsNullOrEmpty(v.Bvid) && !_seenBvid.Add(v.Bvid))
+                            continue;
                     }
+
+                    FeedItems.Add(it);
+                    added++;
+                }
 
                 if (reset) _emptyFeedPages = 0;
                 if (added == 0) _emptyFeedPages++;
                 else _emptyFeedPages = 0;
 
-                // 连续 2 页没有任何新视频 = 到底, 或接口一直回重复页/空页。
+                // 连续 2 页没有任何新动态 = 到底, 或接口一直回重复页/空页。
                 // 不设这道闸时, 滚到底会无限"加载中 → 0 条 → 再加载"。
                 if (_emptyFeedPages >= 2) hasMore = false;
 
@@ -778,7 +799,7 @@ public class FollowViewModel : ObservableObject
                 OnPropertyChanged(nameof(ShowWallLimitHint));
 
                 if (FeedItems.Count == 0)
-                    Error = forUp == null ? "关注的 UP 最近没有视频投稿" : "该 UP 暂时没有投稿视频";
+                    Error = forUp == null ? "关注的 UP 最近没有动态" : "该 UP 暂时没有投稿视频";
 
                 // ★ 内容装得下一屏时列表根本没有滚动条, 滚动事件不会触发 ⇒ "是否在底部"没人更新,
                 //   「已经到底啦」也就永远不出现。这里主动按"装得下"置为在底部。
@@ -827,11 +848,13 @@ public class FollowViewModel : ObservableObject
         }
     }
 
-    /// <summary>卡片墙超过 300 条时的提示(避免用户以为后面没有内容了)。</summary>
-    public bool ShowWallLimitHint => UseCardWall && FeedItems.Count > WallItems.Count;
+    /// <summary>卡片墙超过 300 条时的提示(避免用户以为后面没有内容了)。
+    /// ★ 卡片墙只收视频, 所以按 FeedItems 里的视频动态数比较, 不是总条数。</summary>
+    public bool ShowWallLimitHint => UseCardWall && FeedItems.Count(x => x.HasAnyVideo) > WallItems.Count;
 
     /// <summary>
-    /// 把 FeedItems 的前 300 条同步到卡片墙集合。
+    /// 把 FeedItems 里的**视频动态**(前 300 条)同步到卡片墙集合。
+    /// 图文/文字/专栏不进卡片墙 —— VideoCard 依赖 16:9 封面与播放数据, 硬塞会破坏网格。
     ///
     /// ★★ 增量追加(2026-11-07): 只有"墙确实接不上"时才整墙清空, 其余情况只补尾巴。
     ///   整墙清空 = CardWallPanel 把最多 300 个卡片容器全部销毁再重建; 连续下滑时
@@ -840,23 +863,33 @@ public class FollowViewModel : ObservableObject
     /// 整墙重建的三种情况:
     ///   ① 墙空了(want &gt; 0) —— 正常从 0 开始补;
     ///   ② 墙比目标长(刷新/换 UP/切回卡片墙后 FeedItems 变短);
-    ///   ③ 墙的首尾条目与 FeedItems 对不上 —— 说明整批内容被换过(刷新/切选择/屏蔽)。
+    ///   ③ 墙的首尾条目与视频源对不上 —— 说明整批内容被换过(刷新/切选择/屏蔽)。
     ///   其余情况(最常见: 翻页后 FeedItems 只是变长)走 append, 开销 = 新增那几条。
     /// </summary>
     private void SyncWallItems()
     {
-        var want = Math.Min(FeedItems.Count, WallItemLimit);
+        // DynamicItem.AsVideoItem() 内部缓存, 同一条动态每次返回同一个 VideoItem 引用,
+        // 下面的首尾引用比对才稳定。
+        var videos = new List<VideoItem>(WallItemLimit);
+        foreach (var it in FeedItems)
+        {
+            if (!it.HasAnyVideo) continue;
+            var v = it.AsVideoItem();
+            if (v != null) videos.Add(v);
+            if (videos.Count >= WallItemLimit) break;
+        }
 
+        var want = videos.Count;
         var reset = want == 0
                     || WallItems.Count > want
                     || (WallItems.Count > 0 &&
-                        (!ReferenceEquals(WallItems[0], FeedItems[0]) ||
-                         !ReferenceEquals(WallItems[WallItems.Count - 1], FeedItems[WallItems.Count - 1])));
+                        (!ReferenceEquals(WallItems[0], videos[0]) ||
+                         !ReferenceEquals(WallItems[WallItems.Count - 1], videos[want - 1])));
 
         if (reset && WallItems.Count > 0) WallItems.Clear();
 
         // reset 之后 Count 为 0; 未重置时从这里接着补新增的条目。
-        for (var i = WallItems.Count; i < want; i++) WallItems.Add(FeedItems[i]);
+        for (var i = WallItems.Count; i < want; i++) WallItems.Add(videos[i]);
 
         OnPropertyChanged(nameof(ShowWallLimitHint));
     }
@@ -1001,14 +1034,14 @@ public class FollowViewModel : ObservableObject
     /// ★ 旧版只按时间排, 会出现"明明有红点却排在没更新的 UP 后面" —— 这次修掉。
     /// ★ 用就地 Move 而不是换 ItemsSource: 保留选中态与滚动位置。
     /// </summary>
-    private void ReorderUsersByActivity(IReadOnlyList<VideoItem> items)
+    private void ReorderUsersByActivity(IReadOnlyList<DynamicItem> items)
     {
         var newestPub = new Dictionary<long, long>();
         foreach (var it in items)
         {
-            if (it.OwnerMid <= 0) continue;
-            if (!newestPub.TryGetValue(it.OwnerMid, out var cur) || it.Pubdate > cur)
-                newestPub[it.OwnerMid] = it.Pubdate;
+            if (it.AuthorMid <= 0) continue;
+            if (!newestPub.TryGetValue(it.AuthorMid, out var cur) || it.Pubdate > cur)
+                newestPub[it.AuthorMid] = it.Pubdate;
         }
 
         foreach (var u in Users)

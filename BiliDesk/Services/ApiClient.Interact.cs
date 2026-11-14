@@ -79,8 +79,8 @@ public partial class ApiClient
     ///   2026-09-27 修: 之前把踩也当成 action=2 发给这个接口, 服务端直接回
     ///   `12011 不合法的赞或踩`, 表现就是"点踩点了报错"。
     /// </summary>
-    public Task<(bool ok, string? err)> CommentLikeAsync(long aid, long rpid, bool like)
-        => CommentReactionAsync("https://api.bilibili.com/x/v2/reply/action", aid, rpid, like);
+    public Task<(bool ok, string? err)> CommentLikeAsync(long aid, long rpid, bool like, int type = 1)
+        => CommentReactionAsync("https://api.bilibili.com/x/v2/reply/action", aid, rpid, like, type);
 
     /// <summary>
     /// 对**评论**点踩 / 取消点踩。
@@ -93,12 +93,12 @@ public partial class ApiClient
     /// 也必须互斥, 否则会出现"两个都高亮但服务端只认后一个"的假象。
     /// 另外踩**没有计数**: 接口不下发 dislike 总数, 所以踩只有状态、没有数字。
     /// </summary>
-    public Task<(bool ok, string? err)> CommentDislikeAsync(long aid, long rpid, bool dislike)
-        => CommentReactionAsync("https://api.bilibili.com/x/v2/reply/hate", aid, rpid, dislike);
+    public Task<(bool ok, string? err)> CommentDislikeAsync(long aid, long rpid, bool dislike, int type = 1)
+        => CommentReactionAsync("https://api.bilibili.com/x/v2/reply/hate", aid, rpid, dislike, type);
 
     /// <summary>赞与踩的公共实现(两个接口的参数、返回值、错误码完全一致, 只有地址不同)</summary>
     private async Task<(bool ok, string? err)> CommentReactionAsync(
-        string url, long aid, long rpid, bool on)
+        string url, long aid, long rpid, bool on, int type = 1)
     {
         if (aid <= 0 || rpid <= 0) return (false, "参数不完整");
         var (code, msg) = await PostFormCodeAsync(
@@ -106,11 +106,11 @@ public partial class ApiClient
             new Dictionary<string, string>
             {
                 ["oid"] = aid.ToString(),
-                ["type"] = "1",
+                ["type"] = type.ToString(),
                 ["rpid"] = rpid.ToString(),
                 ["action"] = on ? "1" : "0"
             },
-            referer: "https://www.bilibili.com/");
+            referer: type is 11 or 17 ? "https://t.bilibili.com/" : "https://www.bilibili.com/");
         if (code == 0) return (true, null);
 
         // 这串错误码里有一半是"用户能看懂并且知道该怎么办"的, 直接说人话;
@@ -146,9 +146,10 @@ public partial class ApiClient
     /// <param name="rootRpid">要回复的**顶层评论** id; 0 = 发普通评论(挂在新楼层上)</param>
     /// <param name="parentRpid">被回复的那条 id; 传 0 表示"回复楼主"(自动用 rootRpid)</param>
     public async Task<(bool ok, string? err)> PostCommentAsync(
-        long aid, string message, long rootRpid = 0, long parentRpid = 0)
+        long aid, string message, long rootRpid = 0, long parentRpid = 0,
+        int type = 1, string? referer = null)
     {
-        if (aid <= 0) return (false, "没拿到视频 aid, 暂时不能评论");
+        if (aid <= 0) return (false, type == 17 ? "没拿到动态 id, 暂时不能评论" : "没拿到视频 aid, 暂时不能评论");
         if (string.IsNullOrWhiteSpace(message)) return (false, "评论内容不能为空");
         // B 站单条评论上限 1000 字。界面里也卡了 MaxLength, 这里再兜一次 ——
         // 超长会被服务端整条拒掉, 用户辛辛苦苦写的字就白费了。
@@ -157,7 +158,7 @@ public partial class ApiClient
         var form = new Dictionary<string, string>
         {
             ["oid"] = aid.ToString(),
-            ["type"] = "1",
+            ["type"] = type.ToString(),
             ["message"] = message,
             ["plat"] = "1",
             ["ordering"] = "heat"
@@ -170,7 +171,7 @@ public partial class ApiClient
 
         var (code, msg) = await PostFormCodeAsync(
             "https://api.bilibili.com/x/v2/reply/add", form,
-            referer: "https://www.bilibili.com/");
+            referer: referer ?? (type == 17 ? "https://t.bilibili.com/" : "https://www.bilibili.com/"));
         if (code == 0) return (true, null);
 
         // 这几个码给用户看得懂的话, 其余原样透出服务端的 message

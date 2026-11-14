@@ -33,6 +33,16 @@
             <helpers:BoolToAngleConverter x:Key="BoolToAngle" />
             <BooleanToVisibilityConverter x:Key="BoolToVis" />
 
+            <!-- 点赞(拇指): 与播放器三连按钮完全同一条官方 SVG 路径。
+                 ★ 2026-11-14 从 PlayerWindow 提到应用级: 动态卡/动态详情/评论区的点赞
+                   都复用它, 图标形状与播放器保持一致; 填充规则必须 Nonzero(图形带挖空)。 -->
+            <PathGeometry x:Key="LikeIconGeometry" FillRule="Nonzero"
+                          Figures="M323 877V326H327L481 137Q506 112 541 110Q576 108 603 131Q617 145 625 163Q633 181 631 202L625 326H860Q882 326 901.5 335.5Q921 345 935 363Q947 380 950 401Q953 422 948 441L848 769Q835 816 799 845Q763 874 713 877ZM266 877H186Q156 879 130 865Q104 851 89 824Q74 797 73 769V438Q73 407 88 381.5Q103 356 130 342Q144 335 158 331.5Q172 328 186 326H266Z">
+                <PathGeometry.Transform>
+                    <TranslateTransform X="-0.06" Y="18.46" />
+                </PathGeometry.Transform>
+            </PathGeometry>
+
             <!-- 导航图标(用户提供的官方 SVG): 动态=风车描边 / 消息=信封填充。
                  放应用级 —— 首页/动态页等页面里的 StaticResource 只能解析到这里。 -->
 <!-- 消息(信封): 轮廓与原 SVG 相同, 但改成**描边**画法 ——
