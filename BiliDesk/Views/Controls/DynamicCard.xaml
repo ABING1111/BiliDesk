@@ -69,7 +69,7 @@
                     <TextBlock Text="{Binding AuthorName}" FontSize="14" FontWeight="SemiBold"
                                Foreground="{DynamicResource TextPrimaryBrush}"
                                Cursor="Hand" MouseLeftButtonUp="OnUpClick"
-                               TextTrimming="CharacterEllipsis" MaxWidth="320"
+                               TextTrimming="CharacterEllipsis"
                                ToolTip="{Binding AuthorName, Mode=OneWay}" />
                     <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
                         <TextBlock Text="{Binding PubText, Mode=OneWay}" FontSize="12"
