@@ -1960,8 +1960,11 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <!-- 没有 Icon 时这一列自然收成 0 宽, 不会留下空档 -->
-                            <ContentPresenter Grid.Column="0" ContentSource="Icon"
+                            <!-- ★ 没有 Icon 时**不能**指望这一列自己收成 0 宽:
+                                 ContentPresenter 的内容是空, 但它自己的 Margin(8px)照样占位,
+                                 纯文字项(比如右键菜单里的"复制")会被顶得偏右、左边多一块空白。
+                                 所以下面用 Icon == null 的触发器把它 Collapsed 掉(见 Triggers)。 -->
+                            <ContentPresenter x:Name="IconHost" Grid.Column="0" ContentSource="Icon"
                                               VerticalAlignment="Center" Margin="0,0,8,0"
                                               TextElement.Foreground="{TemplateBinding Foreground}" />
                             <ContentPresenter Grid.Column="1" ContentSource="Header"
@@ -1970,6 +1973,10 @@
                         </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
+                        <!-- 纯文字项: 图标列整个收掉, 左右只剩 Padding(12px), 文字自然居中 -->
+                        <Trigger Property="Icon" Value="{x:Null}">
+                            <Setter TargetName="IconHost" Property="Visibility" Value="Collapsed" />
+                        </Trigger>
                         <Trigger Property="IsHighlighted" Value="True">
                             <Setter TargetName="Bd" Property="Background"
                                     Value="{DynamicResource FlyoutItemHoverBrush}" />
