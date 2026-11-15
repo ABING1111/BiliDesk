@@ -18,17 +18,26 @@ namespace BiliDesk.Helpers;
 ///   `video output` 只占画面那一块, 剩下的区域没人画 ⇒ 露出 `Static` 的类默认背景(白)。
 ///
 /// ★★ 2026-11-03: 去掉 resize/最大化/全屏期间的 WPF 黑布, 改为在原生层把 `Static` 治成
-///   "永远黑底且不覆盖子窗口":
+///   "永远近黑底且不覆盖子窗口":
 ///     · <see cref="AddClipChildren"/>: 给 Static 与父 HwndWrapper 加 `WS_CLIPCHILDREN`。
 ///       没有它时, 父窗口重绘会把自己的白底刷到 `VLC video output` 子窗口上, 表现就是
 ///       拖动窗口/最大化时整块白闪 (LibVLCSharp 上游 2025-07 的同类修复也是加这个 style)。
 ///     · <see cref="EnsureSubclassed"/>: Static 本来就是一个没有内容的系统 `static` 窗口,
-///       子类化后只接管 `WM_ERASEBKGND`, 把客户区填黑; 其余消息原样转发。
-///       `WS_CLIPCHILDREN` 保证填黑只发生在"没有视频子窗口盖住"的边带区域, 不会盖住画面。
+///       子类化后只接管 `WM_ERASEBKGND`, 把客户区填成**近黑**; 其余消息原样转发。
+///       `WS_CLIPCHILDREN` 保证填色只发生在"没有视频子窗口盖住"的边带区域, 不会盖住画面。
 ///       ★ 不接管 `WM_PAINT`: 某些 vout/显卡组合下画面可能由 Static 自己绘制, 吞掉
-///       WM_PAINT 会把画面一起盖黑; `WM_ERASEBKGND` + 黑类背景刷已经足够挡住白底。
-///     · <see cref="PaintClassBackgroundBlack"/>: 继续把父窗口类背景刷设成黑, 兜住
+///       WM_PAINT 会把画面一起盖黑; `WM_ERASEBKGND` + 近黑类背景刷已经足够挡住白底。
+///     · <see cref="PaintClassBackgroundLetterbox"/>: 继续把父窗口类背景刷设成近黑, 兜住
 ///       Static 被 libvlc 重新显示/重绘的瞬间。
+///
+/// ★★★ 2026-11-16 修「云母/亚克力下改窗口大小, 视频上下黑边不断闪」:
+///   材质开启时 <c>FluentWindow.ApplyChrome</c> 会把 <c>WindowChrome.GlassFrameThickness</c>
+///   设成 -1, **整个客户区都成为 DWM 玻璃区**。而 DWM 对 GDI 绘制的**纯黑**(0x00000000)
+///   按全透明处理(Aero 玻璃的经典坑: "用黑色 GDI 笔刷画出来的就是透明色")。
+///   于是视频区的黑边在材质下变成了"透明洞", 露出后面的云母/亚克力; 窗口尺寸一变,
+///   Static 反复擦除/重绘, 观感就是黑边在"黑"和"材质色"之间不断闪。
+///   ⇒ 视频区的底色一律用 **近黑 #010101**: 肉眼与纯黑无法区分, 但它不是 DWM 的
+///     透明色。★ 不要改回 0x000000 —— 普通材质下看不出问题, 云母/亚克力下必然复发。
 ///
 /// ★ 它是**本进程**的窗口, 所以这些 API 可用。
 /// ★ 为什么不用 WPF 层解决(比如给 VideoView 加不透明背景): 那层在视频**之上**
@@ -60,8 +69,17 @@ internal static class VideoBackdropInterop
 
     private delegate IntPtr WindowProc(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
-    /// <summary>进程级唯一的一支黑色 GDI 笔刷。类背景刷要求笔刷长期有效, 不能用完就删。</summary>
-    private static readonly IntPtr BlackBrush = CreateSolidBrush(0x000000);
+    /// <summary>
+    /// 进程级唯一的「视频区边带」GDI 笔刷。类背景刷要求笔刷长期有效, 不能用完就删。
+    ///
+    /// ★★★ 为什么是 **近黑 #010101 而不是纯黑 #000000**(2026-11-16):
+    ///   云母/亚克力开启时整个客户区是 DWM 玻璃区(见 <see cref="EnsureLetterboxVideoHost"/>
+    ///   的类注释)。DWM 把 GDI 绘制的**纯黑**(0x00000000)视为**全透明**,
+    ///   于是视频上下/左右的黑边会露出材质, 并在 resize 时反复闪。
+    ///   RGB(1,1,1) 肉眼与纯黑无差别, 但不会命中 DWM 的透明色。
+    ///   ★ 这是 GDI 在玻璃上的固有坑 —— 换成 <c>FillRect</c> 的任意纯黑笔刷都会复发。
+    /// </summary>
+    private static readonly IntPtr LetterboxBrush = CreateSolidBrush(0x010101);
 
     /// <summary>子类化用的委托必须静态持有, 否则 GC 后窗口过程会指向已释放的托管对象。</summary>
     private static readonly WindowProc SubclassProcDelegate = SubclassWndProc;
@@ -134,54 +152,57 @@ internal static class VideoBackdropInterop
     private static extern IntPtr CreateSolidBrush(int color);
 
     /// <summary>
-    /// 把视频区原生宿主窗口处理成"黑底 + 不覆盖子窗口"。
+    /// 把视频区原生宿主窗口处理成"近黑底 + 不覆盖子窗口"。
     ///
     /// 传进来的是 HwndHost 的 `Static` 子窗口(见 <c>PlayerWindow.FindVideoStaticWindow</c>)。
     /// 失败一律静默: 顶多还是白边/白闪, 绝不能因为"修外观"影响播放。
+    /// ★ 底色是近黑 <c>#010101</c> 而不是纯黑 —— 原因见类注释与 <see cref="LetterboxBrush"/>。
     /// </summary>
-    public static void EnsureBlackVideoHost(IntPtr staticHwnd)
+    public static void EnsureLetterboxVideoHost(IntPtr staticHwnd)
     {
         if (staticHwnd == IntPtr.Zero || !IsWindow(staticHwnd)) return;
 
         try
         {
-            // ① 先把类背景刷设黑: 这样后面加样式/重算非客户区时, 已经不会擦出白底。
+            // ① 先把类背景刷设成近黑: 这样后面加样式/重算非客户区时, 已经不会擦出白底。
             var parent = GetParent(staticHwnd);
-            SetClassBrushBlack(staticHwnd);
-            if (parent != IntPtr.Zero) SetClassBrushBlack(parent);
+            SetClassBrushLetterbox(staticHwnd);
+            if (parent != IntPtr.Zero) SetClassBrushLetterbox(parent);
 
             // ② 父窗口先裁剪子窗口: 否则父窗口重绘时会把白底刷到视频子窗口上。
             if (parent != IntPtr.Zero) AddClipChildren(parent);
             AddClipChildren(staticHwnd);
 
-            // ③ 子类化 Static: 它的客户区被擦/重绘时填黑。
+            // ③ 子类化 Static: 它的客户区被擦/重绘时填近黑。
             EnsureSubclassed(staticHwnd);
         }
         catch { /* 外观修复失败不影响播放 */ }
     }
 
     /// <summary>
-    /// 把视频区原生窗口的类背景刷设成纯黑并立刻擦一次(**兜底**)。
+    /// 把视频区原生窗口的类背景刷设成**近黑**并立刻擦一次(**兜底**)。
     ///
-    /// ★ 2026-11-03 起主修是 <see cref="EnsureBlackVideoHost"/>; 这个方法保留给
+    /// ★ 2026-11-03 起主修是 <see cref="EnsureLetterboxVideoHost"/>; 这个方法保留给
     ///   `Vout` 原生回调那种"不能做子类化/SetWindowPos"的线程使用, 以及作为额外兜底。
     /// ★ 用 `SetClassLongPtr`(改类)而不是 `SetWindowLongPtr(GWL_HBRBACKGROUND)`:
     ///   后者只在 Win32 子类化路径里有效, 对 WPF 的 HwndWrapper 不生效(实测)。
+    /// ★ 底色必须是近黑 #010101, 不是纯黑 —— 云母/亚克力下纯黑 GDI 会被 DWM 当透明
+    ///   (见类注释与 <see cref="LetterboxBrush"/>)。
     /// ★ 失败一律静默: 顶多还是白边, 绝不能因为"修外观"影响播放。
     /// </summary>
-    public static void PaintClassBackgroundBlack(IntPtr hwnd)
+    public static void PaintClassBackgroundLetterbox(IntPtr hwnd)
     {
         var target = GetParent(hwnd);      // 必须改父窗口的类背景刷
         if (target == IntPtr.Zero) target = hwnd;   // 兜底: 拿不到父级就试自己
-        SetClassBrushBlack(target);
+        SetClassBrushLetterbox(target);
     }
 
-    private static void SetClassBrushBlack(IntPtr hwnd)
+    private static void SetClassBrushLetterbox(IntPtr hwnd)
     {
-        if (hwnd == IntPtr.Zero || BlackBrush == IntPtr.Zero) return;
+        if (hwnd == IntPtr.Zero || LetterboxBrush == IntPtr.Zero) return;
         try
         {
-            SetClassLongPtr(hwnd, GclpHbrBackground, BlackBrush);
+            SetClassLongPtr(hwnd, GclpHbrBackground, LetterboxBrush);
             // 立刻擦一次: 用户报的就是"一直白着", 不能等下一次重绘
             InvalidateRect(hwnd, IntPtr.Zero, true);
             UpdateWindow(hwnd);
@@ -217,9 +238,10 @@ internal static class VideoBackdropInterop
     /// <summary>
     /// Static 宿主窗口的窗口过程。
     ///
-    /// ★ 只接管 `WM_ERASEBKGND` 一条消息: 填黑并返回 1 —— 不让系统默认白底擦出来。
+    /// ★ 只接管 `WM_ERASEBKGND` 一条消息: 填**近黑**并返回 1 —— 不让系统默认白底擦出来,
+    ///   也不让 DWM 把纯黑当透明色(见类注释)。
     ///   ★ 不接管 `WM_PAINT`: 某些 vout/显卡组合下画面可能由 Static 自己绘制, 吞掉
-    ///     WM_PAINT 会把画面一起盖黑; 实测 `WM_ERASEBKGND` + `WS_CLIPCHILDREN` + 黑类背景刷
+    ///     WM_PAINT 会把画面一起盖黑; 实测 `WM_ERASEBKGND` + `WS_CLIPCHILDREN` + 近黑类背景刷
     ///     已经足够挡住 resize/最大化时的白底(bd-probe-resize/white/fullscreen 全过)。
     /// ★ 其余消息必须原样转发, 否则 HwndHost 的鼠标/尺寸/焦点处理会断。
     /// </summary>
@@ -245,9 +267,9 @@ internal static class VideoBackdropInterop
 
     private static void FillClientRect(IntPtr hwnd, IntPtr hdc)
     {
-        if (hdc == IntPtr.Zero || BlackBrush == IntPtr.Zero) return;
+        if (hdc == IntPtr.Zero || LetterboxBrush == IntPtr.Zero) return;
         if (GetClientRect(hwnd, out var rc))
-            FillRect(hdc, ref rc, BlackBrush);
+            FillRect(hdc, ref rc, LetterboxBrush);
     }
 
     /// <summary>
@@ -258,7 +280,7 @@ internal static class VideoBackdropInterop
     ///   但真机一跑就发现**整个视频画面也没了** —— 说明在这台机器/这套 vout 上,
     ///   画面就是经由 `Static` 那条链画出来的(与"画面由 video output 画"的假设不同,
     ///   不同显卡/vout 组合拓扑会变)。
-    ///   ⇒ 绝对不能作为产品默认行为。产品走 <see cref="EnsureBlackVideoHost"/>。
+    ///   ⇒ 绝对不能作为产品默认行为。产品走 <see cref="EnsureLetterboxVideoHost"/>。
     /// ★ 保留而不删掉的理由: 下次再遇到"白边"时, 这段代码 + 这条结论能省掉一次同样的试错;
     ///   而它不被调用就不会进产物(纯静态方法, 无副作用)。
     /// </summary>

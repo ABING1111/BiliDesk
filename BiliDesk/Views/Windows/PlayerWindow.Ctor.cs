@@ -225,7 +225,7 @@ public partial class PlayerWindow : FluentWindow
             WriteLibVLCDebug(
                 $"\n[Playing] eofBlack={_eofBlackActive} ended={_ended} " +
                 $"bg={DescribeVideoAreaBg()} time={SafeReadTime()} state={_mp.State}\n");
-            // ★ 视频没填满时的白色边带(2026-10-17): 起播后要把那块原生窗口底色刷黑。
+            // ★ 视频没填满时的白色边带(2026-10-17): 起播后要把那块原生窗口底色刷成近黑。
             //   ★★ 不能只调一次就完事: 实测 `Playing` 触发时 libvlc 的 `Static` 子窗口
             //      **还没建出来**(那一刻拿到的句柄是 0, 修复静默跳过), vout 建好之后才有。
             //      所以这里起一个**有限次重试**的定时器, 命中即停。
@@ -302,7 +302,7 @@ public partial class PlayerWindow : FluentWindow
         //   为什么必须要这个事件、不能只靠定时器: libvlc 的 `Static` 子窗口是**新建**出来的,
         //   它第一次上屏时就已经是白的了 —— 定时器最快也要 120ms 之后才轮到, 那 120ms
         //   在浅色主题下就是用户看到的那一下"白块"。何况最大化/还原/换清晰度都会重建它。
-        //   ⇒ 挂在这里: vout 一出现就立刻刷黑 + 起一轮短时守护。
+        //   ⇒ 挂在这里: vout 一出现就立刻刷成近黑 + 起一轮短时守护。
         // ★★ 这里**故意同步执行、不走 Dispatcher**(与别的事件处理器不同):
         //   `Vout` 在 libvlc 的 vout 线程上触发, 而"改类背景刷"是纯 Win32 调用,
         //   不碰任何 WPF 对象 —— 走 Dispatcher 会把动作推迟到下一轮消息循环, 就晚了。
@@ -314,7 +314,7 @@ public partial class PlayerWindow : FluentWindow
             try
             {
                 var hwnd = FindVideoStaticWindow();
-                if (hwnd != IntPtr.Zero) VideoBackdropInterop.PaintClassBackgroundBlack(hwnd);
+                if (hwnd != IntPtr.Zero) VideoBackdropInterop.PaintClassBackgroundLetterbox(hwnd);
             }
             catch { /* 原生回调里绝不能抛 */ }
 

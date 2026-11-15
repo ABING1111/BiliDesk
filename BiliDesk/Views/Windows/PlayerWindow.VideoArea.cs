@@ -105,7 +105,7 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 把视频区原生宿主窗口处理成"黑底 + 不覆盖子窗口"。
+    /// 把视频区原生宿主窗口处理成"近黑底 + 不覆盖子窗口"。
     ///
     /// ★ 根因(2026-10-17 探针 bd-probe-letterbox 钉死; 2026-11-03 去掉黑布后复核):
     ///   `VideoView` 是 <c>HwndHost</c>, 它下面由 LibVLCSharp/libvlc 建了一串**同进程**子窗口:
@@ -119,30 +119,33 @@ public partial class PlayerWindow : FluentWindow
     ///   没有任何窗口画东西 ⇒ 露出 `Static` 的**窗口类默认背景(白色)**。
     ///   尺寸剧变(vout 重协商)时, `Static` 重绘还会把白底刷到视频子窗口上 ⇒ 整块白闪。
     ///
-    /// ★ 处理(见 <see cref="VideoBackdropInterop.EnsureBlackVideoHost"/>):
+    /// ★ 处理(见 <see cref="VideoBackdropInterop.EnsureLetterboxVideoHost"/>):
     ///   · `WS_CLIPCHILDREN`: 父窗口/Static 重绘时排除子窗口区域, 不把白底刷到画面上;
-    ///   · 子类化 Static 的 `WM_ERASEBKGND` / `WM_PAINT`: 客户区被擦/重绘时直接填黑;
-    ///   · 父窗口 + Static 的类背景刷也设黑: 兜住 libvlc 重新显示 Static 的瞬间。
+    ///   · 子类化 Static 的 `WM_ERASEBKGND` / `WM_PAINT`: 客户区被擦/重绘时直接填近黑;
+    ///   · 父窗口 + Static 的类背景刷也设近黑: 兜住 libvlc 重新显示 Static 的瞬间。
+    ///
+    /// ★★★ 2026-11-16: 近黑(#010101)不是纯黑 —— 云母/亚克力下整个客户区是 DWM 玻璃区,
+    ///   GDI 纯黑会被当透明, 黑边就会露出材质并在 resize 时闪(详见 VideoBackdropInterop 的类注释)。
     ///
     /// ★ 不隐藏 Static: 真机上 `ShowWindow(SW_HIDE)` 会把**整个画面**一起藏掉
     ///   (不同 vout/显卡组合拓扑不一样, 不能赌)。
     /// ★ 起播 / vout 重建 / 换清晰度 / 进出全屏后都要再调一次 —— 见 `Vout`、`Playing`
     ///   与 <see cref="StartVideoBackdropFix"/> 的调用点。
     /// </summary>
-    private void ApplyHwndHostBlackBackground()
+    private void ApplyHwndHostLetterboxBackground()
     {
         var hwnd = FindVideoStaticWindow();
         if (hwnd == IntPtr.Zero) return;
 
         // ★★ 2026-11-03(去掉 resize/最大化/全屏黑布后的根修):
-        //   不再只刷父窗口类背景刷, 而是把 `Static` 自己治成"黑底 + 不覆盖子窗口":
+        //   不再只刷父窗口类背景刷, 而是把 `Static` 自己治成"近黑底 + 不覆盖子窗口":
         //     · WS_CLIPCHILDREN: 父窗口/Static 重绘时不把白底刷到 `VLC video output` 上;
-        //     · 子类化 WM_ERASEBKGND / WM_PAINT: 客户区被擦/重绘时直接填黑。
-        //   这样尺寸剧变时新暴露的区域是黑的, 而不是 Static 的默认白底。
-        VideoBackdropInterop.EnsureBlackVideoHost(hwnd);
+        //     · 子类化 WM_ERASEBKGND / WM_PAINT: 客户区被擦/重绘时直接填近黑。
+        //   这样尺寸剧变时新暴露的区域是近黑的, 而不是 Static 的默认白底。
+        VideoBackdropInterop.EnsureLetterboxVideoHost(hwnd);
     }
 
-    // --- 起播后把视频区原生窗口底色刷黑(见 ApplyHwndHostBlackBackground) ---
+    // --- 起播后把视频区原生窗口底色刷成近黑(见 ApplyHwndHostLetterboxBackground) ---
 
     /// <summary>
     /// **短时守护**: 每 <see cref="VideoBackdropGuardIntervalMs"/> 检查一次 `Static` 有没有
@@ -150,7 +153,7 @@ public partial class PlayerWindow : FluentWindow
     ///
     /// ★★★ 为什么必须有它(2026-10-17 实测, 2026-11-03 去掉黑布后保留):
     ///   libvlc 在 **vout 建立 / 重建 / 首帧到达** 时会重新显示/重绘 `Static`,
-    ///   白色也可能跟着回来。我们的 `EnsureBlackVideoHost` 在那一刻可能还没拿到句柄
+    ///   白色也可能跟着回来。我们的 `EnsureLetterboxVideoHost` 在那一刻可能还没拿到句柄
     ///   (`Playing` 触发时 Static 往往还没建出来), 所以需要短时间反复套用。
     ///   ⇒ 靠"事件触发时刷一次"必然有竞态; 只有**短时间反复确认**才能把这段时间盖死。
     ///
@@ -169,12 +172,12 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 启动短时守护(见 <see cref="RunVideoBackdropGuard"/>): 在接下来约 3 秒内反复套用
-    /// "黑底 + 不覆盖子窗口"的原生修复。尺寸剧变 / vout 重建 / 起播都要调一次。
+    /// "近黑底 + 不覆盖子窗口"的原生修复。尺寸剧变 / vout 重建 / 起播都要调一次。
     /// </summary>
     private void RunVideoBackdropGuard()
     {
         if (_closing) return;
-        ApplyHwndHostBlackBackground();   // 立刻先来一次, 不等第一拍
+        ApplyHwndHostLetterboxBackground();   // 立刻先来一次, 不等第一拍
 
         _videoBackdropGuard ??= new DispatcherTimer
         {
@@ -194,7 +197,7 @@ public partial class PlayerWindow : FluentWindow
             _videoBackdropGuard?.Stop();
             return;
         }
-        ApplyHwndHostBlackBackground();
+        ApplyHwndHostLetterboxBackground();
     }
 
     /// <summary>
@@ -206,6 +209,134 @@ public partial class PlayerWindow : FluentWindow
     ///   ⇒ 改成 3 秒内每 120ms 套用一次(见 <see cref="RunVideoBackdropGuard"/>)。
     /// </summary>
     private void StartVideoBackdropFix() => RunVideoBackdropGuard();
+
+    // ------------------------------------------------------------ resize 期间临时停用材质
+    //
+    // ★★★ 2026-11-16(用户第二次报"云母/亚克力下改窗口大小画面依然会闪"):
+    //   近黑笔刷只解决了"黑边被 DWM 当透明"那一层; 画面本身仍会闪, 因为材质开启时
+    //   整个客户区是 DWM 玻璃区(GlassFrameThickness = -1), 而播放器里有一个 HwndHost
+    //   (LibVLC 的 video output)。WindowChrome + 玻璃区 + HwndHost 在连续 resize 时
+    //   是 WPF 的已知闪烁组合(dotnet/wpf#1176、SO 6500336; 普通材质不透明, 所以没有)。
+    //   ⇒ 尺寸变化期间把背景材质**临时收掉**(窗口落回普通不透明实色底), 尺寸稳定后
+    //     再挂回去。这样视频区回到"普通材质"下那条已经验证稳定的路径 —— 不压黑布,
+    //     画面照常可见, 只是拖动那一下右栏/顶栏的材质会暂时变成实色。
+
+    /// <summary>尺寸稳定多久后把材质挂回来。180ms: 覆盖 DWM 最大化/还原动画的尾部。</summary>
+    private const int BackdropResumeDelayMs = 180;
+
+    private DispatcherTimer? _backdropResumeTimer;
+
+    /// <summary>是否已经排了一次"延迟停材质"(见 <see cref="QueueBackdropSuspendForResize"/>)。</summary>
+    private bool _backdropSuspendQueued;
+
+    /// <summary>
+    /// 启动/首次定位期间**不**因 SizeChanged 停材质。
+    /// ★ 打开播放器时窗口会按记忆尺寸做一次二次定位并触发 SizeChanged; 若当成用户 resize,
+    ///   材质会先消失 180ms 再回来 —— 观感就是"打开播放器时材质闪一下"。
+    ///   这个闸门在 OnLoaded 的首次布局跑完后才放开。
+    /// </summary>
+    private bool _backdropResizeArmed;
+
+    /// <summary>
+    /// 是否正处于"拖边缘缩放"的模态循环(WM_ENTERSIZEMOVE → WM_EXITSIZEMOVE)。
+    /// ★ 这个期间停掉的材质**只在 EXITSIZEMOVE 后恢复**: 用户可能拖一下停一下,
+    ///   若按"尺寸静止 180ms"恢复, 下一次继续拖时又会先闪一帧。
+    /// </summary>
+    private bool _modalResizeInProgress;
+
+    /// <summary>
+    /// 尺寸变化开始: 临时停用背景材质(只停材质, 不盖黑布)。
+    /// ★ 材质本来就没开 / 已经停了 → 什么都不做。
+    /// </summary>
+    private void SuspendBackdropForResize()
+    {
+        if (_closing || BackdropSuspended) return;
+        if (!IsBackdropMaterialActive) return;
+        SetBackdropSuspended(true);
+        // 非模态 resize(状态切换/Win+方向键/DPI)没有可靠的结束消息, 靠尺寸静止恢复;
+        // 拖边缘的模态 resize 则等 EXITSIZEMOVE 统一恢复(见 _modalResizeInProgress)。
+        if (!_modalResizeInProgress) ResumeBackdropAfterResize();
+    }
+
+    /// <summary>
+    /// 没有走 WM_ENTERSIZEMOVE / 状态切换钩子的尺寸变化(Win+方向键吸附、DPI 变化等):
+    /// 排到下一轮渲染前再停材质, 避免在 SizeChanged 里直接改 WindowChrome 造成重入。
+    /// </summary>
+    private void QueueBackdropSuspendForResize()
+    {
+        if (_closing || _backdropSuspendQueued || BackdropSuspended) return;
+        _backdropSuspendQueued = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _backdropSuspendQueued = false;
+            if (!_closing) SuspendBackdropForResize();
+        }), DispatcherPriority.Render);
+    }
+
+    /// <summary>
+    /// 尺寸还在变(或刚变完): 把"恢复材质"的定时器往后推。
+    /// 每次都续期, 所以只有尺寸真正稳定 <see cref="BackdropResumeDelayMs"/> 后才恢复。
+    /// </summary>
+    private void ResumeBackdropAfterResize()
+    {
+        if (_closing || !BackdropSuspended) return;
+        _backdropResumeTimer ??= new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(BackdropResumeDelayMs)
+        };
+        _backdropResumeTimer.Tick -= OnBackdropResumeTick;
+        _backdropResumeTimer.Tick += OnBackdropResumeTick;
+        _backdropResumeTimer.Stop();
+        _backdropResumeTimer.Start();
+    }
+
+    private void OnBackdropResumeTick(object? sender, EventArgs e)
+    {
+        _backdropResumeTimer?.Stop();
+        if (_closing) return;
+        SetBackdropSuspended(false);
+    }
+
+    /// <summary>
+    /// 播放器窗口尺寸变化: 续期恢复定时器; 若还没停材质(非模态 resize),
+    /// 补一次延迟停用。★ 这里**不能**直接调 ApplyChrome —— SizeChanged 还在 WPF 布局里,
+    /// 改 WindowChrome 会重入; 所以只排队(见 <see cref="QueueBackdropSuspendForResize"/>)。
+    /// </summary>
+    private void OnPlayerResizedForBackdrop()
+    {
+        if (_closing || !IsLoaded || !IsVisible) return;
+        if (!_backdropResizeArmed) return;
+        // 首次定位/全屏切稳定期里的 SizeChanged 不能当成用户 resize; 但已经停了材质时
+        // 仍要续期恢复定时器(否则最大化动画中途材质会回来)。
+        if (_placementSettling && !BackdropSuspended) return;
+        // 模态拖边缘期间统一在 EXITSIZEMOVE 恢复; 中间每一次 SizeChanged 都不续期。
+        if (_modalResizeInProgress) return;
+        if (BackdropSuspended)
+        {
+            ResumeBackdropAfterResize();
+            return;
+        }
+        if (WindowState == WindowState.Minimized) return;
+        if (IsBackdropMaterialActive) QueueBackdropSuspendForResize();
+    }
+
+    /// <summary>
+    /// 用户开始拖动/缩放(WM_ENTERSIZEMOVE)。
+    /// ★ 只有拖在**窗口缩放带**上才停材质: 拖标题栏只是移动窗口, 不该让材质闪一下消失。
+    ///   判据用 <see cref="HitTestResizeEdge"/> —— 与视频区边缘缩放共用同一套边缘检测。
+    /// </summary>
+    protected override void OnModalResizeStarted()
+    {
+        base.OnModalResizeStarted();
+        if (_closing || !IsLoaded) return;
+        if (HitTestResizeEdge() == 0) return;
+        _modalResizeInProgress = true;
+        // 上一轮 resize 的恢复定时器可能还在跑: 必须掐掉, 否则它会在这次拖动中途
+        // 把材质挂回来, 又闪一下。
+        _backdropResumeTimer?.Stop();
+        SuspendBackdropForResize();
+    }
+
     /// <summary>
     /// 找 libvlc 那个铺满视频区的 `Static` 窗口(白边的作者)。
     ///
@@ -216,7 +347,7 @@ public partial class PlayerWindow : FluentWindow
     ///      必须读 `.Handle`。第一版只认 `IntPtr` ⇒ 永远拿到 0 ⇒ 边带一直白着。
     ///   ③ ★ 那个句柄拿到的**正是 `Static` 子窗口本身**(实测类名 `Static`, 父级才是
     ///      `HwndWrapper`) —— 它由 LibVLCSharp 的 VideoHwndHost 创建, 我们这侧可以安全地
-    ///      改样式/子类化。处理入口见 <see cref="ApplyHwndHostBlackBackground"/>。
+    ///      改样式/子类化。处理入口见 <see cref="ApplyHwndHostLetterboxBackground"/>。
     ///   ★ 别用 `PresentationSource.FromVisual(VideoView)`: 那返回的是**外层播放器窗口**
     ///     的 HwndSource, 拿它改类背景刷会把主题底色一起改坏。
     /// </summary>

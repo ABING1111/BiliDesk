@@ -34,8 +34,8 @@ public partial class PlayerWindow : FluentWindow
     //
     // ★★ 2026-11-03: 这里的"最大化/还原期间压黑视频区"整套已删除。
     //   白块的根因是 LibVLCSharp 的 Static 宿主窗口在尺寸剧变时重绘白底,
-    //   现在由 VideoBackdropInterop.EnsureBlackVideoHost 在原生层治掉
-    //   (WS_CLIPCHILDREN + WM_ERASEBKGND/WM_PAINT 填黑), 不再需要 WPF 黑布。
+    //   现在由 VideoBackdropInterop.EnsureLetterboxVideoHost 在原生层治掉
+    //   (WS_CLIPCHILDREN + WM_ERASEBKGND/WM_PAINT 填近黑), 不再需要 WPF 黑布。
     //   ★ 别再复活 ArmMaximizeCover / OnMaximizeSettle / OnSystemCommand 那一套。
 
     /// <summary>收藏状态只有这一个入口 —— 分散着改很容易出现两边显示不一致</summary>

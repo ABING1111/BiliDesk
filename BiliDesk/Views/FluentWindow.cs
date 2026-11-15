@@ -188,8 +188,12 @@ public class FluentWindow : Window, IWindowStateTransitionAware
             //   ⇒ 云母必须**单独一个分支**: 照常申请材质, 且窗口底色与亚克力一样要透明
             //     (理由见下面那段 —— 我中间试过给云母实色底, 那是把材质整个盖住, 必然失效)。
             var material = Svc.Settings.AcrylicMaterial;
-            var wantAcrylic = Svc.Settings.AcrylicBackground && material == BackdropMaterial.Acrylic;
-            var wantMica = Svc.Settings.AcrylicBackground &&
+            // ★★★ 2026-11-16: 播放器等窗口在 resize 期间可以临时停用材质(见 SetBackdropSuspended)。
+            //   那种状态下按"无材质"走: 玻璃区与 backdrop 都必须收掉, 窗口落回普通不透明实色底。
+            var wantAcrylic = !_backdropSuspended &&
+                              Svc.Settings.AcrylicBackground && material == BackdropMaterial.Acrylic;
+            var wantMica = !_backdropSuspended &&
+                           Svc.Settings.AcrylicBackground &&
                            material is BackdropMaterial.Mica or BackdropMaterial.MicaAlt;
 
             // ★★★ 两个材质分支都必须**取返回值** —— 返回值 = "这个窗口的材质到底有没有真的挂上"。
@@ -207,7 +211,15 @@ public class FluentWindow : Window, IWindowStateTransitionAware
             //   ★ 判据必须是**返回值**而不是 `wantMica`/`wantAcrylic`: 那两个只表示"用户想要什么",
             //     与"本窗口给不给得起"是两件事。取返回值才能让下面老老实实回落到实色底。
             var materialOn = false;
-            if (wantAcrylic)
+            if (_backdropSuspended)
+            {
+                // ★★★ 2026-11-16: 临时停用材质(resize 期间)。
+                //   **必须走 SetAcrylicBackdrop(None)**: 它会把 GlassFrameThickness 从 -1 还原成
+                //   (0,0,0,1), 并把 DWMWA_SYSTEMBACKDROP_TYPE 设回 None。只调 DisableMica 会把
+                //   "材质类型"关掉, 但玻璃区仍在 —— 窗口仍然是个玻璃窗口, HwndHost 照样闪。
+                DwmInterop.SetAcrylicBackdrop(this, BackdropMaterial.None);
+            }
+            else if (wantAcrylic)
                 materialOn = DwmInterop.SetAcrylicBackdrop(this, material);
             else if (wantMica)
                 // ★ 云母: 照样把材质下发给 DWM —— **这一步就是"启用云母"**。
@@ -247,7 +259,8 @@ public class FluentWindow : Window, IWindowStateTransitionAware
                 // 没开材质(无材质 / 亚克力没开 / 该窗口不支持材质): 一律回落普通实色背景。
                 // ★ 这里才轮到 DisableMica: 材质的选择在函数开头已经统一决定了,
                 //     只在"确实要关"时禁 —— 否则会把刚开的云母一起禁掉(2026-11-12 的那个回归)。
-                if (!Svc.Settings.AcrylicBackground)
+                //   ★ resize 临时停用材质时也要禁(此时 _backdropSuspended=true, 上面已走 None 分支)。
+                if (!Svc.Settings.AcrylicBackground || _backdropSuspended)
                     DwmInterop.DisableMica(this);
                 // ★★ 与 SetAcrylicBackdrop 里那次 HideNonClientDecorations **必须成对**(2026-10-17):
                 //   材质开启时我们让 DWM 不画 caption 底与 1px 边框; 关掉材质后客户区不再是玻璃区,
@@ -277,6 +290,49 @@ public class FluentWindow : Window, IWindowStateTransitionAware
     ///   (见 ApplyChrome 里 2026-10-12 那段说明)。
     /// </summary>
     private bool _acrylicActive;
+
+    /// <summary>
+    /// 是否处于「临时停用背景材质」状态(播放器 resize 期间用)。
+    ///
+    /// ★★★ 为什么需要它(2026-11-16, 用户报"云母/亚克力下改窗口大小画面依然闪"):
+    ///   窗口一旦开了材质, <c>GlassFrameThickness</c> 就是 -1(整个客户区都是 DWM 玻璃区)。
+    ///   播放器里还有一个 <c>HwndHost</c>(LibVLC 的 video output), 它和 DWM 的玻璃/backdrop
+    ///   在尺寸连续变化时会互相抢帧 —— 表现就是视频画面/黑边在拖动窗口边缘时闪。
+    ///   这是 WPF WindowChrome + HwndHost 的已知问题(见 dotnet/wpf#1176 / SO 6500336),
+    ///   在普通材质(不透明窗口)下不会出现, 所以只能**在 resize 期间把材质临时收掉**。
+    ///   ★ 只停材质、不盖黑布: 窗口落回普通不透明实色底, 视频照常可见; 尺寸稳定后
+    ///     (见 PlayerWindow 的恢复定时器)再原样挂回去。
+    /// </summary>
+    private bool _backdropSuspended;
+
+    /// <summary>
+    /// 本窗口当前是否处于「resize 期间临时停用材质」状态。
+    /// 子类据此决定要不要续期/恢复(见 PlayerWindow 的 resize 处理)。
+    /// </summary>
+    protected bool BackdropSuspended => _backdropSuspended;
+
+    /// <summary>
+    /// 本窗口**当前真的挂着**背景材质(云母/亚克力)。
+    /// ★ 与 <see cref="BackdropSuspended"/> 不同: 这个看的是"实际挂上没有", 供子类在
+    ///   resize 开始时判断"有没有必要停"。材质本来就没开时不要做任何事。
+    /// </summary>
+    protected bool IsBackdropMaterialActive => _acrylicActive;
+
+    /// <summary>
+    /// 临时停用/恢复背景材质。**只应由播放器在 resize 期间调用**。
+    ///
+    /// ★ 停用时 <see cref="ApplyChrome"/> 会走"无材质"分支:
+    ///   <c>SetAcrylicBackdrop(None)</c> 把 GlassFrameThickness 从 -1 还原成 (0,0,0,1)、
+    ///   backdrop 设回 None, 再把窗口底色落回不透明实色 —— 窗口变成一个普通的不透明窗口。
+    ///   **不能只调 DisableMica**: 那只关材质类型, 玻璃区还在, HwndHost 照样会闪。
+    /// ★ 恢复时照常走 <see cref="ApplyChrome"/>, 材质/透明底/GlassFrameThickness 一起回来。
+    /// </summary>
+    protected void SetBackdropSuspended(bool suspended)
+    {
+        if (_backdropSuspended == suspended) return;
+        _backdropSuspended = suspended;
+        ApplyChrome();
+    }
 
     /// <summary>
     /// 亚克力窗口底色的可变动画笔(动画载体)。
@@ -653,11 +709,23 @@ public class FluentWindow : Window, IWindowStateTransitionAware
             // 就是用户说的"拖边缘很卡"。
             var entering = msg == WM_ENTERSIZEMOVE;
             CardWall.NotifyModalResize(entering);
+            // 开始/结束拖动缩放都通知子类: 播放器用它临时停用背景材质, 避免 DWM glass +
+            // HwndHost 在 resize 时闪(见 FluentWindow.SetBackdropSuspended 的说明)。
+            if (entering) OnModalResizeStarted();
             // 结束拖动/缩放时通知子类: 播放器用它把"常规窗口几何"落盘(见 PlayerWindow)。
-            if (!entering) OnModalMoveResizeEnded();
+            else OnModalMoveResizeEnded();
         }
         return IntPtr.Zero;
     }
+
+    /// <summary>
+    /// 用户刚**开始**一次"拖动窗口 / 拖边缘缩放"的模态循环(WM_ENTERSIZEMOVE)。
+    ///
+    /// ★ 播放器覆写它来临时停用背景材质: DWM 的玻璃区 + LibVLC 的 HwndHost 在连续
+    ///   改尺寸时会互相抢帧(见 <see cref="SetBackdropSuspended"/>), 普通材质下没这个问题。
+    ///   默认空实现: 其它窗口没有 HwndHost, 不需要为它们改变行为。
+    /// </summary>
+    protected virtual void OnModalResizeStarted() { }
 
     /// <summary>
     /// 用户刚结束一次"拖动窗口 / 拖边缘缩放"的模态循环(WM_EXITSIZEMOVE)。

@@ -448,7 +448,7 @@ public partial class PlayerWindow : FluentWindow
     /// EOF(播完)时手势层是否压成了不透明黑。
     ///
     /// ★ 2026-11-03 起播放器**不再**为"改窗口大小/最大化/全屏"压黑布 —— 那些白闪改由
-    ///   原生宿主窗口(`VideoBackdropInterop.EnsureBlackVideoHost`)在根上治掉。
+    ///   原生宿主窗口(`VideoBackdropInterop.EnsureLetterboxVideoHost`)在根上治掉。
     ///   剩下唯一需要压黑的路径就是 EOF: 那时 vout 被拆掉, 视频 HWND 会露出白底,
     ///   而"重播"遮罩是半透明的, 不垫一层黑就会变成"浅色主题下一片白"。
     /// </summary>
@@ -468,7 +468,7 @@ public partial class PlayerWindow : FluentWindow
     /// 撤掉 EOF 时压上的不透明黑, 把手势层还原成常态的近透明底。
     ///
     /// ★ 2026-11-03: 这是**唯一**还允许切黑手势层的路径(播完时 vout 被拆掉, 会露白底)。
-    ///   改窗口大小/最大化/全屏的白闪已经改由 <see cref="ApplyHwndHostBlackBackground"/>
+    ///   改窗口大小/最大化/全屏的白闪已经改由 <see cref="ApplyHwndHostLetterboxBackground"/>
     ///   在原生宿主窗口上治理, 不再走这里。
     /// </summary>
     private void RestoreVideoAreaBackground()

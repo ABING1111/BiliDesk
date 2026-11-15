@@ -1111,6 +1111,11 @@ public partial class PlayerWindow : FluentWindow
         ReapplyRememberedPlacementAfterRealized();
         CaptureNormalPlacement();
         BeginPlacementTransition();
+        // ★ 2026-11-16: 首次布局/二次定位都跑完后, 才把 SizeChanged 当成"用户改窗口大小"。
+        //   在这之前停材质会让打开播放器时材质闪一下(见 _backdropResizeArmed 的说明)。
+        //   ★ 放在 await LoadVideoAsync() **之前**: 加载慢的时候用户也可能拖窗口。
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Background,
+            new Action(() => _backdropResizeArmed = true));
         // 「铺满窗口」按钮的字形初值: XAML 里写的是"进入前"那个字形(E9A6), 这里按实际状态
         // 再同步一次 —— 窗口是复用的, 复用到一个"上次已铺满"的窗口时不能显示成未铺满。
         UpdateFillWindowButton();
@@ -1125,12 +1130,12 @@ public partial class PlayerWindow : FluentWindow
         // 覆盖层窗口(VideoView 的 ForegroundWindow)这时才建出来 —— 把键盘处理也挂上去,
         // 否则点过一次视频/控制栏之后快捷键就全哑了(见 HookOverlayKeyboard 的说明)
         HookOverlayKeyboard();
-        // ★ 2026-11-03: 尽早把视频宿主窗口治成黑底(不等第一帧/Vout)。
+        // ★ 2026-11-03: 尽早把视频宿主窗口治成近黑底(不等第一帧/Vout)。
         //   放在 Loaded 优先级: 此时 VideoView 的模板与原生宿主窗口已经建好;
         //   拿不到句柄也没关系, Vout/Playing 还会再调(见 StartVideoBackdropFix)。
         _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
         {
-            if (!_closing) ApplyHwndHostBlackBackground();
+            if (!_closing) ApplyHwndHostLetterboxBackground();
         }));
         // ★ 不重复启动: 新窗口第一次打开时 PlayerService 已经先调过 PlayVideo(→LoadVideoAsync),
         //   Loaded 事件随后才到。没有这个闸门就会跑两遍详情/取流/测速, 甚至

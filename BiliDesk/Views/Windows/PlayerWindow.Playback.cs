@@ -1386,7 +1386,7 @@ public partial class PlayerWindow : FluentWindow
         //   深色主题上半透明的"重播"遮罩(#CC000000)盖在白底上 = "一层阴影遮罩"。
         //   手势层在覆盖窗口(VideoView.Content)里, 位于 HWND **之上**, 切黑才真的盖得住。
         //   ★ 2026-11-03: 这是**唯一**还压黑手势层的路径。resize/最大化/全屏的白闪已改为
-        //     在原生宿主窗口上根治(见 VideoBackdropInterop.EnsureBlackVideoHost), 不再压黑布。
+        //     在原生宿主窗口上根治(见 VideoBackdropInterop.EnsureLetterboxVideoHost), 不再压黑布。
         //     所以这里只需记一个 `_eofBlackActive`, 起播时由 RestoreVideoAreaBackground() 撤掉。
         //   ★★★ 2026-11-01 修「听视频模式快进提示已播完」: EOF 时若还有**未确认的跳转**
         //     在飞, 那多半是远跳甩到流尾的假 EOF(音轨 seek 失败被当成播完) ——

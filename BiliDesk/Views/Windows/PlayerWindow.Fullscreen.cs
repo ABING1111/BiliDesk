@@ -65,6 +65,11 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void ApplyFullscreenLayout(bool on)
     {
+        // ★ 2026-11-16: 进出全屏也是一次尺寸剧变(而且会重建 vout)。材质开启时先把它
+        //   临时收掉, 窗口回到普通不透明路径; 状态/布局全部改完后由定时器恢复。
+        //   (见 PlayerWindow.VideoArea.cs 的"resize 期间临时停用材质")
+        SuspendBackdropForResize();
+
         if (on)
         {
             // ★ 全屏期间**禁止**"失焦换窗口底色"那套处理接管(2026-10-06):
@@ -109,7 +114,7 @@ public partial class PlayerWindow : FluentWindow
             if (WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
             WindowState = WindowState.Maximized;
 
-            // ★★ 进全屏同样会按新尺寸重建 vout ⇒ 新的 `Static` 子窗口又没被刷黑,
+            // ★★ 进全屏同样会按新尺寸重建 vout ⇒ 新的 `Static` 子窗口又没被刷成近黑,
             //   全屏时画面两侧/上下会露白边。与退全屏对称, 这里也刷一次。
             StartVideoBackdropFix();
         }
@@ -128,9 +133,9 @@ public partial class PlayerWindow : FluentWindow
             //   (重复按钮的克制现在靠去掉 WS_SYSMENU, 不再靠摘 WS_CAPTION。)
 
             // ★★ 退出全屏后 libvlc 会按新尺寸**重建 vout**, 那里面的 `Static` 子窗口是新的,
-            //   之前设的黑色类背景刷跟着旧窗口一起没了 ⇒ 视频区边缘又露出白(用户报的
+            //   之前设的近黑类背景刷跟着旧窗口一起没了 ⇒ 视频区边缘又露出白(用户报的
             //   "先全屏再退全屏, 播放器页面部分出现白色区域")。
-            //   所以这里必须重刷一次(和起播后那次同一个入口, 见 ApplyHwndHostBlackBackground)。
+            //   所以这里必须重刷一次(和起播后那次同一个入口, 见 ApplyHwndHostLetterboxBackground)。
             StartVideoBackdropFix();
             // 根网格底色还给主题(与 ApplyChrome 同理: 缩回过程露出的边角要主题色)
             RootGrid.SetResourceReference(BackgroundProperty, "AppBackgroundBrush");
@@ -158,6 +163,9 @@ public partial class PlayerWindow : FluentWindow
                 InfoPanel.Opacity = 1;
             }
         }
+
+        // 几何/状态都改完了: 尺寸稳定后把材质挂回去(期间 SizeChanged 会不断续期)。
+        ResumeBackdropAfterResize();
     }
 
     // ------------------------------------------------------------ 尺寸变化的白闪
@@ -166,9 +174,9 @@ public partial class PlayerWindow : FluentWindow
     //   (ArmFullscreenCover / ArmResizeCover / ArmMaximizeCover + _resizeHold 闸)。
     //   它确实能挡住 LibVLC vout 重协商时的白底, 但代价是拖动/最大化/全屏期间
     //   整个视频区变成一块黑布。
-    //   ⇒ 现在改为在原生宿主窗口上根治: 给 Static 加 WS_CLIPCHILDREN + 子类化填黑,
-    //     见 Helpers/VideoBackdropInterop.EnsureBlackVideoHost 与
-    //     PlayerWindow.ApplyHwndHostBlackBackground。
+    //   ⇒ 现在改为在原生宿主窗口上根治: 给 Static 加 WS_CLIPCHILDREN + 子类化填近黑,
+    //     见 Helpers/VideoBackdropInterop.EnsureLetterboxVideoHost 与
+    //     PlayerWindow.ApplyHwndHostLetterboxBackground。
     //   ★ 不要再把这里的黑布加回来 —— 它挡的只是表象, 而且会让"改大小"看起来像黑屏。
     //   ★ EOF(播完)那一层黑不受影响, 见 OnEndReached / RestoreVideoAreaBackground。
 
@@ -496,6 +504,9 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>尺寸/位置仍在变化 ⇒ 说明动画没结束, 把稳定期往后推(尾部防抖)。</summary>
     private void OnPlayerSizeChanged(object? sender, SizeChangedEventArgs e)
     {
+        // ★ 2026-11-16: 材质开启时 resize 期间临时收掉 backdrop(见 VideoArea.cs 的
+        //   "resize 期间临时停用材质"一节)。必须在 placement 逻辑之前 —— 那个分支会提前 return。
+        OnPlayerResizedForBackdrop();
         if (_placementSettling) { ArmPlacementSettleTimer(); return; }
         CaptureNormalPlacement();
     }
@@ -693,6 +704,9 @@ public partial class PlayerWindow : FluentWindow
     protected override void OnWindowStateTransitionStarting()
     {
         if (_closing || !IsLoaded) return;
+        // 最大化/还原/最小化也是尺寸剧变: 先停材质, 等尺寸稳定后再挂回去。
+        SuspendBackdropForResize();
+        ResumeBackdropAfterResize();
         BeginPlacementTransition();
     }
 
@@ -706,6 +720,9 @@ public partial class PlayerWindow : FluentWindow
     protected override void OnModalMoveResizeEnded()
     {
         base.OnModalMoveResizeEnded();
+        // 拖动结束: 尺寸已经定了, 延迟把材质挂回去(期间 SizeChanged 还会续期)。
+        _modalResizeInProgress = false;
+        ResumeBackdropAfterResize();
         if (_closing || !IsLoaded) return;
 
         if (IsNormalStateForPlacement())

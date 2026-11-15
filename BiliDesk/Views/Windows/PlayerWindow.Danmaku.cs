@@ -210,7 +210,7 @@ public partial class PlayerWindow : FluentWindow
         // 先放掉 WPF 持有的鼠标捕获, 否则模态缩放循环拿不到鼠标
         ReleaseCapture();
         // ★ 2026-11-03: 拖边缘不再由 WPF 压黑遮罩 —— 白闪改由原生宿主窗口治理
-        //   (VideoBackdropInterop.EnsureBlackVideoHost)。这里直接把"按在缩放带上"
+        //   (VideoBackdropInterop.EnsureLetterboxVideoHost)。这里直接把"按在缩放带上"
         //   交给 DefWindowProc 进入系统模态缩放循环即可, 不再需要 ENTER/EXIT 的消息钩子。
         // 直接把"按在缩放带上"交给 DefWindowProc: 它进入系统模态缩放循环, 松开鼠标才返回
         DefWindowProc(hwnd, WmNcLButtonDown, (IntPtr)ht, IntPtr.Zero);

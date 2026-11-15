@@ -361,6 +361,11 @@ public static class DwmInterop
             {
                 var glass = on ? new Thickness(-1) : new Thickness(0, 0, 0, 1);
                 if (chrome.GlassFrameThickness != glass) chrome.GlassFrameThickness = glass;
+
+                // ★★★ 2026-11-16: 材质开启 ⇒ 整个客户区是 DWM 玻璃区。此时**GDI 绘制的纯黑**
+                //   会被 DWM 当成全透明(视频区的原生边带就是 GDI 画的) —— 所以
+                //   VideoBackdropInterop 的边带笔刷必须用近黑 #010101, 不能改回 0x000000。
+                //   详见 VideoBackdropInterop 的类注释("云母/亚克力下黑边不断闪")。
             }
             else
             {
