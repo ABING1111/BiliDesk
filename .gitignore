@@ -18,9 +18,6 @@ Publish/*
 memory/
 长期记忆/
 
-# WorkBuddy 会话数据(个人笔记, 不开源)
-.workbuddy/
-
 # 运行期临时文件
 *.log
 *.tmp
