@@ -59,26 +59,37 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>相关视频的加载代次: 换片后作废上一片的在飞请求</summary>
     private int _relatedGen;
 
-    /// <summary>简介折叠后的最大高度(与 XAML 里 DescCollapsedHeight 同一个数)</summary>
-    private const double DescCollapsedHeight = 108;
-
     /// <summary>
     /// 「展开简介」按钮。
     ///
-    /// ★★ 判据必须是"文本**不限高**时需要多高", 所以 Measure 之前**必须先把 MaxHeight 摘掉**:
-    ///   WPF 的 Measure 会遵守 MaxHeight —— 折叠态下 MaxHeight 就是 108,
-    ///   于是 DesiredSize.Height 拿回来恒等于 108, 与阈值比较永远不成立
-    ///   ⇒ 按钮**永远不出现**(实测: 40 行简介 + 展开按钮 Collapsed + DesiredHeight=108)。
-    ///   这个坑很隐蔽: 逻辑读起来完全合理, 只有真跑一次界面才暴露。
-    /// ★ 所以下面那三步的顺序不能换: 备份 → 摘掉 → 量 → 装回。
+    /// ★ 折叠判据抽在 <see cref="DescFoldPolicy"/>: "要不要折 / 按钮出不出现 / MaxHeight 给多大"
+    ///   是**一组**结论, 拆开写必然自相矛盾(比如按钮藏了但 MaxHeight 还夹着 108)。
+    ///
+    /// ★★ 测量部分必须遵守两条顺序约束:
+    ///   ① 判据是"文本**不限高**时需要多高", 所以 Measure 之前**必须先把 MaxHeight 摘掉**:
+    ///      WPF 的 Measure 会遵守 MaxHeight —— 折叠态下 MaxHeight 就是 108,
+    ///      于是 DesiredSize.Height 拿回来恒等于 108, 与阈值比较永远不成立
+    ///      ⇒ 按钮**永远不出现**(实测: 40 行简介 + 展开按钮 Collapsed + DesiredHeight=108)。
+    ///   ② try/finally 不能省: Measure 抛异常时若没装回去, 简介就会永远失去高度上限(撑满整屏)。
     /// ★ 另一个容易写错的替代品是读 ActualHeight: 折叠态下它也被 MaxHeight 夹住,
     ///   同样永远判不出"超没超"。必须用无上限的那次测量。
     /// ★ 宽度未知(窗口还没布局)时直接隐藏按钮: 那时的 0 宽度会算出 0 高度,
     ///   判成"不溢出"就对了, 但纯属巧合, 所以这里显式处理而不是让它自然走完。
+    /// ★★ 关掉「显示相关视频」时**在宽度判据之前**就展开: 此时简介不再需要为下方的
+    ///   推荐列表让位置(用户 2026-11-16 报的"关了相关视频, 简介还是折着")。
+    ///   提前处理也保证"在评论 tab 上改设置"时同样生效 —— 那一刻宽度是 0, 走宽度早退
+    ///   会把旧的 MaxHeight 留在那里, 切回简介 tab 先看到一个仍然折着的简介。
     /// </summary>
     private void UpdateDescFold()
     {
         if (DescText == null || BtnDescFold == null) return;
+
+        if (!Svc.Settings.ShowRelatedVideos)
+        {
+            // 不测量(needed 传 0 即可): 结果与简介多长无关, 永远是"整段展开 + 无按钮"。
+            ApplyDescFoldResult(DescFoldPolicy.Decide(relatedVisible: false, _descExpanded, 0));
+            return;
+        }
 
         var width = DescText.ActualWidth;
         if (width <= 1)
@@ -88,9 +99,7 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
 
-        // ★ 临时摘掉 MaxHeight 再量 —— 见方法说明。try/finally 不能省:
-        //   Measure 抛异常时若没装回去, 简介就会永远失去高度上限(撑满整屏)。
-        var savedMax = DescText.MaxHeight;
+        // ★ 临时摘掉 MaxHeight 再量 —— 见方法说明。try/finally 不能省。
         var needed = 0d;
         try
         {
@@ -100,17 +109,23 @@ public partial class PlayerWindow : FluentWindow
         }
         finally
         {
-            DescText.MaxHeight = _descExpanded
-                ? (needed > DescCollapsedHeight ? needed : DescCollapsedHeight)
-                : DescCollapsedHeight;
+            // 先装回折叠态的上限; 真正的值由下面 ApplyDescFoldResult 统一写。
+            // 不装回的话, 一旦下面抛异常, 简介就永远没有高度上限了。
+            DescText.MaxHeight = DescFoldPolicy.CollapsedHeight;
         }
 
-        // +1 容差: 亚像素误差会让"刚好 6 行"被误判成没超, 按钮该出时不出。
-        var overflows = needed > DescCollapsedHeight + 1;
-        BtnDescFold.Visibility = overflows ? Visibility.Visible : Visibility.Collapsed;
-        // 短简介没有"展开"可言, 状态复位, 否则下次换片会带着一个无意义的展开态
-        if (!overflows) _descExpanded = false;
+        ApplyDescFoldResult(DescFoldPolicy.Decide(relatedVisible: true, _descExpanded, needed));
+    }
 
+    /// <summary>
+    /// 应用 <see cref="DescFoldPolicy"/> 的结论(状态 + MaxHeight + 按钮可见性 + 文案)。
+    /// ★ 三个值一起写: 只改其中一个就会出现"按钮藏了简介还折着"这类半截状态。
+    /// </summary>
+    private void ApplyDescFoldResult(DescFoldPolicy.Result result)
+    {
+        _descExpanded = result.Expanded;
+        DescText.MaxHeight = result.MaxHeight;
+        BtnDescFold.Visibility = result.ShowButton ? Visibility.Visible : Visibility.Collapsed;
         ApplyDescFoldText();
     }
 
@@ -250,10 +265,15 @@ public partial class PlayerWindow : FluentWindow
     /// ★ 打开: 当前是在线视频就重新加载; 直播/本地文件没有 bvid(或已标记本地播放),
     ///   本来就没有相关视频, 直接跳过。
     /// ★ 重新加载走 LoadRelatedAsync 的代次闸门: 快速开关两次也只保留最后一次结果。
+    /// ★★ 简介折叠与相关视频是**联动**的(2026-11-16): 关掉后简介不再需要让位置,
+    ///   要立刻整段展开; 重新打开后恢复折叠。所以这里必须先重算一次折叠 ——
+    ///   否则改了设置, 推荐列表没了、简介却还折着, 信息栏里平白多出一个「展开简介」。
     /// </summary>
     private void OnRelatedVideosSettingChanged()
     {
         if (_closing) return;
+        // ★ 放在分支之前: 两个方向都要重算(关掉 → 展开, 打开 → 重新按 6 行折叠)。
+        UpdateDescFold();
         if (!Svc.Settings.ShowRelatedVideos)
         {
             ClearRelatedPanel();
