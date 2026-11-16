@@ -34,6 +34,14 @@ public partial class PlayerWindow : FluentWindow
     {
         // 只在焦点位于"可编辑"输入框时让按键走默认路径; 只读展示框不拦截空格
         if (Keyboard.FocusedElement is TextBox { IsReadOnly: false }) return;
+        // ★★★ 2026-11-16 修"对着视频选中文字按 Ctrl+C 复制失败, 右上角还弹'正在获取字幕轨…'":
+        //   下面是**一批裸字母**快捷键(C 字幕 / D 弹幕 / M 静音 / L 点赞 / U UP主), 以前不看修饰键,
+        //   于是 Ctrl+C 在**窗口级隧道事件**里就被 case Key.C 吃掉并 e.Handled = true ——
+        //   只读文本控件(LinkText / CommentText / SelectableText)根本收不到那次按键, 复制永远不生效;
+        //   而且顺手调了 ToggleSubtitleByKey(), 字幕轨还没拉回来就弹了那句提示。
+        //   ⇒ 带 Ctrl / Alt 的组合键**一律放行**给系统与文本控件(Ctrl+C/V/A/X/Z 全部恢复);
+        //   裸 C 仍然开关字幕, Shift 组合(方向键 30s 快进)不受影响。
+        if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) != 0) return;
         switch (e.Key)
         {
             case Key.Space: OnPlayPauseClick(this, new RoutedEventArgs()); e.Handled = true; return;
@@ -54,7 +62,7 @@ public partial class PlayerWindow : FluentWindow
             case Key.Up: SetVolume(_volumeCache + VolumeStep); e.Handled = true; return;
             case Key.Down: SetVolume(_volumeCache - VolumeStep); e.Handled = true; return;
             case Key.M: SetVolume(_volumeCache == 0 ? 80 : 0); e.Handled = true; return;
-            case Key.F: if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.None) ToggleFullscreen(); e.Handled = true; return;
+            case Key.F: ToggleFullscreen(); e.Handled = true; return;
             case Key.L: OnLikeClick(this, new RoutedEventArgs()); e.Handled = true; return;
             case Key.U: OnUpPageClick(this, new RoutedEventArgs()); e.Handled = true; return;
             case Key.D: ToggleDanmaku(); e.Handled = true; return;

@@ -5,20 +5,12 @@
              xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
              Title="网页浏览" Width="1180" Height="780"
              MinWidth="800" MinHeight="500" WindowStartupLocation="CenterOwner">
+    <!-- ★ 2026-11-16 用户要求: 内置浏览器原来在系统标题栏之外还有一条 44px 的自绘网址栏,
+         两条地址并排出现(截图) —— 现在整条删掉, 网址只留给系统标题栏显示(见 BrowserWindow.xaml.cs
+         的 SourceChanged: 标题跟当前页面实时更新), 网页区也因此多出 44px。
+         别再把它加回来: 要放按钮请走网页内注入(同文件的悬浮"在浏览器中打开"胶囊),
+         因为 WebView2 是 HwndHost, WPF 元素叠在网页上会被空域压掉。 -->
     <Grid Background="{DynamicResource AppBackgroundBrush}">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="44" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-        <Border Grid.Row="0" BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1">
-            <Grid Margin="8,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="UrlText" Grid.Column="0" FontSize="12"
-                           VerticalAlignment="Center" Margin="14,0" TextTrimming="CharacterEllipsis" />
-            </Grid>
-        </Border>
-        <wv2:WebView2 Grid.Row="1" x:Name="Wv" />
+        <wv2:WebView2 x:Name="Wv" />
     </Grid>
 </views:FluentWindow>

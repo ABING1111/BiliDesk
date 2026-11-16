@@ -112,6 +112,33 @@ public static class LinkLauncher
     }
 
     /// <summary>
+    /// 用**系统默认浏览器**打开一个链接(内置浏览器里的"在浏览器中打开"走这里)。
+    ///
+    /// ★ 与 <see cref="OpenInBrowser"/> 的区别: 那个开的是内置 WebView2 窗口, 这个交给 Windows
+    ///   自己起本机浏览器(登录态/插件/下载都是用户熟悉的那一套)。
+    /// ★ 校验必须复用 <see cref="IsWebUrl"/>: 地址来自网页(可能被脚本伪造), 绝不能把
+    ///   file:/javascript:/ms-* 之类的协议交给 ShellExecute。
+    /// </summary>
+    /// <returns>是否真的交给了系统(启动失败如实返回 false, 由调用方给提示)。</returns>
+    public static bool OpenInSystemBrowser(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !IsWebUrl(url)) return false;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
+            {
+                UseShellExecute = true
+            });
+            return true;
+        }
+        catch
+        {
+            // 没有默认浏览器 / 被策略拦截 / ShellExecute 失败: 返回 false, 不在这里弹框
+            return false;
+        }
+    }
+
+    /// <summary>
     /// 只放行 http/https。链接是**外部数据**, 不能让它把 file:/javascript: 之类的地址塞进 WebView2。
     /// </summary>
     public static bool IsWebUrl(string url)

@@ -31,6 +31,24 @@ public class LinkLauncherTests
         Assert.Equal(expected, LinkLauncher.IsWebUrl(url));
     }
 
+    /// <summary>
+    /// 内置浏览器里的"在系统浏览器中打开"必须走同一条校验。
+    /// ★ 只测**拒绝**那几条: 放行的地址会真的启动浏览器(测试机上不该弹窗);
+    ///   而"非 http/https 不许交给 ShellExecute"才是这条路径的安全边界 —— 网页脚本能伪造地址。
+    /// </summary>
+    [Theory]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("file:///C:/Windows/win.ini")]
+    [InlineData("ms-settings:privacy")]
+    [InlineData("ftp://example.com/a")]
+    [InlineData("")]
+    [InlineData("不是链接")]
+    [InlineData(null)]
+    public void 系统浏览器只接受http与https(string? url)
+    {
+        Assert.False(LinkLauncher.OpenInSystemBrowser(url));
+    }
+
     // ------------------------------------------------------------ 同地址去重
 
     [Fact]
