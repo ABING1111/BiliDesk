@@ -25,11 +25,12 @@ namespace BiliDesk.Views.Pages;
 public partial class FollowPage : UserControl, IRefreshable
 {
     /// <summary>
-    /// 左栏 UP 列表的自动翻页阈值(单位 = **条目**, 不是像素)。
-    /// 这个列表仍是默认的 item-based 虚拟化(CanContentScroll=True), 滚动距离按行数算;
-    /// 设成像素值会在 50 条一页的左栏上永远触发/永远不触发。
+    /// 左栏 UP 列表的自动翻页阈值(单位 = **像素**)。
+    /// ★ 2026-11-16 起左栏也设了 ScrollUnit=Pixel(让全局平滑滚轮生效, 见 FollowPage.xaml 的
+    ///   FollowUserListStyle), 偏移单位从"条"变成像素。一行约 56px(头像 36 + 上下 Margin 16
+    ///   + 行底衬 4), 原来"还差 8 行"≈ 448px, 这里取 400px。
     /// </summary>
-    private const double UserAutoLoadThreshold = 8;
+    private const double UserAutoLoadThreshold = 400;
 
     /// <summary>
     /// 右栏动态流的自动翻页阈值(单位 = **像素**)。

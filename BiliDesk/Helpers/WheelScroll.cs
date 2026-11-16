@@ -50,10 +50,10 @@ namespace BiliDesk.Helpers;
 ///   嵌套小列表(MaxHeight 的直播看板、弹层里的规则列表、播放器分P列表…)上时,
 ///   它自己滚不动, 事件应该继续交给外层页面 —— 旧判定会让里层和外层都不处理, 滚轮像坏了。
 ///
-/// ★ 条目滚动的虚拟化列表(关注页左栏、会话列表等)保持引擎原生: 一格 3 条,
-///   再按像素动画会一笔跳过好几张整卡。动态页**动态卡**是例外: 它显式设了
-///   ScrollUnit=Pixel(见 FollowPage.xaml 的 FeedListStyle), 偏移是像素, 所以同样平滑。
-///   识别逻辑见 <see cref="IsItemScrolling"/>。
+/// ★ 条目滚动的虚拟化列表(会话列表、播放器分P列表等)保持引擎原生: 一格 3 条,
+///   再按像素动画会一笔跳过好几张整卡。动态页**左右两栏都是例外**: 动态卡与左栏 UP 列表
+///   都显式设了 ScrollUnit=Pixel(见 FollowPage.xaml 的 FeedListStyle / FollowUserListStyle),
+///   偏移是像素, 所以同样平滑。识别逻辑见 <see cref="IsItemScrolling"/>。
 ///
 /// ★ 为什么不用 <see cref="SmoothScroll"/>: 那个是逐处 opt-in 的旧实现(2026-11-14 起
 ///   播放器合集列表也改走本类, 它目前无调用), 这里要的是**全局 + 可调速**, 两者语义不同, 别合并。
@@ -425,7 +425,7 @@ public static class WheelScroll
     /// VirtualizingStackPanel 就是)才是条目滚动 —— 普通 StackPanel 仍然走
     /// ScrollContentPresenter 的像素滚动。
     /// (ScrollViewer.ScrollInfo 是 internal, 只能这样从内容反推。)
-    /// ★ 例外: 虚拟化列表明示了 ScrollUnit=Pixel(动态页动态卡就是) —— 那种偏移
+    /// ★ 例外: 虚拟化列表明示了 ScrollUnit=Pixel(动态页动态卡与左栏 UP 列表就是) —— 那种偏移
     ///   仍是像素, 可以动画。这个附加属性挂在 **ItemsControl** 上、由面板去读,
     ///   所以必须按面板的 ItemsOwner 读, 读面板自身永远是默认的 Item。
     /// </summary>

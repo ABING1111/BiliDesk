@@ -174,7 +174,7 @@
             </Border>
         </DataTemplate>
 
-        <!-- 关注 UP 列表专用 ListBox 样式: 打开虚拟化(条目滚动), 关掉 ListBox 自带选中高亮。
+        <!-- 关注 UP 列表专用 ListBox 样式: 打开虚拟化, 关掉 ListBox 自带选中高亮。
              ★ 2790+ 关注必须虚拟化, 否则会一次性创建几千个行控件/头像, UI 线程直接卡死。 -->
         <Style x:Key="FollowUserListStyle" TargetType="ListBox">
             <Setter Property="Background" Value="Transparent" />
@@ -182,6 +182,14 @@
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
             <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+            <!-- ★ 2026-11-16 用户要求"动态最左侧 UP 主列表也要平滑滚动":
+                 默认 ScrollUnit=Item 时偏移单位是"条", 全局 WheelScroll 的按像素低通平滑
+                 会主动跳过(见 WheelScroll.IsItemScrolling), 一格滚轮 = 瞬移 3 行。
+                 与右栏 FeedListStyle 同款改成 Pixel 后, 偏移是像素, 左栏同样走两级低通平滑,
+                 滚轮距离由设置页「滚轮速度」统一控制。
+                 随之而来的唯一约束: 自动翻页阈值也得按像素算(见 FollowPage.xaml.cs 的
+                 UserAutoLoadThreshold)。 -->
+            <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel" />
             <!-- ★ 2026-11-06 用户报"动态页出现多个可以左右拖动的横条":
                  虚拟化 ListBox 的 HorizontalScrollBarVisibility 默认是 Auto, 只要有一行
                  比视口宽一点点(长 UP 名/长文案)就会长出一条水平滚动条; 左栏、动态流、卡片墙
