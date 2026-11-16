@@ -452,13 +452,17 @@
             <!-- 「置顶」标(2026-10-03 修"置顶评论不可见"时加)。
                  ★ 摆在昵称**最前面**(见评论模板), 因为"置顶"说的是这条评论的位置属性,
                    不是作者身份 —— 跟在 UP 标后面会让人以为是第三种身份标。
-                 ★ 色值写死成中性灰蓝: 与 UP 标(#FB7299)/等级蓝(#5B8FF9)区分开, 不跟主题色走
-                   (与上面两个身份标同一个理由)。 -->
+                 ★ 2026-11-16 用户要求"置顶标用显眼的主题色": 底色改成**主题强调色**
+                   (AccentBrush, 跟随用户自定义主题色), 不再用写死的中性灰 #7A7A7A。
+                   文字色不能写死白色 —— 主题色可能被用户调成浅黄/浅绿, 白字会糊;
+                   一律用 TextOnAccentBrush(ThemeService 按对比度自动取黑/白)。
+                 ★ 默认粉主题下底色与 UP 标(#FB7299)相同, 所以徽章内带一枚**图钉图标**,
+                   与纯文字的 UP 标一眼区分(位置也固定: 置顶在昵称最前)。 -->
             <Style x:Key="PinnedBadgeStyle" TargetType="Border">
-                <Setter Property="Background" Value="#7A7A7A" />
-                <Setter Property="CornerRadius" Value="3" />
+                <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+                <Setter Property="CornerRadius" Value="4" />
                 <Setter Property="Padding" Value="4,0,4,1" />
-                <Setter Property="Margin" Value="0,0,4,0" />
+                <Setter Property="Margin" Value="0,0,5,0" />
                 <Setter Property="VerticalAlignment" Value="Center" />
             </Style>
 
@@ -628,7 +632,14 @@
                          见 PinnedBadgeStyle 的说明。 -->
                     <Border Style="{StaticResource PinnedBadgeStyle}"
                             Visibility="{Binding IsPinned, Converter={StaticResource BoolToVis}}">
-                        <TextBlock Text="置顶" FontSize="9" FontWeight="SemiBold" Foreground="White" />
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE718;"
+                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="9" Margin="0,0,2,0" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextOnAccentBrush}" />
+                            <TextBlock Text="置顶" FontSize="9" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextOnAccentBrush}" />
+                        </StackPanel>
                     </Border>
                     <!-- ★ 昵称改成**灰色**(TextSecondaryBrush), 与 B 站网页版一致 ——
                          那里昵称是次要色, 正文才是主色。之前昵称是主色(纯白/纯黑),
@@ -2593,7 +2604,14 @@
                                                                             <!-- 置顶评论点进来后这里也要显示"置顶"标(与列表模板一致) -->
                                                                             <Border Style="{StaticResource PinnedBadgeStyle}"
                                                                                     Visibility="{Binding IsPinned, Converter={StaticResource BoolToVis}}">
-                                                                                <TextBlock Text="置顶" FontSize="9.5" FontWeight="SemiBold" Foreground="White" />
+                                                                                <StackPanel Orientation="Horizontal">
+                                                                                    <TextBlock Text="&#xE718;"
+                                                                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                                               FontSize="9.5" Margin="0,0,2,0" VerticalAlignment="Center"
+                                                                                               Foreground="{DynamicResource TextOnAccentBrush}" />
+                                                                                    <TextBlock Text="置顶" FontSize="9.5" FontWeight="SemiBold"
+                                                                                               Foreground="{DynamicResource TextOnAccentBrush}" />
+                                                                                </StackPanel>
                                                                             </Border>
                                                                             <!-- 昵称用次要色、正文用主色(2026-11-04): 不写 Foreground 会落回全局主色,
                                                                                  与 14px 正文同色, 详情页里"名字"和"内容"容易糊成一块。 -->
