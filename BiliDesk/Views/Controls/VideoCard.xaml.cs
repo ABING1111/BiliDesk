@@ -107,19 +107,28 @@ public partial class VideoCard : UserControl
         if (_extraSource != null)
             _extraSource.CollectionChanged -= OnExtraSourceChanged;
         _extraSource = items;
+        // 订阅统一在这里挂(ApplyExtraMenuItems 只负责插条目, 不碰订阅):
+        // 两边都挂的话, 菜单建好之后再来一次重建就会重复订阅, 一次增删触发多次重建。
+        if (items != null) items.CollectionChanged += OnExtraSourceChanged;
 
         // 菜单还没建(这张卡从没被右键过): 只记住来源, 第一次弹菜单时会按它建。
         if (_menu == null) return;
 
-        ApplyExtraMenuItems(items);
+        ApplyExtraMenuItems(_menu, items);
     }
 
-    /// <summary>把 <paramref name="items"/> 对应的菜单壳插到已建好的菜单末尾。</summary>
-    private void ApplyExtraMenuItems(System.Collections.ObjectModel.ObservableCollection<BiliDesk.Models.CardMenuItem>? items)
+    /// <summary>
+    /// 把 <paramref name="items"/> 对应的菜单壳插到 <paramref name="menu"/> 末尾。
+    ///
+    /// ★★ 目标菜单必须由调用方**显式传入**, 不能在里面读 <see cref="_menu"/>:
+    ///   首次弹菜单时 <see cref="BuildMenu"/> 还没返回、_menu 仍是 null, 在里面读它就直接
+    ///   早退 —— 表现就是收藏/稍后再看页的「移出收藏 / 移出稍后再看」永远不出现在右键菜单里
+    ///   (issue #84)。菜单项本身在定义集合里, 集合有内容但一个都插不进去。
+    /// </summary>
+    private void ApplyExtraMenuItems(
+        ContextMenu menu,
+        System.Collections.ObjectModel.ObservableCollection<BiliDesk.Models.CardMenuItem>? items)
     {
-        var menu = _menu;
-        if (menu == null) return;
-
         foreach (var shell in _extraMenuShells)
             menu.Items.Remove(shell);
         _extraMenuShells.Clear();
@@ -155,9 +164,6 @@ public partial class VideoCard : UserControl
             menu.Items.Add(shell);
             _extraMenuShells.Add(shell);
         }
-
-        // 定义集合运行时增删也要跟着刷新 —— 增删频率低, 整组重建最简单可靠
-        items.CollectionChanged += OnExtraSourceChanged;
     }
 
     /// <summary>第一次需要右键菜单时构造一次(见 <see cref="_menu"/> 的说明)。</summary>
@@ -181,7 +187,9 @@ public partial class VideoCard : UserControl
         _extraSeparator = new Separator { Visibility = Visibility.Collapsed };
         menu.Items.Add(_extraSeparator);
 
-        ApplyExtraMenuItems(_extraSource as System.Collections.ObjectModel.ObservableCollection<BiliDesk.Models.CardMenuItem>);
+        // ★ 把 menu 显式传进去: 这时 _menu 还是 null(本方法还没返回), 让 ApplyExtraMenuItems
+        //   自己读 _menu 会直接早退, 收藏/稍后再看的「移出」项就永远进不了菜单(issue #84)。
+        ApplyExtraMenuItems(menu, _extraSource as System.Collections.ObjectModel.ObservableCollection<BiliDesk.Models.CardMenuItem>);
         return menu;
     }
 
@@ -202,8 +210,6 @@ public partial class VideoCard : UserControl
 
     /// <summary>
     /// 右键菜单即将弹出: 首次建菜单, 并按当前这条视频(直播/普通)修正两个条目的显隐。
-    /// ★ 在事件里把 ContextMenu 挂上, 让 WPF 自己打开 —— 不要 e.Handled + 手动 IsOpen:
-    ///   后者会被 ContextMenuService 的打开流程覆盖, 表现为"右键没反应"。
     /// </summary>
     private void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
