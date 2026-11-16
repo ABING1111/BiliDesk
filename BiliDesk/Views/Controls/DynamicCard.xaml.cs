@@ -333,8 +333,20 @@ public partial class DynamicCard : UserControl
 
     private void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
+        // ★ 首次(或虚拟化复用后 _menu 被清掉)必须自己弹: 见 VideoCard 里同一处注释的完整时序说明。
+        //   WPF 的 ContextMenuService 是 class handler, 在本 handler 之前就取过菜单 —— 那时还是
+        //   null, 于是它这一趟不会弹; 不补这一下就是"右键两下才出现"。
+        var firstTime = _menu == null;
         _menu ??= BuildMenu();
         ContextMenu = _menu;
+
+        if (!firstTime) return;
+        e.Handled = true;
+        _menu.PlacementTarget = this;
+        _menu.Placement = e.CursorLeft >= 0
+            ? System.Windows.Controls.Primitives.PlacementMode.MousePoint
+            : System.Windows.Controls.Primitives.PlacementMode.Center;
+        _menu.IsOpen = true;
     }
 
     private ContextMenu BuildMenu()

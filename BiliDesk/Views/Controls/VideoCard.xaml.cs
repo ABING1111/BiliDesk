@@ -210,9 +210,22 @@ public partial class VideoCard : UserControl
 
     /// <summary>
     /// 右键菜单即将弹出: 首次建菜单, 并按当前这条视频(直播/普通)修正两个条目的显隐。
+    ///
+    /// ★★★ 首次右键必须**自己把菜单弹出来**(2026-11-16 修 issue #84 的"要点两下"):
+    ///   菜单是懒建的, 第一次右键时 <see cref="ContextMenu"/> 还是 null。而 WPF 的
+    ///   <c>ContextMenuService</c> 是以 **class handler** 注册的, 执行顺序在实例 handler **之前** ——
+    ///   它那一趟去取菜单时还是 null, 于是 `e.TargetElement` 没被设置; 等本方法把菜单挂上,
+    ///   弹出流程已经走完(源码里拿到 null 的 TargetElement 就直接 return)。
+    ///   结果就是"第一次右键只是把菜单建好挂上, 第二次才弹"。
+    ///   所以首次建菜单这一趟要 e.Handled + 手动 IsOpen, 补上 WPF 跳过的那一步。
+    ///
+    /// ★ 为什么旧注释写的是"不要手动 IsOpen": 那时菜单在 XAML 里预建、从构造起就挂在元素上,
+    ///   class handler 每次都能取到菜单, WPF 自己弹得出来, 手动再弹反而是干扰。
+    ///   改成懒建(见 <see cref="_menu"/>)之后前提就不成立了。
     /// </summary>
     private void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
+        var firstTime = _menu == null;
         _menu ??= BuildMenu();
 
         var isLive = DataContext is VideoItem { IsLive: true };
@@ -222,6 +235,24 @@ public partial class VideoCard : UserControl
             _watchLaterMenu.Visibility = isLive ? Visibility.Collapsed : Visibility.Visible;
 
         ContextMenu = _menu;
+
+        // 第一次: WPF 已经错过了取菜单的时机, 这一下自己弹(见方法头部的时序说明)
+        if (firstTime) OpenMenuSelf(_menu, e);
+    }
+
+    /// <summary>
+    /// 懒建菜单的"首次弹出": 标记事件已处理, 并按触发方式摆位后打开。
+    /// 键盘触发(Shift+F10)时 CursorLeft 是 -1, 用 Center 而不是 MousePoint —— 否则会弹到鼠标
+    /// 上次停留的位置, 与用户按键盘的位置毫无关系。
+    /// </summary>
+    private void OpenMenuSelf(ContextMenu menu, ContextMenuEventArgs e)
+    {
+        e.Handled = true;
+        menu.PlacementTarget = this;
+        menu.Placement = e.CursorLeft >= 0
+            ? System.Windows.Controls.Primitives.PlacementMode.MousePoint
+            : System.Windows.Controls.Primitives.PlacementMode.Center;
+        menu.IsOpen = true;
     }
 
     private void OnExtraSourceChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
