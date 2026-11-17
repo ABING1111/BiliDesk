@@ -58,6 +58,18 @@ public partial class ApiClient
     private string? _buvid3;
     private string? _buvid4;
 
+    /// <summary>
+    /// 设备指纹领取的串行闸(2026-11-17)。
+    ///
+    /// ★ 为什么需要: 进直播间时**取流**和**直播弹幕**现在是并行发起的(见 LoadLiveAsync),
+    ///   两边都会 await <see cref="EnsureBuvidAsync"/>。冷启动时这一对是空的, 于是两条路
+    ///   同时去打 spi 接口、各拿一对**全新**的 buvid 回来 —— 后写的那一对覆盖先写的,
+    ///   内存与磁盘分叉, 等于这一台设备又换了一次身份(与 EnsureBuvidAsync 里那段
+    ///   "推荐模型每次从零冷启动"是同一个后果)。
+    /// ⇒ 用一把闸把它们串起来: 第一个进去的领, 后面的等它领完直接命中短路返回。
+    /// </summary>
+    private readonly SemaphoreSlim _buvidGate = new(1, 1);
+
     /// <summary>上一次 GetJsonAsync 解析 JSON 失败时的原始响应体(见 -2 分支)。</summary>
     private string? _lastNonJsonBody;
 
@@ -288,45 +300,57 @@ public partial class ApiClient
         // 内存里这一对齐全, 直接用
         if (!string.IsNullOrEmpty(_buvid3) && !string.IsNullOrEmpty(_buvid4)) return;
 
-        // 不全就先把本地存的补进来(buvid3 / buvid4 都可能只缺一个)
-        var sess = SessionManager.Instance.Current;
-        _buvid3 ??= sess.Buvid3;
-        _buvid4 ??= sess.Buvid4;
-
-        // 补齐后完整了 —— 不需要再打网络请求
-        if (!string.IsNullOrEmpty(_buvid3) && !string.IsNullOrEmpty(_buvid4)) return;
-
+        // ★ 冷启动时取流与直播弹幕会并行进来(见 _buvidGate 的说明): 串行化, 只领一次。
+        await _buvidGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var (code, _, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/frontend/finger/spi", null);
-            if (code == 0 && data != null)
+            // 闸内再判一次: 等锁期间前一个调用可能已经领回来了。
+            if (!string.IsNullOrEmpty(_buvid3) && !string.IsNullOrEmpty(_buvid4)) return;
+
+            // 不全就先把本地存的补进来(buvid3 / buvid4 都可能只缺一个)
+            var sess = SessionManager.Instance.Current;
+            _buvid3 ??= sess.Buvid3;
+            _buvid4 ??= sess.Buvid4;
+
+            // 补齐后完整了 —— 不需要再打网络请求
+            if (!string.IsNullOrEmpty(_buvid3) && !string.IsNullOrEmpty(_buvid4)) return;
+
+            try
             {
-                // ★ 只补**缺的那一半**, 已有的绝不覆盖。
-                //   spi 一次给两个, 但已有的那个往往比它给的这个更"旧"、更被服务端认过 ——
-                //   假如本地只缺 buvid4(老版本升上来的用户就是这样), 无条件把 b_3 也收下,
-                //   就会出现"内存用新 buvid3、磁盘留旧 buvid3"的分叉:
-                //   下次启动读回来的是旧 buvid3 + 新 buvid4, 等于又换了一次设备身份。
-                if (string.IsNullOrEmpty(_buvid3) &&
-                    data.Value.TryGetProperty("b_3", out var b3) &&
-                    b3.ValueKind == JsonValueKind.String)
+                var (code, _, data) = await GetJsonAsync(
+                    "https://api.bilibili.com/x/frontend/finger/spi", null);
+                if (code == 0 && data != null)
                 {
-                    _buvid3 = b3.GetString();
-                    if (!string.IsNullOrEmpty(_buvid3)) SessionManager.Instance.SetBuvid3(_buvid3);
-                }
-                if (string.IsNullOrEmpty(_buvid4) &&
-                    data.Value.TryGetProperty("b_4", out var b4) &&
-                    b4.ValueKind == JsonValueKind.String)
-                {
-                    _buvid4 = b4.GetString();
-                    // ★ 必须落盘: 不存的话下次启动又变成一台新设备(见上面那段说明)
-                    if (!string.IsNullOrEmpty(_buvid4)) SessionManager.Instance.SetBuvid4(_buvid4);
+                    // ★ 只补**缺的那一半**, 已有的绝不覆盖。
+                    //   spi 一次给两个, 但已有的那个往往比它给的这个更"旧"、更被服务端认过 ——
+                    //   假如本地只缺 buvid4(老版本升上来的用户就是这样), 无条件把 b_3 也收下,
+                    //   就会出现"内存用新 buvid3、磁盘留旧 buvid3"的分叉:
+                    //   下次启动读回来的是旧 buvid3 + 新 buvid4, 等于又换了一次设备身份。
+                    if (string.IsNullOrEmpty(_buvid3) &&
+                        data.Value.TryGetProperty("b_3", out var b3) &&
+                        b3.ValueKind == JsonValueKind.String)
+                    {
+                        _buvid3 = b3.GetString();
+                        if (!string.IsNullOrEmpty(_buvid3)) SessionManager.Instance.SetBuvid3(_buvid3);
+                    }
+                    if (string.IsNullOrEmpty(_buvid4) &&
+                        data.Value.TryGetProperty("b_4", out var b4) &&
+                        b4.ValueKind == JsonValueKind.String)
+                    {
+                        _buvid4 = b4.GetString();
+                        // ★ 必须落盘: 不存的话下次启动又变成一台新设备(见上面那段说明)
+                        if (!string.IsNullOrEmpty(_buvid4)) SessionManager.Instance.SetBuvid4(_buvid4);
+                    }
                 }
             }
+            catch
+            {
+                // 忽略
+            }
         }
-        catch
+        finally
         {
-            // 忽略
+            _buvidGate.Release();
         }
     }
 

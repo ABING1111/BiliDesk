@@ -210,18 +210,16 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing || _mp == null) return;
 
-        // ★ 直播弹幕时钟(2026-11-13): 直播没有 Length, DispatchDanmaku 第一句就 return,
-        //   点播那条 "TimeChanged → DispatchDanmaku → CalibrateDanmakuClock" 的校准链
-        //   根本不会跑 —— 弹幕会在上屏后一动不动。这里用进度心跳(500ms)补上。
-        //   ★ 只在直播里做: 点播的校准归 DispatchDanmaku, 两处都写会互相抢基准。
-        //   ★ 暂停时冻结在"此刻所见"(见 SetDanmakuClockRunning 的说明), 恢复后下一跳再校准。
+        // ★ 直播弹幕时钟(2026-11-13, 2026-11-17 改为纯墙钟):
+        //   直播没有 Length, DispatchDanmaku 第一句就 return, 点播那条
+        //   "TimeChanged → DispatchDanmaku → CalibrateDanmakuClock" 的校准链根本不会跑。
+        //   ★★ 这里**不再用 _mp.Time 校准** —— 直播的时间轴按块上报、带抖动、缓冲后会前跳,
+        //      每 500ms 拿它硬拽一次基准, 表现就是弹幕"匀速走一小段再突然跳一截"(卡顿)。
+        //      直播弹幕是"到达即显示", 没有时间轴语义, 只要一个单调平滑的墙钟就够。
+        //   ★ 暂停时冻结在"此刻所见"(见 SetDanmakuClockRunning 的说明), 恢复后从冻结处续跑。
         if (_isLive)
         {
-            try
-            {
-                if (_mp.IsPlaying) CalibrateDanmakuClock(_mp.Time / 1000.0);
-                else SetDanmakuClockRunning(false);
-            }
+            try { SetDanmakuClockRunning(_mp.IsPlaying); }
             catch { /* 原生对象可能已失效 */ }
         }
 

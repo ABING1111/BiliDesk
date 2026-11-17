@@ -234,6 +234,11 @@ public partial class PlayerWindow : FluentWindow
             //     命中后立刻停, 不常驻。
             StartVideoBackdropFix();
             UpdatePlayButton();
+            // ★ 直播弹幕时钟(2026-11-17): 起播这一刻就把墙钟立起来, 不等 500ms 的进度心跳。
+            //   直播弹幕的上屏条件含 _dmClockRunning(见 OnLiveDanmakuPumpTick), 不在这里
+            //   立起来的话, 起播后头几百毫秒收到的弹幕只进右侧列表、不上屏 ——
+            //   用户看到的就是"进直播间要等一会才出现弹幕"。
+            if (_isLive) StartLiveDanmakuClock();
             StartControlsHideCountdown();   // 播放中才开始倒计时自动隐藏
             // 聆听态: 起播后把文案里的秒数对齐到真实位置(切流前后 _mp.Time 会有几十毫秒偏差),
             // 并确保声波律动已经在跑(切清晰度/换片都会重建 Media, 但定时器是窗口级的, 不会断)。

@@ -781,6 +781,14 @@ public partial class PlayerWindow : FluentWindow
     private bool _dmClockRunning;
 
     /// <summary>
+    /// 当前时钟是不是**直播模式**(2026-11-17 新增)。
+    ///
+    /// ★ 直播模式下**不接受** `_mp.Time` 校准 —— 见 <see cref="StartLiveDanmakuClock"/> 的说明。
+    /// ★ 它描述的是"这一路片源的时钟来源", 因此换片时必须复位(由 StopLiveDanmaku 清)。
+    /// </summary>
+    private bool _dmClockLive;
+
+    /// <summary>
     /// 走时期间的**播放倍速**。外推必须乘上它, 否则倍速播放时弹幕会一顿一顿。
     ///
     /// ★★★ 2026-10-12 修用户报的"倍速下弹幕滑动不连贯、卡顿":
@@ -811,12 +819,59 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void CalibrateDanmakuClock(double mediaSeconds)
     {
-        _dmClockMedia = mediaSeconds;
+        // ★★★ 直播**不校准**(2026-11-17 修"直播弹幕位移卡顿"):
+        //   点播的 `_mp.Time` 是精确到毫秒、连续推进的时间轴, 拿它校准只会消掉外推误差。
+        //   而直播流的时间轴是**按块上报、带抖动、缓冲后会前跳**的 —— 每次校准都等于把
+        //   外推值硬拽一下, 而校准是 2Hz(见 UpdateProgressUi 的直播分支), 于是弹幕就是
+        //   "匀速走一小段 → 突然跳一截", 也就是用户看到的卡顿。
+        //   直播弹幕本来就是"到达即显示", 没有时间轴语义, 位移只需要一个**单调平滑的墙钟**;
+        //   暂停/恢复由 SetDanmakuClockRunning 冻结/续跑。所以这里直接忽略媒体时间。
+        if (_dmClockLive) return;
+
+        // ★★★ 软校准(2026-11-17 修"弹幕滑动几帧几帧地跳"):
+        //   原来这里直接把 _dmClockMedia 赋成实测值 —— 每 4Hz 硬拽一次, 于是"匀速走一段
+        //   → 突然跳一截"。现在只吃掉偏差的一部分(见 DanmakuMotion.Calibrate):
+        //   小偏差不动, 中等偏差按 25% 收敛, 超过 1.5s 视为 seek 直接对齐。
+        //   ★ 偏差要用"此刻的外推值"来算, 不能用 _dmClockMedia —— 两者差着一次 Stopwatch
+        //     走时, 拿旧基准算会让每次校准都残留一点, 收敛永远差一口气。
+        var current = DanmakuClock();
+        _dmClockMedia = Helpers.DanmakuMotion.Calibrate(current, mediaSeconds);
         _dmClockStamp = _dmWatch.ElapsedMilliseconds;
         // ★ 顺便刷新倍速(这里读原生 Rate 是低频路径, 不违反"逐帧零 P/Invoke"那条铁律)。
         //   Rate 偶尔会返 0(切换/初始化的一瞬), 那时按 1x 走, 别让外推停摆。
         var rate = _mp?.Rate ?? 1.0f;
         _dmClockRate = rate > 0 ? rate : 1.0;
+        _dmClockRunning = true;
+    }
+
+    /// <summary>
+    /// 切到**直播时钟模式**(2026-11-17 新增): 只走墙钟外推, 不再被直播的媒体时间硬拽。
+    ///
+    /// ★ 必须在 <c>Playing</c> 里调用, 而不是等 500ms 的进度心跳:
+    ///   进直播间时 `_dmClockRunning` 还是 false, 而直播弹幕的上屏条件是
+    ///   <c>_mp.IsPlaying &amp;&amp; _dmClockRunning</c>(见 OnLiveDanmakuPumpTick) ——
+    ///   不在这里把它立起来, 起播后的头几百毫秒收到的弹幕就只进右侧列表、不上屏,
+    ///   这正是用户说的"进直播间要等一会才出现弹幕"。
+    ///
+    /// ★ 顺序: **先**刷新倍速, 再 SetDanmakuClockRunning。后者会以"此刻所见"落定基准
+    ///   (位置连续, 不会把在飞弹幕甩到右边缘); 而倍速必须在此之前定下来 ——
+    ///   否则从 2x 的点播切进 1x 的直播时, 时钟会按旧倍速走(直播没有校准来纠偏, 会一直快一倍)。
+    /// </summary>
+    private void StartLiveDanmakuClock()
+    {
+        if (_closing || _mp == null || !_isLive) return;
+
+        _dmClockLive = true;
+        // 直播没有倍速调节(StartFastForward 对直播直接返回), 但 Rate 是 MediaPlayer 的属性、
+        // 不随 Media 重置 —— 上一条点播留下的 2x 会原样带进来, 所以这里必须显式读一次。
+        float rate;
+        try { rate = _mp.Rate; }
+        catch { rate = 1.0f; }          // 原生对象可能已失效
+        _dmClockRate = rate > 0 ? rate : 1.0;
+
+        SetDanmakuClockRunning(true);
+        // SetDanmakuClockRunning 在"本来就在走"时会早退, 这里兜一次底,
+        // 保证上屏条件里的 _dmClockRunning 一定为真。
         _dmClockRunning = true;
     }
 
@@ -1223,7 +1278,13 @@ public partial class PlayerWindow : FluentWindow
     ///   2. **动画只动 RenderTransform**: 动 Canvas.Left 每帧都要走一遍 Canvas 布局,
     ///      动 TranslateTransform 只发生在合成线程的变换矩阵上, 完全不碰布局。
     /// </summary>
-    private void AddDanmaku(string text, int mode, double time, uint color = 0xFFFFFF)
+    /// <param name="spawnClock">
+    /// 显式指定的出生时刻(秒)。null = 取当前弹幕时钟(点播与绝大多数调用)。
+    /// ★ 直播的批量出队会传它: 一个 tick 里上屏的几条必须共用**同一个**基准时间,
+    ///   再各自加一点偏移; 否则每条都自己读一次时钟, 它们的先后就变成"CPU 执行顺序"。
+    /// </param>
+    private void AddDanmaku(string text, int mode, double time, uint color = 0xFFFFFF,
+        double? spawnClock = null)
     {
         if (DanmakuCanvas == null || string.IsNullOrEmpty(text)) return;
         if (DanmakuCanvas.ActualWidth <= 0 || DanmakuCanvas.ActualHeight <= 0) return;
@@ -1233,7 +1294,7 @@ public partial class PlayerWindow : FluentWindow
         // ★ 用弹幕时钟(已被 DispatchDanmaku 校准过), 不再读 `_mp.Time`:
         //   这里虽是低频路径, 但它与逐帧推进必须是**同一个时间源**, 否则新弹幕的出生点
         //   和在飞弹幕算 elapsed 的基准会差一次 Stopwatch 走时, 表现为"新弹幕进场位置偏一点"。
-        var currentSeconds = DanmakuClock();
+        var currentSeconds = spawnClock ?? DanmakuClock();
         if (currentSeconds <= 0) currentSeconds = time;   // 还没起播(极少见): 退回这条弹幕自带的时间
 
         // ★★★ 底衬(2026-11-05): 曾经整块删掉(2026-10-07 用户要求"弹幕文字有长方形背景阴影, 移除它"),
@@ -1479,6 +1540,12 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
         if (_closing) return;
+
+        // ★ 时钟冻结(暂停/缓冲)时位置不会变, 没必要每帧遍历几十条去重算 ——
+        //   而且这里每帧都在跑, 空转的成本会直接落在 UI 线程上(2026-11-17)。
+        //   ★ 只冻结就返回, 不动 _flying: 恢复播放时 SetDanmakuClockRunning 会从
+        //     "冻结处"续跑, 弹幕位置连续, 不会跳。
+        if (!_dmClockRunning) return;
 
         // ★ 只读一次本地 Stopwatch, **一次原生调用都不做**(见 _dmWatch 那段说明)
         var now = DanmakuClock();

@@ -151,5 +151,38 @@ public static class DanmakuMotion
     /// <param name="rate">当前播放倍速(1.0 = 原速)。&lt;=0 的脏值按 1.0 处理。</param>
     public static double Extrapolate(double baseMediaSeconds, double wallSeconds, double rate)
         => baseMediaSeconds + wallSeconds * (rate > 0 ? rate : 1.0);
+
+    // ------------------------------------------------------------ 时钟校准(2026-11-17)
+
+    /// <summary>
+    /// 把"外推值"向"实测值"收敛, 并返回应该采用的**新基准**。
+    ///
+    /// ★ 为什么不能直接赋值(= 硬校准): 外推与校准源之间永远有一点相位差(事件排队、
+    ///   倍速切换、缓冲)。每次校准都硬拽一下, 在 4Hz 下就是"匀速走一段 → 跳一截"。
+    ///   用户报的"弹幕滑动几帧几帧地跳"正是这个形状。
+    /// ★ 小偏差按 <paramref name="gain"/> 收敛(位置连续, 肉眼看不出来), 大偏差直接对齐 ——
+    ///   拖进度条/换片这种"位置本来就该突变"的场景必须立刻纠偏, 不能慢慢爬。
+    /// </summary>
+    /// <param name="current">当前外推值(秒)</param>
+    /// <param name="measured">实测媒体时间(秒)</param>
+    /// <param name="tolerance">小于这个偏差就当作噪声, 不收敛(秒)</param>
+    /// <param name="gain">每次校准吃掉偏差的比例(0~1)</param>
+    /// <param name="snapThreshold">超过这个偏差视为 seek, 直接对齐(秒)</param>
+    public static double Calibrate(double current, double measured,
+        double tolerance = 0.02, double gain = 0.25, double snapThreshold = 1.5)
+    {
+        if (double.IsNaN(measured) || double.IsInfinity(measured)) return current;
+
+        var delta = measured - current;
+        var abs = Math.Abs(delta);
+
+        // 大偏差: 这是 seek / 换片 / 长时间卡顿后的重新对齐, 慢慢爬会让弹幕错位好几秒
+        if (abs >= snapThreshold) return measured;
+        // 噪声: 别为了几毫秒去动基准, 那只会把平滑的位移搅出细碎抖动
+        if (abs <= tolerance) return current;
+
+        var g = gain <= 0 ? 1.0 : (gain >= 1 ? 1.0 : gain);
+        return current + delta * g;
+    }
 }
 

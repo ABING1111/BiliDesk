@@ -433,6 +433,18 @@ public partial class PlayerWindow : FluentWindow
             if (CommentHint != null) CommentHint.Text = "直播没有评论区";
             UpdateButtonState();
 
+            // ★★ 直播弹幕(2026-11-13, 2026-11-17 提到取流**之前**):
+            //   WS 握手是一条很长的串行链 —— room_init → getDanmuInfo(首次还要 nav 取 WBI 密钥)
+            //   → 连 wss(最多 8s 超时, 多 host 依次试) → 鉴权。原来它排在 await 取流之后,
+            //   于是"取流完成 → 才开始连弹幕", 两段耗时直接相加, 用户看到的就是
+            //   "进直播间要等一会才出现弹幕"。
+            //   ⇒ 现在就发起, 与取流**并行**跑; 首条弹幕的上屏时间基本只剩 WS 握手本身。
+            //   ★ 失败/未开播那两条分支里已有 StopLiveDanmaku, 不需要额外处理。
+            ResetLiveDanmakuLayer();
+            StartLiveDanmaku(roomId);
+            // 主播信息面板同样并行, 晚一点回填不影响播放
+            _ = LoadLiveRoomInfoAsync(roomId);
+
             var (ok, err, url, actualQn, qualities) = await Svc.Api.GetLivePlayUrlAsync(roomId, _liveQn);
             if (_closing) return;
             if (!ok || string.IsNullOrEmpty(url))
@@ -449,13 +461,6 @@ public partial class PlayerWindow : FluentWindow
             _qualities.AddRange(qualities);
             if (actualQn > 0) { _currentQn = actualQn; _liveQn = actualQn; }
             FillQualityMenu(actualQn);
-
-            // ★ 直播弹幕(2026-11-13): 与取流并行启动, 失败也不影响播放。
-            //   先清掉上一次直播留在画布上的弹幕 —— 重连会把媒体时间归零, 旧弹幕的时间轴对不上。
-            ResetLiveDanmakuLayer();
-            StartLiveDanmaku(roomId);
-            // 主播信息面板: 与取流并行, 晚一点回填不影响播放
-            _ = LoadLiveRoomInfoAsync(roomId);
 
             if (!PlayLiveStream(url, roomId))
             {
@@ -878,6 +883,10 @@ public partial class PlayerWindow : FluentWindow
         nameof(_lastLaneCalcHeight),
         // 直播聊天列表的"跟随底部"开关: 每次换片源/换直播间都重新开始跟随
         nameof(_liveChatAutoScroll),
+        // 直播弹幕的时钟模式与聊天批次计数(2026-11-17): 都属于"这一路片源"——
+        //   _dmClockLive 不清的话切回点播后弹幕时钟不再校准(见 StopLiveDanmaku);
+        //   _liveChatTickCounter 不清会让新直播间从一个随机的批次相位开始。
+        nameof(_dmClockLive), nameof(_liveChatTickCounter),
         // 异步代次(旧请求回来时必须已作废)
         nameof(_remuxGen), nameof(_loadingGen), nameof(_kaomojiIndex),
         // 界面交互态

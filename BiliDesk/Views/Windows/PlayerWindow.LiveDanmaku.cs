@@ -47,8 +47,33 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>聊天列表最多保留多少条(内存/布局保护)</summary>
     private const int LiveChatMaxEntries = 300;
 
-    /// <summary>每 100ms 最多往聊天列表追加几条(热门房间削峰; 超出的消息只丢列表, 不影响滚动弹幕)</summary>
-    private const int LiveChatMaxPerTick = 16;
+    /// <summary>
+    /// 每个聊天批次最多往列表里追加几条(热门房间削峰; 超出的消息只丢列表, 不影响滚动弹幕)。
+    /// ★ 2026-11-17: 配合"每 3 个 tick(≈100ms)一批"—— 批次**大小与频率都与原来一致**
+    ///   (原实现也是每 100ms 最多 16 条), 所以列表密度不变。
+    ///   真正的优化在别处: 裁剪改成一次裁一批(见 TrimLiveChatAndScroll),
+    ///   徽章笔刷改成缓存(见 LiveAdminBadgeBrushes), 这两项才是 UI 线程的主要开销。
+    /// </summary>
+    private const int LiveChatMaxPerBatch = 16;
+
+    /// <summary>多少个 33ms 的 tick 攒成一次聊天列表批量追加(3 × 33ms ≈ 100ms)。</summary>
+    private const int LiveChatTicksPerBatch = 3;
+
+    /// <summary>距离下一个聊天批次的 tick 计数(见 LiveChatTicksPerBatch)。</summary>
+    private int _liveChatTickCounter = 1;
+
+    /// <summary>裁剪聊天列表时一次至少裁掉多少条(见 TrimLiveChatAndScroll)。</summary>
+    private const int LiveChatTrimChunk = 20;
+
+    /// <summary>
+    /// 聊天"待显示缓冲"的上限。
+    /// ★ 它只在两个批次点之间攒消息(约 100ms), 正常量远小于这个值;
+    ///   设成 64 是给热门房间的突发峰值留余量, 同时保证内存不会因为堆积而失控。
+    /// </summary>
+    private const int LiveChatPendingMax = 64;
+
+    /// <summary>攒着还没灌进右侧列表的聊天消息(见 FlushLiveChatPending)。</summary>
+    private readonly List<LiveDanmakuItem> _liveChatPending = new();
 
     /// <summary>右侧聊天列表的一行。★ 必须 public: XAML 的 {Binding} 通过反射读属性。</summary>
     public sealed class LiveChatEntry
@@ -73,8 +98,22 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>队列上限: 播放尚未开始时最多攒这么多, 再多就丢最旧的。</summary>
     private const int LiveDanmakuMaxQueued = 200;
 
-    /// <summary>每 100ms 最多渲染几条。过高会让 UI 线程被弹幕测量拖住。</summary>
-    private const int LiveDanmakuMaxPerTick = 8;
+    /// <summary>
+    /// 每个 tick 最多渲染几条。
+    /// ★ 2026-11-17: 从 8 降到 3 —— tick 也从 100ms 缩到 33ms(见 LiveDanmakuPumpInterval),
+    ///   单位时间的上限反而略降, 但**上屏更细**。原来 100ms 一口气放 8 条, 这 8 条是同一帧
+    ///   贴到右边缘的, 观感是"一坨一坨地涌"; 现在每 33ms 只放 3 条, 连续感明显更好。
+    ///   上限仍是 3/33ms ≈ 90 条/秒, 远高于热门房间的常见速率, 不会因为削峰把弹幕丢掉。
+    /// </summary>
+    private const int LiveDanmakuMaxPerTick = 3;
+
+    /// <summary>
+    /// 同一批里相邻两条弹幕的出生时间错开多少秒。
+    /// ★ 一个 tick 里上屏的几条如果 SpawnClock 完全相同, 它们会永远并排贴在一起飞 ——
+    ///   哪怕只错开 60ms, 视觉上就是"依次进场"。媒体时钟下这点偏移会被校准吸收,
+    ///   直播时钟是纯墙钟, 错开多少就是多少, 所以这个值必须小且固定。
+    /// </summary>
+    private const double LiveDanmakuSpawnStaggerSeconds = 0.06;
 
     /// <summary>相同文本的重复判定窗口(毫秒)</summary>
     private const int LiveDanmakuRepeatWindowMs = 10_000;
@@ -82,7 +121,14 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>同一窗口内相同文本最多保留几条(超过视为复读刷屏)</summary>
     private const int LiveDanmakuRepeatMax = 3;
 
-    private static readonly TimeSpan LiveDanmakuPumpInterval = TimeSpan.FromMilliseconds(100);
+    /// <summary>
+    /// 出队节拍。
+    /// ★ 2026-11-17: 100ms → 33ms。100ms 的节拍本身就会让弹幕"一涌一涌"(人眼对 100ms
+    ///   的批次非常敏感), 而 33ms 与 30fps 同拍, 上屏时机自然得多。
+    /// ★ 用 Normal 优先级而不是默认值: 默认 Background 会被布局/输入排在后面,
+    ///   热门房间聊天列表正在重排时, 弹幕的上屏时机会被推迟上百毫秒 —— 那也是一顿。
+    /// </summary>
+    private static readonly TimeSpan LiveDanmakuPumpInterval = TimeSpan.FromMilliseconds(33);
 
     /// <summary>
     /// 开始接收某个直播间的弹幕。
@@ -114,6 +160,10 @@ public partial class PlayerWindow : FluentWindow
         _liveDanmakuPump?.Stop();
         _liveInfoTimer?.Stop();
 
+        // ★ 直播时钟模式必须一起退出(2026-11-17): 否则切回点播后 CalibrateDanmakuClock
+        //   会继续被"直播模式"忽略, 弹幕时钟再也不跟媒体时间对齐 —— 拖进度条后弹幕不纠偏。
+        _dmClockLive = false;
+
         var service = _liveDanmaku;
         _liveDanmaku = null;
         if (service != null)
@@ -143,13 +193,20 @@ public partial class PlayerWindow : FluentWindow
     {
         _liveDanmakuQueue.Clear();
         _liveDanmakuRecent.Clear();
+        _liveChatPending.Clear();
+        _liveChatTickCounter = 1;
     }
 
     private void StartLiveDanmakuPump()
     {
         if (_liveDanmakuPump == null)
         {
-            _liveDanmakuPump = new DispatcherTimer { Interval = LiveDanmakuPumpInterval };
+            // ★ Normal 优先级: 默认(Background)会被布局/输入排在后面, 热门房间聊天列表
+            //   正在重排时弹幕上屏会被推迟上百毫秒 —— 那也是一顿(见 LiveDanmakuPumpInterval)。
+            _liveDanmakuPump = new DispatcherTimer(DispatcherPriority.Normal)
+            {
+                Interval = LiveDanmakuPumpInterval
+            };
             _liveDanmakuPump.Tick += OnLiveDanmakuPumpTick;
         }
         _liveDanmakuPump.Start();
@@ -184,13 +241,20 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 每 100ms 把队列里的弹幕放上屏 / 追加到右侧聊天列表。
+    /// 每 33ms 把队列里的弹幕放上屏 / 追加到右侧聊天列表。
     ///
     /// ★ 两个落点的活跃条件不同, 必须分开判断:
     ///   · 右侧聊天列表: **只要还在直播就追加**, 与播放状态、弹幕开关无关 ——
     ///     用户暂停或关掉滚动弹幕时, 聊天记录仍然应该继续走(参考图里就是常驻一块聊天区)。
     ///   · 视频上的滚动弹幕: 只在真正播放且弹幕时钟已起来时渲染。
     ///     缓冲/暂停时到达的消息不再补播, 否则恢复播放会一次性糊上来。
+    ///
+    /// ★ 2026-11-17 两处节奏调整(修"弹幕一涌一涌 / 位移卡顿"):
+    ///   ① tick 从 100ms 缩到 33ms、每 tick 只放 3 条, 同一批的出生时间再错开 60ms ——
+    ///      原来 100ms 一口气放 8 条, 那 8 条是同一帧贴到右边缘的, 看着就是"一坨";
+    ///   ② 聊天列表改成**每 3 个 tick(≈100ms)批量追加一次**(批次大小与原实现相同):
+    ///      气泡模板很重(Border+Grid+3 个 Run), 33ms 就往里塞一批会把 UI 线程切碎,
+    ///      反而把弹幕的位移拖卡。
     /// </summary>
     private void OnLiveDanmakuPumpTick(object? sender, EventArgs e)
     {
@@ -200,27 +264,57 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
 
+        // 队列空就立刻返回: 下面每 tick 都要读一次 _mp.IsPlaying(原生调用),
+        // 33ms 一拍空转也白搭。
+        // ★ 但攒着的聊天消息还没灌进去时不能返回 —— 否则最后一批会卡在缓冲里,
+        //   直到下一条弹幕到达才补上(表现为"聊天列表忽然不动了")。
+        if (_liveDanmakuQueue.IsEmpty && _liveChatPending.Count == 0) return;
+
         var canRender = _mp != null && _mp.IsPlaying && _dmClockRunning && _danmakuOn;
         var shown = 0;
-        var chatAdded = 0;
+        var chatDue = --_liveChatTickCounter <= 0;
+        if (chatDue) _liveChatTickCounter = LiveChatTicksPerBatch;
+
+        // 本 tick 的基准时间只取一次: 一批弹幕共用同一个基准, 再按 LiveDanmakuSpawnStaggerSeconds
+        // 逐条错开 —— 每条各读一次时钟会让同批弹幕的时间差变成"CPU 执行速度", 不可控。
+        var baseClock = canRender ? DanmakuClock() : 0;
 
         while (_liveDanmakuQueue.TryDequeue(out var item))
         {
-            // ① 右侧聊天列表(削峰: 超过上限的本轮消息只丢弃列表显示)
-            if (chatAdded < LiveChatMaxPerTick)
-            {
-                AppendLiveChat(item);
-                chatAdded++;
-            }
+            // ① 右侧聊天列表: **先攒进待显示缓冲**, 到批次点再一次性灌进 ObservableCollection。
+            //    ★ 不能"本 tick 不是批次点就丢掉" —— 队列每 tick 都会被清空, 那样 2/3 的
+            //      聊天消息会凭空消失(弹幕列表是给人看记录的, 不能这么削峰)。
+            //    ★ 缓冲本身有上限: 热门房间一秒几百条时, 保住最新的那些就够了。
+            if (_liveChatPending.Count < LiveChatPendingMax)
+                _liveChatPending.Add(item);
 
             // ② 视频上的滚动弹幕
             if (!canRender || shown >= LiveDanmakuMaxPerTick) continue;
             if (!ShouldShowLiveDanmaku(item)) continue;
-            AddDanmaku(item.Text, item.Mode, DanmakuClock(), item.Color);
+            // 同批共用 baseClock, 再逐条错开: 不错开的话这几条会永远并排贴在一起飞。
+            AddDanmaku(item.Text, item.Mode, baseClock, item.Color,
+                spawnClock: baseClock + shown * LiveDanmakuSpawnStaggerSeconds);
             shown++;
         }
 
-        if (chatAdded > 0) TrimLiveChatAndScroll();
+        if (chatDue) FlushLiveChatPending();
+    }
+
+    /// <summary>
+    /// 把攒下的聊天消息批量灌进右侧列表。
+    /// ★ 一批最多 <see cref="LiveChatMaxPerBatch"/> 条; 超出的直接丢最旧的 ——
+    ///   这是**列表显示**的削峰, 与滚动弹幕完全无关。
+    /// </summary>
+    private void FlushLiveChatPending()
+    {
+        if (_liveChatPending.Count == 0) return;
+
+        var take = Math.Min(_liveChatPending.Count, LiveChatMaxPerBatch);
+        // 超量时丢掉最旧的那部分(保留最新的, 与"聊天列表看最新"的语义一致)
+        var skip = _liveChatPending.Count - take;
+        for (var i = 0; i < take; i++) AppendLiveChat(_liveChatPending[skip + i]);
+        _liveChatPending.Clear();
+        TrimLiveChatAndScroll();
     }
 
     /// <summary>
@@ -241,8 +335,11 @@ public partial class PlayerWindow : FluentWindow
         {
             badgeText = "房管";
             badgeTip = "房管";
-            badgeBrush = TryFindResource("AccentBrush") as Brush ?? Brushes.DodgerBlue;
-            badgeTextBrush = TryFindResource("TextOnAccentBrush") as Brush ?? Brushes.White;
+            // ★ 走缓存: TryFindResource 会走一遍资源查找链, 热门房间每秒几十条房管消息,
+            //   每条查两次纯属浪费(2026-11-17)。笔刷本身由 ThemeService 就地改色, 引用可长期持有。
+            var (adminBg, adminFg) = LiveAdminBadgeBrushes();
+            badgeBrush = adminBg;
+            badgeTextBrush = adminFg;
             badgeVisibility = Visibility.Visible;
         }
         else if (item.MedalLevel > 0)
@@ -267,9 +364,25 @@ public partial class PlayerWindow : FluentWindow
         });
     }
 
-    /// <summary>粉丝勋章背景色。0/非法值用默认青色(B站勋章常见色系)。</summary>
-    private Brush LiveBadgeBrush(uint color)
+    /// <summary>
+    /// 房管徽章的两支笔刷(背景 / 文字), 首次取到后缓存。
+    /// ★ 缓存的是**资源引用本身**: ThemeService 换肤时是就地改色, 引用不变, 所以缓存不会失效。
+    /// </summary>
+    private (Brush Background, Brush Foreground) LiveAdminBadgeBrushes()
     {
+        if (_liveAdminBadgeBg != null && _liveAdminBadgeFg != null)
+            return (_liveAdminBadgeBg, _liveAdminBadgeFg);
+
+        _liveAdminBadgeBg = TryFindResource("AccentBrush") as Brush ?? Brushes.DodgerBlue;
+        _liveAdminBadgeFg = TryFindResource("TextOnAccentBrush") as Brush ?? Brushes.White;
+        return (_liveAdminBadgeBg, _liveAdminBadgeFg);
+    }
+
+    private Brush? _liveAdminBadgeBg;
+    private Brush? _liveAdminBadgeFg;
+
+    /// <summary>粉丝勋章背景色。0/非法值用默认青色(B站勋章常见色系)。</summary>
+    private Brush LiveBadgeBrush(uint color)    {
         if (color == 0 || color > 0xFFFFFF) color = 0x2E7D8F;
         if (_liveBadgeBrushes.TryGetValue(color, out var cached)) return cached;
 
@@ -302,10 +415,23 @@ public partial class PlayerWindow : FluentWindow
         return TryFindResource("TextPrimaryBrush") as Brush ?? Brushes.White;
     }
 
-    /// <summary>裁掉过旧的消息, 并在用户没有往上翻时贴到底部。</summary>
+    /// <summary>
+    /// 裁掉过旧的消息, 并在用户没有往上翻时贴到底部。
+    ///
+    /// ★ 2026-11-17: 改成"超了就一次裁掉一批", 不再逐条 RemoveAt(0)。
+    ///   ObservableCollection.RemoveAt(0) 每次都要让 ListBox 把**整个**集合往下挪一位,
+    ///   热门房间每 100ms 都在触发, 逐条裁比批量裁多出几十倍的布局通知。
+    /// </summary>
     private void TrimLiveChatAndScroll()
     {
-        while (_liveChat.Count > LiveChatMaxEntries) _liveChat.RemoveAt(0);
+        var overflow = _liveChat.Count - LiveChatMaxEntries;
+        if (overflow > 0)
+        {
+            // 一次裁到上限以下 20 条, 留出余量: 免得之后每个批次都要裁一次。
+            var trim = Math.Max(overflow, LiveChatTrimChunk);
+            trim = Math.Min(trim, _liveChat.Count);
+            for (var i = 0; i < trim; i++) _liveChat.RemoveAt(0);
+        }
 
         if (LiveChatEmptyHint != null && LiveChatEmptyHint.Visibility == Visibility.Visible)
             LiveChatEmptyHint.Visibility = Visibility.Collapsed;
