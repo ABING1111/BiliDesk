@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
@@ -30,6 +31,23 @@ public partial class App : Application
     /// </summary>
     public static bool IsExiting { get; set; }
 
+    /// <summary>
+    /// 当前进程是否由 BiliDesk 自己启动(而不是探针/测试工程在进程内引用)。
+    ///
+    /// 探针会在自己的 EXE 里 `new App()` 复用 App.xaml 资源; 此时入口程序集是探针,
+    /// WPF 会把 pack URI(包括相对路径的主题字典)按入口程序集解析, 找不到 BiliDesk 里的资源。
+    /// 这类宿主也不该跑完整启动流程 —— 否则会抢单实例、建主窗口/托盘、起后台轮询。
+    /// </summary>
+    private static bool IsRealAppHost
+    {
+        get
+        {
+            var entry = Assembly.GetEntryAssembly();
+            // entry 为 null 的宿主(极少数非托管宿主)按正常启动处理, 不要误判成探针
+            return entry is null || ReferenceEquals(entry, typeof(App).Assembly);
+        }
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -50,7 +68,9 @@ public partial class App : Application
             if (fatal) return;
             // 弹框节流: 初始化竞态或坏接口可能让这个处理器几秒内被触发十几次,
             // 连环弹框会把用户锁死在"点掉-又弹"里, 看不到任何可操作的东西。
-            if (CanShowErrorDialog())
+            // ★ 2026-11-17: 探针/测试宿主只写日志, 不弹模态框 —— 否则 agent 每跑一次
+            //   任务都会被这个框卡住(探针的异常栈已经完整落在 errors.txt 里)。
+            if (IsRealAppHost && CanShowErrorDialog())
                 MessageBox.Show(
                     "程序遇到一个错误, 已记录到\n" + AppPaths.LogFile + "\n\n" + args.Exception.Message,
                     "BiliDesk 出错了", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -60,6 +80,17 @@ public partial class App : Application
         {
             if (args.ExceptionObject is Exception ex) ReportError(ex);
         };
+
+        // ★★★ 探针/测试宿主: 只提供 App.xaml 资源, 不跑真实启动流程。
+        //   2026-11-17 修"agent 一执行任务就弹『找不到资源 assets/app.png』":
+        //   探针在自己的 EXE 里 new App(), 入口程序集不是 BiliDesk —— 上面的兜底只记日志,
+        //   这里直接返回, 避免创建 MainWindow/托盘、抢单实例、起后台轮询。
+        //   需要的服务由探针自己初始化(见 .probes/*/Program.cs)。
+        if (!IsRealAppHost)
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            return;
+        }
 
         // ★★★ 单实例闸门必须放在**最前面**, 在初始化任何服务之前。
         //   为什么: 第二个实例一旦跑起来, 它会 Load 同一份 session.json/settings.json,

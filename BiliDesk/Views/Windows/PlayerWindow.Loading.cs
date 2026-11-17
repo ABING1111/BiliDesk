@@ -35,6 +35,42 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     public bool IsClosing => _closing;
 
+    /// <summary>
+    /// 当前是否真的在出声/走画面。
+    /// ★ 只给"播放页入口"那类**低频** UI 用(30fps 的声波定时器本来就在读它),
+    ///   不要塞进逐帧路径 —— 每次读都会碰一次 LibVLC 原生对象。
+    /// </summary>
+    public bool IsPlaying
+    {
+        get
+        {
+            if (_closing) return false;
+            try { return _mp?.IsPlaying == true; }
+            catch { return false; }   // 拆解途中原生对象可能已失效
+        }
+    }
+
+    /// <summary>
+    /// 播放/暂停/播完状态变化。由 <see cref="UpdatePlayButton"/> 统一触发(那里本来就负责读 IsPlaying),
+    /// 关闭时再补一次, 让主窗口的「播放页」按钮立刻收起。
+    /// </summary>
+    public event Action? PlaybackStateChanged;
+
+    private bool _reportedIsPlaying;
+
+    /// <summary>
+    /// 把"当前是否在播放"通知出去, 值没变就什么都不做。
+    /// ★ 必须在 UI 线程调用 —— 所有调用点(Playing/Paused/EndReached 的派发体、OnClosing)
+    ///   都已经在 UI 线程, 订阅方(PlayerFab)可以直接更新控件。
+    /// </summary>
+    private void NotifyPlaybackStateChanged()
+    {
+        var playing = IsPlaying;
+        if (playing == _reportedIsPlaying) return;
+        _reportedIsPlaying = playing;
+        PlaybackStateChanged?.Invoke();
+    }
+
     /// <summary>切换视频(用于 PlayerService 复用窗口场景): 停止当前播放, 加载新 bvid</summary>
     public void PlayVideo(string bvid)
     {

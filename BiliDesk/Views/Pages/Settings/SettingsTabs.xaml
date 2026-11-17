@@ -1167,7 +1167,10 @@
                     <StackPanel Orientation="Horizontal" Margin="0,14">
                         <Border Width="34" Height="34" CornerRadius="9">
                             <Border.Background>
-                                <ImageBrush ImageSource="/Assets/app.png" Stretch="UniformToFill" />
+                                <!-- ★ 2026-11-17: 资源 URI 必须带程序集名, 否则探针宿主会按
+                                     入口程序集解析, 报找不到 app.png 并弹全局错误框。 -->
+                                <ImageBrush ImageSource="pack://application:,,,/BiliDesk;component/Assets/app.png"
+                                           Stretch="UniformToFill" />
                             </Border.Background>
                         </Border>
                         <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">

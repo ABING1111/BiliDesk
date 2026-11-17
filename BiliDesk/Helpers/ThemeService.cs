@@ -418,8 +418,12 @@ public class ThemeService
         _palettesLoaded = true;
         try
         {
-            ReadPalette("Themes/Colors.Light.xaml", _light);
-            ReadPalette("Themes/Colors.Dark.xaml", _dark);
+            // ★ 2026-11-17: 必须带 "BiliDesk;component" 的程序集名。
+            //   探针/测试工程会在自己的进程里 new App() 复用资源, 此时入口程序集不是 BiliDesk;
+            //   相对 URI 会被按**入口程序集**解析, 报"找不到资源 themes/colors.light.xaml"。
+            //   (字体/图片等 XAML 里的资源同理, 见 MainWindow.xaml 与 SettingsTabs.xaml 的 logo。)
+            ReadPalette("pack://application:,,,/BiliDesk;component/Themes/Colors.Light.xaml", _light);
+            ReadPalette("pack://application:,,,/BiliDesk;component/Themes/Colors.Dark.xaml", _dark);
         }
         catch (Exception ex)
         {
@@ -428,9 +432,9 @@ public class ThemeService
         }
     }
 
-    private static void ReadPalette(string relativeUri, Dictionary<string, Color> into)
+    private static void ReadPalette(string absoluteUri, Dictionary<string, Color> into)
     {
-        var dict = new ResourceDictionary { Source = new Uri(relativeUri, UriKind.Relative) };
+        var dict = new ResourceDictionary { Source = new Uri(absoluteUri, UriKind.Absolute) };
         foreach (var key in dict.Keys)
         {
             if (key is string k && dict[k] is SolidColorBrush b) into[k] = b.Color;

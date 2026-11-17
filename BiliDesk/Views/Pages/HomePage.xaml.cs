@@ -2,8 +2,10 @@ using System.Collections;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -33,6 +35,13 @@ public partial class HomePage : UserControl, IRefreshable
     /// </summary>
     private Point? _themeClickPoint;
 
+    /// <summary>
+    /// 筛选弹层最近一次"被筛选按钮点击收起"的时刻(Environment.TickCount64)。
+    /// 判定逻辑复用 <see cref="PopupToggle"/>: StaysOpen=False 的弹层会在 MouseDown
+    /// 阶段先自行收起, 只判 IsOpen 取反会变成"永远打开"。
+    /// </summary>
+    private long? _filterPopupClosedAt;
+
     public HomePage()
     {
         InitializeComponent();
@@ -52,8 +61,8 @@ public partial class HomePage : UserControl, IRefreshable
             RefreshThemeIcon();
             RefreshFilterButton();
             AttachFilterViews();
-            // 本页可能停在下滑位置被切走再切回来: 「回到顶部」的显隐要按当前偏移重算一次
-            UpdateBackToTop(ScrollOf(CurrentTabFromVm() ?? HomeTabKind.Recommend));
+            // 本页可能停在下滑位置被切走再切回来: 「刷新 / 回到顶部」的当前状态要按偏移重算一次
+            UpdateTopRefresh(ScrollOf(CurrentTabFromVm() ?? HomeTabKind.Recommend));
         };
         // 主题可能被设置页改掉, 这里跟着更新图标。
         // 只在构造函数里订阅一次、不解绑: 本页实例被 MainWindow 长期缓存, 生命周期等同于应用,
@@ -87,6 +96,8 @@ public partial class HomePage : UserControl, IRefreshable
                 }
                 if (h > 0) FilterPopup.VerticalOffset = ToolBar.ActualHeight - h - 2;
             }));
+        // 筛选弹层: 点一下展开, 再点一下收起(见 HookFilterPopupToggle 的说明)
+        HookFilterPopupToggle();
         // 默认选中「推荐」(个性化内容优先), 触发一次初始加载
         RecommendTab.IsChecked = true;
         RefreshThemeIcon();
@@ -226,10 +237,89 @@ public partial class HomePage : UserControl, IRefreshable
                                : "屏蔽内容(标题 / UP 主)";
     }
 
+    /// <summary>
+    /// 筛选弹层「点一下展开, 再点一下收起」的接线。
+    ///
+    /// ★ StaysOpen=False 的 WPF 弹层在用户点入口按钮时, 会在 **MouseDown 阶段先自动收起**
+    ///   (对弹层而言那是"外部点击"), 等 Click 到达时 IsOpen 恒为 false ——
+    ///   只写 `IsOpen = !IsOpen` 就会永远走"展开"分支, 这正是"再次点击不关闭"的原因。
+    /// ★ 两层防线(与播放器弹层同一套):
+    ///   ① PreviewMouseLeftButtonDown 到达时弹层还开着 → 直接收起并吞掉这一下;
+    ///   ② WPF 已经先收起 → 用 IsOpen 变更回调记下"光标正压在按钮上"的收起时刻,
+    ///      Click 时由 <see cref="PopupToggle.Decide"/> 认出这是同一次点击, 保持收起。
+    /// ★ 用 GetCursorPos + PointToScreen(屏幕物理像素)而不是 IsMouseOver:
+    ///   弹层握着鼠标捕获时, 入口按钮的 IsMouseOver 未必及时更新。
+    /// </summary>
+    private void HookFilterPopupToggle()
+    {
+        // HomePage 实例被 MainWindow 长期缓存(生命周期等同于应用), 这里的订阅无需退订。
+        var descriptor = DependencyPropertyDescriptor.FromProperty(
+            Popup.IsOpenProperty, typeof(Popup));
+        EventHandler onIsOpenChanged = (_, _) =>
+        {
+            if (FilterPopup.IsOpen) return;
+            // 点别处 / 点面板里的按钮 / Esc 引起的收起不记, 否则下次点筛选会被误吞一下。
+            if (IsCursorOverElement(BtnFilter)) _filterPopupClosedAt = Environment.TickCount64;
+        };
+        descriptor.AddValueChanged(FilterPopup, onIsOpenChanged);
+
+        BtnFilter.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            if (!FilterPopup.IsOpen) return;
+            FilterPopup.IsOpen = false;
+            // 这一下已经被我们吞掉, 不会再走 Click —— 清掉刚记下的收起时刻,
+            // 让用户紧接着再点一次时能立刻重新展开(不被 350ms 抑制窗口误吞)。
+            _filterPopupClosedAt = null;
+            e.Handled = true;
+        };
+    }
+
+    /// <summary>
+    /// 光标此刻是否落在元素范围内(GetCursorPos + PointToScreen, 都是屏幕物理像素)。
+    /// 与播放器弹层里的同名判定同一套理由: 收起回调里 WPF 的命中测试未必已刷新。
+    /// </summary>
+    private static bool IsCursorOverElement(FrameworkElement element)
+    {
+        try
+        {
+            if (!GetCursorPos(out var pt)) return false;
+            var tl = element.PointToScreen(new Point(0, 0));
+            var br = element.PointToScreen(new Point(element.ActualWidth, element.ActualHeight));
+            return pt.X >= tl.X && pt.X <= br.X && pt.Y >= tl.Y && pt.Y <= br.Y;
+        }
+        catch { return false; /* 元素已脱离可视树: 不记时刻即可 */ }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out NativePoint pt);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
     private void OnFilterClick(object sender, RoutedEventArgs e)
     {
-        FilterPopup.IsOpen = !FilterPopup.IsOpen;
-        if (FilterPopup.IsOpen) FilterTitleBox.Focus();
+        var action = PopupToggle.Decide(
+            FilterPopup.IsOpen,
+            _filterPopupClosedAt,
+            Environment.TickCount64);
+
+        switch (action)
+        {
+            case PopupToggle.Action.Close:
+                FilterPopup.IsOpen = false;
+                break;
+            case PopupToggle.Action.StayClosed:
+                // 这一下正是"再点一下收起": WPF 已在 MouseDown 阶段收起, 保持收起不重开
+                break;
+            default:
+                FilterPopup.IsOpen = true;
+                FilterTitleBox.Focus();
+                break;
+        }
     }
 
     private void OnClearFilterClick(object sender, RoutedEventArgs e)
@@ -303,10 +393,10 @@ public partial class HomePage : UserControl, IRefreshable
     /// </summary>
     private void RefreshThemeIcon()
     {
-        if (ThemeGlyph == null || BtnTheme == null) return;
+        if (ThemeIcon == null || BtnTheme == null) return;
         var dark = Svc.Theme.IsDark;
-        // E706 = 太阳(Brightness) / E708 = 月亮(QuietHours)
-        ThemeGlyph.Text = dark ? "\uE706" : "\uE708";
+        // 图标显示"点了会切到哪种": 深色时给太阳, 浅色时给月亮。
+        ThemeIcon.Data = (Geometry)FindResource(dark ? "SunIconGeometry" : "MoonIconGeometry");
         BtnTheme.ToolTip = dark ? "切换到浅色主题" : "切换到深色主题";
     }
 
@@ -412,8 +502,8 @@ public partial class HomePage : UserControl, IRefreshable
     private void ShowTab(HomeTabKind tab)
     {
         EnsureFill(tab);
-        // 切 tab 后「回到顶部」要跟着新列表的滚动位置走(那个 tab 可能本来就停在顶部)
-        UpdateBackToTop(ScrollOf(tab));
+        // 切 tab 后「刷新 / 回到顶部」要跟着新列表的滚动位置走(那个 tab 可能本来就停在顶部)
+        UpdateTopRefresh(ScrollOf(tab));
         // 分段标签的下划线跟着选中项走
         MoveTabIndicator(tab);
         // ★ 2026-10-12 用户要求"彻底移除浮动动画" —— 切 tab 现在**没有任何转场动画**,
@@ -552,10 +642,10 @@ public partial class HomePage : UserControl, IRefreshable
         ScrollOf(tab)?.ScrollToTop();
     }
 
-    /// <summary>工具栏刷新键 + 错误条里的「重试」都走这一条</summary>
+    /// <summary>错误条里的「重试」和 F5 都走这一条(与右下角「刷新 / 回到顶部」的刷新分支相同)。</summary>
     private void OnRefreshClick(object sender, RoutedEventArgs e) => _ = RefreshCurrentTabAsync();
 
-    /// <summary>F5: 刷新当前 Tab(与右上角刷新按钮同一条路径, 刷完滚回顶部)。</summary>
+    /// <summary>F5: 刷新当前 Tab(与右下角「刷新 / 回到顶部」按钮同一条路径, 刷完滚回顶部)。</summary>
     public void Refresh() => _ = RefreshCurrentTabAsync();
 
     /// <summary>
@@ -602,7 +692,7 @@ public partial class HomePage : UserControl, IRefreshable
 
     private void PopularScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        UpdateBackToTop((ScrollViewer)sender);
+        UpdateTopRefresh((ScrollViewer)sender);
         if (DataContext is not HomeViewModel vm) return;
         var sv = (ScrollViewer)sender;
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = TriggerAutoLoad(sv, vm))) return;
@@ -611,7 +701,7 @@ public partial class HomePage : UserControl, IRefreshable
 
     private void RecommendScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        UpdateBackToTop((ScrollViewer)sender);
+        UpdateTopRefresh((ScrollViewer)sender);
         if (DataContext is not HomeViewModel vm) return;
         var sv = (ScrollViewer)sender;
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = TriggerAutoLoad(sv, vm))) return;
@@ -620,7 +710,7 @@ public partial class HomePage : UserControl, IRefreshable
 
     private void LiveScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        UpdateBackToTop((ScrollViewer)sender);
+        UpdateTopRefresh((ScrollViewer)sender);
         if (DataContext is not HomeViewModel vm) return;
         var sv = (ScrollViewer)sender;
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = TriggerAutoLoad(sv, vm))) return;
@@ -636,9 +726,9 @@ public partial class HomePage : UserControl, IRefreshable
         e.Handled = true;
     }
 
-    /// <summary>排行榜不自动翻页(它是一次给完的), 但仍然要让「回到顶部」跟着滚动位置亮灭</summary>
+    /// <summary>排行榜不自动翻页(它是一次给完的), 但仍然要让「刷新 / 回到顶部」跟着滚动位置切换</summary>
     private void RankingScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
-        => UpdateBackToTop((ScrollViewer)sender);
+        => UpdateTopRefresh((ScrollViewer)sender);
     /// <summary>
     /// 追番页与其它滚动列表同款: 滚到底自动翻下一批推荐。
     /// TriggerAutoLoad 内部会判当前 tab 是不是追番; 不是的话 LoadMoreAsync 也什么都不做
@@ -651,7 +741,7 @@ public partial class HomePage : UserControl, IRefreshable
     /// </summary>
     private void BangumiScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        UpdateBackToTop((ScrollViewer)sender);
+        UpdateTopRefresh((ScrollViewer)sender);
         if (DataContext is not HomeViewModel vm) return;
         var sv = (ScrollViewer)sender;
         SyncBangumiActiveSection(sv, vm);
@@ -711,48 +801,30 @@ public partial class HomePage : UserControl, IRefreshable
         vm.ActiveBangumiSection = section;
     }
 
-    // ------------------------------------------------------------ 回到顶部
+    // ------------------------------------------------------------ 回到顶部 / 刷新
 
     /// <summary>
-    /// 下滑超过这个距离才把「回到顶部」亮出来。
-    /// 阈值别太小: 轻轻滚一下按钮就闪出来、回滚一点又消失, 看着像故障。
+    /// 把当前 tab 的滚动偏移交给共用的 TopRefreshButton:
+    /// 顶部显示刷新, 下滑超过阈值显示回到顶部(阈值/回差在控件内部)。
     /// </summary>
-    private const double BackToTopThreshold = 400;
-
-    /// <summary>「回到顶部」当前是否亮着(避免每次滚动都重复起动画)</summary>
-    private bool _backToTopShown;
+    private void UpdateTopRefresh(ScrollViewer? sv) => BtnTopRefresh.UpdateForOffset(sv);
 
     /// <summary>
-    /// 按当前滚动位置点亮/熄灭「回到顶部」。
-    ///
-    /// 只动 <c>Opacity</c> 与 <c>IsHitTestVisible</c>, **不用 Visibility** ——
-    /// 它在右下角那个 StackPanel 里与另外四个按钮同排, 用 Collapsed 会让它们每过一次阈值就上下跳。
-    /// 淡入淡出顺带和界面其它地方的过渡语言一致。
+    /// 二合一按钮的点击:
+    ///   · 处于"回到顶部"状态 → 把**当前 tab 的**列表滚回顶部;
+    ///   · 处于"刷新"状态 → 走原来的刷新路径(含刷完滚回顶部)。
+    /// 必须按 tab 取, 不能拿 sender 之外的那个 —— 五个 ScrollViewer 常驻同一棵树, 切走的只是被折叠。
     /// </summary>
-    private void UpdateBackToTop(ScrollViewer? sv)
+    private void OnTopRefreshClick(object sender, RoutedEventArgs e)
     {
-        var show = sv is { VerticalOffset: > BackToTopThreshold };
-        if (show == _backToTopShown) return;
-        _backToTopShown = show;
+        if (BtnTopRefresh.ShowsBackToTop)
+        {
+            var tab = CurrentTabFromVm() ?? HomeTabKind.Recommend;
+            ScrollOf(tab)?.ScrollToTop();
+            return;
+        }
 
-        // 只切按钮自己的 Opacity 与命中测试 —— 它在工具列最上面, 用 Visibility 的话
-        // 下面四个按钮每滚过一次阈值就会上下跳一下。
-        BtnTop.IsHitTestVisible = show;
-        BtnTop.BeginAnimation(OpacityProperty,
-            new DoubleAnimation(BtnTop.Opacity, show ? 1 : 0, TimeSpan.FromMilliseconds(160))
-            {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            });
-    }
-
-    /// <summary>
-    /// 把**当前 tab 的**列表滚回顶部。
-    /// 必须按 tab 取, 不能拿 sender 之外的那个 —— 四个 ScrollViewer 常驻同一棵树, 切走的只是被折叠。
-    /// </summary>
-    private void OnBackToTopClick(object sender, RoutedEventArgs e)
-    {
-        var tab = CurrentTabFromVm() ?? HomeTabKind.Recommend;
-        ScrollOf(tab)?.ScrollToTop();
+        _ = RefreshCurrentTabAsync();
     }
 
     // ------------------------------------------------------------ 顶部居中搜索卡

@@ -27,12 +27,12 @@
                 <StackPanel>
                     <StackPanel.Style>
                         <Style TargetType="StackPanel">
-                            <!-- 底部留白给右下角工具列让位: 普通态 3 颗按钮(≈146),
-                                 编辑态 4 颗 + 计数胶囊(≈244) —— 滚到底时最后一行卡片要整行露出来。 -->
-                            <Setter Property="Margin" Value="36,20,36,164" />
+                            <!-- 底部留白给右下角工具列让位: 普通态 4 颗 44px 按钮(播放页 + 刷回 + 编辑 + 返回)≈ 214,
+                                 编辑态 5 颗 + 计数胶囊 ≈ 312 —— 取 230 / 320, 滚到底时最后一行卡片要整行露出来。 -->
+                            <Setter Property="Margin" Value="36,20,36,230" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsEditMode}" Value="True">
-                                    <Setter Property="Margin" Value="36,20,36,244" />
+                                    <Setter Property="Margin" Value="36,20,36,320" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -250,12 +250,15 @@
              ★ 外面不加任何底板/边框, 就是最朴素的"一列按钮"(投影在样式模板的 ShadowBd 层)。
              ★ Panel.ZIndex 浮在内容之上、不占独立列: 占列的话滚动条会被挤到按钮左边。
                右边留 16 正好避让开滚动条(8px 宽 + 6px 缩放带)。
-             ★ 编辑态的「移出所选 / 清空」用 DangerTextBrush; 全局隐式 TextBlock 样式带
-               Foreground setter, 会吃掉继承色, 所以图标 TextBlock 上要**显式**写前景色。
+             ★ 「移出所选 / 清空」用 DangerTextBrush; 图标 Path 绑定按钮的 Foreground,
+               所以把 Foreground 写在**按钮**上, 不要写到 Path 里(全局隐式样式会吃掉 TextBlock 的继承色)。
              ★ ToolTipService.ShowOnDisabled: 批量操作进行中按钮是灰的, 但 ToolTip 仍要能读。 -->
         <StackPanel x:Name="ToolBar" Panel.ZIndex="20"
                     HorizontalAlignment="Right" VerticalAlignment="Bottom"
                     Margin="0,0,16,20">
+
+            <!-- 播放页快捷入口: 放在最上面, 出现/收起不会推动下面按钮 -->
+            <controls:PlayerFab Margin="0,0,0,6" />
 
             <!-- 已选计数 + 批量进度: 标题滚走之后, 这里是唯一常驻的反馈 -->
             <Border HorizontalAlignment="Right" Margin="0,0,0,8"
@@ -273,20 +276,26 @@
                 </StackPanel>
             </Border>
 
-            <!-- [ 普通模式 ] 刷新 / 编辑 / 返回「我的」 -->
+            <!-- [ 普通模式 ] 回到顶部/刷新 / 编辑 / 返回「我的」 -->
             <StackPanel Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
-                <Button Style="{StaticResource FloatingIconButtonStyle}"
-                        Command="{Binding ReloadCommand}" ToolTip="刷新（F5）">
-                    <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-                </Button>
+                <!-- 顶部 = 刷新 / 下滑 = 回到顶部(见 OnTopRefreshClick) -->
+                <controls:TopRefreshButton x:Name="BtnTopRefresh" Click="OnTopRefreshClick" />
                 <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
                         Command="{Binding ToggleEditCommand}" ToolTip="编辑：批量移出收藏">
-                    <TextBlock Text="&#xE70F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                    <Path Data="{StaticResource PencilIconGeometry}"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.6" StrokeLineJoin="Round"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Width="18" Height="18" Stretch="Uniform" />
                 </Button>
                 <!-- 返回「我的」页: 历史/收藏/缓存的入口都在「我的」页, 统一给一条回去的路 -->
                 <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
                         Click="OnBackToMineClick" ToolTip="返回「我的」">
-                    <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                    <Path Data="{StaticResource BackIconGeometry}"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.6" StrokeLineJoin="Round"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Width="18" Height="18" Stretch="Uniform" />
                 </Button>
             </StackPanel>
 
@@ -300,25 +309,41 @@
                             <Binding Path="SelectedText" />
                         </MultiBinding>
                     </Button.ToolTip>
-                    <TextBlock Text="&#xE8B3;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                    <Path Data="{StaticResource SelectAllIconGeometry}"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.6" StrokeLineJoin="Round"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Width="18" Height="18" Stretch="Uniform" />
                 </Button>
                 <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
                         Command="{Binding RemoveSelectedCommand}"
                         IsEnabled="{Binding CanOperate}"
+                        Foreground="{DynamicResource DangerTextBrush}"
                         ToolTip="移出所选" ToolTipService.ShowOnDisabled="True">
-                    <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15"
-                               Foreground="{DynamicResource DangerTextBrush}" />
+                    <Path Data="{StaticResource TrashIconGeometry}"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.6" StrokeLineJoin="Round"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Width="18" Height="18" Stretch="Uniform" />
                 </Button>
                 <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
                         Command="{Binding ClearFolderCommand}"
                         IsEnabled="{Binding CanOperate}"
+                        Foreground="{DynamicResource DangerTextBrush}"
                         ToolTip="清空收藏夹：把当前收藏夹里的全部内容移出" ToolTipService.ShowOnDisabled="True">
-                    <TextBlock Text="&#xE75A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15"
-                               Foreground="{DynamicResource DangerTextBrush}" />
+                    <Path Data="{StaticResource EraserIconGeometry}"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.6" StrokeLineJoin="Round"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Width="18" Height="18" Stretch="Uniform" />
                 </Button>
                 <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
                         Command="{Binding ToggleEditCommand}" ToolTip="退出编辑">
-                    <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                    <Path Data="{StaticResource CloseIconGeometry}"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.6" StrokeLineJoin="Round"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Width="18" Height="18" Stretch="Uniform" />
                 </Button>
             </StackPanel>
         </StackPanel>

@@ -1,5 +1,7 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using BiliDesk.Views;
 
 namespace BiliDesk.Services;
@@ -10,6 +12,39 @@ namespace BiliDesk.Services;
 public class PlayerService
 {
     private PlayerWindow? _window;
+
+    /// <summary>
+    /// 播放器窗口的"存在/播放状态/标题"发生了变化。
+    /// 主窗口右下角的「播放页」按钮订阅它来显示/隐藏自己、启停声波律动。
+    /// ★ 事件只在 UI 线程发: 值来自 PlayerWindow 的 UI 派发体, 订阅方可以直接摸控件。
+    /// </summary>
+    public event Action? StateChanged;
+
+    /// <summary>当前是否持有一个可以唤回的播放器窗口(已开始关闭的不算)。</summary>
+    public bool HasPlayer => _window is { IsClosing: false };
+
+    /// <summary>播放器是否存在且真的在播放。低频读取, 不要放在逐帧路径里。</summary>
+    public bool IsPlaying => HasPlayer && _window!.IsPlaying;
+
+    /// <summary>
+    /// 当前视频标题(已去掉窗口标题里的 " - BiliDesk" 后缀)。
+    /// 换集时 PlayerWindow 会改自己的 Title, 这里按需读取, 不额外维护一份副本。
+    /// </summary>
+    public string? CurrentTitle
+    {
+        get
+        {
+            var title = _window?.Title;
+            if (string.IsNullOrWhiteSpace(title)) return null;
+            // 视频详情还没回来时窗口还是 XAML 里的默认标题, 不要把它当成视频标题显示。
+            if (title == "BiliDesk 播放器") return null;
+
+            const string suffix = " - BiliDesk";
+            return title.EndsWith(suffix, StringComparison.Ordinal)
+                ? title[..^suffix.Length]
+                : title;
+        }
+    }
 
     /// <summary>
     /// 指定的播放器窗口是否仍是当前被复用的那个。
@@ -37,6 +72,32 @@ public class PlayerService
         => Play(title, win => win.PlayLocalFile(path));
 
     /// <summary>
+    /// 把已有播放器叫回前台(「播放页」按钮的唯一动作)。
+    /// 最小化 → 还原; 被别的窗口盖住 → Activate + SetForegroundWindow。
+    /// ★ 只在用户点击这类前台手势里调用, 不做任何轮询/抢焦点。
+    /// </summary>
+    public void ActivateCurrent()
+    {
+        var win = _window;
+        if (win == null || win.IsClosing) return;
+
+        try
+        {
+            if (win.WindowState == WindowState.Minimized)
+                win.WindowState = WindowState.Normal;
+            if (!win.IsVisible) win.Show();
+            win.Activate();
+
+            var hwnd = new WindowInteropHelper(win).Handle;
+            if (hwnd != IntPtr.Zero) SetForegroundWindow(hwnd);
+        }
+        catch
+        {
+            // 窗口正在拆解时可能已经不可用 —— 用户再点一次即可, 不弹错误框
+        }
+    }
+
+    /// <summary>
     /// 三种播放入口的共同外壳: 取(或新建)播放器窗口 → 交给具体分支起播 → 设标题。
     ///
     /// 差别只在"起播那一行", 以前三个方法把取窗口、判空、设标题各连同它抄了一遍。
@@ -54,6 +115,9 @@ public class PlayerService
 
         start(win);
         if (!string.IsNullOrEmpty(title)) win.Title = title + " - BiliDesk";
+        // 新窗口/换片后立即广播一次: 主窗口的入口不必等 Playing 事件才出现,
+        // 标题也在这时已经写好(按钮的 ToolTip 会读 CurrentTitle)。
+        StateChanged?.Invoke();
     }
 
     private PlayerWindow? GetOrCreateWindow()
@@ -83,13 +147,25 @@ public class PlayerService
             return null;
         }
 
+        // 播放/暂停变化 → 转发给主窗口的「播放页」按钮。
+        // ★ 旧窗口晚到的事件不能影响新窗口: 所有出口都再确认一次引用。
+        win.PlaybackStateChanged += () =>
+        {
+            if (ReferenceEquals(_window, win)) StateChanged?.Invoke();
+        };
+
         // 只在引用仍指向自己时才清空, 避免旧窗口的 Closed 把新窗口的引用一起置空
         win.Closed += (_, _) =>
         {
-            if (ReferenceEquals(_window, win)) _window = null;
+            if (!ReferenceEquals(_window, win)) return;
+            _window = null;
+            StateChanged?.Invoke();
         };
         _window = win;
         win.Show();
         return win;
     }
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
 }

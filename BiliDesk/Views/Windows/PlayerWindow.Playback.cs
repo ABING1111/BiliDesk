@@ -176,6 +176,9 @@ public partial class PlayerWindow : FluentWindow
         // 标准语义: 正在播放时显示"暂停"图标(双竖条), 停止/暂停时显示"播放"图标(三角)
         // 用矢量 Path 而非字体图标, 彻底避免字体缺失时显示为方块的问题
         BtnPlay.Content = _mp.IsPlaying ? CreatePauseIcon() : CreatePlayIcon();
+        // 主窗口的「播放页」按钮靠这条通知切换声波律动(暂停时停在静态高度)。
+        // 它只在值真的变了时才发事件, 所以放在这里不会跟着进度心跳反复触发。
+        NotifyPlaybackStateChanged();
     }
 
     private static System.Windows.Shapes.Path CreatePlayIcon()

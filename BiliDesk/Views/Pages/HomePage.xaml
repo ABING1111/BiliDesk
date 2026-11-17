@@ -312,8 +312,8 @@
         <!-- ===== 右下角浮动工具列 =====
              2026-09-30 按用户要求从**右上角移到这里**。原来压在右上角, 窗口一窄就和搜索框抢地方,
              缩到小尺寸时那几个按钮会被内容盖住看不见。移到右下角后只跟"最后一行卡片"重叠,
-             而滚动内容末尾留了 250px 下边距(见各处 StackPanel 的 bottom margin),
-             滚到底时最后一行能整行露出来。
+             而滚动内容末尾留了 300px 下边距(见各处 StackPanel 的 bottom margin),
+            滚到底时最后一行能整行露出来。
 
              ★ 按钮用 `FloatingIconButtonStyle`: 常态/悬停/按下三种底色都是**不透明**的。
                默认的 IconButtonStyle 是 4% 黑(#0A000000), 只适合"浮在纯色页面背景上";
@@ -328,26 +328,22 @@
              按钮用 Panel.ZIndex 浮在右下角(不写 ZIndex 会被后面声明的内容盖住),
              右边留 16px 正好避让开滚动条。
 
-             ★ 「回到顶部」始终占位、**只切透明度与命中测试**, 不用 Visibility ——
-               它在同一列按钮的最上面, 用 Collapsed 的话下面四个按钮每滚过一次阈值就会上下跳一下。 -->
+             ★ 「回到顶部 / 刷新」现在是**同一个按钮**(TopRefreshButton), 位置和尺寸恒定,
+               靠滚动位置切换图标与动作; 不再用"两个按钮叠透明度"那套。 -->
         <StackPanel x:Name="ToolBar" Grid.Row="1" Grid.RowSpan="2" Panel.ZIndex="10"
                     HorizontalAlignment="Right" VerticalAlignment="Bottom"
                     Margin="0,0,16,20">
 
-            <!-- 回到顶部: 下滑之后才亮起来(见 HomePage.xaml.cs 的 UpdateBackToTop)。
-                 E70E = ChevronUp。 -->
-            <Button x:Name="BtnTop" Style="{StaticResource FloatingIconButtonStyle}"
-                    Opacity="0" IsHitTestVisible="False"
-                    Click="OnBackToTopClick" ToolTip="回到顶部">
-                <TextBlock Text="&#xE70E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-            </Button>
+            <!-- 播放页快捷入口: 播放器窗口存活时淡入, 点击把播放器叫回前台。
+                 ★ 放在工具列**第一个**: 它是 Collapsed/Visible 切换的, 放在底部会让下面的按钮
+                   每次播放/关闭都整体上下跳; 放在最上面时新增/收起不改变已有按钮的绝对位置。 -->
+            <controls:PlayerFab Margin="0,0,0,6" />
 
-            <!-- 刷新: 走 code-behind 的 OnRefreshClick 而不是直接绑命令 —— 刷完要把列表滚回顶部
-                 (见 HomePage.RefreshCurrentTabAsync 的说明), 那是"视图"的事, VM 不该管。 -->
-            <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
-                    Click="OnRefreshClick" ToolTip="刷新（F5）">
-                <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-            </Button>
+            <!-- 回到顶部 / 刷新二合一(2026-11-17 用户要求合并):
+                 顶部 = 刷新, 下滑超过阈值 = 回到顶部。
+                 ★ 用共用控件而不是两个按钮叠透明度: 状态切换、回差阈值、图标交叉淡入都在
+                   TopRefreshButton 里, 六个页面手感一致, 且工具列高度恒定。 -->
+            <controls:TopRefreshButton x:Name="BtnTopRefresh" Click="OnTopRefreshClick" />
 
             <!-- 深浅色切换: 图标显示的是"点了会切到哪种", 比显示当前状态更直观。
                  PreviewMouseLeftButtonDown 用来记住点击位置, 供圆形扩散动画当圆心 ——
@@ -355,8 +351,11 @@
             <Button x:Name="BtnTheme" Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
                     PreviewMouseLeftButtonDown="OnThemeButtonMouseDown"
                     Click="OnThemeToggleClick">
-                <TextBlock x:Name="ThemeGlyph" Text="&#xE708;"
-                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                <Path x:Name="ThemeIcon" Data="{StaticResource MoonIconGeometry}"
+                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                      StrokeThickness="1.6" StrokeLineJoin="Round"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                      Width="18" Height="18" Stretch="Uniform" />
             </Button>
 
             <!-- 离线缓存入口已删(2026-09-26): 收进「我的」页, 这里只剩主题切换和消息 -->
@@ -366,24 +365,29 @@
                     Click="OnMessagesClick" ToolTip="B 站消息(私信)">
                 <Path Data="{StaticResource MessageIconGeometry}"
                       Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                      StrokeThickness="1.4" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                      Width="15" Height="15" Stretch="Uniform" />
+                      StrokeThickness="1.6" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                      Width="18" Height="18" Stretch="Uniform" />
             </Button>
 
             <!-- 屏蔽: 点开左上方的小面板输入要屏蔽的标题 / UP 关键词 -->
             <Button x:Name="BtnFilter" Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
                     Click="OnFilterClick" ToolTip="屏蔽内容(标题 / UP 主)">
-                <TextBlock Text="&#xE71C;"
-                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                <Path Data="{StaticResource FilterIconGeometry}"
+                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                      StrokeThickness="1.6" StrokeLineJoin="Round"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                      Width="18" Height="18" Stretch="Uniform" />
             </Button>
 
             <!-- 屏蔽面板: 弹在**工具列左边**(2026-10-01 用户要求; 原来弹在整条工具列上方)。
                  ★ 锚到 ToolBar: 锚 BtnFilter 的话面板会盖住上面几个按钮。
                  ★ Placement=Left 只定水平位置(右缘贴着工具列左缘, 再留 6px 间隙); 垂直方向
-                   默认顶对齐, 而面板(≈340px 高)比工具列(≈214px)高 —— 顺着顶对齐会往窗口
+                   默认顶对齐, 而面板(≈340px 高)比工具列(≈264px)高 —— 顺着顶对齐会往窗口
                    下缘外长出去。底对齐在 code-behind 的 Opened 里按实际高度算(见 HomePage 构造函数),
                    面板多高都能贴着工具列底缘, 不用猜一个写死的 VerticalOffset。
-                 StaysOpen=False 点到别处就收起。 -->
+                 StaysOpen=False 点到别处就收起。
+                 ★ 再点一次筛选按钮也要能收起 —— 由 code-behind 的 HookFilterPopupToggle 处理
+                   (WPF 会在 MouseDown 阶段先自行收起, 单纯取反 IsOpen 永远收不起来)。 -->
             <Popup x:Name="FilterPopup" PlacementTarget="{Binding ElementName=ToolBar}"
                    Placement="Left" HorizontalOffset="-6"
                    StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
@@ -491,10 +495,11 @@
                 <!-- 右边不再留 58px(那是给右上角工具列让位的, 工具列已挪到右下角)。
                      现在卡片墙左右都是卡片自带的 8px 外边距, 铺满整个内容宽。
 
-                     底部 250px = 右下角浮动工具列的高度(5 个 38px 按钮 + 间距 + 20px 下边距)。
+                     底部 300px = 右下角浮动工具列的高度(5 个 44px 按钮 + 4 个 6px 间距 + 20px 下边距,
+                     约 264px; 取 300 留一点余量)。
                      必须留在**滚动内容之外**(挂在容器 margin 上而不是卡片上), 这样滚到底时最后一行
                      能整行滚到浮动按钮上方, 不被压住。拿掉它的话最后一行永远有一角点不到。 -->
-                <StackPanel Margin="0,0,0,250">
+                <StackPanel Margin="0,0,0,300">
                     <Border Margin="20,4,20,0" Padding="14,10" CornerRadius="8"
                             Background="{DynamicResource InfoBarBackgroundBrush}"
                             BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"
@@ -550,7 +555,7 @@
             <ScrollViewer x:Name="RecommendScroll" VerticalScrollBarVisibility="Auto"
                           ScrollChanged="RecommendScroll_OnScrollChanged"
                           Visibility="{Binding IsRecommendTab, Converter={StaticResource BoolToVis}}">
-                <StackPanel Margin="0,0,0,250">
+                <StackPanel Margin="0,0,0,300">
                     <Border Margin="20,4,20,0" Padding="14,10" CornerRadius="8"
                             Background="{DynamicResource InfoBarBackgroundBrush}"
                             BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"
@@ -644,7 +649,7 @@
             <ScrollViewer x:Name="RankingScroll" VerticalScrollBarVisibility="Auto"
                           ScrollChanged="RankingScroll_OnScrollChanged"
                           Visibility="{Binding IsRankingTab, Converter={StaticResource BoolToVis}}">
-                <StackPanel Margin="0,0,0,250">
+                <StackPanel Margin="0,0,0,300">
                     <Border Margin="20,4,20,0" Padding="14,10" CornerRadius="8"
                             Background="{DynamicResource InfoBarBackgroundBrush}"
                             BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"
@@ -683,7 +688,7 @@
             <ScrollViewer x:Name="LiveScroll" VerticalScrollBarVisibility="Auto"
                           ScrollChanged="LiveScroll_OnScrollChanged"
                           Visibility="{Binding IsLiveTab, Converter={StaticResource BoolToVis}}">
-                <StackPanel Margin="0,0,0,250">
+                <StackPanel Margin="0,0,0,300">
                     <!-- ===== 我关注的主播(2026-11-08, 参考图顶部头像行) =====
                          只展示正在直播的(GetFollowingLiveAsync 已按 live_status=1 过滤)。
                          未登录 / 没人在播时整块收起。 -->
@@ -838,7 +843,7 @@
             <ScrollViewer x:Name="BangumiScroll" VerticalScrollBarVisibility="Auto"
                           ScrollChanged="BangumiScroll_OnScrollChanged"
                           Visibility="{Binding IsBangumiTab, Converter={StaticResource BoolToVis}}">
-                <StackPanel Margin="0,0,0,250">
+                <StackPanel Margin="0,0,0,300">
 
                     <Border Margin="20,4,20,0" Padding="14,10" CornerRadius="8"
                             Background="{DynamicResource InfoBarBackgroundBrush}"

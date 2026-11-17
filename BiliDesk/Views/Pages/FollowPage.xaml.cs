@@ -201,6 +201,8 @@ public partial class FollowPage : UserControl, IRefreshable
                 AllDynamicEntry.Opacity = 1;
             }));
             StartLivePolling();
+            // 切回动态页时按当前右栏滚动位置补一次「刷新 / 回到顶部」状态。
+            UpdateTopRefresh(GetVisibleFeedScroll());
         }
     }
 
@@ -252,6 +254,7 @@ public partial class FollowPage : UserControl, IRefreshable
             UpdateLayoutChips(vm);
             _shortContentFills = 0;
             _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(TryAutoFillShortContent));
+            UpdateTopRefresh(GetVisibleFeedScroll());
         }
     }
 
@@ -263,6 +266,7 @@ public partial class FollowPage : UserControl, IRefreshable
             UpdateLayoutChips(vm);
             _shortContentFills = 0;
             _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(TryAutoFillShortContent));
+            UpdateTopRefresh(GetVisibleFeedScroll());
         }
     }
 
@@ -396,6 +400,20 @@ public partial class FollowPage : UserControl, IRefreshable
         }
     }
 
+    /// <summary>工具列的「刷新 / 回到顶部」二合一按钮: 顶部刷新, 下滑回顶(右栏动态流)。</summary>
+    private void OnTopRefreshClick(object sender, RoutedEventArgs e)
+    {
+        if (BtnTopRefresh.ShowsBackToTop)
+        {
+            GetVisibleFeedScroll()?.ScrollToTop();
+            return;
+        }
+
+        OnRefreshClick(sender, e);
+    }
+
+    private void UpdateTopRefresh(ScrollViewer? sv) => BtnTopRefresh.UpdateForOffset(sv);
+
     /// <summary>右下角工具列「刷新」: 刷新后把右栏滚回顶部(与首页刷新同一套体验)。</summary>
     private async void OnRefreshClick(object sender, RoutedEventArgs e)
     {
@@ -446,6 +464,7 @@ public partial class FollowPage : UserControl, IRefreshable
         var sv = ScrollViewerOf(e, sender);
         if (sv != null)
         {
+            UpdateTopRefresh(sv);
             // ★ 记录"用户当前是否停在列表底部"(2026-11-06):
             //   「已经到底啦」只在真正滑到底时出现, 往上滚就消失 ——
             //   它是"到底了"的瞬时反馈, 不该变成常驻横幅。

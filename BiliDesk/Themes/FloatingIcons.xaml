@@ -1,0 +1,37 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:PresentationOptions="http://schemas.microsoft.com/winfx/2006/xaml/presentation/options">
+
+    <!--
+        ============ 右下角浮动工具列的线性图标(2026-11-17) ============
+
+        全部按 20×20 画布、1.6px 描边设计; 使用时统一 Width/Height=18 + Stretch=Uniform。
+        ★ 用矢量而不是 Segoe 字形: 不同 Windows 版本的字形粗细/位置有差异,
+          而且 44px 圆角按钮里 18px 的线性图标比原 15px 字形更耐看。
+        ★ Freeze: 这些几何体被多处共享且只读, 冻结后不参与动态资源失效传播。
+        ★ 单独成一本字典(由 Styles.xaml 合并进来): 便于维护, 也让"只加载 Styles"的离线探针
+          照常解析这些 StaticResource, 不必把整个 App.xaml 当资源字典加载。
+    -->
+    <PathGeometry x:Key="RefreshIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 16.4,8.2 A 6.6,6.6 0 1 0 16.9,11.8 M 16.4,8.2 L 16.4,3.8 M 16.4,8.2 L 12,8.2" />
+    <PathGeometry x:Key="ChevronUpIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 4.8,12.4 L 10,7.2 L 15.2,12.4" />
+    <PathGeometry x:Key="SunIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 10,6.8 A 3.2,3.2 0 1 1 10,13.2 A 3.2,3.2 0 1 1 10,6.8 Z M 10,2 V 4 M 10,16 V 18 M 2,10 H 4 M 16,10 H 18 M 4.3,4.3 L 5.7,5.7 M 14.3,14.3 L 15.7,15.7 M 15.7,4.3 L 14.3,5.7 M 5.7,14.3 L 4.3,15.7" />
+    <PathGeometry x:Key="MoonIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 12.8,3.2 A 7,7 0 1 0 16.8,13.6 A 5.4,5.4 0 1 1 12.8,3.2 Z" />
+    <PathGeometry x:Key="FilterIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 3.5,5 H 16.5 L 11.4,10.8 V 16 L 8.6,14.4 V 10.8 Z" />
+    <PathGeometry x:Key="PencilIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 4.2,15.8 L 5.2,12.2 L 13.6,3.8 A 1.9,1.9 0 0 1 16.4,6.6 L 8,15 Z M 11.8,5.6 L 14.4,8.2" />
+    <PathGeometry x:Key="BackIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 15.5,10 H 5 M 9.5,5.5 L 5,10 L 9.5,14.5" />
+    <PathGeometry x:Key="SelectAllIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 4,5.2 A 1.2,1.2 0 0 1 5.2,4 H 14.8 A 1.2,1.2 0 0 1 16,5.2 V 14.8 A 1.2,1.2 0 0 1 14.8,16 H 5.2 A 1.2,1.2 0 0 1 4,14.8 Z M 7,10 L 9.2,12.2 L 13.2,8.2" />
+    <PathGeometry x:Key="TrashIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 4.5,6 H 15.5 M 8,6 V 4.2 H 12 V 6 M 6,6 L 6.8,16 H 13.2 L 14,6 M 8.5,8.5 V 13.5 M 11.5,8.5 V 13.5" />
+    <PathGeometry x:Key="EraserIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 3.8,13.5 L 9.8,7.5 A 1.1,1.1 0 0 1 11.4,7.5 L 13.5,9.6 A 1.1,1.1 0 0 1 13.5,11.2 L 8.2,16.5 H 4.8 L 3.8,15.5 Z M 3.8,16.5 H 16.2" />
+    <PathGeometry x:Key="CloseIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 5.5,5.5 L 14.5,14.5 M 14.5,5.5 L 5.5,14.5" />
+</ResourceDictionary>

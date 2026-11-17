@@ -42,7 +42,15 @@ public partial class HistoryPage : UserControl
         Loaded += OnLoaded;
         // 页面常驻 PageLayer、只切 Visibility: 切回来时 Loaded 不会再发,
         // 而折叠期间量到的是过期版式 —— 变可见时补量一次。
-        IsVisibleChanged += (_, e) => { if (e.NewValue is true) _sticky.SyncDeferred(); };
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true)
+            {
+                _sticky.SyncDeferred();
+                // 页面常驻 PageLayer, 切回来时不一定再发 ScrollChanged —— 按当前偏移补一次状态
+                BtnTopRefresh.UpdateForOffset(PageScroll);
+            }
+        };
         DataContextChanged += (_, e) =>
         {
             if (e.NewValue is not HistoryViewModel vm) return;
@@ -51,6 +59,18 @@ public partial class HistoryPage : UserControl
             // ★ 这里原来还订阅 vm.PropertyChanged 去刷搜索按钮的"已筛选中"外观,
             //   2026-10-06 搜索功能整体移除后已无必要, 连同 OnVmPropertyChanged 一起删除。
         };
+    }
+
+    /// <summary>工具列二合一按钮: 顶部 = 重新同步云端历史, 下滑 = 回到顶部。</summary>
+    private void OnTopRefreshClick(object sender, RoutedEventArgs e)
+    {
+        if (BtnTopRefresh.ShowsBackToTop)
+        {
+            PageScroll.ScrollToTop();
+            return;
+        }
+
+        if (Vm?.ReloadCommand.CanExecute(null) == true) Vm.ReloadCommand.Execute(null);
     }
 
     /// <summary>右下角工具列的返回按钮: 历史/收藏/缓存的入口都在「我的」页, 统一回那里</summary>
@@ -83,6 +103,8 @@ public partial class HistoryPage : UserControl
     private void OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (sender is not ScrollViewer sv) return;
+        // 工具列顶部 = 刷新, 下滑 = 回到顶部
+        BtnTopRefresh.UpdateForOffset(sv);
         // ★ 吸顶要在**任何**滚动事件上都算(包括布局变化那几拍), 否则缩放窗口时胶囊会脱钉。
         //   它只改 RenderTransform, 不参与下面的翻页闸门。
         _sticky.Update();

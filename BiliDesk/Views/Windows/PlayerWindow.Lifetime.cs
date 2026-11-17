@@ -68,6 +68,8 @@ public partial class PlayerWindow : FluentWindow
                 _isLive, _isLocalPlayback);
 
             _closing = true;
+            // 关闭后「播放页」按钮必须立刻收起(PlayerService 的 Closed 会再来一次兜底)。
+            NotifyPlaybackStateChanged();
 
             // 直播弹幕: 立刻取消 WS 并退订事件 —— 关窗后后台线程不能再往队列/UI 里塞东西。
             // ★ Dispose 只发取消信号、不等待, 不会拖慢关闭。

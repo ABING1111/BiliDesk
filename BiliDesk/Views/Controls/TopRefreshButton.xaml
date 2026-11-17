@@ -1,0 +1,36 @@
+<UserControl x:Class="BiliDesk.Views.Controls.TopRefreshButton"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False">
+    <!--
+        ============ 「回到顶部 / 刷新」二合一按钮 ============
+
+        工具列顶部只有一个槽位:
+          · 列表停在上方(距顶 32px 内)= 刷新;
+          · 往下滑超过 32px = 回到顶部;
+          · 回滚到 12px 内才切回刷新(回差, 免得在阈值附近来回闪)。
+        两个图标做交叉淡入 + 轻微缩放, 按钮尺寸/位置全程不变。
+        具体"刷新哪一页 / 滚哪个 ScrollViewer"由宿主页面在 Click 里决定。
+    -->
+    <Button x:Name="Btn" Style="{StaticResource FloatingIconButtonStyle}"
+            Click="OnButtonClick" ToolTip="刷新（F5）"
+            AutomationProperties.Name="刷新">
+        <Grid Width="18" Height="18" RenderTransformOrigin="0.5,0.5">
+            <Grid.RenderTransform>
+                <ScaleTransform x:Name="IconScale" ScaleX="1" ScaleY="1" />
+            </Grid.RenderTransform>
+
+            <Path x:Name="RefreshIcon" Data="{StaticResource RefreshIconGeometry}"
+                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                  StrokeThickness="1.6" StrokeLineJoin="Round"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                  Stretch="Uniform" />
+
+            <Path x:Name="TopIcon" Data="{StaticResource ChevronUpIconGeometry}"
+                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                  StrokeThickness="1.8" StrokeLineJoin="Round"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                  Stretch="Uniform" Opacity="0" />
+        </Grid>
+    </Button>
+</UserControl>

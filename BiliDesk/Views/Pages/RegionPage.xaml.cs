@@ -35,6 +35,11 @@ public partial class RegionPage : UserControl
         InitializeComponent();
         // 屏蔽筛掉一批卡片后补下一页(否则分区页会停在半屏空白上)
         FilterService.Instance.Changed += OnFilterApplied;
+        // 分区页常驻 PageLayer, 切回来时不会重新 Layout 出 ScrollChanged —— 手动按当前偏移补一次状态
+        IsVisibleChanged += (_, e) =>
+        {
+            if ((bool)e.NewValue) UpdateTopRefresh(ListScroll);
+        };
     }
 
     /// <summary>切到某个分区。同一个分区且已加载过 → 不重拉。</summary>
@@ -102,7 +107,7 @@ public partial class RegionPage : UserControl
     /// </summary>
     private void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        UpdateBackToTop(sender as ScrollViewer);
+        UpdateTopRefresh(sender as ScrollViewer);
         if (sender is not ScrollViewer sv) return;
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = MaybeAutoLoadAsync(sv))) return;
         _ = MaybeAutoLoadAsync(sv);
@@ -144,46 +149,28 @@ public partial class RegionPage : UserControl
 
     // ------------------------------------------------------------ 右下角工具列
 
-    /// <summary>滚过这个距离就把「回到顶部」点亮(与首页同值)</summary>
-    private const double BackToTopThreshold = 300;
-
-    /// <summary>「回到顶部」当前是否亮着(避免每次滚动都重复起动画)</summary>
-    private bool _backToTopShown;
+    /// <summary>把当前滚动偏移交给共用的「刷新 / 回到顶部」按钮。</summary>
+    private void UpdateTopRefresh(ScrollViewer? sv) => BtnTopRefresh.UpdateForOffset(sv);
 
     /// <summary>
-    /// 按当前滚动位置点亮/熄灭「回到顶部」。
-    ///
-    /// ★ 只动 Opacity 与命中测试, **不用 Visibility** —— 它在工具列最上面, 用 Collapsed 会让
-    ///   下面那个「刷新」每滚过一次阈值就上下跳一下(首页同款, 见 HomePage.UpdateBackToTop)。
-    /// </summary>
-    private void UpdateBackToTop(ScrollViewer? sv)
-    {
-        var show = sv is { VerticalOffset: > BackToTopThreshold };
-        if (show == _backToTopShown) return;
-        _backToTopShown = show;
-
-        BtnTop.IsHitTestVisible = show;
-        BtnTop.BeginAnimation(OpacityProperty,
-            new DoubleAnimation(BtnTop.Opacity, show ? 1 : 0, TimeSpan.FromMilliseconds(160))
-            {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            });
-    }
-
-    private void OnBackToTopClick(object sender, RoutedEventArgs e) => ListScroll.ScrollToTop();
-
-    /// <summary>
-    /// 刷新当前分区: 回到游标 1 重拉第一页, 并把列表滚回顶部。
+    /// 二合一按钮: 顶部 = 刷新本分区, 下滑 = 回到顶部。
+    /// 刷新沿用原路径: 回到游标 1 重拉第一页, 并把列表滚回顶部。
     /// ★ 由页面(而不是 VM)来做"滚回顶部": 刷新会把整批内容换成服务端此刻的快照, 停在
-    ///   原来的滚动位置毫无意义; 而滚动位置是视图的事(首页 OnRefreshClick 同款分工)。
+    ///   原来的滚动位置毫无意义; 而滚动位置是视图的事(首页 OnTopRefreshClick 同款分工)。
     /// </summary>
-    private void OnRefreshClick(object sender, RoutedEventArgs e)
+    private void OnTopRefreshClick(object sender, RoutedEventArgs e)
     {
+        if (BtnTopRefresh.ShowsBackToTop)
+        {
+            ListScroll.ScrollToTop();
+            return;
+        }
+
         if (DataContext is not RegionViewModel vm) return;
         ListScroll.ScrollToTop();
         _ = vm.RefreshAsync();
     }
 
-    /// <summary>F5: 刷新当前分区(与右上角刷新按钮同一条路径, 含滚回顶部)。</summary>
-    public void Refresh() => OnRefreshClick(this, new RoutedEventArgs());
+    /// <summary>F5: 刷新当前分区(与工具列刷新同一条路径, 含滚回顶部)。</summary>
+    public void Refresh() => OnTopRefreshClick(this, new RoutedEventArgs());
 }

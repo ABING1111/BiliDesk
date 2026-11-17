@@ -169,7 +169,11 @@
                         HorizontalAlignment="Center" Margin="0,18,0,20"
                         Cursor="Hand" ToolTip="分区" MouseLeftButtonUp="OnBrandLogoClick">
                     <Border.Background>
-                        <ImageBrush ImageSource="/Assets/app.png" Stretch="UniformToFill" />
+                        <!-- ★ 2026-11-17: 必须带程序集名 —— 探针/测试工程会在自己的进程里
+                             new BiliDesk.App() 复用 App.xaml 资源, 入口程序集不是 BiliDesk;
+                             只写 /Assets/app.png 会按入口程序集解析, 找不到图并弹全局错误框。 -->
+                        <ImageBrush ImageSource="pack://application:,,,/BiliDesk;component/Assets/app.png"
+                                    Stretch="UniformToFill" />
                     </Border.Background>
                 </Border>
 

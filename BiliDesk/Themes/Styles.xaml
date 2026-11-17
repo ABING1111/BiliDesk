@@ -2,6 +2,12 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=System.Runtime">
 
+    <!-- 浮动工具列的线性图标(单独一本字典便于维护; 并进 Styles 后,
+         只要宿主加载了 Styles 就能解析 StaticResource, 离线探针也照常能用)。 -->
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="FloatingIcons.xaml" />
+    </ResourceDictionary.MergedDictionaries>
+
     <!-- ============ 全局控件样式 (Fluent / Win11 风格) ============
          注意: 主题色笔刷一律使用 DynamicResource, 以便深浅色动态切换 -->
 
@@ -137,14 +143,16 @@
            ShadowBd 的底色随 TemplateBinding 走(保证有形状可投影), Bd 叠在上面承接悬停/按下底色;
            ShadowBd 会被 Bd 完全盖住, 只有影子露在外面。 -->
     <Style x:Key="FloatingIconButtonStyle" TargetType="Button">
-        <Setter Property="Width" Value="38" />
-        <Setter Property="Height" Value="38" />
+        <!-- 44×44 / 圆角 12 / 图标 18: 2026-11-17 用户要求"适当调大按钮、增大圆角、美化图标"。
+             原先是 38×38 / 圆角 8 / 15px 图标, 在卡片封面上显得偏小。 -->
+        <Setter Property="Width" Value="44" />
+        <Setter Property="Height" Value="44" />
         <Setter Property="Background" Value="{DynamicResource FloatingFillBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
-        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontSize" Value="18" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
@@ -153,20 +161,21 @@
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
                     <Grid>
-                        <!-- 投影层: 空底 + 柔和影子。BlurRadius 12 / Depth 2 / 0.35 是
-                             "贴在卡片封面上也看得出浮起、又不至于脏"的观感值。 -->
+                        <!-- 投影层: 空底 + 柔和影子。BlurRadius 14 / Depth 3 / 0.32 是
+                             "贴在卡片封面上也看得出浮起、又不至于脏"的观感值。
+                             44px 的按钮比旧 38px 更大, 影子跟着放大一点才不会像贴纸。 -->
                         <!-- ★ 底色直连 DynamicResource 而**不是** TemplateBinding: TemplateBinding 是轻量绑定,
                              不参与 DynamicResource 的失效传播 —— 亚克力开关改色后它不会重取,
                              按钮会一直停在首次应用模板时的颜色(实测表现: 开了亚克力按钮还是实色)。
                              这个样式只服务工具列(10 处, 无人覆盖 Background), 所以直连最稳。 -->
-                        <Border x:Name="ShadowBd" Background="{DynamicResource FloatingFillBrush}" CornerRadius="8">
+                        <Border x:Name="ShadowBd" Background="{DynamicResource FloatingFillBrush}" CornerRadius="12">
                             <Border.Effect>
-                                <DropShadowEffect BlurRadius="12" ShadowDepth="2" Direction="270"
-                                                  Opacity="0.35" Color="#000000" />
+                                <DropShadowEffect BlurRadius="14" ShadowDepth="3" Direction="270"
+                                                  Opacity="0.32" Color="#000000" />
                             </Border.Effect>
                         </Border>
                         <!-- 内容层: 透明底, 悬停/按下底色打在它身上(ShadowBd 被盖住, 只出影子) -->
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8"
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="12"
                                 BorderBrush="{DynamicResource FlyoutBorderBrush}" BorderThickness="1">
                             <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                               VerticalAlignment="{TemplateBinding VerticalContentAlignment}"

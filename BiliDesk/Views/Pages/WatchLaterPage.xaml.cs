@@ -20,6 +20,11 @@ public partial class WatchLaterPage : UserControl
         InitializeComponent();
         // 屏蔽筛掉一批后补下一页(否则停在半屏空白上)
         FilterService.Instance.Changed += OnFilterApplied;
+        // 页面常驻 PageLayer: 切回来时不一定再发 ScrollChanged, 按当前偏移补一次按钮状态
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) BtnTopRefresh.UpdateForOffset(ListScroll);
+        };
         Loaded += async (_, _) =>
         {
             if (Vm != null)
@@ -46,6 +51,8 @@ public partial class WatchLaterPage : UserControl
     private void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (sender is not ScrollViewer sv) return;
+        // 工具列顶部 = 刷新, 下滑 = 回到顶部
+        BtnTopRefresh.UpdateForOffset(sv);
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => MaybeAutoLoad(sv))) return;
         MaybeAutoLoad(sv);
     }
@@ -80,6 +87,18 @@ public partial class WatchLaterPage : UserControl
     }
 
     /// <summary>返回「我的」页(入口在那里)</summary>
+    /// <summary>工具列二合一按钮: 顶部 = 刷新稍后再看, 下滑 = 回到顶部。</summary>
+    private void OnTopRefreshClick(object sender, RoutedEventArgs e)
+    {
+        if (BtnTopRefresh.ShowsBackToTop)
+        {
+            ListScroll.ScrollToTop();
+            return;
+        }
+
+        if (Vm?.ReloadCommand.CanExecute(null) == true) Vm.ReloadCommand.Execute(null);
+    }
+
     private void OnBackToMineClick(object sender, RoutedEventArgs e)
         => App.MainVm.Navigate(PageKey.Mine);
 }

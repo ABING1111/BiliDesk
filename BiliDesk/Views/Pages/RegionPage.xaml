@@ -55,11 +55,11 @@
             <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto"
                           ScrollChanged="OnListScrollChanged"
                           Visibility="{Binding HasItems, Converter={StaticResource BoolToVis}}">
-                <!-- ★ 底部留白给右下角浮动工具列让位(与首页同款做法, 见 HomePage 的 250)。
-                     这里是 2 个 38px 按钮 + 6px 间距 + 20px 下边距 ≈ 102, 取 110 留点余量。
+                <!-- ★ 底部留白给右下角浮动工具列让位(与首页同款做法, 见 HomePage 的 300)。
+                     这里是 2 个 44px 按钮(播放页 + 刷新/回顶) + 6px 间距 + 20px 下边距 ≈ 114, 取 140 留点余量。
                      必须留在**滚动内容之外**(挂在容器 margin 上而不是卡片上),
                      这样滚到底时最后一行能整行滚到浮动按钮上方, 不被压住。 -->
-                <StackPanel Margin="0,0,0,110">
+                <StackPanel Margin="0,0,0,140">
                     <ItemsControl x:Name="CardList" Margin="0,4,0,0">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -100,35 +100,22 @@
             </ScrollViewer>
         </Grid>
 
-        <!-- ===== 右下角浮动工具列(回到顶部 + 刷新) =====
+        <!-- ===== 右下角浮动工具列(播放页 + 回到顶部/刷新) =====
              ★★ 2026-10-17 新增(用户要求"改成和首页一致的右下方工具列【包含刷新和回到顶部】")。
-                原来「刷新」放在标题行右端, 与右上角的窗口按钮(最小化/最大化/关闭)重叠 —— 见本文件顶部说明。
+             2026-11-17: 播放页入口 + 回到顶部/刷新合并成 TopRefreshButton。
 
              ★ 用与首页**同一份** `FloatingIconButtonStyle`: 常态/悬停/按下三种底色都不透明 ——
                工具列浮在卡片封面上, 默认 IconButtonStyle 那 4% 黑等于没有底, 图标会糊进封面图案。
              ★ 它是浮层(Panel.ZIndex 浮在内容之上), **不占独立列** —— 占列的话滚动条会被挤到
                按钮左边, 看着像没贴到窗口右缘。右边留 16px 正好避让开滚动条。
-             ★ 「回到顶部」始终占位、只切透明度与命中测试(不用 Visibility): 它在这一列的最上面,
-               用 Collapsed 的话下面那个按钮每滚过一次阈值就会上下跳一下(首页同款坑)。 -->
+             ★ 播放页按钮放在最上面: 它是 Collapsed/Visible 切换的, 放底部会让下面按钮上下跳。 -->
         <StackPanel x:Name="ToolBar" Grid.Row="1" Panel.ZIndex="10"
                     HorizontalAlignment="Right" VerticalAlignment="Bottom"
                     Margin="0,0,16,20">
 
-            <!-- 回到顶部: 下滑之后才亮起来(见 code-behind 的 UpdateBackToTop)。E70E = ChevronUp -->
-            <Button x:Name="BtnTop" Style="{StaticResource FloatingIconButtonStyle}"
-                    Opacity="0" IsHitTestVisible="False"
-                    Click="OnBackToTopClick" ToolTip="回到顶部">
-                <TextBlock Text="&#xE70E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-            </Button>
+            <controls:PlayerFab Margin="0,0,0,6" />
 
-            <!-- 刷新: 回到游标 1 重拉第一页(列表会被整体换成服务端此刻的快照)。
-                 ★ 走 code-behind 的 OnRefreshClick 而不是直接绑 RefreshCommand —— 刷完要把列表
-                   滚回顶部(那 500 条内容是从头换的), 那是"视图"的事, VM 不该管(与首页同款写法)。
-                 翻页是滚动自动触发的, 所以这里只有"刷新"没有"加载更多"按钮。 -->
-            <Button x:Name="BtnRefresh" Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
-                    Click="OnRefreshClick" ToolTip="刷新本分区（F5）">
-                <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-            </Button>
+            <controls:TopRefreshButton x:Name="BtnTopRefresh" Click="OnTopRefreshClick" />
         </StackPanel>
     </Grid>
 </UserControl>
