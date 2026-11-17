@@ -12,9 +12,6 @@ namespace BiliDesk.ViewModels;
 /// <summary>设置页 ViewModel: 外观 + 账户 + 数据 + 关于</summary>
 public class SettingsViewModel : ObservableObject
 {
-    /// <summary>作者 B 站 UID(设置页「关于」Tab 的作者栏)。与导航服务共用。</summary>
-    private const long AuthorMid = 697238372;
-
     private bool _isLoggedIn;
     private string _userName = "";
     private string _userFace = "";
@@ -140,6 +137,20 @@ public class SettingsViewModel : ObservableObject
         catch (Exception ex)
         {
             Svc.Toast.Show("打开下载目录失败: " + ex.Message);
+        }
+    }
+
+    /// <summary>关于页外链(仓库 / Issues)统一走内置浏览器。
+    /// LinkLauncher 已做同地址去重, 这里只需要把"没开起来"的情况反馈给用户。</summary>
+    private static void OpenAboutLink(string url)
+    {
+        try
+        {
+            LinkLauncher.OpenInBrowser(url);
+        }
+        catch (Exception ex)
+        {
+            Svc.Toast.Show("打开链接失败: " + ex.Message);
         }
     }
 
@@ -1608,10 +1619,18 @@ public class SettingsViewModel : ObservableObject
     /// </summary>
     private RelayCommand? _resetCacheLocationCommand;
     public ICommand ShowDisclaimerCommand { get; }
-    /// <summary>打开作者 B 站主页。旧版是页面 code-behind 的 Click 处理器;
-    /// 2026-10-03 重做后页面内容整体搬进 ResourceDictionary(模板里不能挂事件),
-    /// 所以改成命令。与原实现同一条路: NavigationDispatcher.OpenUserSpace。</summary>
-    public ICommand OpenAuthorCommand { get; }
+
+    /// <summary>关于页显示的真实地址(绑在副标题上, 让用户点之前就知道会去哪)。
+    /// ★ 必须是**实例属性**: WPF 绑定按实例属性描述符查找, static 属性绑不上。</summary>
+    public string GitHubRepoUrl => UpdateChecker.RepoPageUrl;
+    public string FeedbackUrl => UpdateChecker.IssuesPageUrl;
+
+    /// <summary>打开 GitHub 仓库。2026-11-17 用户要求: 原来的「作者 B 站主页」栏
+    /// 改成开源仓库地址 + 反馈入口, 统一走**内置浏览器**(与正文链接同一入口,
+    /// 共用 WebView2 Profile, 不用切到系统浏览器)。</summary>
+    public ICommand OpenRepoCommand { get; }
+    /// <summary>打开 GitHub Issues(反馈入口)。</summary>
+    public ICommand OpenFeedbackCommand { get; }
 
     public SettingsViewModel()
     {
@@ -1660,20 +1679,9 @@ public class SettingsViewModel : ObservableObject
 
         LogoutCommand = new AsyncRelayCommand(LogoutAsync);
 
-        // 作者主页(设置页「关于」Tab)。与原 code-behind 同一入口。
-        OpenAuthorCommand = new RelayCommand(() =>
-        {
-            try
-            {
-                var dispatcher = Svc.Navigate
-                    ?? new NavigationDispatcher(System.Windows.Application.Current.MainWindow);
-                dispatcher.OpenUserSpace(AuthorMid.ToString());
-            }
-            catch (Exception ex)
-            {
-                Svc.Toast.Show("打开作者主页失败: " + ex.Message);
-            }
-        });
+        // GitHub 仓库 / 问题反馈(设置页「关于」Tab, 2026-11-17 取代原作者主页入口)
+        OpenRepoCommand = new RelayCommand(() => OpenAboutLink(UpdateChecker.RepoPageUrl));
+        OpenFeedbackCommand = new RelayCommand(() => OpenAboutLink(UpdateChecker.IssuesPageUrl));
 
         // 立即收进托盘(按钮点一下就能验证"关闭到托盘"是什么效果, 不用真的去点关闭键)
         MinimizeToTrayCommand = new RelayCommand(() => TrayService.Instance.MinimizeToTray());

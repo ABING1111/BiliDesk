@@ -19,7 +19,7 @@
             枚举项用 SettingsComboStyle 下拉。
         功能一个不少: 旧页的每一项绑定都原样搬进新布局, VM 只加了 Tab 投影属性。
         四个 Tab 的内容在 Settings/SettingsTabs.xaml(独立 ResourceDictionary,
-        模板里不能挂事件, 作者栏因此改走 OpenAuthorCommand)。
+        模板里不能挂事件, 关于页的 GitHub 仓库 / 反馈外链因此改走命令)。
     -->
     <Grid>
         <ScrollViewer x:Name="PageScroll" VerticalScrollBarVisibility="Auto"

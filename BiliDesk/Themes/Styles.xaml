@@ -675,8 +675,8 @@
         </Setter>
     </Style>
 
-    <!-- 关于页作者卡片按钮: 整块可点, 悬停时铺一层淡底反馈 -->
-    <Style x:Key="AuthorCardButtonStyle" TargetType="Button">
+    <!-- 关于页外链行(GitHub 仓库 / 问题反馈): 整块可点, 悬停时铺一层淡底反馈 -->
+    <Style x:Key="AboutLinkButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="BorderThickness" Value="0" />

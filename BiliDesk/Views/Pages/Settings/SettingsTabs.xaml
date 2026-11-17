@@ -15,7 +15,7 @@
           通用:   颜色模式 / 主题色 / 关闭时最小化到托盘 / 立即收进托盘
           播放:   跳过赞助片段 / 画质 / 缓冲 / 网络线路 / 弹幕(显示与过滤 / 外观)
           数据管理: 账户 / 封面图片缓存 / 短视频下载缓存
-          关于:   软件信息 / 作者 / 声明 / 自动检查更新 / 检查更新 / 版本号
+          关于:   软件信息 / 自动检查更新 / 检查更新 / 版本号 / 开源与反馈 / 声明
 
         ★ 2026-11-05 排版重整(播放页):
           · 「跳过赞助片段」从**最下面提到最上面** —— 它是整个播放页唯一一个用户会主动
@@ -1235,14 +1235,17 @@
             </Border>
 
             <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
-                            Content="作者" />
+                            Content="开源与反馈" />
 
             <Border Style="{StaticResource SettingsCardStyle}">
                 <StackPanel>
-                    <Button Style="{StaticResource AuthorCardButtonStyle}"
+                    <!-- GitHub 仓库(2026-11-17 取代原来的「作者 B 站主页」卡片):
+                         整块可点, 落点走内置浏览器(与正文链接同一入口)。 -->
+                    <Button Style="{StaticResource AboutLinkButtonStyle}"
                             HorizontalContentAlignment="Stretch" Cursor="Hand"
                             Margin="0,8"
-                            Command="{Binding OpenAuthorCommand}" ToolTip="在应用内打开作者的主页">
+                            Command="{Binding OpenRepoCommand}"
+                            ToolTip="在应用内置浏览器中打开 GitHub 仓库">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
@@ -1251,22 +1254,18 @@
                             </Grid.ColumnDefinitions>
                             <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17"
                                     Background="{DynamicResource AccentSoftFillBrush}">
-                                <TextBlock Text="A" FontWeight="Bold" FontSize="16"
+                                <TextBlock Text="&#xE774;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="15"
                                            Foreground="{DynamicResource AccentTextBrush}"
                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
                             <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="作者" Style="{StaticResource MetaTextStyle}"
-                                               VerticalAlignment="Center" />
-                                    <TextBlock Text="ABing" FontWeight="SemiBold" FontSize="14"
-                                               Margin="10,0,0,0" VerticalAlignment="Center" />
-                                    <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                               FontSize="12" Margin="6,0,0,0" VerticalAlignment="Center"
-                                               Foreground="{DynamicResource TextTertiaryBrush}" />
-                                </StackPanel>
-                                <TextBlock Text="BiliDesk 作者 / 点击进入我的 B 站主页"
+                                <TextBlock Text="GitHub 仓库" FontWeight="SemiBold" FontSize="14" />
+                                <TextBlock Text="{Binding GitHubRepoUrl}"
                                            Style="{StaticResource MetaTextStyle}" Margin="0,2,0,0" />
+                                <TextBlock Text="源码、版本发布与更新说明都在这里"
+                                           Style="{StaticResource MetaTextStyle}" Margin="0,1,0,0"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
                             </StackPanel>
                             <TextBlock Grid.Column="2" Text="&#xE76C;"
                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -1274,18 +1273,59 @@
                                        Foreground="{DynamicResource TextTertiaryBrush}" />
                         </Grid>
                     </Button>
+
                     <Border Style="{StaticResource SettingsRowDivider}" />
-                    <Grid Style="{StaticResource SettingsRowStyle}">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="非官方声明与免责声明" Style="{StaticResource SettingsRowTitleStyle}" />
-                            <TextBlock Text="首次启动时已确认, 可随时在这里重新查看全文"
-                                       Style="{StaticResource SettingsRowDescStyle}" />
-                        </StackPanel>
-                        <Button Content="查看声明" Style="{StaticResource SubtleButtonStyle}"
-                                VerticalAlignment="Center" HorizontalAlignment="Right"
-                                Command="{Binding ShowDisclaimerCommand}" />
-                    </Grid>
+
+                    <!-- 反馈: 落到 GitHub Issues 列表(公开可追踪, 不预填模板)。 -->
+                    <Button Style="{StaticResource AboutLinkButtonStyle}"
+                            HorizontalContentAlignment="Stretch" Cursor="Hand"
+                            Margin="0,8"
+                            Command="{Binding OpenFeedbackCommand}"
+                            ToolTip="在应用内置浏览器中打开 GitHub Issues">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17"
+                                    Background="{DynamicResource AccentSoftFillBrush}">
+                                <TextBlock Text="&#xE939;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="15"
+                                           Foreground="{DynamicResource AccentTextBrush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="问题反馈" FontWeight="SemiBold" FontSize="14" />
+                                <TextBlock Text="{Binding FeedbackUrl}"
+                                           Style="{StaticResource MetaTextStyle}" Margin="0,2,0,0" />
+                                <TextBlock Text="遇到 Bug 或有功能建议, 欢迎在这里提一条"
+                                           Style="{StaticResource MetaTextStyle}" Margin="0,1,0,0"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                            </StackPanel>
+                            <TextBlock Grid.Column="2" Text="&#xE76C;"
+                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="13" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </Grid>
+                    </Button>
                 </StackPanel>
+            </Border>
+
+            <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
+                            Content="声明" />
+
+            <Border Style="{StaticResource SettingsCardStyle}">
+                <Grid Style="{StaticResource SettingsRowStyle}">
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="非官方声明与免责声明" Style="{StaticResource SettingsRowTitleStyle}" />
+                        <TextBlock Text="首次启动时已确认, 可随时在这里重新查看全文"
+                                   Style="{StaticResource SettingsRowDescStyle}" />
+                    </StackPanel>
+                    <Button Content="查看声明" Style="{StaticResource SubtleButtonStyle}"
+                            VerticalAlignment="Center" HorizontalAlignment="Right"
+                            Command="{Binding ShowDisclaimerCommand}" />
+                </Grid>
             </Border>
         </StackPanel>
     </DataTemplate>

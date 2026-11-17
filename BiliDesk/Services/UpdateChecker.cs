@@ -46,6 +46,14 @@ public static class UpdateChecker
     public const string ReleasePageUrl =
         $"https://github.com/{RepoOwner}/{RepoName}/releases/latest";
 
+    /// <summary>仓库首页(设置 → 关于页「GitHub 仓库」的落点)。</summary>
+    public const string RepoPageUrl =
+        $"https://github.com/{RepoOwner}/{RepoName}";
+
+    /// <summary>Issues 列表(设置 → 关于页「问题反馈」的落点)。</summary>
+    public const string IssuesPageUrl =
+        $"https://github.com/{RepoOwner}/{RepoName}/issues";
+
     // ★ 这里曾经有一个"微云高速下载"镜像按钮(WeiYunShareUrl / WeiYunSharePwd 两个常量)。
     //   2026-10-01 用户要求**下载全部走 GitHub**, 两个常量与那个按钮一起删掉了。
     //   别再按"国内下载慢"的直觉加回来: 镜像链接要人工维护, 忘了换新版就是给用户一个旧包;
