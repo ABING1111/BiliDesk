@@ -342,6 +342,18 @@ public class SettingsStore
     public bool ShowRelatedVideos { get; set; } = true;
 
     /// <summary>
+    /// 自动连播(2026-11-19 新增, 默认**开**)。
+    ///
+    /// ★ 播完后自动播下一条: 合集/番剧优先接着播下一集, 否则接着播「相关视频」列表。
+    ///   换片前有 5 秒倒计时, 随时可取消(见 Helpers/AutoPlayPolicy)。
+    /// ★ 关闭相关视频显示时, 播放器**仍然**会取一次相关视频 —— 那是连播的固定队列,
+    ///   只是不往信息栏里显示。所以"关掉推荐"与"关掉连播"是两件事。
+    /// ★ 老配置缺这个字段 ⇒ 反序列化保留初始化值 true ⇒ 与"默认开启"一致。
+    /// ★ 与 <see cref="Models.AppSettings.AutoPlayNext"/> 是读写契约。
+    /// </summary>
+    public bool AutoPlayNext { get; set; } = true;
+
+    /// <summary>
     /// 字幕: 有字幕的视频自动显示(默认**关** —— 字幕是"有人要"的增强功能, 默认开会对
     /// "只看画面"的用户多一层遮挡; 想要的用户在播放器点一次 CC 就记住了)。
     /// ★ 老配置缺这个字段 ⇒ false ⇒ 与"从未开启"一致, 不需要版本兼容。
@@ -595,6 +607,14 @@ public class SettingsStore
     /// </summary>
     public event Action? RelatedVideosChanged;
 
+    /// <summary>
+    /// 「自动连播」开关变更(2026-11-19)。已打开的播放器据此：
+    ///   · 关掉 ⇒ 立刻取消正在跑的倒计时并作废播放队列;
+    ///   · 打开 ⇒ 若当前是刚播过的视频(队列还没建), 补取一次相关视频当固定队列。
+    /// 不广播的话用户改完设置得重开视频才生效, 看起来像开关没作用。
+    /// </summary>
+    public event Action? AutoPlayNextChanged;
+
     public void Load()
     {
         try
@@ -775,6 +795,9 @@ public class SettingsStore
 
         // 显示相关视频(2026-11-14): 老配置缺字段 ⇒ AppSettings 的初始化值 true(保持原有行为)。
         ShowRelatedVideos = s.ShowRelatedVideos;
+
+        // 自动连播(2026-11-19): 老配置缺字段 ⇒ AppSettings 的初始化值 true(默认开启)。
+        AutoPlayNext = s.AutoPlayNext;
 
         // 字幕(2026-11-15): 老配置缺字段 ⇒ 关闭 + 空语言 + 默认字号, 正是"从未用过"的语义。
         // ★ 语言串要清洗: 手改配置可能塞进超长垃圾 —— 存的值会被拿去和轨道的 lan 做
@@ -995,6 +1018,7 @@ public class SettingsStore
         PreferredAudioTier = PreferredAudioTier,
         AutoResume = AutoResume,
         ShowRelatedVideos = ShowRelatedVideos,
+        AutoPlayNext = AutoPlayNext,
         SubtitleEnabled = SubtitleEnabled,
         SubtitleLan = SubtitleLan,
         SubtitleFontPercent = SubtitleFontPercent,
@@ -1216,6 +1240,18 @@ public class SettingsStore
         ShowRelatedVideos = value;
         Save();
         RelatedVideosChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// 改「自动连播」并落盘。
+    /// ★ 需要广播: 已经打开的播放器要立刻收掉/补上连播队列, 不能等下一次换片。
+    /// </summary>
+    public void SetAutoPlayNext(bool value)
+    {
+        if (AutoPlayNext == value) return;
+        AutoPlayNext = value;
+        Save();
+        AutoPlayNextChanged?.Invoke();
     }
 
     /// <summary>

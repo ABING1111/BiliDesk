@@ -397,6 +397,12 @@ public class HomeViewModel : ObservableObject
     private int _bangumiPage = 1;
     private bool _bangumiHasMore = true;
 
+    /// <summary>
+    /// 上一次同步「我的追番」时对应的追番版本号(见 Helpers/BangumiFollowSignal)。
+    /// ★ 切回追番 tab 时与当前版本号比对: 不等 ⇒ 期间在详情页追过/取消过 ⇒ 只重拉这一栏。
+    /// </summary>
+    private int _bangumiFollowVersion;
+
     /// <summary>切到追番 tab</summary>
     public async Task SwitchToBangumiAsync()
     {
@@ -410,7 +416,18 @@ public class HomeViewModel : ObservableObject
         //
         //   现在: 首次进来才拉; 之后切回来直接用已加载的内容。真正要更新内容用工具栏的
         //   「刷新」(那条路仍然走 reset:true)。
-        if (BangumiRecommend.Count > 0) return;
+        if (BangumiRecommend.Count > 0)
+        {
+            // ★ 追番/取消追番只影响「我的追番」那一栏(2026-11-19): 补拉它即可,
+            //   推荐绝不重拉 —— 重拉会把用户翻到的页清回第一页。
+            if (_bangumiFollowVersion != Helpers.BangumiFollowSignal.Version)
+            {
+                _bangumiFollowVersion = Helpers.BangumiFollowSignal.Version;
+                await ReloadMyBangumiAsync();
+            }
+            return;
+        }
+        _bangumiFollowVersion = Helpers.BangumiFollowSignal.Version;
         _bangumiPage = 1;
         _bangumiHasMore = true;
         await LoadBangumiAsync(reset: true);
@@ -479,20 +496,8 @@ public class HomeViewModel : ObservableObject
             // ---- 我的追番(失败不牵连推荐: 推荐是公开接口, 不该被一个登录态问题拖掉) ----
             if (reset && MyBangumi.Count == 0)
             {
-                var mid = await CurrentMidAsync();
-                if (mid > 0)
-                {
-                    var (mOk, mErr, mine) = await Svc.Api.GetMyBangumiAsync(mid);
-                    if (!mOk && !string.IsNullOrEmpty(mErr))
-                        // 追番失败只在该栏提示, 不设全局 Error —— 否则整页盖一条红条,
-                        // 而下面的推荐其实是好的
-                        BangumiHint = mErr;
-                    if (mine != null)
-                    {
-                        MyBangumi.Clear();
-                        foreach (var it in mine) MyBangumi.Add(it);
-                    }
-                }
+                _bangumiFollowVersion = Helpers.BangumiFollowSignal.Version;
+                await ReloadMyBangumiAsync();
             }
 
             // ---- 番剧 / 国创推荐(一次请求, 就地分流) ----
@@ -535,6 +540,54 @@ public class HomeViewModel : ObservableObject
         {
             _bangumiLoading = false;
         }
+    }
+
+    /// <summary>
+    /// 内嵌页(番剧详情)关掉、本页重新可见时调: 期间追过/取消过番就补拉「我的追番」。
+    ///
+    /// ★ 必须走这条: 内嵌页是盖在 PageLayer 上的, 关掉时**不会**触发追番 tab 的 Checked
+    ///   事件 —— SwitchToBangumiAsync 根本不会被调用, 只靠它的话列表永远不刷新
+    ///   (用户报的"追了番但我的追番里没有")。
+    /// </summary>
+    public void RefreshBangumiIfFollowChanged()
+    {
+        if (!IsBangumiTab) return;
+        if (_bangumiFollowVersion == Helpers.BangumiFollowSignal.Version) return;
+        _bangumiFollowVersion = Helpers.BangumiFollowSignal.Version;
+        _ = ReloadMyBangumiAsync();
+    }
+
+    /// <summary>
+    /// 只重拉「我的追番」那一栏(不动推荐)。
+    ///
+    /// ★ 追番/取消追番之后必须靠它: 番剧详情页是内嵌页, 关掉时本页并不会重新拉数据 ——
+    ///   用户在详情页追了一部番、退回来却在「我的追番」里找不到, 会以为功能坏了
+    ///   (信号见 Helpers/BangumiFollowSignal)。
+    /// ★ 为什么不连带重拉推荐: 推荐栏是"滚了很久才翻到的"分页列表, 重拉会把它清回第一页
+    ///   (见 SwitchToBangumiAsync 的说明)。追番只影响这一栏。
+    /// ★ 失败只在该栏给一句提示, 不设全局 Error —— 推荐是好的, 不该被登录态问题拖掉。
+    /// </summary>
+    private async Task ReloadMyBangumiAsync()
+    {
+        var mid = await CurrentMidAsync();
+        if (mid <= 0)
+        {
+            BangumiHint = "登录后才能看到「我的追番」";
+            return;
+        }
+
+        var (ok, err, mine) = await Svc.Api.GetMyBangumiAsync(mid);
+        if (!ok && !string.IsNullOrEmpty(err)) BangumiHint = err;
+        if (mine == null) return;
+
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            MyBangumi.Clear();
+            foreach (var it in mine) MyBangumi.Add(it);
+            OnPropertyChanged(nameof(MyBangumiCountText));
+            OnPropertyChanged(nameof(HasMyBangumi));
+            OnPropertyChanged(nameof(MyBangumiHint));
+        });
     }
 
     private string _bangumiHint = "";

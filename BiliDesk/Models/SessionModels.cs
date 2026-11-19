@@ -100,6 +100,17 @@ public class AppSettings
     public bool ShowRelatedVideos { get; set; } = true;
 
     /// <summary>
+    /// 自动连播(2026-11-19 新增, 默认**开**)。
+    ///
+    /// ★ 播完后自动播下一条: 合集/番剧优先接着播下一集, 否则接着播「相关视频」列表。
+    ///   换片前有 5 秒倒计时, 随时可取消(见 Helpers/AutoPlayPolicy)。
+    /// ★ 默认开(用户 2026-11-19 拍板): 这是"接着看"的主流程, 不想要的人在设置里关掉即可。
+    /// ★ 老配置没有这个字段 ⇒ 反序列化保留初始化值 true ⇒ 与"默认开启"一致。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool AutoPlayNext { get; set; } = true;
+
+    /// <summary>
     /// 字幕自动显示(2026-11-15 新增, 默认关)。开启后播放器加载到字幕轨就自动按上次语言起显。
     /// ★ 老配置缺这个字段 ⇒ false ⇒ 与"从未开启"一致, 不需要版本兼容。
     /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。

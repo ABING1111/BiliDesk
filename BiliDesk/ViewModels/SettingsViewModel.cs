@@ -1007,6 +1007,33 @@ public class SettingsViewModel : ObservableObject
         ? "播放器右侧简介下方显示相关推荐; 关闭后不再加载相关视频, 简介也不再折叠"
         : "已关闭, 播放器不再请求与显示相关视频, 简介整段展开";
 
+    // ----------------- 自动连播(2026-11-19) -----------------
+
+    /// <summary>
+    /// 播完自动播下一条(默认开)。合集/番剧优先接下一集, 否则接相关视频列表;
+    /// 换片前有 5 秒倒计时, 可随时取消。
+    /// </summary>
+    public bool AutoPlayNext
+    {
+        get => Svc.Settings.AutoPlayNext;
+        set
+        {
+            if (value == Svc.Settings.AutoPlayNext) return;
+            Svc.Settings.SetAutoPlayNext(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(AutoPlayNextHint));
+        }
+    }
+
+    /// <summary>
+    /// 副标题: 说清"下一条"从哪来 + 有倒计时可取消。
+    /// ★ 必须写明"倒计时可取消": 否则用户会担心"开了就停不下来"。
+    /// ★ 也要说明它独立于「显示相关视频」: 关了显示时连播仍然用那份推荐当队列。
+    /// </summary>
+    public string AutoPlayNextHint => Svc.Settings.AutoPlayNext
+        ? "播完后 5 秒自动播下一条: 合集/番剧先接下一集, 播完再接着播相关视频; 倒计时中可随时取消"
+        : "已关闭; 播完后停在「已播完」, 需要自己点下一条";
+
     // ----------------- 字幕(2026-11-15) -----------------
 
     /// <summary>有字幕的视频自动显示(默认关; 在播放器点一次 CC 也会记住)</summary>

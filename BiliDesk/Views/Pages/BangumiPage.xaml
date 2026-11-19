@@ -134,10 +134,25 @@
                                    Visibility="{Binding Evaluate, Converter={StaticResource StrToVis}}" />
                     </StackPanel>
 
-                    <Button Grid.Column="2" Content="播放最新一集" Style="{StaticResource AccentButtonStyle}"
-                            Padding="16,8" VerticalAlignment="Top"
-                            Click="OnPlayLatestClick"
-                            Visibility="{Binding HasCurrent, Converter={StaticResource BoolToVis}}" />
+                    <!-- 追番 + 播放最新一集(2026-11-19)。
+                         ★ 追番按钮用 FollowToggleButtonStyle: 它的 IsFollowed 触发器会在
+                           已追时把底色压成浅灰(与 UP 主主页同一套观感), 并且已经处理了
+                           "全局隐式 TextBlock 样式吃掉 Foreground"的坑。
+                         ★ 状态来源是 Svc.BangumiFollow(查「我的追番」列表) ——
+                           详情接口的 user_status.follow 实测不可信, 见 BangumiFollowCache 的说明。 -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Top"
+                                Visibility="{Binding HasDetail, Converter={StaticResource BoolToVis}}">
+                        <Button Content="{Binding FollowButtonText}"
+                                Style="{StaticResource FollowToggleButtonStyle}"
+                                Padding="16,8" VerticalAlignment="Top"
+                                IsEnabled="{Binding CanToggleFollow}"
+                                Click="OnFollowClick"
+                                ToolTip="追番 / 取消追番" />
+                        <Button Content="播放最新一集" Style="{StaticResource AccentButtonStyle}"
+                                Padding="16,8" VerticalAlignment="Top" Margin="10,0,0,0"
+                                Click="OnPlayLatestClick"
+                                Visibility="{Binding HasCurrent, Converter={StaticResource BoolToVis}}" />
+                    </StackPanel>
                 </Grid>
 
                 <!-- ===== 错误 ===== -->

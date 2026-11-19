@@ -62,6 +62,9 @@ public partial class PlayerWindow : FluentWindow
     private void RestartFromBeginning()
     {
         if (_closing || _mp == null) return;
+        // ★ 用户明确要重播: 把自动连播的倒计时收掉 —— 否则几秒后它又把画面换走,
+        //   用户会以为"点重播没反应, 自己跳去别的视频了"。(那一条仍留在队列里。)
+        CancelAutoPlayCountdown();
         // 用户明确要从头重播: 删除本机进度, 否则下次打开又跳回旧位置。
         if (!_isLive && !_isLocalPlayback)
             Svc.PlaybackProgress.MarkCompleted(_currentBvid, _currentCid);
@@ -981,6 +984,9 @@ public partial class PlayerWindow : FluentWindow
         if (_ended)
         {
             _seekAfterEndedGuard = true;
+            // ★ 用户在「已播完」页面拖了进度条 = 他要继续看这一条, 不是想换下一条。
+            //   立刻收掉自动连播倒计时(它那条仍留在队列里, 下次播完还会再提示)。
+            CancelAutoPlayCountdown();
             WriteLibVLCDebug($"[Seek] 已播完, 进度条跳转 → 重建 Media(目标 {targetMs}ms)\n");
             RebuildMediaAndSeek(targetMs);
             return;
@@ -1159,6 +1165,10 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing) return;
         _ended = true;
+        // ★ 自动连播(2026-11-19): 退回"已播完"态时必须是**普通态**(「已播完 + 重播」)。
+        //   倒计时那块在用户拖进度条时已经被 CancelAutoPlayCountdown 收了状态,
+        //   但面板可见性还停在倒计时态 —— 不切回来的话用户会看到「0 秒后自动播放」。
+        ShowEndNormalState();
         // 重播页的遮罩是半透明的, 底下是 EOF 黑层 —— 那层黑此刻正好盖住被拆掉的
         // vout 露出的白底, 所以不用额外处理。
         if (EndOverlay != null) EndOverlay.Visibility = Visibility.Visible;
@@ -1434,6 +1444,11 @@ public partial class PlayerWindow : FluentWindow
         Svc.PlaybackProgress.MarkCompleted(_currentBvid, _currentCid);
         if (_aid > 0 && _currentCid > 0)
             _ = Svc.HistorySync.ReportNowAsync(_aid, _currentCid, _lastKnownMs / 1000);
+
+        // ★ 自动连播(2026-11-19): 有下一条就起 5 秒倒计时, 没有就保持「已播完 + 重播」。
+        //   放在最后: 上面那条 MarkCompleted / 历史补报说的是**这一条**播完了, 必须先落库,
+        //   否则换片之后这些状态就跟着新视频走了。
+        TryStartAutoPlayCountdown();
     }));
 
 }

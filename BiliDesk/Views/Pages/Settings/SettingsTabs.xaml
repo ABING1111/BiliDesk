@@ -636,6 +636,27 @@
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding ShowRelatedVideos, Mode=TwoWay}" />
                     </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 自动连播(2026-11-19): 播完自动播下一条。
+                         ★ 与上面那条是**两件事**: 「显示相关视频」管看不看得到推荐,
+                           「自动连播」管播不播下一条 —— 关掉显示时连播照样用那份推荐当队列。
+                         ★ 默认开(用户 2026-11-19 拍板): 不想要的人在里关掉即可。
+                         ★ 已打开的播放器会立即生效(见 SettingsStore.AutoPlayNextChanged)。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="自动连播" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding AutoPlayNextHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding AutoPlayNext, Mode=TwoWay}" />
+                    </Grid>
 
                     <!-- ★ 组五: 字幕(2026-11-15)
                          B 站的 CC/AI 字幕是"有人要"的增强功能, 默认关 —— 想要的用户

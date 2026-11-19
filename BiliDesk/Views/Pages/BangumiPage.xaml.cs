@@ -26,6 +26,12 @@ public partial class BangumiPage : UserControl
 
     private void OnPlayLatestClick(object sender, RoutedEventArgs e) => Vm?.PlayLatest();
 
+    /// <summary>追番 / 取消追番(2026-11-19)。状态与请求全在 VM 里, 这里只接线。</summary>
+    private async void OnFollowClick(object sender, RoutedEventArgs e)
+    {
+        if (Vm != null) await Vm.ToggleFollowAsync();
+    }
+
     private async void OnRetryClick(object sender, RoutedEventArgs e)
     {
         // 失败时选集是空的, InitAsync 里的"已加载就跳过"不会命中, 这里直接重拉即可。

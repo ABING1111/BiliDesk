@@ -508,6 +508,10 @@ public partial class ApiClient
             if (TryObject(res, "stat") is { } stat)
                 detail.FollowCount = GetLong(stat, "follow");
 
+            // ★ 这里**刻意不读** user_status.follow(2026-11-19 实测不可信):
+            //   追番成功后它仍然是 0, 拿它做"已追番"判据会永远显示未追。
+            //   追番态统一走 Services/BangumiFollowCache(查「我的追番」列表)。
+
             if (res.TryGetProperty("areas", out var areas) && areas.ValueKind == JsonValueKind.Array)
             {
                 var names = areas.EnumerateArray()
@@ -550,6 +554,30 @@ public partial class ApiClient
             App.ReportError(ex);
             return (false, "加载番剧详情失败: " + ex.Message, null);
         }
+    }
+
+    /// <summary>
+    /// 追番 / 取消追番(2026-11-19)。
+    ///
+    /// 接口: <c>POST /pgc/web/follow/add</c> 与 <c>POST /pgc/web/follow/del</c>,
+    /// 表单只有 <c>season_id</c>(ssid) + csrf —— 已核对 bilibili-API-collect 的
+    /// docs/bangumi/follow.md(2026-11-19)。
+    ///
+    /// ★ 走 <see cref="PostFormAsync"/>: 它统一处理 csrf(bili_jct) / Cookie / 指纹预热 /
+    ///   Origin 同源 / 业务码解析。写接口的 Origin 不能省 —— 缺了会被判"非浏览器客户端"。
+    /// ★ 未登录时 csrf 为空, PostFormCodeAsync 直接回 -101「未登录」, 调用方据此给提示。
+    /// ★ Referer 用该番剧的播放页: 与 B 站网页版点"追番"时所在页面一致, 风控最稳。
+    /// ★ 常见业务码: 0 成功 / -101 未登录 / -111 csrf 校验失败。
+    /// </summary>
+    public async Task<(bool ok, string? err)> SetBangumiFollowAsync(long seasonId, bool follow)
+    {
+        if (seasonId <= 0) return (false, "番剧 ID 无效");
+        return await PostFormAsync(
+            follow
+                ? "https://api.bilibili.com/pgc/web/follow/add"
+                : "https://api.bilibili.com/pgc/web/follow/del",
+            new Dictionary<string, string> { ["season_id"] = seasonId.ToString() },
+            referer: $"https://www.bilibili.com/bangumi/play/ss{seasonId}");
     }
 
     /// <summary>

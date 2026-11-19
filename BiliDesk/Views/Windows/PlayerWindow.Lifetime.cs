@@ -220,6 +220,9 @@ public partial class PlayerWindow : FluentWindow
         // 跳过赞助片段: 退订 + 掐掉还没回来的查询
         Svc.Settings.SponsorBlockChanged -= OnSponsorSettingsChanged;
         Svc.Settings.RelatedVideosChanged -= OnRelatedVideosSettingChanged;
+        // 自动连播: 退订 + 收掉倒计时(表已由 StopAllTimers 停过, 这里清状态)
+        Svc.Settings.AutoPlayNextChanged -= OnAutoPlayNextSettingChanged;
+        CancelAutoPlayCountdown();
         // 字幕: 退订 + 掐掉还没回来的请求(在飞的下载不能留着写已关闭窗口的状态)
         Svc.Settings.SubtitleSettingsChanged -= OnSubtitleSettingsChanged;
         CancelSubtitleFetch();

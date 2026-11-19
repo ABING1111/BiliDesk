@@ -179,3 +179,28 @@ public sealed class BangumiDetail
     /// <summary>评分那一行的文案; 没有评分就整段不显示。</summary>
     public string ScoreText => string.IsNullOrEmpty(Score) ? "" : Score + " 分";
 }
+
+/// <summary>
+/// 进播放器时带进去的**番剧选集表**(2026-11-19)。
+///
+/// ★ 为什么播放器需要它: PGC 的分集表只存在于 <c>/pgc/view/web/season</c>, 而播放器加载
+///   单个视频走的是 <c>/x/web-interface/view</c> —— 那条路只会给出 <c>ugc_season</c>(UGC
+///   合集), 番剧根本不会带分集表。所以"在播放器里选集 / 播完自动下一集"必须由选集页
+///   把整季的集表递进来。
+/// ★ 播放器收到后把它**合成**成一份 <see cref="SeasonInfo"/> 喂给现有的合集面板
+///   (见 PlayerWindow.BuildBangumiSeason), 于是高亮当前集 / 打开时滚到当前 / 点击换集
+///   / 连播链全部复用, 不必再写第二套选集 UI。
+/// ★ 这个对象**不进** Setter 语义: 它只描述"这一季有哪些集", 当前在第几集由播放器用
+///   cid/bvid 自己定位(见 SeasonEpisode / FindCurrentEpisode)。
+/// </summary>
+public sealed class BangumiPlaylist
+{
+    /// <summary>番剧 season_id(ssid)。仅用于诊断与"重新拉详情"这类后备路径。</summary>
+    public long SeasonId { get; init; }
+
+    /// <summary>番剧名 —— 播放器合集面板的标题就用它。</summary>
+    public string Title { get; init; } = "";
+
+    /// <summary>整季正片, 按官方播放顺序。</summary>
+    public List<BangumiEpisode> Episodes { get; init; } = new();
+}

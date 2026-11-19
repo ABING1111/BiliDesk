@@ -62,6 +62,78 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool _seasonOpen;
 
+    // ------------------------------------------------------------ 番剧选集(2026-11-19)
+
+    /// <summary>
+    /// 番剧选集页带进来的整季分集表(普通视频为 null)。
+    /// ★ 登记在 <c>PersistentFields</c>: 同一季连播几集都要用它, 换片不能清。
+    ///   清它的唯一入口是 <see cref="SetBangumiPlaylist"/>(public PlayVideo 传 null 时)。
+    /// </summary>
+    private BangumiPlaylist? _bangumi;
+
+    /// <summary>
+    /// 由 <see cref="_bangumi"/> **合成**的合集数据(缓存, 避免每集重建 300 多个对象)。
+    /// ★ 引用类型, 不在自检清单里; 换番剧时由 <see cref="SetBangumiPlaylist"/> 置空。
+    /// </summary>
+    private SeasonInfo? _bangumiSeasonCache;
+
+    /// <summary>换番剧上下文(传 null = 退出番剧). 同时让合成缓存失效。</summary>
+    private void SetBangumiPlaylist(BangumiPlaylist? playlist)
+    {
+        _bangumi = playlist;
+        _bangumiSeasonCache = null;
+    }
+
+    /// <summary>
+    /// 决定这一片用哪份"合集"数据喂给面板。
+    ///
+    /// ★ 番剧优先: PGC 的分集表只存在于 /pgc/view/web/season, 播放器加载单集走的
+    ///   /x/web-interface/view 只会给 ugc_season(UGC 合集) —— 番剧根本拿不到分集表。
+    ///   所以选集页把表带进来后, 这里换上一份合成的 SeasonInfo, 复用合集面板的全部能力:
+    ///   高亮当前集 / 打开时滚到当前 / 点击换集 / 连播链。
+    /// </summary>
+    private SeasonInfo? ResolveSeasonForCurrentVideo(SeasonInfo? ugcSeason)
+        => BuildBangumiSeason() ?? ugcSeason;
+
+    /// <summary>
+    /// 把番剧分集表映射成 <see cref="SeasonInfo"/>。
+    /// ★ 只映射面板真正用到的字段: bvid / aid / cid / 标题 / 封面 / 时长 / 序号。
+    ///   `Index` 用 1 起的序号 —— 面板左上角那枚角标显示的就是它。
+    /// ★ `Title` 用 <see cref="BangumiEpisode.DisplayTitle"/>("第12话 凡人风起天南"),
+    ///   因为番剧的 Title 只是"12", LongTitle 才是本集标题, 分开显示会丢信息。
+    /// </summary>
+    private SeasonInfo? BuildBangumiSeason()
+    {
+        if (_bangumi == null || _bangumi.Episodes.Count == 0) return null;
+        if (_bangumiSeasonCache != null) return _bangumiSeasonCache;
+
+        var season = new SeasonInfo
+        {
+            SeasonId = _bangumi.SeasonId,
+            Title = _bangumi.Title,
+            EpCount = _bangumi.Episodes.Count
+        };
+
+        var index = 0;
+        foreach (var ep in _bangumi.Episodes)
+        {
+            if (string.IsNullOrEmpty(ep.Bvid)) continue;
+            season.Episodes.Add(new SeasonEpisode
+            {
+                Bvid = ep.Bvid,
+                Aid = ep.Aid,
+                Cid = ep.Cid,
+                Title = ep.DisplayTitle,
+                Cover = ep.Cover,
+                DurationSec = ep.DurationSec,
+                Index = ++index
+            });
+        }
+
+        _bangumiSeasonCache = season;
+        return season;
+    }
+
     /// <summary>点 tab 行右侧的「合集」: 开关面板(不请求接口 —— 数据在详情加载时就已经拿到了)</summary>
     private void OnSeasonToggleClick(object sender, RoutedEventArgs e)
     {
@@ -121,6 +193,11 @@ public partial class PlayerWindow : FluentWindow
         if (BtnSeason == null) return;
         BtnSeason.Visibility = _hasSeason ? Visibility.Visible : Visibility.Collapsed;
         BtnSeason.Tag = _seasonOpen ? "on" : "off";
+        // ★ 番剧走同一块面板, 但用户心智里那是「选集」而不是「合集」
+        //   (番剧没有 UGC 合集这个概念)。文案跟着当前上下文切换。
+        var bangumi = _bangumi != null;
+        if (BtnSeasonText != null) BtnSeasonText.Text = bangumi ? "选集" : "合集";
+        BtnSeason.ToolTip = bangumi ? "查看/收起番剧选集" : "查看/收起视频合集";
     }
 
     /// <summary>详情加载完之后灌合集数据</summary>
@@ -137,6 +214,7 @@ public partial class PlayerWindow : FluentWindow
             _seasonOpen = false;
             ClearSeasonUi(collapsePanel: true);
             UpdateSeasonButtonState();
+            ApplyAutoPlaySeasonChain(null);
             return;
         }
 
@@ -165,6 +243,9 @@ public partial class PlayerWindow : FluentWindow
         UpdateSeasonButtonState();
         // 面板本来开着(用户连看几集)就保持开着 —— 换片不该把面板收起来
         if (_seasonOpen) SeasonPanel.Visibility = Visibility.Visible;
+        // 连播链: 合集与番剧共用(番剧的分集表已经被合成成同一份 SeasonInfo)。
+        // ★ 必须放在 `_currentSeasonEpisode` 定下来之后 —— 它算的是"当前集之后的那些"。
+        ApplyAutoPlaySeasonChain(season);
     }
 
     /// <summary>

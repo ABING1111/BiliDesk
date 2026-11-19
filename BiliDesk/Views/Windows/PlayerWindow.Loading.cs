@@ -71,8 +71,15 @@ public partial class PlayerWindow : FluentWindow
         PlaybackStateChanged?.Invoke();
     }
 
-    /// <summary>切换视频(用于 PlayerService 复用窗口场景): 停止当前播放, 加载新 bvid</summary>
-    public void PlayVideo(string bvid)
+    /// <summary>
+    /// 切换视频(用于 PlayerService 复用窗口场景): 停止当前播放, 加载新 bvid。
+    ///
+    /// ★ <paramref name="bangumi"/>: 番剧选集页带进来的整季分集表(2026-11-19)。
+    ///   传 null = 普通视频 ⇒ 清掉上一个番剧的选集上下文(点相关视频/卡片时都走这里)。
+    /// ★ 上下文必须在 ResetForNewMedia **之前**写好: 那个方法负责清每片状态,
+    ///   而这份选集表是**跨片保持**的(同一季连播几集都用它)。
+    /// </summary>
+    public void PlayVideo(string bvid, BangumiPlaylist? bangumi = null)
     {
         if (_closing || string.IsNullOrEmpty(bvid)) return;
         if (bvid == _currentBvid && _mp.IsPlaying) return;
@@ -80,6 +87,7 @@ public partial class PlayerWindow : FluentWindow
         _currentBvid = bvid;
         _isLocalPlayback = false;
         _isLive = false;
+        SetBangumiPlaylist(bangumi);
         ResetForNewMedia();
         _ = LoadVideoAsync();
     }
@@ -204,11 +212,15 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing || string.IsNullOrEmpty(bvid)) return;
 
-        // ★ 设置页关掉「显示相关视频」(2026-11-14): 不请求接口, 也不留任何区块。
-        //   必须放在"显示转圈"之前 —— 否则会先闪一下「正在加载…」再消失, 看着像功能坏了。
-        //   ClearRelatedPanel 还会让在途请求的 gen 作废, 双保险。
-        if (!Svc.Settings.ShowRelatedVideos)
+        // ★ 两个用途, 两个开关, 互不替代(2026-11-19):
+        //   ① 「显示相关视频」—— 决定信息栏里**看不看得到**这一块;
+        //   ② 「自动连播」     —— 把同一份列表固定成**播放队列**(见 PlayerWindow.Autoplay)。
+        //   所以关掉显示时**仍然要请求**, 只是不往界面上挂。两个都关才一个请求都不发。
+        var showPanel = Svc.Settings.ShowRelatedVideos;
+        var needQueue = Svc.Settings.AutoPlayNext;
+        if (!showPanel && !needQueue)
         {
+            // ClearRelatedPanel 还会让在途请求的 gen 作废, 双保险。
             ClearRelatedPanel();
             return;
         }
@@ -221,24 +233,30 @@ public partial class PlayerWindow : FluentWindow
         // 先清空再转圈: 不清的话上一次的卡片会一直挂在界面上, 而那批推荐与当前视频无关。
         _relatedAll = new List<VideoItem>();
         _relatedShown = 0;
-        RelatedList.ItemsSource = null;
-        RelatedPanel.Visibility = Visibility.Visible;
-        RelatedLoadingRing.Visibility = Visibility.Visible;
-        RelatedHint.Text = "正在加载…";
+        if (showPanel)
+        {
+            RelatedList.ItemsSource = null;
+            RelatedPanel.Visibility = Visibility.Visible;
+            RelatedLoadingRing.Visibility = Visibility.Visible;
+            RelatedHint.Text = "正在加载…";
+        }
 
         var (ok, err, items) = await Svc.Api.GetRelatedAsync(bvid);
         // 代次比对: 换片后这批结果就不属于当前视频了, 丢掉(与 ClearDanmaku 那套同款闸门)
         if (_closing || gen != _relatedGen) return;
 
-        RelatedLoadingRing.Visibility = Visibility.Collapsed;
-        RelatedHint.Text = "";
+        if (showPanel)
+        {
+            RelatedLoadingRing.Visibility = Visibility.Collapsed;
+            RelatedHint.Text = "";
+        }
 
         if (!ok || items == null || items.Count == 0)
         {
             // ★ 失败/为空时把整块藏起来, 而不是留一个空标题 + 一句报错:
             //   "相关视频"下面是空的比不显示更糟(看着像功能坏了)。
             //   真的想给用户一个交代, 那该走 Toast, 而这属于后台补充信息, 不该打扰。
-            RelatedPanel.Visibility = Visibility.Collapsed;
+            if (showPanel) RelatedPanel.Visibility = Visibility.Collapsed;
             // 只写 errors.txt 不弹窗: 相关视频是后台补充信息, 失败不该打断看片。
             // 包一层 Exception 是因为 App.ReportError 只收 Exception(它的唯一用途就是落盘),
             // 这里不去动那个公共签名 —— 加一个 string 重载会让人以为"失败可以不记录"。
@@ -247,13 +265,21 @@ public partial class PlayerWindow : FluentWindow
         }
 
         _relatedAll = items;
-        // 先挂第一批(与旧行为一致: 打开播放器先看到 8 条, 不一下铺满 40 条)
-        _relatedShown = Math.Min(RelatedPageSize, items.Count);
-        RelatedList.ItemsSource = items.GetRange(0, _relatedShown);
 
-        // 相关接口(archive/related)与热门同构, 字段表里没有 is_followed:
-        // 卡片先出来, 再异步补「已关注」标签(与搜索页同一套做法)。
-        MarkRelatedFollowedAsync(items, gen).Forget();
+        // 自动连播: 这份列表就是"固定播放队列"(只有会话起点那一份会被采纳, 见实现说明)
+        ApplyAutoPlayVideoChain(bvid, items);
+
+        if (showPanel)
+        {
+            // 先挂第一批(与旧行为一致: 打开播放器先看到 8 条, 不一下铺满 40 条)
+            _relatedShown = Math.Min(RelatedPageSize, items.Count);
+            RelatedList.ItemsSource = items.GetRange(0, _relatedShown);
+
+            // 相关接口(archive/related)与热门同构, 字段表里没有 is_followed:
+            // 卡片先出来, 再异步补「已关注」标签(与搜索页同一套做法)。
+            // ★ 面板不显示时这一步纯属白打一次接口, 跳过。
+            MarkRelatedFollowedAsync(items, gen).Forget();
+        }
     }
 
     /// <summary>
@@ -425,6 +451,7 @@ public partial class PlayerWindow : FluentWindow
         _isLocalPlayback = true;   // 没有在线上下文: 不打接口、不互动、不上报
         _isLive = true;
         _liveRoomId = roomId;
+        SetBangumiPlaylist(null);  // 直播间没有"番剧选集"这回事
         ResetForNewMedia();
         if (!string.IsNullOrEmpty(roomTitle)) VideoTitleText.Text = roomTitle;
         _ = LoadLiveAsync(roomId);
@@ -573,6 +600,7 @@ public partial class PlayerWindow : FluentWindow
         _currentBvid = "";
         _isLocalPlayback = true;
         _isLive = false;
+        SetBangumiPlaylist(null);  // 本地文件没有选集/连播
         ResetForNewMedia();
         // 本地文件没有 bvid, 自然也没有相关视频
         ClearRelatedPanel();
@@ -618,6 +646,11 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void ResetForNewMedia()
     {
+        // ★ 自动连播: 换片就收掉倒计时。本条换片可能是连播自己发起的(已经停表, 幂等),
+        //   更可能是用户手动换的 —— 后者若还留着倒计时, 它会在新片播到一半时突然换走。
+        //   注意: 会话状态(队列/起点)**这里不清**, 由 EnsureAutoPlaySession 显式决定。
+        CancelAutoPlayCountdown();
+
         _indexInLib = 0;
         // 换片: 音频链路诊断重新记一次(每个片源一条, 见 LogAudioStateOnce)
         _audioStateLogged = false;
@@ -1012,6 +1045,19 @@ public partial class PlayerWindow : FluentWindow
         nameof(_hasNormalPlacement), nameof(_placementSettling), nameof(_hasPlacementSettleSample), // 常规几何快照与稳定期(2026-11-14 重做)
         nameof(_windowPlacementSaved), // 本次窗口是否已落盘几何
         nameof(_seasonOpen),         // 合集面板的展开态: 用户开着面板连看几集是常态, 换片收起它很烦
+        // ---- 2026-11-19 自动连播(见 PlayerWindow.Autoplay.cs) ----
+        // ★ 一次连播会话本来就跨好几条视频, 所以这些字段**必须跨片保持**:
+        //   ResetForNewMedia 里清了队列, 连播第二集就断在半路了。
+        //   会话什么时候作废由 EnsureAutoPlaySession(每次 LoadVideoAsync 开头)显式判定。
+        nameof(_autoPlaySessionActive), nameof(_autoPlayOriginBvid), nameof(_autoPlayExpectedBvid),
+        nameof(_autoPlayVideoChainBvid), nameof(_autoPlayVideoCursor), nameof(_autoPlayCountdown),
+        // 下面三个是引用类型(自检本来不审), 登记在这里是把"跨片保持"的语义固化下来:
+        //   _autoPlayPending 只在倒计时中存在(换片时由 CancelAutoPlayCountdown 收掉);
+        //   两个链则要活整场会话。
+        nameof(_autoPlayPending), nameof(_autoPlaySeasonChain), nameof(_autoPlayVideoChain),
+        // 番剧选集表(2026-11-19): 同一季连播几集都用它, 换片绝不能清 ——
+        //   清了第二集就变成"普通视频", 选集面板与连播链一起消失。
+        nameof(_bangumi),
         nameof(_isFillWindow),       // 「铺满窗口」是窗口级的显示模式(同 _isFullscreen), 换片不该把它弹回去
         nameof(_commentSort),        // 评论排序是用户看评论的习惯(同 _seasonOpen): 选过一次就一直是那个顺序
         nameof(_isListenMode),       // 「听视频」是窗口级的播放模式(同 _isFullscreen): 换片不该把它弹回视频
@@ -1221,6 +1267,10 @@ public partial class PlayerWindow : FluentWindow
     {
         if (string.IsNullOrEmpty(_currentBvid)) return;
 
+        // ★ 自动连播(2026-11-19): 先判"这次换片是连播自己接上的, 还是用户手动换的"。
+        //   手动换 ⇒ 旧队列作废重开。必须放在这里(加载最开头): 后面 ApplySeason 要据此建连播链。
+        EnsureAutoPlaySession();
+
         // ★ 每次进入都取一个新代次: 上一次在飞的加载(点了另一条视频/另一个分P)立刻作废。
         //   没有这一道时, 连点两张卡片会跑两条完整的加载链, 后回来的那条会把画面/标题盖掉。
         var gen = ++_loadGen;
@@ -1252,7 +1302,9 @@ public partial class PlayerWindow : FluentWindow
             UpdateUiFromDetail(detail);
             // 合集数据在详情里就已经解析好了(见 ApiClient.GetVideoAsync), 这里零额外请求。
             // 放在 UpdateUiFromDetail 之后: 它要用刚设好的 _currentCid/_aid 来定位"当前是第几集"。
-            ApplySeason(detail.Season);
+            // ★ 番剧(PGC)的分集表不在 view 接口里, 由选集页带进来(见 BuildBangumiSeason);
+            //   这里统一成"先问番剧、没有再吃 ugc_season"。
+            ApplySeason(ResolveSeasonForCurrentVideo(detail.Season));
             // 分P 同理, 零额外请求。放在 ApplySeason 之后: 两者抢的是同一块信息栏, 后写的赢。
             ApplyPages(detail.Pages);
 

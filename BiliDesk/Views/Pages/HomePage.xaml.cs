@@ -61,6 +61,9 @@ public partial class HomePage : UserControl, IRefreshable
             RefreshThemeIcon();
             RefreshFilterButton();
             AttachFilterViews();
+            // 从内嵌页(番剧详情)退回来时, 期间追过的番要立刻出现在「我的追番」里
+            // (内嵌页关掉不会触发 tab 的 Checked, 见 HomeViewModel.RefreshBangumiIfFollowChanged)
+            Vm?.RefreshBangumiIfFollowChanged();
             // 本页可能停在下滑位置被切走再切回来: 「刷新 / 回到顶部」的当前状态要按偏移重算一次
             UpdateTopRefresh(ScrollOf(CurrentTabFromVm() ?? HomeTabKind.Recommend));
         };

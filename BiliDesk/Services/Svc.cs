@@ -14,6 +14,8 @@ public static class Svc
     /// <summary>下载进度中心: 同时下多个视频时合并成一条稳定进度, 见 issue #38</summary>
     public static DownloadProgressService DownloadProgress => DownloadProgressService.Instance;
     public static ApiClient Api { get; } = new();
+    /// <summary>「这一季我追了吗」的查询与缓存(详情页追番按钮的状态来源)</summary>
+    public static BangumiFollowCache BangumiFollow => BangumiFollowCache.Instance;
     /// <summary>扫码登录接口(不带会话 Cookie, 见 PassportService 的说明)</summary>
     public static PassportService Passport => PassportService.Instance;
     public static WebView2Service WebView2 { get; } = new();

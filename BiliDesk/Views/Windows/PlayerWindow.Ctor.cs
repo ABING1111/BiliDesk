@@ -139,6 +139,8 @@ public partial class PlayerWindow : FluentWindow
         SponsorMarks.SizeChanged += (_, _) => RenderSponsorMarks();
         // 显示相关视频: 开关一变, 已打开的信息栏立即隐藏/重新加载(2026-11-14)
         Svc.Settings.RelatedVideosChanged += OnRelatedVideosSettingChanged;
+        // 自动连播(2026-11-19): 开关一变, 已打开的播放器立刻收掉/补上连播队列
+        Svc.Settings.AutoPlayNextChanged += OnAutoPlayNextSettingChanged;
         if (DanmakuAreaSlider != null) DanmakuAreaSlider.Value = Svc.Settings.DanmakuAreaPercent;
         // ★ 到这里四个滑杆都已经同步成"用户的真实设置", 才打开回灌闸门。
         //   在这之前的所有 ValueChanged 都只刷文字、不落库 —— 否则 XAML 里的初始

@@ -53,9 +53,15 @@ public class PlayerService
     /// </summary>
     public bool IsCurrent(PlayerWindow window) => ReferenceEquals(_window, window);
 
-    /// <summary>播放视频(复用窗口)</summary>
-    public void PlayVideo(string bvid, string? title = null)
-        => Play(title, win => win.PlayVideo(bvid));
+    /// <summary>
+    /// 播放视频(复用窗口)。
+    ///
+    /// ★ <paramref name="bangumi"/>: 番剧选集页把整季分集表带进来(2026-11-19)。
+    ///   播放器据此在信息栏里给出「选集」入口与"播完自动下一集"。
+    ///   普通视频传 null ⇒ 自动清掉上一个番剧的选集上下文。
+    /// </summary>
+    public void PlayVideo(string bvid, string? title = null, BiliDesk.Models.BangumiPlaylist? bangumi = null)
+        => Play(title, win => win.PlayVideo(bvid, bangumi));
 
     /// <summary>
     /// 打开直播间(首页「直播」tab 用)。复用同一个播放器窗口, 走"直播"分支:
