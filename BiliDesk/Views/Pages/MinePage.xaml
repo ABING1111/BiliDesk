@@ -10,6 +10,51 @@
         快捷入口现有四个: 离线缓存 / 观看记录 / 我的收藏 / 稍后再看(2026-09-28 加)。
         我的订阅暂不做(用户拍板), 参考图里那个位置空着。
     -->
+    <UserControl.Resources>
+        <!--
+            收藏夹卡片右上角的「删除收藏夹」(2026-11-19)。
+            ★ 默认藏起来, 悬停整张卡片才出现: 常驻一颗红叉会把封面弄脏, 也容易误点。
+            ★ 默认收藏夹(B 站不让删)永远不出现 —— 由 IsDefault 条件控制。
+            ★ 半透明黑底 + 白图标, 压在封面图上也能看清(封面明暗不确定, 用主题灰底会糊掉)。
+        -->
+        <Style x:Key="FolderDeleteButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="28" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Visibility" Value="Collapsed" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="14" Background="#B3000000"
+                                BorderBrush="#40FFFFFF" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#E6000000" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#FF000000" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <!-- 悬停在整张卡片(卡片根 StackPanel)上 -->
+                        <Condition Binding="{Binding IsMouseOver,
+                                             RelativeSource={RelativeSource AncestorType=StackPanel}}"
+                                   Value="True" />
+                        <Condition Binding="{Binding IsDefault}" Value="False" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Visibility" Value="Visible" />
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
     <Grid helpers:Responsive.Enable="True">
 
         <!-- 响应式: 窄档收内边距 + 快捷入口从 4 列改 2 列(每项能分到两倍宽度, 拇指也更好点)。
@@ -296,11 +341,18 @@
                                        FontSize="12" />
                         </Button>
                     </StackPanel>
-                    <Button Style="{StaticResource IconButtonStyle}" HorizontalAlignment="Right"
-                            VerticalAlignment="Center" Click="OnRefreshFoldersClick" ToolTip="刷新收藏夹（F5）">
-                        <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                   FontSize="15" />
-                    </Button>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <Button Style="{StaticResource IconButtonStyle}" Margin="0,0,6,0"
+                                Command="{Binding CreateFolderCommand}" ToolTip="新建收藏夹">
+                            <TextBlock Text="&#xE710;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="15" />
+                        </Button>
+                        <Button Style="{StaticResource IconButtonStyle}"
+                                Click="OnRefreshFoldersClick" ToolTip="刷新收藏夹（F5）">
+                            <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="15" />
+                        </Button>
+                    </StackPanel>
                 </Grid>
 
                 <!-- 收藏夹卡片(横向, 装不下时滚动) -->
@@ -313,6 +365,12 @@
                            HorizontalAlignment="Center"
                            Foreground="{DynamicResource TextTertiaryBrush}"
                            Visibility="{Binding FolderError, Converter={StaticResource StrToVis}}" />
+
+                <!-- 一个收藏夹都没有: 只显示"还没有创建收藏夹"而不给入口等于死路 -->
+                <Button Content="新建收藏夹" Style="{StaticResource AccentButtonStyle}"
+                        HorizontalAlignment="Center" Margin="0,12,0,0" Padding="20,7"
+                        Command="{Binding CreateFolderCommand}"
+                        Visibility="{Binding NoFolders, Converter={StaticResource BoolToVis}}" />
 
                 <!-- 收藏夹卡片: 和视频页同一套 WrapPanel 自动换行(2026-09-26 用户要求,
                      之前横向单行最右边那夹会被窗口右缘裁掉一截) -->
@@ -332,14 +390,25 @@
                             <StackPanel Width="168" Margin="0,0,14,16" Cursor="Hand"
                                         MouseLeftButtonUp="OnFolderClick"
                                         Background="Transparent">
-                                <Border x:Name="FolderCover" Width="168" Height="104"
-                                        CornerRadius="8"
-                                        Background="{DynamicResource CardBackgroundBrush}"
-                                        helpers:Cover.Source="{Binding Cover}">
-                                    <!-- 注意: 不能放兜底图标 —— Cover.Source 把图画在 Border 的
-                                         Background 上, 子元素永远叠在它上面; 拉图失败时
-                                         CardBackgroundBrush 底色本身就是兜底 -->
-                                </Border>
+                                <Grid Width="168" Height="104">
+                                    <Border x:Name="FolderCover" Width="168" Height="104"
+                                            CornerRadius="8"
+                                            Background="{DynamicResource CardBackgroundBrush}"
+                                            helpers:Cover.Source="{Binding Cover}">
+                                        <!-- 注意: 不能放兜底图标 —— Cover.Source 把图画在 Border 的
+                                             Background 上, 子元素永远叠在它上面; 拉图失败时
+                                             CardBackgroundBrush 底色本身就是兜底 -->
+                                    </Border>
+                                    <!-- 悬停时出现的删除按钮(默认收藏夹不显示, 见上面样式) -->
+                                    <Button Style="{StaticResource FolderDeleteButtonStyle}"
+                                            HorizontalAlignment="Right" VerticalAlignment="Top"
+                                            Margin="0,6,6,0" ToolTip="删除收藏夹"
+                                            Click="OnDeleteFolderClick">
+                                        <TextBlock Text="&#xE74D;"
+                                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                   FontSize="12" Foreground="White" />
+                                    </Button>
+                                </Grid>
                                 <TextBlock Text="{Binding Title}" FontSize="13" Margin="2,8,0,0"
                                            TextTrimming="CharacterEllipsis"
                                            Foreground="{DynamicResource TextPrimaryBrush}" />

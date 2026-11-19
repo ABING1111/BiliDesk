@@ -87,7 +87,13 @@ public partial class FavoritesPage : UserControl
         // 已经拿到内容就不再重复请求(页面会被主窗口反复挂载/卸载);
         // 但"上次没登录 / 请求失败"这两种情况要再给一次机会, 否则用户登录后回到这一页
         // 只能看到旧错误提示, 必须手动点刷新。
-        if (_loadedOnce && (Vm.Folders.Count > 0 || Vm.Items.Count > 0)) return;
+        if (_loadedOnce && (Vm.Folders.Count > 0 || Vm.Items.Count > 0))
+        {
+            // 在播放器收藏窗 / 「我的」页新建过收藏夹 → 这里按版本号补一次重拉;
+            // 版本号没变时是空操作, 不会让每次切页都闪一下。
+            await Vm.RefreshFoldersIfStaleAsync();
+            return;
+        }
         _loadedOnce = true;
         await Vm.LoadAsync();
     }

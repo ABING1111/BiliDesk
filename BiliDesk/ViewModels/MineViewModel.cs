@@ -51,6 +51,22 @@ public class MineViewModel : ObservableObject
     /// </summary>
     private bool _foldersLoaded;
 
+    /// <summary>
+    /// 上次拉收藏夹时的集合版本(见 <see cref="FavFolderSync"/>)。
+    /// 在收藏页/播放器新建或删除收藏夹后版本会自增 —— 本页据此让"已加载过"的短路失效,
+    /// 用户切回来就能看到最新卡片, 不必手动点刷新。
+    /// </summary>
+    private int _foldersVersion = -1;
+
+    /// <summary>
+    /// 列表需要重拉: 刚建完夹但服务端列表还没把它带出来时, 本地先补一张卡片,
+    /// 同时打上这个标记 —— 下次进页面一定再拉一次权威列表。
+    /// </summary>
+    private bool _foldersDirty;
+
+    /// <summary>正在删除收藏夹(请求在飞): 防连点, 也防同一张卡被删两次</summary>
+    private bool _deletingFolder;
+
     public ObservableCollection<FavFolder> Folders { get; } = new();
 
     public bool Loading { get => _loading; private set => SetProperty(ref _loading, value); }
@@ -102,11 +118,19 @@ public class MineViewModel : ObservableObject
     /// <summary>「我的收藏 N」里的 N = 收藏夹个数(和参考图一致)</summary>
     public string FavCountText => Folders.Count > 0 ? Folders.Count.ToString() : "";
 
+    /// <summary>
+    /// 已经成功拉过一次列表, 且账号下一个收藏夹都没有 —— 空状态要在这里给出「新建收藏夹」。
+    /// (不能只凭 FolderError 判断: 网络失败也是非空错误, 那种时候新建按钮帮不上忙。)
+    /// </summary>
+    public bool NoFolders => _foldersLoaded && Folders.Count == 0;
+
     public ICommand OpenCacheCommand { get; }
     public ICommand OpenHistoryCommand { get; }
     public ICommand OpenFavoritesCommand { get; }
     public ICommand OpenFolderCommand { get; }
     public ICommand RefreshCommand { get; }
+    public ICommand CreateFolderCommand { get; }
+    public ICommand DeleteFolderCommand { get; }
     public ICommand LoginCommand { get; }
 
     /// <summary>头像 / 昵称 / 等级徽章 → 我的个人主页(复用 UP 主主页页)。</summary>
@@ -133,6 +157,12 @@ public class MineViewModel : ObservableObject
             if (p is FavFolder f) SvcWindow.Main?.OpenFavFolder(f);
         });
         RefreshCommand = new RelayCommand(() => _ = LoadAsync());
+        CreateFolderCommand = new AsyncRelayCommand(CreateFolderAsync);
+        // 删除带参数(卡片对应的 FavFolder): 用 RelayCommand 自己转发到异步方法
+        DeleteFolderCommand = new RelayCommand(p =>
+        {
+            if (p is FavFolder f) _ = DeleteFolderAsync(f);
+        });
         LoginCommand = new RelayCommand(() => App.MainVm.OpenLoginWindow());
 
         // ---- 2026-11-18 新增(issue #90): 头像与三个数字变成可点的入口 ----
@@ -257,7 +287,8 @@ public class MineViewModel : ObservableObject
     public async Task LoadFoldersAsync(bool force = false)
     {
         if (FolderLoading) return;
-        if (_foldersLoaded && !force) return;
+        // ★ 版本号变了 = 别处新建过收藏夹, 即使"已经加载过"也要重拉(force 之外的第二个理由)
+        if (_foldersLoaded && !force && !_foldersDirty && _foldersVersion == FavFolderSync.Version) return;
         FolderLoading = true;
         FolderError = "";
         try
@@ -266,22 +297,73 @@ public class MineViewModel : ObservableObject
 
             Folders.Clear();
             OnPropertyChanged(nameof(FavCountText));
+            OnPropertyChanged(nameof(NoFolders));
             if (!ok || folders == null)
             {
-                // 失败**不置**"已加载"标记: 下次切回本页会自动重试(否则收藏夹会一直空着)
+                // 失败**不置**"已加载"标记: 下次切回本页会自动重试(否则收藏夹会一直空着)。
+                // ★ 这里连旧标记一起放下: 列表已经被清空, 再"假装已加载"会让重试被短路,
+                //   也会让 NoFolders 误判成"账号里没有收藏夹"而显示新建按钮。
+                _foldersLoaded = false;
                 FolderError = err ?? "收藏夹加载失败";
                 return;
             }
 
             foreach (var f in folders) Folders.Add(f);
             _foldersLoaded = true;
+            _foldersVersion = FavFolderSync.Version;
+            _foldersDirty = false;
             OnPropertyChanged(nameof(FavCountText));
+            OnPropertyChanged(nameof(NoFolders));
             if (folders.Count == 0) FolderError = "还没有创建收藏夹";
         }
         finally
         {
             // 同 LoadAsync: 标志位必须由 finally 收口, 否则一次异常就让收藏夹永久卡在"加载中"
             FolderLoading = false;
+        }
+    }
+
+    /// <summary>
+    /// 新建收藏夹(2026-11-19): 弹窗/请求与收藏页、播放器收藏窗共用 <see cref="FavFolderActions"/>,
+    /// 这里只负责建完刷新卡片列表(封面/隐私/数量都得走服务端真数据, 本地拼不出来)。
+    /// </summary>
+    private async Task CreateFolderAsync()
+    {
+        var created = await FavFolderActions.CreateAsync(SvcWindow.Main);
+        if (created == null) return;
+
+        await LoadFoldersAsync(force: true);
+
+        // 列表接口偶尔有延迟(或这次刷新失败), 没带出新夹: 先把接口返回的这一颗补成卡片,
+        // 并标记"脏"让下次进页面重拉权威列表(那时封面/数量才准)。
+        // ★ 同时清掉 FolderError: 卡片区在错误文案非空时是整块收起的, 不清的话
+        //   用户明明刚建好夹, 页面上却只有一句"还没有创建收藏夹"。
+        if (created.Id > 0 && Folders.All(f => f.Id != created.Id))
+        {
+            Folders.Add(created);
+            _foldersDirty = true;
+            FolderError = "";
+            OnPropertyChanged(nameof(FavCountText));
+            OnPropertyChanged(nameof(NoFolders));
+        }
+    }
+
+    /// <summary>
+    /// 删除收藏夹(2026-11-19): 确认/请求在 <see cref="FavFolderActions.DeleteAsync"/>,
+    /// 这里建完刷新卡片列表 —— 封面/顺序以服务端为准。
+    /// </summary>
+    private async Task DeleteFolderAsync(FavFolder folder)
+    {
+        if (folder == null || _deletingFolder) return;
+        _deletingFolder = true;
+        try
+        {
+            if (!await FavFolderActions.DeleteAsync(folder)) return;
+            await LoadFoldersAsync(force: true);
+        }
+        finally
+        {
+            _deletingFolder = false;
         }
     }
 }

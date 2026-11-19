@@ -78,41 +78,54 @@
         </StackPanel>
 
         <!-- 收藏夹勾选列表 -->
-        <ScrollViewer Grid.Row="1" Margin="10,0,10,4" VerticalScrollBarVisibility="Auto">
-            <ItemsControl x:Name="FolderList">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <CheckBox Style="{StaticResource FavFolderRowStyle}"
-                                  IsChecked="{Binding IsChecked, Mode=TwoWay}">
-                            <StackPanel>
-                                <TextBlock Text="{Binding Folder.Title}" FontSize="13.5"
-                                           TextTrimming="CharacterEllipsis"
-                                           Foreground="{DynamicResource TextPrimaryBrush}" />
-                                <TextBlock Text="{Binding MetaText}">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock" BasedOn="{StaticResource MetaTextStyle}">
-                                            <Setter Property="Margin" Value="0,2,0,0" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding MetaText}" Value="">
-                                                    <Setter Property="Visibility" Value="Collapsed" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </StackPanel>
-                        </CheckBox>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+        <ScrollViewer x:Name="FolderScroll" Grid.Row="1" Margin="10,0,10,4" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- 一个夹都没有时的提示(新建按钮在底部左侧, 见下) -->
+                <TextBlock x:Name="EmptyHint" Text="还没有收藏夹，点下方的「新建收藏夹」创建一个"
+                           Visibility="Collapsed"
+                           Margin="12,18,12,0" TextWrapping="Wrap" TextAlignment="Center"
+                           FontSize="12.5" Foreground="{DynamicResource TextTertiaryBrush}" />
+                <ItemsControl x:Name="FolderList">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <CheckBox Style="{StaticResource FavFolderRowStyle}"
+                                      IsChecked="{Binding IsChecked, Mode=TwoWay}">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Folder.Title}" FontSize="13.5"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    <TextBlock Text="{Binding MetaText}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource MetaTextStyle}">
+                                                <Setter Property="Margin" Value="0,2,0,0" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding MetaText}" Value="">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </CheckBox>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
         </ScrollViewer>
 
-        <!-- 底部按钮 -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="22,10,22,18">
-            <Button Content="取消" Style="{StaticResource SubtleButtonStyle}"
-                    Padding="20,7" Click="OnCancelClick" />
-            <Button Content="确定" Style="{StaticResource AccentButtonStyle}"
-                    Padding="20,7" Margin="10,0,0,0" Click="OnConfirmClick" />
-        </StackPanel>
+        <!-- 底部按钮: 左边「新建收藏夹」, 右边取消/确定 -->
+        <Grid Grid.Row="2" Margin="22,10,22,18">
+            <Button x:Name="BtnCreateFolder" HorizontalAlignment="Left" VerticalAlignment="Center"
+                    Content="＋ 新建收藏夹" Style="{StaticResource SubtleButtonStyle}"
+                    Padding="14,7" Click="OnCreateFolderClick"
+                    ToolTip="创建一个新的云端收藏夹，并默认勾选它" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Button Content="取消" Style="{StaticResource SubtleButtonStyle}"
+                        Padding="20,7" Click="OnCancelClick" />
+                <Button Content="确定" Style="{StaticResource AccentButtonStyle}"
+                        Padding="20,7" Margin="10,0,0,0" Click="OnConfirmClick" />
+            </StackPanel>
+        </Grid>
     </Grid>
 </views:FluentWindow>

@@ -60,13 +60,15 @@ public partial class ApiClient
                     //   attr bit0 = 是否默认收藏夹, attr bit1 = 1 表示私密(bilibili-API-collect 收藏夹文档)。
                     //   之前按 privacy 解析永远是 0, 私密夹全显示成"公开"。
                     var attr = GetLong(f, "attr");
+                    var title = GetStr(f, "title");
                     list.Add(new FavFolder
                     {
                         Id = GetLong(f, "id"),
-                        Title = GetStr(f, "title"),
+                        Title = title,
                         MediaCount = GetInt(f, "media_count"),
                         Cover = UrlUtil.Normalize(GetStr(f, "cover")),
-                        Privacy = (attr & 2) != 0 ? 1 : 0
+                        Privacy = (attr & 2) != 0 ? 1 : 0,
+                        IsDefault = IsDefaultFavFolder(title)
                     });
                 }
             }
@@ -76,6 +78,86 @@ public partial class ApiClient
         {
             return (false, ex.Message, null);
         }
+    }
+
+    /// <summary>
+    /// 新建一个云端收藏夹。
+    /// 接口: POST /x/v3/fav/folder/add (需要 csrf, 所以必须登录)。
+    ///
+    /// 参数: title 名称 / intro 简介(这里固定空串) / privacy 0 公开 1 私密。
+    /// ★ 名称长度、重名、收藏夹数量上限全部由服务端判: 这里**不**替服务端做业务裁决,
+    ///   只把 message 原样透出(界面侧另有一层"空/超长"的前置校验, 见 Helpers/FavFolderName)。
+    /// ★ 返回的 <c>data</c> 里才有新夹的 id: 解析不到 id 时返回 ok + folder=null,
+    ///   由调用方走"重新拉一次列表"的兜底 —— 不要在这里造一个假 id。
+    /// </summary>
+    public async Task<(bool ok, string? err, FavFolder? folder)> CreateFavFolderAsync(
+        string title, int privacy = 0)
+    {
+        title = (title ?? "").Trim();
+        if (title.Length == 0) return (false, "收藏夹名称不能为空", null);
+        if (!SessionManager.Instance.HasLogin) return (false, "新建收藏夹需要登录", null);
+        var mid = SessionManager.Instance.Current.DedeUserID;
+
+        var (code, msg, data) = await PostFormDataAsync(
+            "https://api.bilibili.com/x/v3/fav/folder/add",
+            new Dictionary<string, string>
+            {
+                ["title"] = title,
+                ["intro"] = "",
+                ["privacy"] = privacy == 1 ? "1" : "0",
+                ["platform"] = "web",
+                ["web_location"] = "333.1387"
+            },
+            referer: $"https://space.bilibili.com/{mid}/favlist");
+        if (code != 0) return (false, msg ?? $"请求失败 (code {code})", null);
+
+        FavFolder? folder = null;
+        if (data.HasValue && data.Value.ValueKind == JsonValueKind.Object)
+        {
+            var d = data.Value;
+            var id = GetLong(d, "id");
+            if (id > 0)
+            {
+                // 与 GetFavFoldersFullAsync 同一套隐私解析: attr bit1 = 私密。
+                // 服务端没回 attr 时按请求时的 privacy 兜底(用户刚选的就是他要的)。
+                var attr = GetLong(d, "attr");
+                var name = GetStr(d, "title");
+                folder = new FavFolder
+                {
+                    Id = id,
+                    Title = name.Length > 0 ? name : title,
+                    MediaCount = GetInt(d, "media_count"),
+                    Cover = UrlUtil.Normalize(GetStr(d, "cover")),
+                    Privacy = (attr & 2) != 0 || privacy == 1 ? 1 : 0
+                };
+            }
+        }
+        return (true, null, folder);
+    }
+
+    /// <summary>
+    /// 删除一个云端收藏夹。
+    /// 接口: POST /x/v3/fav/folder/del, 参数 media_ids(mlid, 多个用逗号分隔) + csrf。
+    ///
+    /// ★ **默认收藏夹删不掉** —— 服务端会拒绝。界面侧已按 <see cref="FavFolder.IsDefault"/>
+    ///   把入口禁掉了, 这里的返回仍然把服务端 message 原样透出, 防的是"属性位解析不到"
+    ///   这类边角情况: 那时用户会看到一句真实的拒绝原因, 而不是一个假成功。
+    /// ★ 删除不可撤销: 调用方必须先确认(见 Helpers/FavFolderActions.DeleteAsync)。
+    /// </summary>
+    public async Task<(bool ok, string? err)> DeleteFavFolderAsync(long mediaId)
+    {
+        if (mediaId <= 0) return (false, "缺少收藏夹 id");
+        if (!SessionManager.Instance.HasLogin) return (false, "删除收藏夹需要登录");
+
+        var mid = SessionManager.Instance.Current.DedeUserID;
+        return await PostFormAsync(
+            "https://api.bilibili.com/x/v3/fav/folder/del",
+            new Dictionary<string, string>
+            {
+                ["media_ids"] = mediaId.ToString(),
+                ["platform"] = "web"
+            },
+            referer: $"https://space.bilibili.com/{mid}/favlist");
     }
 
 }

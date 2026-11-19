@@ -56,6 +56,33 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
     private bool _busy;
     private string _busyText = "";
 
+    /// <summary>正在新建收藏夹(弹窗/请求期间禁用「+」, 防止连点建出两个同名夹)</summary>
+    private bool _creatingFolder;
+
+    /// <summary>正在删除收藏夹(请求期间禁用删除按钮)</summary>
+    private bool _deletingFolder;
+
+    /// <summary>
+    /// 当前打开的收藏夹对象。
+    /// ★ 单独存一份而不是每次按 id 去 Folders 里找: 删除按钮要读 IsDefault,
+    ///   而重建列表的那一瞬 Folders 可能已经空了/换了对象, 按 id 找会得到 null。
+    /// </summary>
+    private FavFolder? _currentFolder;
+
+    /// <summary>
+    /// 上次拉收藏夹列表时 <see cref="FavFolderSync"/> 的版本号。
+    /// 在别处(播放器收藏勾选窗 / 「我的」页)新建或删除了收藏夹后版本会自增,
+    /// 本页下次显示时据此重拉 —— 否则 chip 条里会缺一个/多一个夹。
+    /// </summary>
+    private int _foldersVersion = -1;
+
+    /// <summary>
+    /// 列表需要重拉(与版本号独立的第二种"脏")。
+    /// 场景: 刚建完收藏夹, 但 <c>created/list-all</c> 还没把新夹带出来 —— 本地先插一颗占位,
+    /// 同时打上这个标记, 下次进页面一定再拉一次权威列表(封面/顺序/数量)。
+    /// </summary>
+    private bool _foldersDirty;
+
     public ObservableCollection<FavFolder> Folders { get; } = new();
     public ObservableCollection<VideoItem> Items { get; } = new();
 
@@ -72,6 +99,8 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
         {
             if (!SetProperty(ref _loading, value)) return;
             OnPropertyChanged(nameof(ShowLoadingOverlay));
+            OnPropertyChanged(nameof(CanCreateFolder));
+            OnPropertyChanged(nameof(CanDeleteFolder));
         }
     }
 
@@ -116,6 +145,63 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
 
     /// <summary>操作进度文案(如"正在移出 40/120…")</summary>
     public string BusyText { get => _busyText; private set => SetProperty(ref _busyText, value); }
+
+    /// <summary>
+    /// 新建收藏夹进行中(弹窗开着 / 请求在飞)。
+    /// ★ 与 <see cref="Busy"/>(批量移出)分开: 建夹期间不该禁用翻页, 也不该让顶栏变成编辑态文案。
+    /// </summary>
+    public bool CreatingFolder
+    {
+        get => _creatingFolder;
+        private set
+        {
+            if (!SetProperty(ref _creatingFolder, value)) return;
+            OnPropertyChanged(nameof(CanCreateFolder));
+        }
+    }
+
+    /// <summary>「+」是否可点: 已登录、不在新建中、也不在整页加载中</summary>
+    public bool CanCreateFolder => !CreatingFolder && !Loading && Svc.Session.HasLogin;
+
+    /// <summary>正在删除收藏夹(请求在飞)</summary>
+    public bool DeletingFolder
+    {
+        get => _deletingFolder;
+        private set
+        {
+            if (!SetProperty(ref _deletingFolder, value)) return;
+            OnPropertyChanged(nameof(CanDeleteFolder));
+        }
+    }
+
+    /// <summary>「删除当前收藏夹」是否可点: 有夹、不是默认夹、已登录、不在忙</summary>
+    public bool CanDeleteFolder
+        => !DeletingFolder && !Loading && _currentFolder is { IsDefault: false } && Svc.Session.HasLogin;
+
+    /// <summary>删除按钮的提示。默认夹/没选中夹时点不动, 这里说明原因</summary>
+    public string DeleteFolderToolTip
+    {
+        get
+        {
+            if (_currentFolder == null) return "请先打开一个收藏夹";
+            if (_currentFolder.IsDefault) return "默认收藏夹不能删除";
+            return "删除当前收藏夹（不可恢复）";
+        }
+    }
+
+    /// <summary>
+    /// 账号下还没有任何收藏夹(空状态)。
+    /// 空状态面板据此显示「新建收藏夹」—— 之前这里只有一个「重试」,
+    /// 新用户点进收藏页除了重试没有别的路。
+    /// </summary>
+    public bool HasNoFolders => Folders.Count == 0;
+
+    /// <summary>
+    /// 空状态里的「新建收藏夹」是否该出现。
+    /// ★ 未登录时要藏起来: 建夹需要登录, 放一颗点了只会弹"需要先登录"的灰按钮,
+    ///   不如让页面专心显示"请先登录"。
+    /// </summary>
+    public bool ShowEmptyCreateButton => HasNoFolders && Svc.Session.HasLogin;
 
     /// <summary>当前收藏夹名称, 编辑模式下显示"正在编辑: xxx"</summary>
     public string CurrentFolderTitle { get; private set; } = "";
@@ -188,6 +274,8 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
 
     public ICommand ReloadCommand { get; }
     public ICommand SelectFolderCommand { get; }
+    public ICommand CreateFolderCommand { get; }
+    public ICommand DeleteFolderCommand { get; }
     public ICommand ToggleEditCommand { get; }
     public ICommand SelectAllCommand { get; }
     public ICommand RemoveSelectedCommand { get; }
@@ -231,6 +319,8 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
         {
             if (p is FavFolder f) _ = SelectFolderAsync(f);
         });
+        CreateFolderCommand = new AsyncRelayCommand(CreateFolderAsync);
+        DeleteFolderCommand = new AsyncRelayCommand(DeleteCurrentFolderAsync);
 
         ToggleEditCommand = new RelayCommand(() =>
         {
@@ -263,6 +353,13 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
         });
 
         HookSelectionSource();
+
+        // 空状态按钮的显隐跟着集合走(加载完成/重建列表都会改它)
+        Folders.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasNoFolders));
+            OnPropertyChanged(nameof(ShowEmptyCreateButton));
+        };
     }
 
     // ------------------------------------------------------------ 选择状态
@@ -299,9 +396,12 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
         Folders.Clear();
         Items.Clear();
         _currentFolderId = 0;
+        _currentFolder = null;
         IsEditMode = false;
         ResetPaging();
         UpdateCount();
+        OnPropertyChanged(nameof(CanDeleteFolder));
+        OnPropertyChanged(nameof(DeleteFolderToolTip));
 
         var (ok, err, folders) = await Svc.Api.GetFavFoldersAsync();
 
@@ -311,6 +411,11 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
             Error = err ?? "云端收藏夹加载失败";
             return;
         }
+
+        // 记下拉取时的"收藏夹集合版本": 别处新建收藏夹后本页据此判断要不要重拉
+        _foldersVersion = FavFolderSync.Version;
+        _foldersDirty = false;
+
         if (folders.Count == 0)
         {
             Loading = false;
@@ -332,13 +437,132 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
         Loading = false;
     }
 
+    // ------------------------------------------------------------ 新建收藏夹
+
+    /// <summary>
+    /// 新建收藏夹(2026-11-19): 弹窗 → 接口 → 重拉列表 → 自动选中新夹。
+    ///
+    /// ★ 为什么建完还要重拉一次列表: <c>created/list-all</c> 带着封面/顺序/媒体数,
+    ///   比接口返回的那一颗更完整; 建夹是低频动作, 多一次请求换"列表一定是对的"很划算。
+    /// ★ 但如果列表接口还没把新夹带出来(服务端偶有延迟), 就把返回的那一颗补进去先上屏,
+    ///   并打上"脏"标记, 下次进页面再校准 —— 不能因为一次时序问题让用户以为没建成。
+    /// ★ 顺带把 Error 清掉: 用户可能正是在"账号下还没有创建收藏夹"的空状态里点的新建。
+    /// </summary>
+    private async Task CreateFolderAsync()
+    {
+        if (CreatingFolder) return;
+        if (!Svc.Session.HasLogin) { Svc.Toast.Show("新建收藏夹需要先登录"); return; }
+
+        CreatingFolder = true;
+        try
+        {
+            var created = await FavFolderActions.CreateAsync(SvcWindow.Main);
+            if (created == null) return;   // 取消 / 失败, 提示已由 FavFolderActions 发过
+
+            var (ok, err, folders) = await Svc.Api.GetFavFoldersAsync();
+            if (!ok || folders == null)
+            {
+                // 夹其实已经建好了, 只是列表没刷新出来: 不破坏当前界面, 下次进页面再拉
+                Svc.Toast.Show("收藏夹已创建, 但列表刷新失败: " + (err ?? "未知错误"));
+                _foldersDirty = true;
+                return;
+            }
+
+            // 服务端列表偶尔有延迟, 还没把刚建的夹带出来: 先把接口返回的这一颗补进去,
+            // chip 条立刻能看到新夹; 同时打脏标记, 下次进页面再拉权威列表校准封面/顺序。
+            var includesCreated = created.Id > 0 && folders.Any(f => f.Id == created.Id);
+            if (!includesCreated && created.Id > 0)
+            {
+                folders.Add(created);
+                _foldersDirty = true;
+            }
+            else
+            {
+                _foldersDirty = false;
+            }
+            _foldersVersion = FavFolderSync.Version;
+
+            if (folders.Count == 0)
+            {
+                Svc.Toast.Show("收藏夹已创建, 但列表刷新失败: 没拿到任何收藏夹");
+                _foldersDirty = true;
+                return;
+            }
+
+            // 选中新夹: 优先按接口返回的 id, 没有 id 时按标题, 再退到最后一个(新建夹通常排在末尾)
+            var target = (created.Id > 0 ? folders.FirstOrDefault(f => f.Id == created.Id) : null)
+                         ?? folders.FirstOrDefault(f => string.Equals(f.Title, created.Title, StringComparison.Ordinal))
+                         ?? folders[^1];
+
+            // ★ 重建集合而不是逐条 diff: 这是用户主动触发的低频操作, 重建简单且一定与
+            //   服务端一致; 高亮由下面的 SelectFolderAsync 重新推上去(它会清掉旧的 IsCurrent)。
+            //   chip 容器会重建一次 —— 只在"新建之后"发生, 不像删除那样频繁, 可以接受。
+            //   先清 Error 再动集合, 免得清空的这一拍让空状态面板闪一下。
+            Error = "";
+            Folders.Clear();
+            foreach (var f in folders) Folders.Add(f);
+
+            await SelectFolderAsync(target);
+        }
+        finally
+        {
+            CreatingFolder = false;
+        }
+    }
+
+    // ------------------------------------------------------------ 删除收藏夹
+
+    /// <summary>
+    /// 删除当前收藏夹(2026-11-19): 确认 → 接口 → 整页重载。
+    ///
+    /// ★ 默认收藏夹在这里就拦下(按钮本来也是禁用的, 防的是快捷键/程序调用这条边角路)。
+    /// ★ 删除成功后必须重载而不是本地移除: 被删的正是当前夹, 分页/总数/当前选中都得换人;
+    ///   LoadAsync 会落到第一个夹(默认收藏夹), 语义正好。
+    /// </summary>
+    private async Task DeleteCurrentFolderAsync()
+    {
+        var folder = _currentFolder;
+        if (folder == null || DeletingFolder) return;
+        if (folder.IsDefault) { Svc.Toast.Show("默认收藏夹不能删除"); return; }
+        if (!Svc.Session.HasLogin) { Svc.Toast.Show("删除收藏夹需要先登录"); return; }
+
+        DeletingFolder = true;
+        try
+        {
+            if (!await FavFolderActions.DeleteAsync(folder)) return;
+            await LoadAsync();
+        }
+        finally
+        {
+            DeletingFolder = false;
+        }
+    }
+
+    /// <summary>
+    /// 别处(播放器收藏勾选窗 / 「我的」页)新建或删除了收藏夹之后, 本页下次显示时补一次重拉。
+    /// 版本号没变、也没有脏标记时直接返回 —— 不能每次切页都重拉, 那会让收藏页每次进来都闪一下。
+    /// ★ 重拉时用 PendingFolder 保留当前选中的夹: 用户只是去播放器建了个夹回来,
+    ///   不该被甩回第一个收藏夹。
+    /// </summary>
+    public async Task RefreshFoldersIfStaleAsync()
+    {
+        if (!_foldersDirty && _foldersVersion == FavFolderSync.Version) return;
+        if (Loading || !Svc.Session.HasLogin) return;
+
+        PendingFolder = Folders.FirstOrDefault(f => f.Id == _currentFolderId);
+        await LoadAsync();
+    }
+
     /// <summary>切换收藏夹并加载其第一页</summary>
     public async Task SelectFolderAsync(FavFolder folder)
     {
         if (folder == null) return;
         _currentFolderId = folder.Id;
+        _currentFolder = folder;
         CurrentFolderTitle = folder.Title;
         OnPropertyChanged(nameof(CurrentFolderTitle));
+        OnPropertyChanged(nameof(CanDeleteFolder));
+        OnPropertyChanged(nameof(DeleteFolderToolTip));
 
         // chip 高亮跟着数据走: 用户点击时 RadioButton 自己会选上, 但"程序切夹"
         // (我的页点卡片 / PendingFolder)不经过点击, 高亮必须在这里同步,

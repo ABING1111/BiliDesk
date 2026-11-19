@@ -118,11 +118,14 @@ public partial class ApiClient
                 foreach (var f in arr.EnumerateArray())
                 {
                     if (f.ValueKind != JsonValueKind.Object) continue;
+                    var title = GetStr(f, "title");
                     list.Add(new FavFolder
                     {
                         Id = GetLong(f, "id"),
-                        Title = GetStr(f, "title"),
-                        MediaCount = GetInt(f, "media_count")
+                        Title = title,
+                        MediaCount = GetInt(f, "media_count"),
+                        // 默认夹(不能删)按标题识别, 见 IsDefaultFavFolder 的说明
+                        IsDefault = IsDefaultFavFolder(title)
                     });
                 }
             }
@@ -264,11 +267,14 @@ public partial class ApiClient
                 foreach (var f in arr.EnumerateArray())
                 {
                     if (f.ValueKind != JsonValueKind.Object) continue;
+                    var title = GetStr(f, "title");
                     list.Add(new FavFolder
                     {
                         Id = GetLong(f, "id"),
-                        Title = GetStr(f, "title"),
+                        Title = title,
                         MediaCount = GetInt(f, "media_count"),
+                        // 默认夹(不能删)按标题识别, 见 IsDefaultFavFolder 的说明
+                        IsDefault = IsDefaultFavFolder(title),
                         // fav_state 为 1 表示该视频已在此收藏夹中
                         HasVideo = GetInt(f, "fav_state") == 1
                     });

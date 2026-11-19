@@ -1,7 +1,9 @@
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows;
+using BiliDesk.Helpers;
 using BiliDesk.Models;
 
 namespace BiliDesk.Views
@@ -39,7 +41,7 @@ namespace BiliDesk.Views
             }
         }
 
-        private readonly List<PickerItem> _items = new();
+        private readonly ObservableCollection<PickerItem> _items = new();
 
         /// <summary>是否点了"确定"(false = 用户取消, 调用方直接忽略所有结果)</summary>
         public bool Confirmed { get; private set; }
@@ -75,6 +77,47 @@ namespace BiliDesk.Views
                 });
             }
             FolderList.ItemsSource = _items;
+            UpdateEmptyHint();
+        }
+
+        /// <summary>
+        /// 列表空的时候给一句提示 —— 账号下一个收藏夹都没有时, 这里原本是一片空白,
+        /// 用户只能靠自己发现左下角那颗「新建收藏夹」(2026-11-19)。
+        /// </summary>
+        private void UpdateEmptyHint()
+            => EmptyHint.Visibility = _items.Count == 0
+                ? Visibility.Visible : Visibility.Collapsed;
+
+        /// <summary>
+        /// 新建收藏夹: 建完直接插进列表并**默认勾选** —— 用户在建夹的这一刻,
+        /// 目的基本就是"把这条视频收进这个新夹", 再让他手动点一下是多余的一步。
+        /// ★ InitialChecked 保持 false: 视频本来就不在这个新夹里, 确认时它会进 AddedIds。
+        /// </summary>
+        private async void OnCreateFolderClick(object sender, RoutedEventArgs e)
+        {
+            BtnCreateFolder.IsEnabled = false;
+            try
+            {
+                var created = await FavFolderActions.CreateAsync(this);
+                if (created == null) return;
+
+                _items.Add(new PickerItem
+                {
+                    Folder = created,
+                    MetaText = created.Privacy == 1 ? "私密" : "",
+                    InitialChecked = false,
+                    IsChecked = true,
+                });
+                UpdateEmptyHint();
+
+                // 新夹在列表末尾(按收藏夹顺序它本来就排在最后), 滚到底让用户看见它被勾上了
+                _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
+                    new Action(() => FolderScroll.ScrollToEnd()));
+            }
+            finally
+            {
+                BtnCreateFolder.IsEnabled = true;
+            }
         }
 
         private void OnConfirmClick(object sender, RoutedEventArgs e)

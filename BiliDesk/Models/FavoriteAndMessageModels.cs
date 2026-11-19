@@ -75,6 +75,14 @@ public class FavFolder : System.ComponentModel.INotifyPropertyChanged
     public int Privacy { get; set; }
 
     public string PrivacyText => Privacy == 1 ? "私密" : "公开";
+
+    /// <summary>
+    /// 是否是账号的「默认收藏夹」。
+    /// 默认夹**不允许删除**(B 站服务端也会拒绝), 界面据此隐藏/禁用删除入口。
+    /// 解析口径: 按固定标题「默认收藏夹」识别 —— 该夹不允许改名/删除,
+    /// 比位掩码 attr 稳(attr bit0 的语义在文档里有 0=默认 / 1=默认 两种说法)。
+    /// </summary>
+    public bool IsDefault { get; set; }
 }
 
 /// <summary>

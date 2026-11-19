@@ -128,11 +128,9 @@ public partial class PlayerWindow : FluentWindow
                 Svc.Toast.Show("收藏状态获取失败: " + (err ?? "未知错误"));
                 return;
             }
-            if (folders.Count == 0)
-            {
-                Svc.Toast.Show("账号下还没有收藏夹, 请先去 B 站创建一个");
-                return;
-            }
+            // ★ 一个收藏夹都没有时**也**打开勾选窗(2026-11-19): 窗口左下角就是「新建收藏夹」,
+            //   建完默认勾选、点确定即可收藏。以前这里直接 Toast"请先去 B 站创建一个",
+            //   在应用里根本没有出路 —— 新建入口补上之后那句话就可以删了。
 
             // 模态弹窗(Owner 指向播放器): 播放器若正在关窗, 不再开新窗
             if (_closing) return;

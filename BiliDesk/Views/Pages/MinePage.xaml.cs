@@ -53,7 +53,24 @@ public partial class MinePage : UserControl, IRefreshable
     /// <summary>点收藏夹卡片 → 收藏页并选中那个夹(经 MainWindow.OpenFavFolder 落地)</summary>
     private void OnFolderClick(object sender, MouseButtonEventArgs e)
     {
+        // 点在卡片右上角的「删除收藏夹」上时不要顺带打开收藏页:
+        // Button 通常会吞掉鼠标事件, 但这里挂的是 MouseLeftButtonUp 手势, 再兜一层更稳。
+        if (VisualTreeUtil.FindAncestor<Button>(e.OriginalSource as DependencyObject) != null) return;
+
         if (sender is FrameworkElement { DataContext: FavFolder folder })
             SvcWindow.Main?.OpenFavFolder(folder);
+    }
+
+    /// <summary>
+    /// 卡片右上角的「删除收藏夹」(2026-11-19): 交给 VM 命令(确认 → 接口 → 重拉卡片)。
+    /// </summary>
+    private void OnDeleteFolderClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (sender is FrameworkElement { DataContext: FavFolder folder } &&
+            Vm?.DeleteFolderCommand is { } cmd && cmd.CanExecute(folder))
+        {
+            cmd.Execute(folder);
+        }
     }
 }

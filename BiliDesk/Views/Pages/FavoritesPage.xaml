@@ -32,9 +32,9 @@
                 <StackPanel>
                     <StackPanel.Style>
                         <Style TargetType="StackPanel">
-                            <!-- 底部留白给右下角工具列让位: 普通态 4 颗 44px 按钮(播放页 + 刷回 + 编辑 + 返回)≈ 214,
-                                 编辑态 5 颗 + 计数胶囊 ≈ 312 —— 取 230 / 320, 滚到底时最后一行卡片要整行露出来。 -->
-                            <Setter Property="Margin" Value="36,20,36,230" />
+                            <!-- 底部留白给右下角工具列让位: 普通态 6 颗 44px 按钮(播放页 + 刷回 + 新建 + 删除 + 编辑 + 返回)≈ 324,
+                                 编辑态 5 颗 + 计数胶囊 ≈ 312 —— 取 324 / 320, 滚到底时最后一行卡片要整行露出来。 -->
+                            <Setter Property="Margin" Value="36,20,36,324" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsEditMode}" Value="True">
                                     <Setter Property="Margin" Value="36,20,36,320" />
@@ -244,6 +244,13 @@
                     HorizontalAlignment="Center" Margin="0,16,0,0" Padding="24,7"
                     Command="{Binding ReloadCommand}"
                     Visibility="{Binding Loading, Converter={StaticResource InvBoolToVis}}" />
+            <!-- 账号下一个收藏夹都没有时, 这里必须有"新建"的出路 —— 光给一个「重试」,
+                 用户点了还是同一个空页面(2026-11-19 新建收藏夹功能) -->
+            <Button Content="新建收藏夹" Style="{StaticResource AccentButtonStyle}"
+                    HorizontalAlignment="Center" Margin="0,16,0,0" Padding="24,7"
+                    Command="{Binding CreateFolderCommand}"
+                    IsEnabled="{Binding CanCreateFolder}"
+                    Visibility="{Binding ShowEmptyCreateButton, Converter={StaticResource BoolToVis}}" />
         </StackPanel>
 
         <!-- ============ 右下角浮动工具列(2026-11-14) ============
@@ -283,6 +290,30 @@
             <StackPanel Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
                 <!-- 顶部 = 刷新 / 下滑 = 回到顶部(见 OnTopRefreshClick) -->
                 <controls:TopRefreshButton x:Name="BtnTopRefresh" Click="OnTopRefreshClick" />
+                <!-- 新建收藏夹(2026-11-19): 建完自动切到新夹, 见 FavoritesViewModel.CreateFolderAsync -->
+                <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
+                        Command="{Binding CreateFolderCommand}"
+                        IsEnabled="{Binding CanCreateFolder}"
+                        ToolTip="新建收藏夹" ToolTipService.ShowOnDisabled="True">
+                    <Path Data="{StaticResource PlusIconGeometry}"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.6" StrokeLineJoin="Round"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Width="18" Height="18" Stretch="Uniform" />
+                </Button>
+                <!-- 删除当前收藏夹(2026-11-19): 默认收藏夹禁用, 提示见 DeleteFolderToolTip -->
+                <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
+                        Command="{Binding DeleteFolderCommand}"
+                        IsEnabled="{Binding CanDeleteFolder}"
+                        Foreground="{DynamicResource DangerTextBrush}"
+                        ToolTip="{Binding DeleteFolderToolTip}"
+                        ToolTipService.ShowOnDisabled="True">
+                    <Path Data="{StaticResource TrashIconGeometry}"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.6" StrokeLineJoin="Round"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Width="18" Height="18" Stretch="Uniform" />
+                </Button>
                 <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
                         Command="{Binding ToggleEditCommand}" ToolTip="编辑：批量移出收藏">
                     <Path Data="{StaticResource PencilIconGeometry}"

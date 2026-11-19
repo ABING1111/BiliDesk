@@ -103,4 +103,15 @@ public partial class ApiClient
         return 0;
     }
 
+    /// <summary>
+    /// 这个收藏夹是不是账号的「默认收藏夹」。
+    ///
+    /// ★ 只按**标题**判断: 默认夹的名字固定是「默认收藏夹」, 且 B 站不允许改名/删除它。
+    ///   不用 attr 位掩码是因为文档对 bit0 的语义有两种说法(0=默认 / 1=默认),
+    ///   押错一边的后果是"要么默认夹能被删, 要么所有夹都不能删", 两种都不能接受。
+    /// ★ 默认夹不允许删除(服务端也会拒绝), 界面据此隐藏/禁用删除入口。
+    /// </summary>
+    private static bool IsDefaultFavFolder(string title)
+        => string.Equals(title, "默认收藏夹", StringComparison.Ordinal);
+
 }

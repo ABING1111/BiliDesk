@@ -34,8 +34,26 @@ public partial class ApiClient
     private async Task<(int code, string? msg)> PostFormCodeAsync(
         string url, Dictionary<string, string> ps, string? referer = null)
     {
+        var (code, msg, _) = await PostFormDataAsync(url, ps, referer);
+        return (code, msg);
+    }
+
+    /// <summary>
+    /// POST 表单, 除业务码外把响应里的 <c>data</c> 也带回来。
+    ///
+    /// ★ 为什么需要它: 点赞/收藏这类接口只看成功与否, 现有的
+    ///   <see cref="PostFormCodeAsync"/> 就够了; 但**新建收藏夹**(/x/v3/fav/folder/add)
+    ///   的返回值里才有新夹的 id —— 不解析 data 就只能建完再拉一次列表猜哪个是新的。
+    /// ★ <c>data</c> 必须 <c>Clone()</c>: 方法返回时 <c>using var doc</c> 已经释放了,
+    ///   直接把这枚 JsonElement 传出去就是"访问已释放的文档"(运行时抛 ObjectDisposedException)。
+    /// ★ 风控预热 / csrf / Cookie / Origin 与 <see cref="PostFormCodeAsync"/> 完全同一套,
+    ///   两个方法不能各写一份 —— 少一个头就是一次 -352。
+    /// </summary>
+    private async Task<(int code, string? msg, JsonElement? data)> PostFormDataAsync(
+        string url, Dictionary<string, string> ps, string? referer = null)
+    {
         var csrf = SessionManager.Instance.Current.BiliJct;
-        if (string.IsNullOrEmpty(csrf)) return (-101, "未登录");
+        if (string.IsNullOrEmpty(csrf)) return (-101, "未登录", null);
         ps["csrf"] = csrf;
         try
         {
@@ -61,11 +79,13 @@ public partial class ApiClient
                 var errMsg = "code " + code;
                 if (doc.RootElement.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String)
                     errMsg = m.GetString() ?? errMsg;
-                return (code, errMsg);
+                return (code, errMsg, null);
             }
-            return (0, null);
+            // 见方法注释: 必须在文档释放前 Clone
+            var data = doc.RootElement.TryGetProperty("data", out var d) ? d.Clone() : (JsonElement?)null;
+            return (0, null, data);
         }
-        catch (Exception ex) { return (-999, ex.Message); }
+        catch (Exception ex) { return (-999, ex.Message, null); }
     }
 
     /// <summary>
