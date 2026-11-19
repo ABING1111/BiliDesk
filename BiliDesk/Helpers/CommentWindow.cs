@@ -24,8 +24,19 @@ namespace BiliDesk.Helpers;
 /// </summary>
 public static class CommentWindow
 {
-    /// <summary>视口外预取多少屏(上下各一份)。</summary>
+    /// <summary>视口外预取多少屏(上下各一份; 有滚动方向时按方向偏置, 见下方 Directional*)。</summary>
     public const double PrefetchScreens = 0.75;
+
+    /// <summary>
+    /// 沿滚动方向的预取屏数(2026-11-17 滑动卡顿修复)。
+    /// ★ 为什么要偏置: 对称预取时, 前进方向只有 0.75 屏缓冲, 快速滚动经常"跑赢预取",
+    ///   卡片进视野才被同步重建 —— 那一帧就是用户感到的顿挫。把缓冲加到前进方向,
+    ///   后方只留少量(回滚一点不至于立刻重建), 总量不变、内存窗口不变。
+    /// </summary>
+    public const double PrefetchAheadScreens = 1.25;
+
+    /// <summary>逆滚动方向的预取屏数(与 PrefetchAheadScreens 配对, 总和 = 2×PrefetchScreens)。</summary>
+    public const double PrefetchBehindScreens = 0.25;
 
     /// <summary>离视口多少屏以外才释放。必须明显大于预取区间, 否则会"刚补上又被放掉"。</summary>
     public const double ReleaseScreens = 2.0;
@@ -33,11 +44,25 @@ public static class CommentWindow
     /// <summary>同步恢复的余量(屏): 滚动时视口边缘的那半条评论也要提前恢复。</summary>
     public const double VisibleMarginScreens = 0.15;
 
-    /// <summary>每轮后台扫描最多补多少张离屏卡片, 避免一次重建太多视觉树。</summary>
+    /// <summary>
+    /// 每轮后台预取的**时间预算**(毫秒, 2026-11-17)。
+    /// ★★ 旧版按张数限量(PrefetchBurst=4): 一张热门评论卡 = 1 条正文 + 最多 3 条楼中楼预览,
+    ///   全是 RichTextBox/FlowDocument 的实例化与排版, 单张 5~15ms —— 4 张叠在一个
+    ///   Dispatcher 回调里就是 20~60ms 的掉帧, 用户看到"滚动中有节奏地一顿一顿"。
+    ///   改为按耗时切片: 每重建一张检查 Stopwatch, 超预算就停、剩余的排到下一帧继续。
+    ///   6ms ≈ 60Hz 一帧(16.7ms)里留给预取的份额, 不挤占布局/渲染/输入。
+    /// </summary>
+    public const double PrefetchBudgetMs = 6.0;
+
+    /// <summary>每轮后台扫描最多补多少张离屏卡片(时间预算之外的硬上限, 防单张异常便宜时连建太多)。</summary>
     public const int PrefetchBurst = 4;
 
-    /// <summary>翻页时每次往列表里放几条(不是接口页大小), 让新评论分批出现。</summary>
-    public const int RevealBatch = 6;
+    /// <summary>
+    /// 翻页时每次往列表里放几条(不是接口页大小), 让新评论分批出现。
+    /// ★ 2026-11-17 从 6 降到 3: 6 条卡片的同帧实例化在触底翻页时仍是一次可感知的尖峰,
+    ///   3 条 + 分帧调度(ScheduleCommentAutoLoad)在观感上更连续。
+    /// </summary>
+    public const int RevealBatch = 3;
 
     /// <summary>
     /// 热门评论"异常少"的回退阈值: 非置顶根评论少于一页的一半(15 条)且总条数更多时,
@@ -105,6 +130,22 @@ public static class CommentWindow
 
     /// <summary>后台预取带的下边界(视口坐标)。</summary>
     public static double PrefetchBottom(double viewport) => viewport * (1 + PrefetchScreens);
+
+    /// <summary>
+    /// 按滚动方向偏置的预取带上边界(视口坐标)。
+    /// <paramref name="direction"/>: +1 = 向下滚, -1 = 向上滚, 0 = 方向未知(对称)。
+    /// 向下滚时上方只留 PrefetchBehindScreens, 向上滚时上方留 PrefetchAheadScreens。
+    /// </summary>
+    public static double DirectionalPrefetchTop(double viewport, int direction)
+        => -viewport * (direction > 0 ? PrefetchBehindScreens
+            : direction < 0 ? PrefetchAheadScreens
+            : PrefetchScreens);
+
+    /// <summary>按滚动方向偏置的预取带下边界(视口坐标)。语义与 DirectionalPrefetchTop 对称。</summary>
+    public static double DirectionalPrefetchBottom(double viewport, int direction)
+        => viewport * (1 + (direction < 0 ? PrefetchBehindScreens
+            : direction > 0 ? PrefetchAheadScreens
+            : PrefetchScreens));
 
     /// <summary>释放带的上边界(视口坐标)。</summary>
     public static double ReleaseTop(double viewport) => -viewport * ReleaseScreens;

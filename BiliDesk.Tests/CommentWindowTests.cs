@@ -39,8 +39,63 @@ public class CommentWindowTests
     public void 释放带必须明显大于预取带()
     {
         Assert.True(CommentWindow.ReleaseScreens > CommentWindow.PrefetchScreens);
+        // ★ 方向偏置后, 前进方向的预取带也必须仍在释放带内(否则"刚补上又被放掉")
+        Assert.True(CommentWindow.ReleaseScreens > CommentWindow.PrefetchAheadScreens);
         Assert.Equal(-2000, CommentWindow.ReleaseTop(Viewport), 3);
         Assert.Equal(3000, CommentWindow.ReleaseBottom(Viewport), 3);
+    }
+
+    // ------------------------------------------------------------ 方向偏置预取带(2026-11-17)
+
+    [Fact]
+    public void 方向未知时预取带保持对称()
+    {
+        Assert.Equal(CommentWindow.PrefetchTop(Viewport),
+            CommentWindow.DirectionalPrefetchTop(Viewport, 0), 3);
+        Assert.Equal(CommentWindow.PrefetchBottom(Viewport),
+            CommentWindow.DirectionalPrefetchBottom(Viewport, 0), 3);
+    }
+
+    [Fact]
+    public void 向下滚时预取缓冲偏向下方()
+    {
+        // 上方只留 0.25 屏, 下方留 1.25 屏
+        Assert.Equal(-250, CommentWindow.DirectionalPrefetchTop(Viewport, 1), 3);
+        Assert.Equal(2250, CommentWindow.DirectionalPrefetchBottom(Viewport, 1), 3);
+    }
+
+    [Fact]
+    public void 向上滚时预取缓冲偏向上方()
+    {
+        Assert.Equal(-1250, CommentWindow.DirectionalPrefetchTop(Viewport, -1), 3);
+        Assert.Equal(1250, CommentWindow.DirectionalPrefetchBottom(Viewport, -1), 3);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(-1)]
+    [InlineData(0)]
+    public void 任何方向的预取带都完整覆盖视口且总宽不变(int direction)
+    {
+        var top = CommentWindow.DirectionalPrefetchTop(Viewport, direction);
+        var bottom = CommentWindow.DirectionalPrefetchBottom(Viewport, direction);
+        // 覆盖视口(否则视口边缘的卡片没人预取)
+        Assert.True(top <= 0);
+        Assert.True(bottom >= Viewport);
+        // 总宽 = 视口 + 2×PrefetchScreens 屏: 偏置只挪缓冲, 不放大内存窗口
+        Assert.Equal(Viewport * (1 + 2 * CommentWindow.PrefetchScreens), bottom - top, 3);
+        // 必须仍在释放带内(迟滞, 防"刚补上又被放掉"的抖动)
+        Assert.True(top > CommentWindow.ReleaseTop(Viewport));
+        Assert.True(bottom < CommentWindow.ReleaseBottom(Viewport));
+    }
+
+    [Fact]
+    public void 预取预算与批量常量在合理范围()
+    {
+        // 预算必须明显小于一帧(60Hz ≈ 16.7ms), 否则切片失去意义
+        Assert.InRange(CommentWindow.PrefetchBudgetMs, 1, 10);
+        Assert.InRange(CommentWindow.PrefetchBurst, 1, 8);
+        Assert.InRange(CommentWindow.RevealBatch, 1, 6);
     }
 
     [Fact]

@@ -203,12 +203,30 @@ public partial class PlayerWindow : FluentWindow
     //   ② 预取/释放区间从 ±4 屏收到 ±0.75 / ±2 屏, 不再一次重建几十条;
     //   ③ 向上滚动也要执行窗口扫描 —— 旧实现 `VerticalChange < 0` 直接 return,
     //      拖回上面时被释放的评论根本没人补, 才会"先空白随后刷新"。
+    //
+    // ★★★ 2026-11-17 修"热门评论区滑动卡顿"(四件事):
+    //   ① CommentText 的 DPD 监听泄漏已修(见 CommentText.cs) —— 旧文档不再随轮次堆积;
+    //   ② 预取从"每轮固定 4 张"改成**时间预算切片**(PrefetchBudgetMs), 剩余排下一帧;
+    //   ③ 预取带按滚动方向偏置(前进方向缓冲更大, 卡片在进视野前就建好);
+    //   ④ 释放扫描不再 O(n) 全列表 —— 用二分定位 ±2 屏边界, 只扫边界外侧。
 
     private readonly Dictionary<ContentPresenter, CommentCardParts> _commentCardParts = new();
     private DispatcherTimer? _commentContentWindowTimer;
 
     /// <summary>正在做窗口扫描(UpdateLayout 可能触发 ScrollChanged, 必须防重入)</summary>
     private bool _commentWindowUpdating;
+
+    /// <summary>
+    /// 最近的滚动方向(+1 下 / -1 上 / 0 未知), 预取带据此偏置。
+    /// 由 OnInfoScrollChanged 按 VerticalChange 更新; 换列表/回顶时归零。
+    /// </summary>
+    private int _commentScrollDirection;
+
+    /// <summary>
+    /// 上一轮预取因时间预算用尽被截断: 不等 120ms 定时器, 立刻排下一帧继续补。
+    /// ★ 用独立标志合并调度, 连续截断也只排一个回调。
+    /// </summary>
+    private bool _commentPrefetchContinueScheduled;
 
     /// <summary>一张评论卡片的可释放部件(正文/图片)</summary>
     private sealed class CommentCardParts
@@ -719,13 +737,35 @@ public partial class PlayerWindow : FluentWindow
             _commentContentWindowTimer.Tick += (_, _) =>
             {
                 _commentContentWindowTimer?.Stop();
-                UpdateCommentContentWindow();
+                // 截断(预算用尽还有活): 排下一帧继续, 不等下一次滚动事件 ——
+                // 用户可能刚好停滚, 剩余预取不补完, 再起步时又要视口内同步重建。
+                if (UpdateCommentContentWindow()) ScheduleCommentPrefetchContinue();
             };
         }
         // ★ 节流而不是防抖: 持续滚动时也要每 120ms 收一次离屏内容,
         //   否则"一路滚到底"的整段时间里内存都堆着(与封面窗口同一个教训)。
         if (_commentContentWindowTimer.IsEnabled) return;
         _commentContentWindowTimer.Start();
+    }
+
+    /// <summary>
+    /// 上一轮预取没干完(时间预算用尽): 排到下一个 Background 帧继续, 不等 120ms 定时器。
+    /// ★ 用 Background 而不是 Loaded: 让输入/布局/渲染先行, 预取只捡空闲时间片。
+    /// </summary>
+    private void ScheduleCommentPrefetchContinue()
+    {
+        if (_closing || _commentPrefetchContinueScheduled) return;
+        _commentPrefetchContinueScheduled = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _commentPrefetchContinueScheduled = false;
+            if (_closing) return;
+            // ★ 防自旋: 重建会引发布局 → ScrollChanged → QueueCommentContentWindow,
+            //   120ms 定时器可能恰好在这一拍触发、把同一张卡先恢复掉 —— 本轮就成空转。
+            //   空转时不再续排, 后续活交给定时器/下一次滚动事件, 否则 Background 队列
+            //   会被"续排 → 空转 → 续排"占满。
+            if (UpdateCommentContentWindow()) ScheduleCommentPrefetchContinue();
+        }), DispatcherPriority.Background);
     }
 
     /// <summary>
@@ -737,8 +777,12 @@ public partial class PlayerWindow : FluentWindow
     ///   还是空模板, 用户就会先看到一片空白, 过一会儿才刷出来。
     ///   现在只要视口里出现被释放的卡片, 就在**这一帧的布局/渲染之前**把它恢复。
     ///
-    /// ★ forceLayout: 跳滚/拖动滚动条时, TransformToAncestor 可能还拿着上一屏的
-    ///   渲染位置(与 CardWallPanel 里那段说明同一类问题), 必须先 UpdateLayout 再量。
+    /// ★ forceLayout: 大跨度跳滚/拖动滚动条时 TransformToAncestor 可能拿着上一屏的
+    ///   渲染位置。★★ 2026-11-17 起调用方(OnInfoScrollChanged)不再"每帧大跳就
+    ///   UpdateLayout"(那会把整个外层滚动区的脏布局每帧同步结清, 拖拽发涩) ——
+    ///   先直接量坐标, 只有恢复带里**一张都没恢复出来**时才结清布局重扫一次:
+    ///   正常滚动走不到兜底; 真跳滚时多花一次布局, 换来不空白。
+    ///   显式传 forceLayout=true 的调用方(切 tab/返回列表)语义不变。
     /// </summary>
     private void RestoreVisibleCommentCardsNow(bool forceLayout = false)
     {
@@ -757,8 +801,18 @@ public partial class PlayerWindow : FluentWindow
             }
 
             var viewport = sv.ViewportHeight;
-            RestoreCommentBand(CommentWindow.RestoreNowTop(viewport),
+            var restored = RestoreCommentBand(CommentWindow.RestoreNowTop(viewport),
                 CommentWindow.RestoreNowBottom(viewport), int.MaxValue);
+
+            // ★ 一张都没恢复出来, 但恢复带里确实压着已释放的卡片 ⇒ 坐标八成是陈旧的
+            //   (跳滚后布局未结清)。结清一次再扫; 只兜底这一次, 不会逐帧 UpdateLayout。
+            if (!forceLayout && restored == 0 && HasReleasedCardInRestoreBand(sv, viewport))
+            {
+                try { sv.UpdateLayout(); }
+                catch { /* 同上 */ }
+                RestoreCommentBand(CommentWindow.RestoreNowTop(viewport),
+                    CommentWindow.RestoreNowBottom(viewport), int.MaxValue);
+            }
         }
         finally
         {
@@ -767,21 +821,49 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 按滚动位置释放/恢复评论卡片的正文与图片。
+    /// 恢复带里是否压着"已释放"的卡片(二分定位 + 只查缓存字典, 每帧调也不贵)。
+    /// 用于判定"量出来的坐标是不是陈旧到把该恢复的卡片全漏掉了"。
+    /// </summary>
+    private bool HasReleasedCardInRestoreBand(ScrollViewer sv, double viewport)
+    {
+        // ★ 先按容器索引找到视口附近的候选(二分, O(log n)), 再查字典 ——
+        //   不能遍历整个 _commentCardParts: 滚了几百条后它本身就是 O(n), 每帧调等于白改。
+        if (CommentList == null) return false;
+        var count = CommentList.Items.Count;
+        if (count == 0) return false;
+        var top = CommentWindow.RestoreNowTop(viewport);
+        var bottom = CommentWindow.RestoreNowBottom(viewport);
+        var first = FindFirstCommentIndexAt(sv, top);
+        // 往回多查一张: first 前面那张可能压着带上沿
+        for (var i = Math.Max(0, Math.Min(first, count) - 1); i < count; i++)
+        {
+            if (CommentList.ItemContainerGenerator.ContainerFromIndex(i) is not ContentPresenter card) break;
+            if (!TryGetCommentCardBounds(card, sv, out var cardTop, out var cardBottom)) break;
+            if (cardTop > bottom) break;
+            if (cardBottom >= top &&
+                _commentCardParts.TryGetValue(card, out var parts) && parts.Released)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 按滚动位置释放/恢复评论卡片的正文与图片; 返回"预取因时间预算被截断, 还有活没干完"。
+    /// 定时器/续排路径据此决定要不要再排下一帧。
     ///
     /// 规则(区间见 <see cref="CommentWindow"/>):
     ///   · 视口 + 一小截余量: 同步恢复(见 <see cref="RestoreVisibleCommentCardsNow"/>);
-    ///   · 视口外 ±0.75 屏: 每轮限量预取几张, 不一次重建一大片;
-    ///   · 超出 ±2 屏: 释放, 常驻窗口从旧版的 9 屏降到约 5 屏。
+    ///   · 视口外预取: 按滚动方向偏置(前方 1.25 屏 / 后方 0.25 屏), 每轮按时间预算切片;
+    ///   · 超出 ±2 屏: 释放(二分定位边界, 只扫边界外侧), 常驻窗口约 5 屏。
     /// ★ 只释放**内容**, 容器保留并把高度冻结 —— 如果把容器删掉, 列表会重排、
     ///   用户正在看的位置会跳; 只清 Document 则版式和滚动条都不动。
     /// </summary>
-    private void UpdateCommentContentWindow()
+    private bool UpdateCommentContentWindow()
     {
-        if (_closing || _commentWindowUpdating || CommentList == null || !_commentsLoaded) return;
-        if (CommentsPanel == null || CommentsPanel.Visibility != Visibility.Visible || IsCommentDetailOpen) return;
+        if (_closing || _commentWindowUpdating || CommentList == null || !_commentsLoaded) return false;
+        if (CommentsPanel == null || CommentsPanel.Visibility != Visibility.Visible || IsCommentDetailOpen) return false;
         var sv = InfoScroll;
-        if (sv == null || sv.ViewportHeight <= 0) return;
+        if (sv == null || sv.ViewportHeight <= 0) return false;
 
         _commentWindowUpdating = true;
         try
@@ -792,31 +874,29 @@ public partial class PlayerWindow : FluentWindow
             RestoreCommentBand(CommentWindow.RestoreNowTop(viewport),
                 CommentWindow.RestoreNowBottom(viewport), int.MaxValue);
 
-            // ② 视口外预取: 限量, 避免一次重建几十棵视觉树造成卡顿
-            RestoreCommentBand(CommentWindow.PrefetchTop(viewport),
-                CommentWindow.PrefetchBottom(viewport), CommentWindow.PrefetchBurst);
+            // ② 视口外预取: **时间预算切片**(2026-11-17), 不再固定张数。
+            //   带按滚动方向偏置: 前进方向缓冲更大, 卡片在进视野前就建好,
+            //   减少"进视野才同步重建"那一帧的顿挫。预算用尽就排下一帧继续。
+            var truncated = PrefetchCommentBand(
+                CommentWindow.DirectionalPrefetchTop(viewport, _commentScrollDirection),
+                CommentWindow.DirectionalPrefetchBottom(viewport, _commentScrollDirection));
 
-            // ③ 释放离视口足够远的卡片
+            // ③ 释放离视口足够远的卡片。
+            //   ★★ 2026-11-17: 不再从第 0 条扫到最后一条(几百上千条时每 120ms 全量
+            //   走一遍 ContainerFromIndex 是实打实的卡顿源) —— 卡片纵向单调排列,
+            //   二分定位 ±ReleaseScreens 边界, 只扫边界外侧。
             var releasedAny = false;
-            for (var i = 0; i < CommentList.Items.Count; i++)
-            {
-                if (CommentList.ItemContainerGenerator.ContainerFromIndex(i) is not ContentPresenter card) continue;
-                if (!_commentCardParts.TryGetValue(card, out var parts))
-                {
-                    parts = GetCommentCardParts(card);
-                    // 模板还没应用: 下一轮再收
-                    if (parts.Texts.Length == 0 && parts.Covers.Length == 0) continue;
-                }
-                if (parts.Released) continue;
-                if (!TryGetCommentCardBounds(card, sv, out var top, out var bottom)) continue;
-                if (!CommentWindow.ShouldRelease(top, bottom, viewport)) continue;
-                ReleaseCommentCard(card, parts);
-                if (parts.Released) releasedAny = true;
-            }
+            var firstKept = FindFirstCommentIndexAt(sv, CommentWindow.ReleaseTop(viewport));
+            var firstBelow = FindFirstCommentIndexAt(sv, CommentWindow.ReleaseBottom(viewport));
+            releasedAny |= ReleaseCommentRange(0, firstKept, sv, viewport);
+            releasedAny |= ReleaseCommentRange(firstBelow, CommentList.Items.Count, sv, viewport);
 
             // 释放了一批视觉树/位图后请求一次温和回收: 光靠 GC 自己不会马上把工作集交给系统,
             // 任务管理器里的数字就一直是"只涨不落"。(内部有 96MB 闸门 + 800ms 合并, 不会频繁 GC)
             if (releasedAny) MemoryTrim.RequestTrim();
+
+            // 预取被预算截断: 不等 120ms 定时器, 下一帧接着补
+            return truncated;
         }
         finally
         {
@@ -825,11 +905,105 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
+    /// 在预取带内按**时间预算**重建离屏卡片; 返回是否因预算用尽被截断(还有活没干完)。
+    ///
+    /// ★ 每重建一张就检查耗时(Stopwatch): 一张热门评论卡是 1+3 个 RichTextBox 的
+    ///   实例化与排版, 单张 5~15ms —— 固定"一轮 4 张"会把 20~60ms 叠进一个回调。
+    ///   预算(≈6ms)保证每轮至多略微超出一张的成本, 剩余工作由调用方排到下一帧。
+    /// ★ PrefetchBurst 仍作硬上限: 命中缓存的卡片重建极便宜时, 也别一口气建太多。
+    /// </summary>
+    private bool PrefetchCommentBand(double bandTop, double bandBottom)
+    {
+        if (CommentList == null || CommentList.Items.Count == 0) return false;
+        var sv = InfoScroll;
+        if (sv == null) return false;
+
+        var sw = Stopwatch.StartNew();
+        var count = CommentList.Items.Count;
+        var first = FindFirstCommentIndexAt(sv, bandTop);
+        var restored = 0;
+
+        // 先往回扫: first 前面那几张可能已经压到带上沿
+        for (var i = Math.Min(first, count) - 1; i >= 0; i--)
+        {
+            if (!TryGetCommentCardBounds(i, sv, out var card, out _, out var bottom)) break;
+            if (bottom < bandTop) break;
+            if (TryRestoreCommentCard(card)) restored++;
+            if (restored >= CommentWindow.PrefetchBurst ||
+                sw.Elapsed.TotalMilliseconds >= CommentWindow.PrefetchBudgetMs)
+                return BandMayHaveReleasedCards(bandTop, bandBottom);
+        }
+
+        for (var i = Math.Max(first, 0); i < count; i++)
+        {
+            if (!TryGetCommentCardBounds(i, sv, out var card, out var top, out _)) break;
+            if (top > bandBottom) break;
+            if (TryRestoreCommentCard(card)) restored++;
+            if (restored >= CommentWindow.PrefetchBurst ||
+                sw.Elapsed.TotalMilliseconds >= CommentWindow.PrefetchBudgetMs)
+                return BandMayHaveReleasedCards(bandTop, bandBottom);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 预取带里是否还有"已释放"的卡片(截断后决定要不要排下一帧)。
+    /// 二分定位 + 只查缓存字典, 不做重建, 便宜。
+    /// </summary>
+    private bool BandMayHaveReleasedCards(double bandTop, double bandBottom)
+    {
+        var sv = InfoScroll;
+        if (sv == null || CommentList == null) return false;
+        var count = CommentList.Items.Count;
+        if (count == 0) return false;
+        var first = FindFirstCommentIndexAt(sv, bandTop);
+        for (var i = Math.Max(0, Math.Min(first, count) - 1); i < count; i++)
+        {
+            if (CommentList.ItemContainerGenerator.ContainerFromIndex(i) is not ContentPresenter card) break;
+            if (!TryGetCommentCardBounds(card, sv, out var top, out var bottom)) break;
+            if (top > bandBottom) break;
+            if (bottom >= bandTop &&
+                _commentCardParts.TryGetValue(card, out var parts) && parts.Released)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 释放 [from, to) 里离视口足够远的卡片; 返回是否真的放掉了至少一张。
+    /// ★ 二分给出的边界是"按旧坐标"的近似 —— 每张仍用 ShouldRelease 按当前坐标核实,
+    ///   坐标量不到/还在带内的跳过, 不会误放视口附近的卡。
+    /// </summary>
+    private bool ReleaseCommentRange(int from, int to, ScrollViewer sv, double viewport)
+    {
+        if (CommentList == null) return false;
+        var releasedAny = false;
+        for (var i = Math.Max(0, from); i < Math.Min(to, CommentList.Items.Count); i++)
+        {
+            if (CommentList.ItemContainerGenerator.ContainerFromIndex(i) is not ContentPresenter card) continue;
+            if (!_commentCardParts.TryGetValue(card, out var parts))
+            {
+                parts = GetCommentCardParts(card);
+                // 模板还没应用: 下一轮再收
+                if (parts.Texts.Length == 0 && parts.Covers.Length == 0) continue;
+            }
+            if (parts.Released) continue;
+            if (!TryGetCommentCardBounds(card, sv, out var top, out var bottom)) continue;
+            if (!CommentWindow.ShouldRelease(top, bottom, viewport)) continue;
+            ReleaseCommentCard(card, parts);
+            if (parts.Released) releasedAny = true;
+        }
+        return releasedAny;
+    }
+
+    /// <summary>
     /// 恢复 [bandTop, bandBottom] 区间内**已被释放**的评论卡片。
     ///
     /// ★ 用二分查找定位第一张与带上沿相交的卡片, 再向两侧扫到带边界:
     ///   不再每次滚动都从第 0 条扫到最后一条(几千条评论时那是实打实的卡顿源)。
-    /// ★ 返回实际恢复的张数(maxRestores 用来限制后台预取一次补太多)。
+    /// ★ 返回实际恢复的张数。现在只服务**视口同步恢复**带(maxRestores=int.MaxValue);
+    ///   视口外预取走 PrefetchCommentBand 的时间预算切片(2026-11-17)。
     /// </summary>
     private int RestoreCommentBand(double bandTop, double bandBottom, int maxRestores)
     {
@@ -970,6 +1144,9 @@ public partial class PlayerWindow : FluentWindow
         _commentSeenRpids.Clear();
         _commentRevealScheduled = false;
         _commentWindowUpdating = false;
+        // 新列表从头看起: 预取方向偏置归零(对称), 截断续排作废
+        _commentScrollDirection = 0;
+        _commentPrefetchContinueScheduled = false;
     }
 
     /// <summary>缓存一张卡片里的正文控件与封面图(每张只 BFS 一次)。</summary>

@@ -364,10 +364,15 @@ public partial class PlayerWindow : FluentWindow
         // ★★ 评论内容窗口必须**两个方向都处理**(2026-11-09):
         //   旧实现 `VerticalChange < 0` 直接 return, 向上滚动时既不恢复也不释放 ——
         //   用户按住滚动条拖回已经看过的内容, 看到的先是空模板, 要等别的时机才刷出来。
-        //   视口内同步恢复(拖到哪一帧, 那一屏就得有内容); 大跨度跳滚先结清布局再量坐标。
-        var viewport = sv.ViewportHeight;
-        var jumped = viewport > 0 && Math.Abs(e.VerticalChange) >= Math.Max(48, viewport * 0.35);
-        RestoreVisibleCommentCardsNow(forceLayout: jumped);
+        //   视口内同步恢复(拖到哪一帧, 那一屏就得有内容)。
+        // ★★★ 2026-11-17 修滑动卡顿: 不再"单帧位移大就 forceLayout" ——
+        //   平滑滚轮(WheelScroll)一格 ≈120px, 拖滚动条更是每帧大跳, 旧判定几乎逐帧
+        //   命中, 把整个外层滚动区的脏布局每帧同步结清, 拖拽发涩。现在先直接量坐标,
+        //   RestoreVisibleCommentCardsNow 内部只在"该恢复却一张没恢复出来"时才兜底
+        //   UpdateLayout 重扫(见该方法说明)。方向记下来给预取带偏置用。
+        if (e.VerticalChange > 0) _commentScrollDirection = 1;
+        else if (e.VerticalChange < 0) _commentScrollDirection = -1;
+        RestoreVisibleCommentCardsNow();
         QueueCommentContentWindow();
 
         // 往上滚不补**新内容**(相关视频与评论都是"向下无限加载")

@@ -34,6 +34,20 @@ namespace BiliDesk.Views.Controls;
 public class CommentText : RichTextBox
 {
     /// <summary>
+    /// PagePadding 变更监听的 handler(存成字段才能 RemoveValueChanged)。
+    /// ★★ 2026-11-17 修"评论区越滚越卡": DependencyPropertyDescriptor.AddValueChanged
+    ///   会**强引用**目标 Document(且 handler 捕获控件自身), 从不 Remove 的话,
+    ///   每一轮"离屏换空模板 → 回来换回原模板"都会永久泄漏一整棵旧
+    ///   RichTextBox + FlowDocument + 内联表情位图 —— 热门区滚几分钟就是几百份,
+    ///   Gen2 越滚越大、GC 越来越频繁, 表现就是滑动持续掉帧。
+    ///   现在 Unloaded 时摘监听并清空 Blocks, Loaded 时重挂/重建(见 OnUnloaded/OnLoaded)。
+    /// </summary>
+    private readonly EventHandler _pagePaddingHandler;
+
+    /// <summary>PagePadding 监听当前是否挂着(防重复订阅/重复摘除)。</summary>
+    private bool _pagePaddingHooked;
+
+    /// <summary>
     /// 正文内容是否已被"离屏释放"。
     ///
     /// ★ 为什么需要: 评论区是无限加载的, 但没有虚拟化(容器不会销毁)。每条评论的
@@ -140,12 +154,55 @@ public class CommentText : RichTextBox
         //     所以这里挂属性变更监听: 只要它被改回 5 就拨回 0。
         //     (DependencyPropertyDescriptor 走的是 DependencyProperty 的实际变更,
         //      排版阶段的修改也会触发; 只在非 0 时才赋值, 不会造成死循环。)
+        // ★★ 2026-11-17: handler 存字段 + Loaded/Unloaded 成对挂摘(见 _pagePaddingHandler),
+        //   否则 DPD 的强引用会把每次被模板替换销毁的旧文档永久钉在内存里。
+        _pagePaddingHandler = (_, _) =>
+        {
+            if (Document.PagePadding != default)
+                Document.PagePadding = new Thickness(0);
+        };
+        HookPagePadding();
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
+    }
+
+    private void HookPagePadding()
+    {
+        if (_pagePaddingHooked) return;
+        _pagePaddingHooked = true;
         DependencyPropertyDescriptor.FromProperty(FlowDocument.PagePaddingProperty, typeof(FlowDocument))
-            .AddValueChanged(Document, (_, _) =>
-            {
-                if (Document.PagePadding != default)
-                    Document.PagePadding = new Thickness(0);
-            });
+            .AddValueChanged(Document, _pagePaddingHandler);
+    }
+
+    private void UnhookPagePadding()
+    {
+        if (!_pagePaddingHooked) return;
+        _pagePaddingHooked = false;
+        DependencyPropertyDescriptor.FromProperty(FlowDocument.PagePaddingProperty, typeof(FlowDocument))
+            .RemoveValueChanged(Document, _pagePaddingHandler);
+    }
+
+    /// <summary>
+    /// 离树(评论卡片被换成空模板 / 列表清空)时: 摘掉 DPD 监听、放掉文档内容。
+    /// ★ 换模板释放路径(PlayerWindow.ReleaseCommentCard)只丢控件引用、不清 Blocks ——
+    ///   没有这一步, 旧文档和表情位图会随 DPD 强引用永久泄漏(见 _pagePaddingHandler)。
+    /// ★ 只清内容不销毁控件: 若这棵树随后又被接回去(容器复用), OnLoaded 会重建。
+    /// </summary>
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        UnhookPagePadding();
+        if (!_contentReleased)
+        {
+            _contentReleased = true;
+            Document.Blocks.Clear();
+        }
+    }
+
+    /// <summary>入树时重挂监听; 内容被离屏释放过就按当前 Comment 重建。</summary>
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        HookPagePadding();
+        if (_contentReleased) Rebuild();
     }
 
     /// <summary>
