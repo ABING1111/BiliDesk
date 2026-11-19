@@ -265,6 +265,43 @@ public class UserSpaceViewModel : ObservableObject
 
     public string FollowLabel => IsFollowed ? "已关注" : "+ 关注";
 
+    /// <summary>
+    /// 这个空间是不是**我自己**。
+    ///
+    /// ★ 2026-11-18 新增(issue #90): 自己的主页不该显示「关注」按钮 ——
+    ///   显示了就会渲染出「+ 关注」, 点了 B 站直接报"不能关注自己"。
+    ///   所以这一页自己看自己时, 那个按钮整块隐藏。
+    /// </summary>
+    private bool _isSelf;
+
+    /// <summary>当前看的这个空间是不是我自己。</summary>
+    public bool IsSelf
+    {
+        get => _isSelf;
+        private set
+        {
+            if (SetProperty(ref _isSelf, value))
+                OnPropertyChanged(nameof(ShowFollowButton));
+        }
+    }
+
+    /// <summary>「关注」按钮是否该显示(看别人时显示, 看自己时隐藏)。</summary>
+    public bool ShowFollowButton => !IsSelf;
+
+    /// <summary>
+    /// 取当前登录用户的 mid。
+    ///
+    /// ★ 优先读 Cookie 里的 DedeUserID —— 那是**本地**字段, 不需要网络往返。
+    ///   拿不到(极少数会话没带这个 Cookie)才去问一次 nav。
+    /// </summary>
+    private static async Task<long> GetSelfMidAsync()
+    {
+        if (long.TryParse(Svc.Session.Current.DedeUserID, out var cached) && cached > 0)
+            return cached;
+        var (_, _, me) = await Svc.Api.GetUserStateAsync();
+        return me?.Mid ?? 0;
+    }
+
     public ICommand ToggleFollowCommand { get; }
     public ICommand RefreshCommand { get; }
     public ICommand GoToPageCommand { get; }
@@ -432,6 +469,10 @@ public class UserSpaceViewModel : ObservableObject
             var infoTask = Svc.Api.GetSpaceInfoAsync(_mid);
             var videosTask = LoadPageAsync(1);
             _ = RefreshFollowStateAsync();
+            // ★ 2026-11-18: 判定"这是不是我自己的空间" —— 是自己的话隐藏「关注」按钮
+            //   (显示了就会渲染出「+ 关注」, 点了 B 站报"不能关注自己")。
+            //   与其它请求并行, 不占关键路径。
+            _ = RefreshIsSelfAsync();
             var (infoOk, _, info) = await infoTask;
             await videosTask;
 
@@ -598,6 +639,7 @@ public class UserSpaceViewModel : ObservableObject
     {
         if (!Svc.Session.HasLogin) { Svc.Toast.Show("关注需要先登录"); return; }
         if (_mid <= 0) return;
+        if (IsSelf) { Svc.Toast.Show("不能关注自己"); return; }
         var (ok, err) = await Svc.Api.FollowUpAsync(_mid, true);
         Svc.Toast.Show(ok ? "已关注" : "关注失败: " + (err ?? "未知错误"));
     }
@@ -606,8 +648,29 @@ public class UserSpaceViewModel : ObservableObject
     public async Task RefreshFollowStateAsync()
     {
         if (_mid <= 0 || !Svc.Session.HasLogin) return;
+        // ★ 看自己的主页时不必查关注关系(关注按钮本来就隐藏), 省一次请求。
+        if (IsSelf) return;
         var (ok, _, followed) = await Svc.Api.GetRelationAsync(_mid);
         if (ok) IsFollowed = followed;
+    }
+
+    /// <summary>判定当前空间是不是我自己(拿自己的 mid 与本空间的 mid 比)。</summary>
+    private async Task RefreshIsSelfAsync()
+    {
+        if (_mid <= 0) return;
+        try
+        {
+            var selfMid = await GetSelfMidAsync();
+            if (selfMid <= 0) return;
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                IsSelf = selfMid == _mid;
+            });
+        }
+        catch
+        {
+            // 静默: 判定失败就当"不是自己"(按钮显示出来, 顶多是多一次无效的关注尝试)
+        }
     }
 
     /// <summary>关注 / 取消关注(按当前状态切换)。按钮文案随 IsFollowed 变。</summary>
@@ -615,6 +678,8 @@ public class UserSpaceViewModel : ObservableObject
     {
         if (!Svc.Session.HasLogin) { Svc.Toast.Show("关注需要先登录"); return; }
         if (_mid <= 0) return;
+        // ★ 双保险: 万一按钮因布局问题还露着(理论上已被 IsSelf 藏掉), 也不能真去关注自己。
+        if (IsSelf) { Svc.Toast.Show("不能关注自己"); return; }
         var (ok, err) = await Svc.Api.FollowUpAsync(_mid, !IsFollowed);
         if (ok)
         {

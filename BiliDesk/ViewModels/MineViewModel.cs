@@ -30,6 +30,7 @@ public class MineViewModel : ObservableObject
     private string _error = "";
     private string _name = "";
     private string _face = "";
+    private long _mid;
     private int _level;
     private string _coinsText = "--";
     private string _expText = "";
@@ -58,6 +59,14 @@ public class MineViewModel : ObservableObject
     public string Name { get => _name; private set => SetProperty(ref _name, value); }
     public string Face { get => _face; private set => SetProperty(ref _face, value); }
     public int Level { get => _level; private set => SetProperty(ref _level, value); }
+
+    /// <summary>
+    /// 当前登录用户的 UID。
+    ///
+    /// ★ 2026-11-18 新增(issue #90): 头像/昵称/三个数字要能点进「个人主页」与「我的空间」,
+    ///   而那两处都得知道"我是谁" —— 这个 mid 之前被丢掉了(只取了昵称/头像/等级)。
+    /// </summary>
+    public long Mid { get => _mid; private set => SetProperty(ref _mid, value); }
 
     public string LevelText => Level > 0 ? "LV" + Level : "";
 
@@ -100,6 +109,18 @@ public class MineViewModel : ObservableObject
     public ICommand RefreshCommand { get; }
     public ICommand LoginCommand { get; }
 
+    /// <summary>头像 / 昵称 / 等级徽章 → 我的个人主页(复用 UP 主主页页)。</summary>
+    public ICommand OpenSelfSpaceCommand { get; }
+
+    /// <summary>「动态」数字 → 我的空间·动态。</summary>
+    public ICommand OpenDynamicsCommand { get; }
+
+    /// <summary>「关注」数字 → 我的空间·关注。</summary>
+    public ICommand OpenFollowingsCommand { get; }
+
+    /// <summary>「粉丝」数字 → 我的空间·粉丝。</summary>
+    public ICommand OpenFollowersCommand { get; }
+
     public MineViewModel()
     {
         // 快捷入口: 直接走主导航(页面实例都在 MainWindow._pages 里缓存着)
@@ -113,9 +134,34 @@ public class MineViewModel : ObservableObject
         });
         RefreshCommand = new RelayCommand(() => _ = LoadAsync());
         LoginCommand = new RelayCommand(() => App.MainVm.OpenLoginWindow());
+
+        // ---- 2026-11-18 新增(issue #90): 头像与三个数字变成可点的入口 ----
+        //
+        // ★ 都走 Svc.Navigate(App 启动时注册的单例): 它内部会判断主窗口在不在,
+        //   在就内嵌进内容区(自带返回按钮), 不在就退回独立窗口 ——
+        //   与「我的」页已有的快捷入口同一套导航体系。
+        OpenSelfSpaceCommand = new RelayCommand(() =>
+        {
+            if (Mid <= 0) { Svc.Toast.Show("还没拿到账号信息, 请稍后再试"); return; }
+            Svc.Navigate?.OpenUserSpace(Mid.ToString());
+        });
+        OpenDynamicsCommand = new RelayCommand(
+            () => OpenUserCenter(UserCenterTab.Dynamics));
+        OpenFollowingsCommand = new RelayCommand(
+            () => OpenUserCenter(UserCenterTab.Followings));
+        OpenFollowersCommand = new RelayCommand(
+            () => OpenUserCenter(UserCenterTab.Followers));
+
         // 登录态变化(扫码成功/退出)时原地刷新 —— 否则用户在「我的」页点「去登录」,
         // 登录窗口关了页面还停在未登录态, 得切出去再切回来才恢复
         Svc.Session.Changed += OnSessionChanged;
+    }
+
+    /// <summary>打开「我的空间」的某个 Tab(看的是**我**自己的空间)。</summary>
+    private void OpenUserCenter(UserCenterTab tab)
+    {
+        if (Mid <= 0) { Svc.Toast.Show("还没拿到账号信息, 请稍后再试"); return; }
+        Svc.Navigate?.OpenUserCenter(Mid, Name, Face, isSelf: true, tab);
     }
 
     private void OnSessionChanged() => _ = LoadAsync();
@@ -134,6 +180,7 @@ public class MineViewModel : ObservableObject
             IsLoggedIn = false;
             Name = "";
             Face = "";
+            Mid = 0;
             Level = 0;
             CoinsText = "--";
             ExpText = "";
@@ -160,6 +207,9 @@ public class MineViewModel : ObservableObject
 
             Name = user.Name;
             Face = user.Face;
+            // ★ 2026-11-18: 记下自己的 mid —— 头像/昵称/三个数字都要靠它进「个人主页」与「我的空间」。
+            //   之前这个值被丢掉了(只取了昵称/头像/等级), 于是那几个入口根本不知道该查谁。
+            Mid = user.Mid;
             Level = user.Level;
             CoinsText = user.Coins.ToString("0.#");
             if (user.ExperienceNext > 0)

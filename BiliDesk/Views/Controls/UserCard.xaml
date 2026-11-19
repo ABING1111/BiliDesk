@@ -46,23 +46,40 @@
             </Border>
 
             <StackPanel Grid.Column="1" Margin="14,0,12,0" VerticalAlignment="Center">
-                <!-- 名字 + 认证图标。名字列用 * 让它在窄窗口里自动省略, 不把认证挤出去 -->
+                <!-- 名字 + 认证徽章(2026-11-19 改版)。
+                     ★ 列宽必须是 Auto/Auto/* : 原来名字列是 *, 会把徽章顶到整整一行的最右边
+                       (离名字上千像素, 看着就是行尾莫名其妙一个勾 —— 用户原话"不明意义的勾")。
+                       Auto 让徽章紧跟名字, 末尾的 * 只吃空白(不需要往里放任何东西 ——
+                       Grid 默认 Stretch, 星列自然把剩下的宽度全占掉)。
+                     ★★ 名字还得能省略: Auto 列配 MaxWidth ⇒ 超长昵称在 420px 处截断,
+                       不会把徽章挤出可见区。
+                     ★★★ 徽章画成"实心圆 + 矢量对勾"而不是 E73E 字形: 裸对勾读不出"认证"
+                       的意思(用户不认识), 字形在不同 Windows 版本上还会糊。
+                       矢量对勾的做法与 FollowPage「全部已读」那个勾一致。 -->
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="{Binding Name}"
+                    <TextBlock Grid.Column="0" Text="{Binding Name}" MaxWidth="420"
                                FontSize="15" FontWeight="SemiBold"
                                Foreground="{DynamicResource TextPrimaryBrush}"
                                TextTrimming="CharacterEllipsis"
                                ToolTip="{Binding Name}" />
-                    <TextBlock Grid.Column="1" Text="&#xE73E;"
-                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                               FontSize="12" Margin="6,0,0,0" VerticalAlignment="Center"
-                               Foreground="{DynamicResource AccentTextBrush}"
-                               ToolTip="{Binding VerifyDesc}"
-                               Visibility="{Binding HasVerify, Converter={StaticResource BoolToVis}}" />
+                    <Border x:Name="VerifyBadge" Grid.Column="1"
+                            Width="14" Height="14" CornerRadius="7" Margin="6,0,0,0"
+                            VerticalAlignment="Center"
+                            Background="{DynamicResource AccentBrush}"
+                            ToolTip="{Binding VerifyToolTip}"
+                            Visibility="{Binding HasVerify, Converter={StaticResource BoolToVis}}">
+                        <Path Width="8" Height="8" Stretch="Uniform"
+                              Data="M 1,4.4 L 3.2,6.6 L 7,1.6"
+                              Stroke="White" StrokeThickness="1.5"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round"
+                              HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
                 </Grid>
 
                 <!-- 签名: 一行截断; 空签名整行藏掉, 免得名字和统计之间多出一条空白 -->

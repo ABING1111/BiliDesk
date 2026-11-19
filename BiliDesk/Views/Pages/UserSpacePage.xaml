@@ -243,23 +243,35 @@
                     </StackPanel>
                 </StackPanel>
 
-                <!-- 数据: 关注数 / 粉丝数 / 获赞数(参考图: 数字在上、标签在下、细竖线分隔) -->
+                <!-- 数据: 关注数 / 粉丝数 / 获赞数(参考图: 数字在上、标签在下、细竖线分隔)
+                     ★ 2026-11-18(issue #90): 关注数与粉丝数**可点** ——
+                       点进去是「我的空间」的对应 Tab, 看的是**这个 UP** 的关注/粉丝列表。
+                       (获赞数没有对应的列表, 保持不可点; 投稿数同理 —
+                        投稿就在本页面里, 点自己没意义。) -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal"
                             VerticalAlignment="Center" Margin="0,0,26,0">
-                    <StackPanel MinWidth="64">
-                        <TextBlock Text="{Binding FollowingText}" FontSize="18" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center" />
-                        <TextBlock Text="关注数" Style="{StaticResource MetaTextStyle}"
-                                   HorizontalAlignment="Center" Margin="0,2,0,0" />
-                    </StackPanel>
+                    <Button x:Name="FollowingStat" Style="{StaticResource ClickableAreaButtonStyle}"
+                            Padding="0,4" Click="OnOpenFollowingsClick"
+                            ToolTip="查看 TA 关注的 UP 主">
+                        <StackPanel MinWidth="64">
+                            <TextBlock Text="{Binding FollowingText}" FontSize="18" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="关注数" Style="{StaticResource MetaTextStyle}"
+                                       HorizontalAlignment="Center" Margin="0,2,0,0" />
+                        </StackPanel>
+                    </Button>
                     <Border Width="1" Height="30" Background="{DynamicResource DividerBrush}"
                             Margin="16,0" />
-                    <StackPanel MinWidth="64">
-                        <TextBlock Text="{Binding FollowerText}" FontSize="18" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center" />
-                        <TextBlock Text="粉丝数" Style="{StaticResource MetaTextStyle}"
-                                   HorizontalAlignment="Center" Margin="0,2,0,0" />
-                    </StackPanel>
+                    <Button x:Name="FollowerStat" Style="{StaticResource ClickableAreaButtonStyle}"
+                            Padding="0,4" Click="OnOpenFollowersClick"
+                            ToolTip="查看 TA 的粉丝">
+                        <StackPanel MinWidth="64">
+                            <TextBlock Text="{Binding FollowerText}" FontSize="18" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="粉丝数" Style="{StaticResource MetaTextStyle}"
+                                       HorizontalAlignment="Center" Margin="0,2,0,0" />
+                        </StackPanel>
+                    </Button>
                     <Border Width="1" Height="30" Background="{DynamicResource DividerBrush}"
                             Margin="16,0" />
                     <StackPanel MinWidth="64">
@@ -271,10 +283,13 @@
                 </StackPanel>
 
                 <!-- 关注按钮: 未关注 = 强调色实底「+ 关注」; 已关注 = 灰色底「已关注」
-                     (颜色切换在 FollowToggleButtonStyle 的 DataTrigger 里, 读 VM.IsFollowed) -->
+                     ★ 2026-11-18(issue #90): 看**自己**主页时整块隐藏 ——
+                       显示了会渲染出「+ 关注」, 点了 B 站直接报"不能关注自己"。
+                       判定见 UserSpaceViewModel.IsSelf。 -->
                 <Button Grid.Column="3" Command="{Binding ToggleFollowCommand}" Padding="22,8"
-                        VerticalAlignment="Center" ToolTip="关注 / 取消关注该 UP 主"
-                        Style="{StaticResource FollowToggleButtonStyle}">
+                        Margin="14,0,0,0" VerticalAlignment="Center" ToolTip="关注 / 取消关注该 UP 主"
+                        Style="{StaticResource FollowToggleButtonStyle}"
+                        Visibility="{Binding ShowFollowButton, Converter={StaticResource BoolToVis}}">
                     <TextBlock Text="{Binding FollowLabel}" FontSize="12" />
                 </Button>
             </Grid>

@@ -665,7 +665,7 @@ public partial class ApiClient
         return users;
     }
 
-    /// <summary>关注列表/关注搜索里的一行。字段与搜索页的 SearchUserItem 不同, 不复用。</summary>
+    /// <summary>关注列表/关注搜索/粉丝列表里的一行。字段与搜索页的 SearchUserItem 不同, 不复用。</summary>
     private static FollowUser? ParseFollowUser(JsonElement e)
     {
         var u = new FollowUser
@@ -679,6 +679,9 @@ public partial class ApiClient
         {
             u.VerifyType = GetInt(ov, "type");
             u.VerifyDesc = GetStr(ov, "desc");
+            // ★ 归一化: 接口对"没认证"的用户下发的是 **127**, 不是 -1。
+            //   不归一化的话界面上每个人名字旁边都会多一个认证勾(与搜索页同一处处理)。
+            if (u.VerifyType is not (0 or 1)) u.VerifyType = -1;
         }
         return u.Mid > 0 && !string.IsNullOrEmpty(u.Name) ? u : null;
     }

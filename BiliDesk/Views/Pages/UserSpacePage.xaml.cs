@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
@@ -265,6 +266,24 @@ public partial class UserSpacePage : UserControl
     private void OnScrollToTopRequested()
         => Dispatcher.BeginInvoke(new Action(() => ListScroll?.ScrollToTop()),
             DispatcherPriority.Loaded);
+
+    // ------------------------------------------------------------ 统计数字可点(2026-11-18, issue #90)
+
+    /// <summary>「关注数」→ 「我的空间」·关注(看的是**这个 UP** 的关注列表)。</summary>
+    private void OnOpenFollowingsClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not UserSpaceViewModel vm || vm.Mid <= 0) return;
+        Svc.Navigate?.OpenUserCenter(vm.Mid, vm.Name, vm.Face, vm.IsSelf,
+            ViewModels.UserCenterTab.Followings);
+    }
+
+    /// <summary>「粉丝数」→ 「我的空间」·粉丝。</summary>
+    private void OnOpenFollowersClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not UserSpaceViewModel vm || vm.Mid <= 0) return;
+        Svc.Navigate?.OpenUserCenter(vm.Mid, vm.Name, vm.Face, vm.IsSelf,
+            ViewModels.UserCenterTab.Followers);
+    }
 
     // ------------------------------------------------------------ 头像右键菜单
 

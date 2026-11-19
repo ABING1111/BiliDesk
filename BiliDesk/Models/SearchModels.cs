@@ -88,6 +88,11 @@ public sealed class SearchUserItem
     public string VerifyDesc { get; set; } = "";
 
     public bool HasVerify => VerifyType is 0 or 1;
+
+    /// <summary>认证徽章的悬停提示(desc 为空时兜底成"认证", 与 FollowUser 同款)。</summary>
+    public string VerifyToolTip =>
+        string.IsNullOrWhiteSpace(VerifyDesc) ? "认证" : "认证：" + VerifyDesc;
+
     public string FansText => VideoItem.FormatCount(Fans) + " 粉丝";
     public string VideosText => VideoItem.FormatCount(Videos) + " 投稿";
     public string LevelText => Level > 0 ? $"Lv{Level}" : "";

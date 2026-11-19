@@ -42,6 +42,25 @@ public class FollowUser : System.ComponentModel.INotifyPropertyChanged
     public string VerifyDesc { get; set; } = "";
 
     /// <summary>
+    /// 这个用户有没有认证(个人/机构)。
+    ///
+    /// ★ 与 <see cref="SearchUserItem.HasVerify"/> 同一套判据(0 / 1 才算认证),
+    ///   归一化在解析时做(见 ApiClient.Feed.ParseFollowUser) —— 接口对"没认证"的用户
+    ///   下发的是 **127**, 不归一化的话每个人名字旁边都会多一个认证勾。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasVerify => VerifyType is 0 or 1;
+
+    /// <summary>
+    /// 认证徽章的悬停提示。
+    /// ★ 接口对部分认证账号不给 desc(空串), 直接把空的 VerifyDesc 绑到 ToolTip 上
+    ///   会弹出一个**空白的提示框** —— 兜底成"认证"两个字。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string VerifyToolTip =>
+        string.IsNullOrWhiteSpace(VerifyDesc) ? "认证" : "认证：" + VerifyDesc;
+
+    /// <summary>
     /// 这一行是"有未读、但还没被分页加载出来"的**占位行**(2026-11-06)。
     ///
     /// ★ 用途: 关注 2790 人时, 一个刚更新的 UP 可能还在第 2 页之后。左栏只做一个面板,

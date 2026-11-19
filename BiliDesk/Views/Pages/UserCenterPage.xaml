@@ -1,0 +1,236 @@
+<UserControl x:Class="BiliDesk.Views.Pages.UserCenterPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             Background="{DynamicResource AppBackgroundBrush}">
+    <!--
+        「我的空间」页(2026-11-18 新增, issue #90)。
+
+        一个页面三个 Tab: 动态 / 关注 / 粉丝 —— 看的是**同一个 mid** 的三份内容。
+        「我的」页点三个数字进来、UP 主主页点关注数/粉丝数进来, 都用这一个页面。
+
+        ★ Tab 行用全局的 ContentTabStyle(播放器「简介/评论」那一套):
+          强调色下划线 + 互斥(RadioButton + GroupName)。
+          ★ 选中态**只由 code-behind 写 IsChecked 驱动** —— 与播放页那条经验一致:
+            分散着改必然出现"两个都亮"或"两个都不亮"。
+        -->
+    <UserControl.Resources>
+        <!-- 动态卡列表: 虚拟化 + 关掉 ListBox 自带选中高亮(与 UserSpacePage 的 SpaceDynamicListStyle 同款) -->
+        <Style x:Key="CenterDynamicListStyle" TargetType="ListBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+            <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Focusable" Value="False" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <ContentPresenter />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 用户列表(关注 / 粉丝): 同样虚拟化 —— 关注 2790+ 时不虚拟化会直接卡死 -->
+        <Style x:Key="CenterUserListStyle" TargetType="ListBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+            <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Focusable" Value="False" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <ContentPresenter />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- ===== Tab 行: 动态 / 关注 / 粉丝 =====
+             ★ 2026-11-18(用户反馈"tab 与下方小字有些拥挤"):
+               两行之间留出 12 + 6 = 18px 的空隙。原来只有 4px —— 选中态那根 2px
+               下划线几乎贴着概要行的字顶, 看着像"下划线给那行字做了下划线"。
+               空隙拆在两处: Tab 行下留 12(Tab 的点击/悬停区不被拉高),
+               概要行上留 6(它自己的行盒上下也平衡)。 -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="36,14,36,12">
+            <RadioButton x:Name="TabDynamics" GroupName="UserCenterTab"
+                         Style="{StaticResource ContentTabStyle}" Content="动态"
+                         Checked="OnTabDynamicsChecked" />
+            <RadioButton x:Name="TabFollowings" GroupName="UserCenterTab"
+                         Style="{StaticResource ContentTabStyle}" Content="关注"
+                         Checked="OnTabFollowingsChecked" />
+            <RadioButton x:Name="TabFollowers" GroupName="UserCenterTab"
+                         Style="{StaticResource ContentTabStyle}" Content="粉丝"
+                         Checked="OnTabFollowersChecked" />
+        </StackPanel>
+
+        <!-- ===== 概要行(已加载 N / 总数) ===== -->
+        <TextBlock Grid.Row="1" Text="{Binding SummaryText}" FontSize="13"
+                   Margin="36,6,36,10" Foreground="{DynamicResource TextTertiaryBrush}" />
+
+        <!-- ===== 内容区 ===== -->
+        <Grid Grid.Row="2">
+
+            <!-- ========== 动态 Tab ========== -->
+            <Grid Visibility="{Binding IsDynamicsTab, Converter={StaticResource BoolToVis}}">
+                <ListBox x:Name="DynamicsList" Style="{StaticResource CenterDynamicListStyle}"
+                         Margin="4,0,8,0"
+                         ItemsSource="{Binding Dynamics}"
+                         ScrollViewer.ScrollChanged="OnDynamicsScrollChanged">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <controls:DynamicCard DetailRequested="OnDynamicCardDetailRequested" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <!-- 首次加载的居中大菊花 -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding DynamicsLoading, Converter={StaticResource BoolToVis}}">
+                    <controls:LoadingRing Width="30" Height="30" HorizontalAlignment="Center" />
+                    <TextBlock Text="加载中…" Style="{StaticResource MetaTextStyle}"
+                               Margin="0,12,0,0" HorizontalAlignment="Center" />
+                </StackPanel>
+
+                <!-- 错误(重试) -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding ShowDynamicsError, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding DynamicsError}" FontSize="13" TextWrapping="Wrap"
+                               MaxWidth="420" HorizontalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                            HorizontalAlignment="Center" Margin="0,14,0,0" Padding="22,7"
+                            Command="{Binding RetryCommand}" />
+                </StackPanel>
+
+                <!-- 空态(★ 用**本 Tab 自己的**标记, 不用总的 TabEmpty ——
+                       否则另外两个 Tab 的空态提示也会跟着亮, 看着像"挂了三句") -->
+                <TextBlock x:Name="DynamicsEmptyText" Text="还没有动态" FontSize="13" HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           Visibility="{Binding DynamicsEmpty, Converter={StaticResource BoolToVis}}" />
+
+                <!-- 底部"正在加载更多" -->
+                <controls:LoadingRing Width="16" Height="16" HorizontalAlignment="Center"
+                                      VerticalAlignment="Bottom" Margin="0,0,0,14"
+                                      Visibility="{Binding DynamicsLoadingMore, Converter={StaticResource BoolToVis}}" />
+            </Grid>
+
+            <!-- ========== 关注 Tab ========== -->
+            <Grid Visibility="{Binding IsFollowingsTab, Converter={StaticResource BoolToVis}}">
+                <ListBox x:Name="FollowingsList" Style="{StaticResource CenterUserListStyle}"
+                         Margin="4,0,8,0"
+                         ItemsSource="{Binding Followings}"
+                         ScrollViewer.ScrollChanged="OnFollowingsScrollChanged">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <controls:FollowUserCard />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding FollowingsLoading, Converter={StaticResource BoolToVis}}">
+                    <controls:LoadingRing Width="30" Height="30" HorizontalAlignment="Center" />
+                    <TextBlock Text="加载中…" Style="{StaticResource MetaTextStyle}"
+                               Margin="0,12,0,0" HorizontalAlignment="Center" />
+                </StackPanel>
+
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding ShowFollowingsError, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding FollowingsError}" FontSize="13" TextWrapping="Wrap"
+                               MaxWidth="420" HorizontalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                            HorizontalAlignment="Center" Margin="0,14,0,0" Padding="22,7"
+                            Command="{Binding RetryCommand}" />
+                </StackPanel>
+
+                <TextBlock x:Name="FollowingsEmptyText" Text="还没有关注任何人" FontSize="13" HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           Visibility="{Binding FollowingsEmpty, Converter={StaticResource BoolToVis}}" />
+
+                <controls:LoadingRing Width="16" Height="16" HorizontalAlignment="Center"
+                                      VerticalAlignment="Bottom" Margin="0,0,0,14"
+                                      Visibility="{Binding FollowingsLoadingMore, Converter={StaticResource BoolToVis}}" />
+            </Grid>
+
+            <!-- ========== 粉丝 Tab ========== -->
+            <Grid Visibility="{Binding IsFollowersTab, Converter={StaticResource BoolToVis}}">
+                <ListBox x:Name="FollowersList" Style="{StaticResource CenterUserListStyle}"
+                         Margin="4,0,8,0"
+                         ItemsSource="{Binding Followers}"
+                         ScrollViewer.ScrollChanged="OnFollowersScrollChanged">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <controls:FollowUserCard />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding FollowersLoading, Converter={StaticResource BoolToVis}}">
+                    <controls:LoadingRing Width="30" Height="30" HorizontalAlignment="Center" />
+                    <TextBlock Text="加载中…" Style="{StaticResource MetaTextStyle}"
+                               Margin="0,12,0,0" HorizontalAlignment="Center" />
+                </StackPanel>
+
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding ShowFollowersError, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding FollowersError}" FontSize="13" TextWrapping="Wrap"
+                               MaxWidth="420" HorizontalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                            HorizontalAlignment="Center" Margin="0,14,0,0" Padding="22,7"
+                            Command="{Binding RetryCommand}" />
+                </StackPanel>
+
+                <TextBlock x:Name="FollowersEmptyText" Text="还没有粉丝" FontSize="13" HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           Visibility="{Binding FollowersEmpty, Converter={StaticResource BoolToVis}}" />
+
+                <controls:LoadingRing Width="16" Height="16" HorizontalAlignment="Center"
+                                      VerticalAlignment="Bottom" Margin="0,0,0,14"
+                                      Visibility="{Binding FollowersLoadingMore, Converter={StaticResource BoolToVis}}" />
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

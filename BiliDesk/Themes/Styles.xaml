@@ -2390,6 +2390,52 @@
         <Setter Property="IsHitTestVisible" Value="False" />
     </Style>
 
+    <!-- ============ 透明可点区块(2026-11-18, issue #90) ============
+         「我的」页的头像/昵称/三个统计数字、UP 主主页的统计数字都用它:
+         一块**看不出是按钮**的可点区域, 悬停时铺一层浅浅的底衬。
+
+         ★★★ 为什么做成 Button 而不是 Border + MouseLeftButtonUp:
+           WPF 的 UIElement.MouseLeftButtonUp 是 **Direct(直达)路由** ——
+           只发给"正好被点中的那个元素", 挂在父级上时, 点在里面的子元素
+           **永远不会触发**(探针 bd-probe-mine 实测: avatar=1 header=0 page=0)。
+           而 Button 的 Click 是**真正的冒泡事件**, 且自带:
+             · 按下-抬起必须落在同一元素(自带配对判定, 不写一行代码);
+             · 键盘 Tab 聚焦 + 空格/回车触发(无障碍);
+             · Command 绑定(VM 里的命令直接挂上, 页面不用写 click 处理)。
+           ⇒ 这块区域再也不需要 code-behind, 也不需要各自维护"按下标记"。
+         ★ 常态背景必须显式 Transparent: 没有背景 = 不参与命中测试(同样的坑见 QuickEntry)。 -->
+    <Style x:Key="ClickableAreaButtonStyle" TargetType="Button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" CornerRadius="8"
+                            Background="{TemplateBinding Background}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter
+                            HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background"
+                                    Value="{DynamicResource ControlFillHoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.72" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- 封面角标(播放量/弹幕/时长): 卡片一悬停就淡出, 取消悬停再淡回。
          放大的是封面, 角标压在上面会挡住画面 —— 这也是 B 站网页版的行为。 -->
     <Style x:Key="CoverBadgeFadeStyle" TargetType="FrameworkElement">

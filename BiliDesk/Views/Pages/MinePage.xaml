@@ -79,80 +79,128 @@
                       Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}}">
             <StackPanel x:Name="PageBody" Margin="36,6,36,28">
 
-                <!-- == 资料头 == -->
-                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                    <Border x:Name="AvatarBox" Width="64" Height="64" CornerRadius="32"
-                            Background="{DynamicResource AccentSoftFillBrush}"
-                            helpers:Cover.Source="{Binding Face}">
-                        <!-- 兜底人形: Cover.Source 把头像画在 Border 的 Background 上, 子元素会叠在图上,
-                             所以 Face 有 URL 就把图标藏掉(和侧栏头像当年的处理一致) -->
-                        <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                   FontSize="26" Foreground="{DynamicResource AccentTextBrush}"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   Visibility="{Binding Face, Converter={StaticResource InvStrToVis}}" />
-                    </Border>
-                    <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{Binding Name}" FontSize="20" FontWeight="SemiBold"
-                                       VerticalAlignment="Center"
-                                       Foreground="{DynamicResource TextPrimaryBrush}" />
-                            <!-- 等级徽章: 空串(Lv0)时整块隐藏 -->
-                            <Border CornerRadius="4" Padding="5,1.5" Margin="8,0,0,0"
-                                    VerticalAlignment="Center"
-                                    Background="{DynamicResource AccentSoftFillBrush}"
-                                    Visibility="{Binding LevelText, Converter={StaticResource StrToVis}}">
-                                <TextBlock Text="{Binding LevelText}" FontSize="10.5" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource AccentTextBrush}" />
-                            </Border>
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                            <TextBlock Text="硬币" FontSize="12"
-                                       Foreground="{DynamicResource TextTertiaryBrush}" />
-                            <TextBlock Text="{Binding CoinsText}" FontSize="12" Margin="4,0,0,0"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" />
-                            <!-- 经验: 没拿到(ExpText 为空)时整段隐藏 -->
-                            <StackPanel Orientation="Horizontal" Margin="18,0,0,0"
-                                        Visibility="{Binding ExpText, Converter={StaticResource StrToVis}}">
-                                <TextBlock Text="经验" FontSize="12"
-                                           Foreground="{DynamicResource TextTertiaryBrush}" />
-                                <TextBlock Text="{Binding ExpText}" FontSize="12" Margin="4,0,0,0"
-                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                <!-- == 资料头 ==
+                     ★ 2026-11-18(issue #90): 头像 / 昵称 / 等级徽章变成可点的入口 ——
+                       点进去进「我的个人主页」(复用 UP 主主页页)。
+                       ★ 用 Button 包一层(ClickableAreaButtonStyle)而不是 Border + 鼠标事件:
+                         · Button.Click 是**冒泡**事件, 点在里面的头像/昵称上照样触发;
+                         · 按下-抬起必须落在同一元素 —— 自带配对判定, 不用自己维护标记;
+                         · 键盘 Tab + 空格/回车也能进, 无障碍直接到位;
+                         · Command 绑定 VM 的命令, 页面不用写 click 处理。
+                         ★★ 反面教材: WPF 的 UIElement.MouseLeftButtonUp 是 **Direct(直达)路由**,
+                            只发给"正好被点中的那个元素" —— 挂在父级 Border 上时,
+                            点在里面的头像上**永远不会触发**。
+                            (探针 bd-probe-mine 实测: avatar=1 header=0 page=0。)
+                     ★ 2026-11-18(用户反馈"框与头像圆相切"):
+                       ① 悬停底衬: 内边距 10,8。底衬的左边框原来正好切在圆形头像的最左点上,
+                          看着像"框没包住头像"; 现在左右各让出 10px、上下 8px。
+                          水平方向用负外边距(-10)抵消, 头像的左边线与页面对齐线一分不动。
+                          ★ 竖直方向**不能**用负外边距(-8 会把底衬顶到 ScrollViewer 视口外,
+                            滚到最顶时上边被切掉 2px), 改成把里面 StackPanel 的上外边距
+                            从 10 减到 2: 8(内边距) + 2 = 10, 头像落点与改动前完全一致。
+                       ② 提示气泡: Placement=Bottom + 8px 间距。默认是跟随鼠标,
+                          指针停在头像下沿时气泡就从那儿冒出来, 上边缘正好贴着圆底。
+                          钉在整块下方并留 8px 空隙, 无论指针在哪都不会再贴着头像。 -->
+                <Button Style="{StaticResource ClickableAreaButtonStyle}"
+                        HorizontalAlignment="Left"
+                        Padding="10,8" Margin="-10,0,-10,0"
+                        Command="{Binding OpenSelfSpaceCommand}"
+                        ToolTip="查看我的个人主页"
+                        ToolTipService.Placement="Bottom"
+                        ToolTipService.VerticalOffset="8">
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                        <Border x:Name="AvatarBox" Width="64" Height="64" CornerRadius="32"
+                                Background="{DynamicResource AccentSoftFillBrush}"
+                                helpers:Cover.Source="{Binding Face}">
+                            <!-- 兜底人形: Cover.Source 把头像画在 Border 的 Background 上, 子元素会叠在图上,
+                                 所以 Face 有 URL 就把图标藏掉(和侧栏头像当年的处理一致) -->
+                            <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="26" Foreground="{DynamicResource AccentTextBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Visibility="{Binding Face, Converter={StaticResource InvStrToVis}}" />
+                        </Border>
+                        <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Name}" FontSize="20" FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <!-- 等级徽章: 空串(Lv0)时整块隐藏 -->
+                                <Border CornerRadius="4" Padding="5,1.5" Margin="8,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Background="{DynamicResource AccentSoftFillBrush}"
+                                        Visibility="{Binding LevelText, Converter={StaticResource StrToVis}}">
+                                    <TextBlock Text="{Binding LevelText}" FontSize="10.5" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource AccentTextBrush}" />
+                                </Border>
                             </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <TextBlock Text="硬币" FontSize="12"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                                <TextBlock Text="{Binding CoinsText}" FontSize="12" Margin="4,0,0,0"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <!-- 经验: 没拿到(ExpText 为空)时整段隐藏 -->
+                                <StackPanel Orientation="Horizontal" Margin="18,0,0,0"
+                                            Visibility="{Binding ExpText, Converter={StaticResource StrToVis}}">
+                                    <TextBlock Text="经验" FontSize="12"
+                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    <TextBlock Text="{Binding ExpText}" FontSize="12" Margin="4,0,0,0"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+                            <!-- 经验进度条: 120px 轨道, 实心段宽度由 VM 算好(ExpBarWidth) -->
+                            <Grid Width="120" Height="3" Margin="0,6,0,0" HorizontalAlignment="Left"
+                                  Visibility="{Binding ExpText, Converter={StaticResource StrToVis}}">
+                                <Border CornerRadius="1.5" Background="{DynamicResource DividerBrush}" />
+                                <Border CornerRadius="1.5" HorizontalAlignment="Left"
+                                        Background="{DynamicResource AccentBrush}"
+                                        Width="{Binding ExpBarWidth}" />
+                            </Grid>
                         </StackPanel>
-                        <!-- 经验进度条: 120px 轨道, 实心段宽度由 VM 算好(ExpBarWidth) -->
-                        <Grid Width="120" Height="3" Margin="0,6,0,0" HorizontalAlignment="Left"
-                              Visibility="{Binding ExpText, Converter={StaticResource StrToVis}}">
-                            <Border CornerRadius="1.5" Background="{DynamicResource DividerBrush}" />
-                            <Border CornerRadius="1.5" HorizontalAlignment="Left"
-                                    Background="{DynamicResource AccentBrush}"
-                                    Width="{Binding ExpBarWidth}" />
-                        </Grid>
                     </StackPanel>
-                </StackPanel>
+                </Button>
 
-                <!-- == 动态 / 关注 / 粉丝(三等分, 数字在上、标签在下) == -->
+                <!-- == 动态 / 关注 / 粉丝(三等分, 数字在上、标签在下) ==
+                     ★ 2026-11-18(issue #90): 三个数字变成可点的入口 ——
+                       点进去进「我的空间」的对应 Tab。
+                     ★ 用 Button(ClickableAreaButtonStyle) 而不是 Border + 鼠标事件:
+                       Click 是**冒泡**事件, 点在里面的数字/文字上也照样触发;
+                       按下-抬起必须落在同一元素 —— 自带配对判定;
+                       键盘 Tab + 空格/回车也能用。
+                       (WPF 的 MouseLeftButtonUp 是 Direct 路由, 挂在父级上收不到子元素的点击。) -->
                 <UniformGrid Columns="3" Margin="0,28,0,0">
-                    <StackPanel HorizontalAlignment="Center">
-                        <TextBlock Text="{Binding DynamicText}" FontSize="18" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextPrimaryBrush}" />
-                        <TextBlock Text="动态" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextTertiaryBrush}" />
-                    </StackPanel>
-                    <StackPanel HorizontalAlignment="Center">
-                        <TextBlock Text="{Binding FollowingText}" FontSize="18" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextPrimaryBrush}" />
-                        <TextBlock Text="关注" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextTertiaryBrush}" />
-                    </StackPanel>
-                    <StackPanel HorizontalAlignment="Center">
-                        <TextBlock Text="{Binding FollowerText}" FontSize="18" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextPrimaryBrush}" />
-                        <TextBlock Text="粉丝" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
-                                   Foreground="{DynamicResource TextTertiaryBrush}" />
-                    </StackPanel>
+                    <Button x:Name="DynamicEntry" Style="{StaticResource ClickableAreaButtonStyle}"
+                            Padding="0,6" Command="{Binding OpenDynamicsCommand}"
+                            ToolTip="查看我的动态">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="{Binding DynamicText}" FontSize="18" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <TextBlock Text="动态" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="FollowingEntry" Style="{StaticResource ClickableAreaButtonStyle}"
+                            Padding="0,6" Command="{Binding OpenFollowingsCommand}"
+                            ToolTip="查看我关注的 UP 主">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="{Binding FollowingText}" FontSize="18" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <TextBlock Text="关注" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="FollowerEntry" Style="{StaticResource ClickableAreaButtonStyle}"
+                            Padding="0,6" Command="{Binding OpenFollowersCommand}"
+                            ToolTip="查看我的粉丝">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="{Binding FollowerText}" FontSize="18" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <TextBlock Text="粉丝" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </StackPanel>
+                    </Button>
                 </UniformGrid>
 
                 <!-- == 快捷入口(四个: 离线缓存 / 观看记录 / 我的收藏 / 稍后再看)。

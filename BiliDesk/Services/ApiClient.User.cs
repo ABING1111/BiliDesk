@@ -120,4 +120,68 @@ public partial class ApiClient
         }
     }
 
+    /// <summary>
+    /// 粉丝列表(某人的粉丝明细)。接口: GET /x/relation/followers (vmid / pn / ps)
+    ///
+    /// ★ 2026-11-18 新增(issue #90「我的」页要看粉丝列表):
+    ///   关注列表已有 <see cref="GetFollowingsAsync"/>, 粉丝列表之前完全没有 —— 这次补上。
+    ///
+    /// ★★ **每页条数上限是 20**(关注列表那个接口是 50) —— 这是服务端硬上限,
+    ///   请求更大的 ps 会被静默截断。所以两个接口的页大小**不能共用常量**,
+    ///   调用方必须各自写死自己那个上限(见 <see cref="FollowerPageSize"/> 的说明)。
+    ///
+    /// ★ 需要登录 Cookie(未登录回 -101); Referer 必须是 bilibili.com 子域名
+    ///   (这里给 space.bilibili.com/{vmid}/fans), 否则 -352 风控。
+    ///
+    /// ★ 隐私设置: 用户把粉丝列表设成不可见时服务端回 **22118**(关注列表则是 22115),
+    ///   这里转成人话 —— 界面上直接甩一个裸 code 用户看不懂。
+    ///
+    /// ★ 数据形状与关注列表**完全一致**(mid/uname/face/sign/official_verify + total),
+    ///   所以直接复用 <see cref="ParseFollowUserList"/>(同一 partial class 内, 无需改可见性) ——
+    ///   另写一份解析器必然漂移。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<FollowUser>? list, int total)> GetFollowersAsync(
+        long vmid, int pn = 1, int ps = FollowerPageSize)
+    {
+        if (vmid <= 0) return (false, "缺少用户 UID", null, 0);
+        try
+        {
+            await EnsureBuvidAsync();
+            var ps2 = new Dictionary<string, string>
+            {
+                ["vmid"] = vmid.ToString(),
+                ["pn"] = pn.ToString(),
+                ["ps"] = Math.Min(ps, FollowerPageSize).ToString(),
+                ["order"] = "desc"
+            };
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/relation/followers", ps2,
+                referer: $"https://space.bilibili.com/{vmid}/fans");
+            if (code != 0 || data == null)
+            {
+                var errMsg = msg ?? $"请求失败 (code {code})";
+                if (code == -101) errMsg = "请先登录";
+                // ★ 隐私设置: 粉丝列表不可见。别把裸 code 甩给用户。
+                else if (code == 22118) errMsg = "该用户把粉丝列表设成了不可见";
+                else if (code == 22115) errMsg = "该用户把关注列表设成了不可见";
+                return (false, errMsg, null, 0);
+            }
+
+            var users = ParseFollowUserList(data.Value, out var total);
+            return (true, null, users, total);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null, 0);
+        }
+    }
+
+    /// <summary>
+    /// 粉丝列表每页条数的**服务端硬上限**(20)。
+    ///
+    /// ★ 别跟关注列表的 50 混用: 关注接口给 50, 粉丝接口只给 20, 请求更大的会被静默截断
+    ///   (表现为"每页只有 20 条"却没有任何报错, 分页却按 20 走 —— 看着像到底了)。
+    /// </summary>
+    public const int FollowerPageSize = 20;
+
 }

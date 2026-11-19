@@ -131,6 +131,49 @@ public class NavigationDispatcher
     }
 
     /// <summary>
+    /// 打开「我的空间」页(动态 / 关注 / 粉丝三个 Tab)。
+    ///
+    /// 与 <see cref="OpenUserSpace"/> / <see cref="OpenBangumi"/> 同款做法:
+    /// 在**主窗口内容区里内嵌打开**(盖一层带返回按钮的页面), 而不是另开独立窗口 ——
+    /// 用户是从某个页面点进来的, 要能"退回去", 另开窗口会让人失去方位感。
+    ///
+    /// ★ 这个页面**看的是谁的空间由 mid 决定**, 不是"一定是我的":
+    ///   「我的」页点三个数字 → 传自己的 mid;
+    ///   UP 主主页点关注数/粉丝数 → 传那个 UP 的 mid。两处共用同一个页面。
+    ///
+    /// ★ <paramref name="isSelf"/> 由调用方判定 —— 调用方本来就知道自己的 mid,
+    ///   不必在这里多打一次 nav 请求(那一次往返不划算)。
+    /// </summary>
+    public void OpenUserCenter(long mid, string name = "", string face = "", bool isSelf = false,
+                               ViewModels.UserCenterTab tab = ViewModels.UserCenterTab.Dynamics,
+                               string? title = null)
+    {
+        if (mid <= 0) return;
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            var page = new UserCenterPage(mid, name, face, isSelf, tab);
+
+            var main = SvcWindow.Main;
+            if (main != null && main.IsLoaded)
+            {
+                main.ShowEmbeddedPage(page, title ?? (name.Length > 0 ? name + " 的空间" : "我的空间"));
+                return;
+            }
+
+            var host = new Window
+            {
+                Title = title ?? "我的空间",
+                Width = 980,
+                Height = 720,
+                Background = ThemeBackground(),
+                Content = page
+            };
+            host.Owner = _owner;
+            host.Show();
+        });
+    }
+
+    /// <summary>
     /// 打开番剧选集页。
     ///
     /// 与 <see cref="OpenUserSpace"/> 同款做法: 在**主窗口内容区里内嵌打开**(盖一层带返回
