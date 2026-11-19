@@ -29,6 +29,9 @@ public class FluentWindow : Window, IWindowStateTransitionAware
         //   图标字体不受影响 —— 它们是元素上的局部值, 优先级高于这里的继承值
         //   (Styles.xaml 隐式 TextBlock 样式那段长注释说的就是这件事)。
         FontFamily = UiFont.Current;
+        // ★ 基准字重与字体配套(2026-11-19, 见 UiFont.CurrentWeight): MiSans 这类非标准字重族
+        //   若按默认 400 请求, WPF 会就近匹配到 Medium(380) —— 整窗正文发粗。
+        FontWeight = UiFont.CurrentWeight;
         SourceInitialized += OnSourceInitialized;
         // ★ 任务栏自动隐藏/换显示器等让"工作区"变化时, 最大化窗口会被系统重新摆放,
         //   但 WindowState 不变(不会触发 StateChanged) —— 尺寸一变就按新几何补一次内缩。
@@ -146,8 +149,12 @@ public class FluentWindow : Window, IWindowStateTransitionAware
 
     private void OnThemeChanged() => ApplyChrome();
 
-    /// <summary>全局界面字体变化(来自设置页): 重设本窗口字体, 子元素靠继承自动跟随</summary>
-    private void OnUiFontChanged() => FontFamily = UiFont.Current;
+    /// <summary>全局界面字体变化(来自设置页): 重设本窗口字体与基准字重, 子元素靠继承自动跟随</summary>
+    private void OnUiFontChanged()
+    {
+        FontFamily = UiFont.Current;
+        FontWeight = UiFont.CurrentWeight;
+    }
 
     /// <summary>全局亚克力开关变化(来自设置页): 所有已开窗口都要立刻跟着换背景</summary>
     private void OnAcrylicChanged() => ApplyChrome();

@@ -3,6 +3,10 @@ using System.Linq;
 using System.Windows.Input;
 using System.Windows.Media;
 using BiliDesk.Helpers;
+// FontWeight/FontWeights 在 System.Windows 根命名空间(不在 Media), 文件里只用别名引这一个类型,
+// 避免整包 using System.Windows 带进来一堆与 Media/WinForms 同名类型(Point/Size/Color...)的冲突面
+using FontWeight = System.Windows.FontWeight;
+using FontWeights = System.Windows.FontWeights;
 using BiliDesk.Models;
 using BiliDesk.Services;
 using BiliDesk.Views.Windows;
@@ -515,12 +519,16 @@ public class SettingsViewModel : ObservableObject
     private void RebuildFontOptions()
     {
         _fontOptions.Clear();
-        _fontOptions.Add(new FontOption("默认", "", new FontFamily(UiFont.DefaultSource)));
+        _fontOptions.Add(new FontOption("默认", "", new FontFamily(UiFont.DefaultSource), FontWeights.Normal));
         var (kind, name) = UiFont.ParseStored(Svc.Settings.UiFontFamily);
         if (kind == UiFont.StoredKind.File && UiFont.TryGetImport(name, out var importFamily, out var importDisplay))
-            _fontOptions.Add(new FontOption(importDisplay + "（已导入）", Svc.Settings.UiFontFamily, importFamily));
+            _fontOptions.Add(new FontOption(importDisplay + "（已导入）", Svc.Settings.UiFontFamily, importFamily,
+                UiFont.GetBaseWeight(importFamily)));
+        // GetBaseWeight 有进程级缓存: 首次打开设置页为每个字体付一次判定(~百毫秒量级), 之后免费
         foreach (var (source, display) in UiFont.SystemFonts)
-            _fontOptions.Add(new FontOption(display, source, new FontFamily(UiFont.BuildSystemSource(source))));
+            _fontOptions.Add(new FontOption(display, source,
+                new FontFamily(UiFont.BuildSystemSource(source)),
+                UiFont.GetBaseWeight(new FontFamily(source))));
     }
 
     /// <summary>
@@ -1878,11 +1886,12 @@ public sealed class SponsorCategoryOption : ObservableObject
 /// </summary>
 public sealed class FontOption : IEquatable<FontOption>
 {
-    public FontOption(string label, string stored, FontFamily preview)
+    public FontOption(string label, string stored, FontFamily preview, FontWeight previewWeight)
     {
         Label = label;
         Stored = stored;
         Preview = preview;
+        PreviewWeight = previewWeight;
     }
 
     /// <summary>界面显示名(系统字体优先中文名; 导入项带"（已导入）"后缀)</summary>
@@ -1893,6 +1902,9 @@ public sealed class FontOption : IEquatable<FontOption>
 
     /// <summary>预览用字体(下拉项与选中框都用它渲染)</summary>
     public FontFamily Preview { get; }
+
+    /// <summary>预览用基准字重(2026-11-19): 与 UiFont.GetBaseWeight 同源, 下拉里"所见即所得"</summary>
+    public FontWeight PreviewWeight { get; }
 
     public bool Equals(FontOption? other)
         => other != null && string.Equals(Stored, other.Stored, StringComparison.Ordinal);

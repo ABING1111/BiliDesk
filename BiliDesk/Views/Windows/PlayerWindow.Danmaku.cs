@@ -684,6 +684,13 @@ public partial class PlayerWindow : FluentWindow
     private FontFamily _danmakuFont = Helpers.UiFont.Current;
 
     /// <summary>
+    /// 弹幕基准字重(2026-11-19): 与 <see cref="_danmakuFont"/> 配套, 语义见 <see cref="Helpers.UiFont.CurrentWeight"/>。
+    /// 弹幕层不跟窗口继承走, 字重也必须显式设到每条 TextBlock 上(见 AddDanmaku);
+    /// 字重影响字宽, 与字号同档 —— 变化时走 ApplyDanmakuLook 的清屏重建。
+    /// </summary>
+    private FontWeight _danmakuWeight = Helpers.UiFont.CurrentWeight;
+
+    /// <summary>
     /// 是否给弹幕加**半透明圆角胶囊底衬**(2026-11-05 新增)。
     ///
     /// ★ 默认开 —— 纯白字压在明亮画面上会看不清, 这正是底衬要解决的问题。
@@ -1323,7 +1330,9 @@ public partial class PlayerWindow : FluentWindow
                 Foreground = DanmakuBrush(color),
                 FontSize = _danmakuFontSize,
                 // 跟随全局界面字体(2026-11-14): 弹幕层不跟窗口继承走, 必须显式设(见 _danmakuFont)
-                FontFamily = _danmakuFont
+                FontFamily = _danmakuFont,
+                // 基准字重随字体一起走(2026-11-19): MiSans 这类族不校正的话 400 请求会落 Medium
+                FontWeight = _danmakuWeight
             }
         };
 
@@ -1687,6 +1696,7 @@ public partial class PlayerWindow : FluentWindow
             Helpers.DanmakuMotion.MinSpeedLevel, Helpers.DanmakuMotion.MaxSpeedLevel);
         var nextPill = s.DanmakuPillBackground;
         var nextFamily = Helpers.UiFont.Current;
+        var nextWeight = Helpers.UiFont.CurrentWeight;
 
         var opacityChanged = Math.Abs(nextOpacity - _danmakuOpacity) > 0.001;
         var fontChanged = Math.Abs(nextFont - _danmakuFontSize) > 0.01;
@@ -1694,6 +1704,7 @@ public partial class PlayerWindow : FluentWindow
         var pillChanged = nextPill != _danmakuPill;
         // UiFont 每次换字体都 new 一个 FontFamily, 引用不同即变化(同值时 SetFromSettings 不会广播)
         var familyChanged = !ReferenceEquals(nextFamily, _danmakuFont);
+        var weightChanged = nextWeight != _danmakuWeight;
 
         // ★★★ 泳道高是"字号 × 胶囊开关"的**派生量**, 所以这里**无条件**同步 ——
         //   放在早退之前是关键: 否则"设置恰好等于默认值"时会早退, 泳道高就停在字段
@@ -1701,7 +1712,7 @@ public partial class PlayerWindow : FluentWindow
         //   会上下压在一起 —— 正是"字号改了泳道没跟着改"那类历史 bug 的同一形状。
         _laneHeight = Helpers.DanmakuMotion.LaneHeight(nextFont, nextPill);
 
-        if (!opacityChanged && !fontChanged && !speedChanged && !pillChanged && !familyChanged) return;
+        if (!opacityChanged && !fontChanged && !speedChanged && !pillChanged && !familyChanged && !weightChanged) return;
 
         _danmakuOpacity = nextOpacity;
         _danmakuFontSize = nextFont;
@@ -1710,11 +1721,12 @@ public partial class PlayerWindow : FluentWindow
         _danmakuFixedSeconds = Helpers.DanmakuMotion.FixedSeconds(nextLevel);
         _danmakuPill = nextPill;
         _danmakuFont = nextFamily;
+        _danmakuWeight = nextWeight;
 
         // 不透明度不需要清屏: 基线字段改完, 在飞的弹幕在下一帧自然按新基线渲染
         // (固定弹幕的 Opacity 每帧被"基线 × 淡出系数"覆写, 所以只改基线就够)。
 
-        if (fontChanged || speedChanged || pillChanged || familyChanged)
+        if (fontChanged || speedChanged || pillChanged || familyChanged || weightChanged)
         {
             // 布局变了, 在飞的那些按旧尺寸/旧速度继续飞会突然错位, 一并清掉
             ResetLanes();

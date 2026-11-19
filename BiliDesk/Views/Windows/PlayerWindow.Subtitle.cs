@@ -401,6 +401,7 @@ public partial class PlayerWindow : FluentWindow
         SubtitleText.MaxWidth = Math.Max(240, VideoAreaRoot.ActualWidth * 0.78);
         // 界面字体(2026-11-14 新增): 字幕层在独立浮层可视树里, 不跟窗口继承走(同弹幕层)
         SubtitleText.FontFamily = UiFont.Current;
+        SubtitleText.FontWeight = UiFont.CurrentWeight; // ★ 基准字重随字体一起走(2026-11-19)
     }
 
     /// <summary>显示字幕层并写入文本。空文本 = 直接隐藏。</summary>

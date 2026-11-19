@@ -170,7 +170,8 @@
                                       VirtualizingStackPanel.VirtualizationMode="Recycling">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding Label}" FontFamily="{Binding Preview}" />
+                                        <TextBlock Text="{Binding Label}" FontFamily="{Binding Preview}"
+                                                   FontWeight="{Binding PreviewWeight}" />
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>

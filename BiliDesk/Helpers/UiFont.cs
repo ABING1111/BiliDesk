@@ -13,6 +13,11 @@ namespace BiliDesk.Helpers;
 /// 全局「界面字体」(2026-11-14 新增): 用户可选系统已安装字体, 也可导入 .ttf/.otf/.ttc 字体文件。
 /// 弹幕跟随同一字体; 图标字体不受影响(它们是元素上的局部值, 优先级高于窗口继承)。
 ///
+/// 基准字重(2026-11-19 新增): <see cref="CurrentWeight"/> 与字体配套, 是界面正文继承的 FontWeight。
+/// 动机: WPF 按请求字重(400)在族内**就近匹配**字面, 而 MiSans 这类非标准字重家族没有 400 实例
+/// (实测命名实例落在 150/200/250/305/330/380/450/520/630/700), 400 会被匹配到 **380(Medium)** ——
+/// 表现就是"选了 MiSans VF 整个界面发粗"(用户实测报告)。
+///
 /// ## 生效链路(与 UiScale / WheelScroll 同一套路: 配置驱动的静态值)
 ///   SettingsStore.Load 末尾 → <see cref="SetFromSettings"/> → <see cref="Current"/> 落定;
 ///   所有窗口继承 Views/FluentWindow, 构造时读 Current, 并订阅 <see cref="Changed"/> 即时换字体。
@@ -96,9 +101,18 @@ public static class UiFont
 
     private static FontFamily _current = new(DefaultSource);
     private static string _currentStored = "";
+    private static FontWeight _currentWeight = FontWeights.Normal;
 
     /// <summary>当前生效的界面字体(所有窗口与弹幕读它)</summary>
     public static FontFamily Current => _current;
+
+    /// <summary>
+    /// 当前生效的**基准字重**(2026-11-19 新增, 与 <see cref="Current"/> 配套)。
+    /// 默认栈与"Regular 恰好是 400"的族给 Normal —— 行为与以前完全一致;
+    /// 只有族里没有 400 字面的字体才校正, 让继承而来的正文落中真正的 Regular 字面。
+    /// 元素上显式设置的 FontWeight(SemiBold/Bold 标题等)不受影响, 仍按自己的值匹配。
+    /// </summary>
+    public static FontWeight CurrentWeight => _currentWeight;
 
     /// <summary>当前字体的显示名(设置页说明行用; 默认档显示"默认")</summary>
     public static string CurrentDisplay { get; private set; } = "默认";
@@ -121,10 +135,11 @@ public static class UiFont
         PruneOtherImports(kind == StoredKind.File ? name : null);
 
         if (string.Equals(next, _currentStored, StringComparison.Ordinal)) return;
-        var (family, display) = Resolve(next);
+        var (family, display, weight) = Resolve(next);
         _currentStored = next;
         _current = family;
         CurrentDisplay = display;
+        _currentWeight = weight;
         Changed?.Invoke();
     }
 
@@ -162,23 +177,131 @@ public static class UiFont
         }
     }
 
-    /// <summary>存储值 → (生效字体, 显示名)。解析不了的一律回落默认。</summary>
-    private static (FontFamily Family, string Display) Resolve(string? stored)
+    /// <summary>存储值 → (生效字体, 显示名, 基准字重)。解析不了的一律回落默认。</summary>
+    private static (FontFamily Family, string Display, FontWeight Weight) Resolve(string? stored)
     {
         var (kind, name) = ParseStored(stored);
         if (kind == StoredKind.File)
         {
             var import = TryResolveImport(name);
-            if (import != null) return import.Value;
+            if (import != null)
+                return (import.Value.Family, import.Value.Display, GetBaseWeight(import.Value.Family));
         }
         else if (kind == StoredKind.System && IsSystemFont(name))
         {
             var display = SystemFonts
                 .FirstOrDefault(x => string.Equals(x.Source, name, StringComparison.OrdinalIgnoreCase)).Display;
+            // ★ 基准字重按**所选族单独**判(不拼回退栈): 就近匹配只发生在用户选的这一族里;
+            //   回退族(YaHei)有自己的 400 面, 校正它反而会把回退字面拉轻(330 请求下 YaHei 落 290 Light)
             return (new FontFamily(BuildSystemSource(name)),
-                    string.IsNullOrEmpty(display) ? name : display);
+                    string.IsNullOrEmpty(display) ? name : display,
+                    GetBaseWeight(new FontFamily(name)));
         }
-        return (new FontFamily(DefaultSource), "默认");
+        return (new FontFamily(DefaultSource), "默认", FontWeights.Normal);
+    }
+
+    // ------------------------------------------------------------ 基准字重(Regular 实例校正, 2026-11-19)
+
+    /// <summary>
+    /// 「这个族的 Regular 实例到底是几」的**纯决策**(可单测)。
+    ///
+    /// 规则(ComputeBaseWeight 按同规则喂事实):
+    ///   1. 可变字体(fvar 存在): Regular = **fvar 默认实例**的字重 —— 浏览器/DirectWrite 在
+    ///      400 请求下渲染的就是它。实测 MiSans VF: wght 轴 150~700, 默认 330(Regular);
+    ///   2. 静态字体: 取族里**命名为 Regular/常规**的字面(WPF 按排版族名归并了全部静态文件,
+    ///      那个字面就是该族 intended 的 Regular);
+    ///   3. 都判不出 → 400, 不校正 —— 缺证据时不动现有行为。
+    /// </summary>
+    public static int PickRegularWeight(IReadOnlyList<(int Weight, string? Subfamily, int? FvarDefault)> faces)
+    {
+        foreach (var (weight, subfamily, fvarDefault) in faces)
+        {
+            // SfntReader 已把 Fixed 16.16 取整成 int, 这里直接用
+            if (fvarDefault.HasValue) return fvarDefault.Value;
+            if (IsRegularName(subfamily)) return weight;
+        }
+        return 400;
+    }
+
+    private static bool IsRegularName(string? name)
+        => name is not null
+           && (name.Equals("Regular", StringComparison.OrdinalIgnoreCase) || name == "常规");
+
+    /// <summary>族名 → 基准字重 的进程级缓存: 判定要枚举字面 + 读字体文件, 别重复付。</summary>
+    private static readonly Dictionary<string, FontWeight> BaseWeightCache = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// 某族的「基准字重」= 界面正文应当继承的 FontWeight(见 <see cref="CurrentWeight"/>)。
+    /// 设置页下拉的预览项也用它, 保证"所见即所得"。
+    /// ★ 参数应是**单族** FontFamily(系统字体传名字本身, 导入传目录族);
+    ///   带回退栈的复合族不参与判定(默认栈整体回落 Normal, 行为不变)。
+    /// </summary>
+    public static FontWeight GetBaseWeight(FontFamily family)
+    {
+        if (family is null) return FontWeights.Normal;
+        var key = family.Source;
+        if (BaseWeightCache.TryGetValue(key, out var cached)) return cached;
+        var computed = ComputeBaseWeight(family);
+        BaseWeightCache[key] = computed;
+        return computed;
+    }
+
+    private static FontWeight ComputeBaseWeight(FontFamily family)
+    {
+        try
+        {
+            var familyNames = CollectFamilyNames(family);
+            var faces = new List<(int Weight, string? Subfamily, int? FvarDefault)>();
+            // 同一文件被族内多个字面共享(可变字体必然如此), 每个文件只读一次表
+            var fileFacts = new Dictionary<string, SfntReader.FontFacts>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var ft in family.FamilyTypefaces)
+            {
+                if (ft.Style != FontStyles.Normal) continue;
+                var w = ft.Weight.ToOpenTypeWeight();
+                if (faces.Exists(f => f.Weight == w)) continue; // 双份安装(如两套 HarmonyOS SC)会枚举出重复字面
+
+                string? sub = null;
+                int? fvar = null;
+                var tf = new Typeface(family, FontStyles.Normal, FontWeight.FromOpenTypeWeight(w), FontStretches.Normal);
+                if (tf.TryGetGlyphTypeface(out var gt) && gt.FontUri.IsFile)
+                {
+                    var path = gt.FontUri.LocalPath;
+                    if (!fileFacts.TryGetValue(path, out var facts))
+                    {
+                        facts = SfntReader.Inspect(path, familyNames);
+                        fileFacts[path] = facts;
+                    }
+                    sub = facts.Subfamily;
+                    fvar = facts.FvarDefault;
+                }
+                faces.Add((w, sub, fvar));
+            }
+
+            return FontWeight.FromOpenTypeWeight(PickRegularWeight(faces));
+        }
+        catch
+        {
+            // 枚举/解析失败一律回落 400: 字重校正只锦上添花, 不能影响可用性
+            return FontWeights.Normal;
+        }
+    }
+
+    /// <summary>族名候选: Source(去 "./#" 前缀) + 各语言族名, 供 .ttc 子字体匹配。</summary>
+    private static List<string> CollectFamilyNames(FontFamily family)
+    {
+        var names = new List<string>();
+        void Add(string? n)
+        {
+            if (string.IsNullOrWhiteSpace(n)) return;
+            var hash = n.IndexOf('#'); // 文件夹字体的 Source 形如 "./#族名"
+            if (hash >= 0) n = n[(hash + 1)..];
+            n = n.Trim();
+            if (n.Length > 0) names.Add(n);
+        }
+        Add(family.Source);
+        foreach (var kv in family.FamilyNames) Add(kv.Value);
+        return names.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     // ------------------------------------------------------------ 导入字体文件
