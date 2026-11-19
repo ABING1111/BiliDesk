@@ -37,13 +37,25 @@ public static class CoverWindow
         Environment.GetEnvironmentVariable("BILIDESK_DISABLE_COVER_WINDOW") != "1";
 
     /// <summary>
-    /// 补图余量(屏): 视口上下各多准备这么多屏的封面。
+    /// 补图余量(屏): 视口**上方**多准备这么多屏的封面。
     ///
-    /// ★ 为什么要有余量: 用户滚动时, 下一行卡片可能在**滚动停止之前**就已经进入视野。
-    ///   只补"当前严格可见"的话, 快速滚动会看到一片占位色。留半屏 ≈ 一两行卡片,
-    ///   让"马上要看到的"提前准备好。
+    /// ★ 为什么要有余量: 用户往回滚时, 上一行卡片可能在**滚动停止之前**就已经进入视野。
+    ///   只补"当前严格可见"的话, 快速回滚会看到一片占位色。留半屏 ≈ 一两行卡片。
     /// </summary>
     public const double PrefetchScreens = 0.5;
+
+    /// <summary>
+    /// 补图余量(屏): 视口**下方**多准备这么多屏的封面。
+    ///
+    /// ★★ 2026-11-14 从与上方共用 0.5 改成独立的 1.5(用户报"往下滑到未加载内容顿 1 秒,
+    ///   滑已加载的不顿"; 滑回已缓存区域明显好转 ⇒ 大头是封面**下载**等待):
+    ///   下滑是主方向, 而"加载更多"的预取阈值已放大到 ~1.2 屏(见 HomePage.AutoLoadThresholdFor),
+    ///   新一页卡片会提前一屏多出现在列表尾部 —— 下方补图带必须罩得住它们,
+    ///   让下载与用户继续滚动的时间重叠, 滚到眼前时封面已就位(或至少已在途)。
+    ///   上方保持 0.5: 回滚方向的图多半刚被淘汰、还在 MemCache/磁盘缓存里, 恢复很快。
+    /// ★ 内存上界不受影响: 预取只决定"发起加载", 常驻仍由 <see cref="ResidentScreens"/> 淘汰兜住。
+    /// </summary>
+    public const double PrefetchScreensBelow = 1.5;
 
     /// <summary>
     /// 常驻封面的上限, 以"当前视口能放几张卡"为单位。
@@ -51,15 +63,14 @@ public static class CoverWindow
     /// ★ 为什么是"视口张数的倍数"而不是固定数字: 窗口大小/列数不同, 一屏的张数差很多
     ///   (小窗口 12 张、大屏 40 张)。按倍数算, 上限自动跟着视口走, 不用调参。
     ///
-    /// ★ 为什么是 2.5(2026-11-09 从 3 降下来): 补图区间本身就是"视口 ± 半屏"= 2 屏,
-    ///   2.5 屏仍有半屏余量 —— 正常滚动时被放掉的永远是"早就滚过去一屏多"的卡片,
-    ///   用户不可能马上看到。省下的是每面墙约 1/6 的常驻封面(≈6MB/屏 × 0.5 屏)。
-    ///   首页有 4 个常驻 tab 墙, 这一项在隐藏 tab 全放(B2)之外再兜一层。
-    ///
-    /// ★ 内存含义: 常驻封面 ≈ 2.5 屏 × 每张 0.33~0.5MB。以首页 24 张/屏计 ≈ 60 张 ≈ 20~30MB,
-    ///   与"滚过多少张"无关 —— 这正是用户要的"单页内存有上限"。
+    /// ★ 为什么是 3.5(2026-11-14 从 2.5 回调): 下方补图带扩到 1.5 屏后(见
+    ///   <see cref="PrefetchScreensBelow"/>), 补图区间 = 1 + 0.5 + 1.5 = 3 屏。
+    ///   上限必须**严格大于**补图区间(留半屏余量), 否则"刚预取 → 名额不够 → 立刻被放 →
+    ///   下一轮又取"抖动(下方带外还有"1 秒内看到过不释放"的宽限兜着, 见 ReleaseStalestCovers)。
+    ///   多出的 0.5 屏 ≈ 每面墙 4~8MB, 换"下滑到眼前即有图", 值得。
+    ///   内存上界仍然成立: 常驻 ≈ 3.5 屏 × 每张 0.33~0.5MB, 与"滚过多少张"无关。
     /// </summary>
-    public const double ResidentScreens = 2.5;
+    public const double ResidentScreens = 3.5;
 
     /// <summary>
     /// 当前允许常驻的封面张数。视口还没量出来(<paramref name="visibleCount"/> ≤ 0)时返回 0,
@@ -68,7 +79,8 @@ public static class CoverWindow
     public static int ResidentCap(int visibleCount)
         => visibleCount <= 0 ? 0 : (int)Math.Ceiling(visibleCount * ResidentScreens);
 
-    /// <summary>补图区间: 与视口有交集、或落在上下各 <see cref="PrefetchScreens"/> 屏之内。</summary>
+    /// <summary>补图区间: 与视口有交集、或落在上方 <see cref="PrefetchScreens"/> /
+    /// 下方 <see cref="PrefetchScreensBelow"/> 屏之内(上下不对称, 下滑是主方向)。</summary>
     public readonly record struct Bands(double Top, double Bottom);
 
     /// <summary>
@@ -82,7 +94,7 @@ public static class CoverWindow
 
         return new Bands(
             Top: -viewport * PrefetchScreens,
-            Bottom: viewport * (1 + PrefetchScreens));
+            Bottom: viewport * (1 + PrefetchScreensBelow));
     }
 
     /// <summary>

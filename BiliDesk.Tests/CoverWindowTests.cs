@@ -23,12 +23,12 @@ public class CoverWindowTests
         => CoverWindow.For(Viewport)!.Value;
 
     [Fact]
-    public void 补图区间按余量展开()
+    public void 补图区间按余量展开_上下不对称()
     {
         var b = Bands();
-        // 上下各留半屏(500)
+        // 上方半屏(500), 下方 1.5 屏(1500) —— 下滑是主方向, 见 PrefetchScreensBelow
         Assert.Equal(-500, b.Top, 3);
-        Assert.Equal(1500, b.Bottom, 3);
+        Assert.Equal(2500, b.Bottom, 3);
     }
 
     [Fact]
@@ -63,6 +63,9 @@ public class CoverWindowTests
         Assert.True(CoverWindow.ShouldRestore(-400, -300, b));
         // 视口下方半屏内
         Assert.True(CoverWindow.ShouldRestore(1100, 1200, b));
+        // ★ 下方 1.5 屏内也要补: "加载更多"提前一屏多追加的新卡片落在这里,
+        //   必须提前发起下载, 用户滚到眼前时封面已就位(2026-11-14 修下滑顿挫)。
+        Assert.True(CoverWindow.ShouldRestore(2100, 2200, b));
     }
 
     [Fact]
@@ -71,8 +74,8 @@ public class CoverWindowTests
         var b = Bands();
         // 视口上方一屏外
         Assert.False(CoverWindow.ShouldRestore(-1200, -1100, b));
-        // 视口下方一屏外
-        Assert.False(CoverWindow.ShouldRestore(1600, 1700, b));
+        // 视口下方 1.5 屏外(区间下沿 = 2500)
+        Assert.False(CoverWindow.ShouldRestore(2600, 2700, b));
     }
 
     [Theory]
@@ -113,24 +116,25 @@ public class CoverWindowTests
     // ---------------------------------------------------------------- 常驻上限
 
     [Fact]
-    public void 常驻上限是视口张数的2点5倍()
+    public void 常驻上限是视口张数的3点5倍()
     {
-        // 视口 24 张 ⇒ 上限 60 张。这是"内存有上界"与"不会刚补上就被挤掉"的折中,
+        // 视口 24 张 ⇒ 上限 84 张。这是"内存有上界"与"不会刚补上就被挤掉"的折中,
         // 见 CoverWindow.ResidentScreens 的说明。
-        Assert.Equal(60, CoverWindow.ResidentCap(24));
-        Assert.Equal(30, CoverWindow.ResidentCap(12));
-        Assert.Equal(100, CoverWindow.ResidentCap(40));
+        Assert.Equal(84, CoverWindow.ResidentCap(24));
+        Assert.Equal(42, CoverWindow.ResidentCap(12));
+        Assert.Equal(140, CoverWindow.ResidentCap(40));
     }
 
     [Fact]
     public void 常驻上限必须明显大于补图区间_否则会抖动()
     {
-        // 补图区间 = 视口 ± 半屏 = 2 屏。上限若 ≤ 2 屏, 就会出现
-        // "刚补上 → 名额不够 → 立刻被放掉 → 下一轮又补"的循环。
+        // 补图区间 = 视口 + 上方半屏 + 下方 1.5 屏 = 3 屏(上下不对称, 2026-11-14)。
+        // 上限若 ≤ 3 屏, 就会出现"刚预取 → 名额不够 → 立刻被放掉 → 下一轮又补"的循环。
         // 这里钉住"至少留半屏的余量"。
-        Assert.True(CoverWindow.ResidentScreens >= 1 + 2 * CoverWindow.PrefetchScreens,
+        var bandScreens = 1 + CoverWindow.PrefetchScreens + CoverWindow.PrefetchScreensBelow;
+        Assert.True(CoverWindow.ResidentScreens >= bandScreens + 0.5,
             $"ResidentScreens={CoverWindow.ResidentScreens} 必须 >= " +
-            $"{1 + 2 * CoverWindow.PrefetchScreens}(补图区间) + 余量");
+            $"{bandScreens + 0.5}(补图区间 {bandScreens} 屏 + 半屏余量)");
     }
 
     [Theory]

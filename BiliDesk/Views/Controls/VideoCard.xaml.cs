@@ -54,6 +54,22 @@ public partial class VideoCard : UserControl
     private static readonly ConditionalWeakTable<VideoItem, object?> _seenItems = new();
 
     /// <summary>
+    /// 标记"这一条是**滚动加载追加**进来的, 不要播入场淡入"。
+    ///
+    /// ★ 2026-11-14(用户报"往下滑到未加载内容卡 1 秒"): 一页 20~30 张卡片同时起
+    ///   160ms 的 Opacity 动画, 合成器就要同时混合这么多动画层 —— 那一下的卡顿有相当一部分
+    ///   来自这里。而这些卡片是用户**盯着列表往下滑**时补进来的, 本来也不该再演一次入场;
+    ///   首屏/切 tab 那批(真正的"第一次亮相")仍然照旧播。
+    ///
+    /// 实现上复用 <see cref="_seenItems"/>: OnLoaded 见到"已亮过相"就只落位、不动画。
+    /// 类型不是 <see cref="VideoItem"/> 的(番剧海报卡等)直接忽略 —— 那些卡片自己决定入场。
+    /// </summary>
+    internal static void MarkNoEntranceAnimation(object? item)
+    {
+        if (item is VideoItem vi) _seenItems.Add(vi, null);
+    }
+
+    /// <summary>
     /// 页面可以往卡片右键菜单里追加自己的菜单项(如收藏页的"移出收藏")。
     /// 用 ObservableCollection 而不是普通 List: 菜单项可能在页面加载后动态增删,
     /// 集合同知能让菜单自动刷新。

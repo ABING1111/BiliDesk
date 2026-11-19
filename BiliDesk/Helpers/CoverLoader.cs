@@ -280,22 +280,40 @@ public static class CoverLoader
             //   用户看到的就是"标题有(标题来自接口 JSON, 与图片链路无关)、封面一片灰"。
             //   ⇒ 现在把字节留在 downloaded 里, 写盘失败就退回内存解码: 封面照常显示,
             //     只是这一张不进磁盘缓存(下次再看会重新下载)。
+            //
+            // ★★★ 2026-11-14 改成**流式写盘**(用户报"往下滑到未加载内容卡 1 秒"):
+            //   旧写法 `GetByteArrayAsync` 每张图都新分配一块 ~100KB+ 的 byte[] ——
+            //   超过 85KB 就是**大对象(LOH)**。滚动加载一页 20~30 张封面 = 每页几 MB 的 LOH
+            //   分配, 而 LOH 分配会频繁触发 gen2 GC; gen2 期间 UI 线程的新分配要等 GC 收尾,
+            //   表现正是一次几百毫秒到 1 秒的冻结。而且它只在"往下滑到新内容"时发生 ——
+            //   滑已加载过的卡片不下载、不分配, 所以不卡(与用户实测完全吻合)。
+            //   流式下载用 ArrayPool 的小缓冲 + 直接落盘, 这条路不再产生大对象。
+            //   `downloaded` 只保留给"流式写盘失败"的兜底(那一支才需要字节来解码)。
             byte[]? downloaded = null;
-            try
+            if (!File.Exists(cacheFile))
             {
-                if (!File.Exists(cacheFile))
+                await DownloadGate.WaitAsync().ConfigureAwait(false);
+                try
                 {
-                    await DownloadGate.WaitAsync().ConfigureAwait(false);
-                    try { downloaded = await Http.GetByteArrayAsync(url).ConfigureAwait(false); }
-                    finally { DownloadGate.Release(); }
-                    await File.WriteAllBytesAsync(cacheFile, downloaded).ConfigureAwait(false);
-                    // 写盘成功才计数: 写失败的图下次还会重下, 不该被算进"缓存增长"里。
-                    NotifyCacheWritten();
+                    var wrote = await DownloadToFileAsync(url, cacheFile).ConfigureAwait(false);
+                    if (!wrote)
+                    {
+                        // 流式写盘失败(缓存目录不可写/磁盘满/被占用): 退回"先拿字节再写",
+                        // 至少这张封面能在内存里解出来显示(见上面 2026-10-11 的那段)。
+                        try
+                        {
+                            downloaded = await Http.GetByteArrayAsync(url).ConfigureAwait(false);
+                            await File.WriteAllBytesAsync(cacheFile, downloaded).ConfigureAwait(false);
+                        }
+                        catch
+                        {
+                            // 字节可能拿到了但写不进去 —— 保留 downloaded 走内存解码
+                        }
+                    }
                 }
-            }
-            catch
-            {
-                // 写盘失败**不等于**取图失败 —— 下面的内存兜底会处理; 真没字节才返回 null
+                finally { DownloadGate.Release(); }
+                // 写盘成功才计数: 写失败的图下次还会重下, 不该被算进"缓存增长"里。
+                if (File.Exists(cacheFile)) NotifyCacheWritten();
             }
 
             // 解码放后台线程: 一张 1280 宽的 JPEG 解码要几毫秒到几十毫秒,
@@ -364,6 +382,51 @@ public static class CoverLoader
         foreach (var s in WidthSteps)
             if (decodeWidth <= s) return s;
         return WidthSteps[^1];
+    }
+
+    /// <summary>
+    /// 把图片**流式**写进缓存文件(不产生大 byte[])。返回是否成功。
+    ///
+    /// ★ 为什么不用 <c>GetByteArrayAsync</c>: 见 <see cref="LoadCoreAsync"/> 里 2026-11-14 的说明 ——
+    ///   每张 ~100KB+ 的 byte[] 落在 LOH 上, 滚动加载一页就是几 MB 的大对象分配,
+    ///   会频繁触发 gen2 GC, 而 gen2 期间 UI 线程的分配会被迫等待(观感就是"卡 1 秒")。
+    ///   <c>CopyToAsync</c> 用的是 ArrayPool 里的 80KB 以下小缓冲, 不会进 LOH。
+    ///
+    /// ★ 先写 `.part` 再改名: 中途失败/进程被杀时不会在缓存目录里留下"看起来正常"的半张图
+    ///   (半张 JPEG 有可能被解码器接受, 表现为封面下半截是灰的)。
+    /// </summary>
+    private static async Task<bool> DownloadToFileAsync(string url, string cacheFile)
+    {
+        var partFile = cacheFile + ".part";
+        try
+        {
+            using var resp = await Http
+                .GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+            using (var src = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false))
+            using (var dst = new FileStream(partFile, FileMode.Create, FileAccess.Write,
+                       FileShare.None, 64 * 1024, useAsync: true))
+            {
+                await src.CopyToAsync(dst).ConfigureAwait(false);
+            }
+
+            try
+            {
+                File.Move(partFile, cacheFile, overwrite: true);
+            }
+            catch
+            {
+                // 改名失败(极少数: 目标被占用/跨卷): 退一步复制, 内容一样
+                File.Copy(partFile, cacheFile, overwrite: true);
+                try { File.Delete(partFile); } catch { /* 忽略 */ }
+            }
+            return true;
+        }
+        catch
+        {
+            try { File.Delete(partFile); } catch { /* 忽略 */ }
+            return false;
+        }
     }
 
     /// <summary>估算解码后位图占用的字节(Pbgra32: 每像素 4 字节)</summary>

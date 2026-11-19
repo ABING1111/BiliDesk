@@ -22,7 +22,20 @@ namespace BiliDesk.Views.Pages;
 public partial class HomePage : UserControl, IRefreshable
 {
     private HomeViewModel? Vm => DataContext as HomeViewModel;
-    private const double AutoLoadThreshold = 240;
+    /// <summary>
+    /// 自动加载的预取阈值下限(DIP)。实际阈值按视口高度动态放大, 见 <see cref="AutoLoadThresholdFor"/>。
+    ///
+    /// ★★ 2026-11-14 从固定 240 改成"约 2 屏"(用户报"滑到未加载内容会顿 1 秒, 滑已加载的不顿"):
+    ///   240px ≈ 一行卡片, 几乎滑到最底才发请求 —— AutoLoadThrottle 的稳定期/冷却 + 接口
+    ///   200~500ms(撞上 -412 限流退避还有 1.5s)全部叠在"用户已经滚到底、滚不动"的那段等待上。
+    ///   提前两屏预取, 网络等待与用户继续滚动的时间重叠, 到底时新内容已就位。
+    ///   (FollowPage 的动态流早已用 800px 固定预取, 这里按视口算, 大小窗口都合适。)
+    /// </summary>
+    private const double AutoLoadThresholdMin = 480;
+
+    /// <summary>预取阈值 = max(下限, 2 × 视口高)。视口量不出来时退回下限。</summary>
+    private static double AutoLoadThresholdFor(ScrollViewer sv)
+        => Math.Max(AutoLoadThresholdMin, sv.ViewportHeight * 2.0);
     // 防止连续自动填充死循环
     private int _autoFillCount;
 
@@ -682,7 +695,7 @@ public partial class HomePage : UserControl, IRefreshable
 
         var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
         var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;
-        if (distanceToBottom > AutoLoadThreshold && !contentShort) return;
+        if (distanceToBottom > AutoLoadThresholdFor(sv) && !contentShort) return;
 
         // ★ 冷却闸门: 缩放/布局变化会连着发很多 ScrollChanged, 稳定后也可能连续判中。
         //   没有它的话一次拖窗口能触发好几页(见 AutoLoadThrottle)。
@@ -1286,8 +1299,11 @@ public partial class HomePage : UserControl, IRefreshable
 ///   视图发 Reset, 下面的重建逻辑正好接住。
 /// - 读数据源用 **索引快照** 而不是枚举器: 填充过程中数据源还可能被改(直播 tab 切回会
 ///   Clear+重灌、滚动加载会 Add、屏蔽刷新会 Reset), 枚举器一遇到修改就抛异常, 索引不会。
-/// - 填充中的 Add 不直接进视图(交给游标自然扫到, 保证顺序); 填充完的 Add 直接补
-///   (就是普通的滚动加载, 一次 20 条, 逐个生成容器的负担可以接受)。
+/// - 填充中的 Add 不直接进视图(交给游标自然扫到, 保证顺序); 填充完的 Add 进**待补队列**,
+///   由同一个泵按小批(8 张/帧)分帧补 —— 2026-11-14 用户报"滑到未加载内容顿 1 秒"的另一半:
+///   原来加载更多的 20~30 条在一个回调里逐条 Add, 一次布局同步生成 30 张 VideoCard
+///   (标题换行排版最贵), 就是"新卡片出现瞬间整界面冻结"的来源。首屏 24 张/批在页面
+///   刚出现时可接受, 滚动中的追加必须更小批, 帧间隔才贴得住 60fps。
 /// - Reset/Remove/Replace/Move 一律全量重同步: 这些只发生在"刷新/屏蔽变化"语义里, 简单正确优先。
 /// </summary>
 internal sealed class DeferredFill
@@ -1297,6 +1313,24 @@ internal sealed class DeferredFill
     private readonly ICollectionView? _viewSource;
     private readonly ObservableCollection<object> _view = new();
     private readonly int _chunk;
+
+    /// <summary>"加载更多"追加时的**初始**每帧批量; 之后按帧间隔自适应(见 <see cref="_appendBatch"/>)。</summary>
+    private const int AppendBatchStart = 6;
+    private const int AppendBatchMin = 2;
+    private const int AppendBatchMax = 16;
+
+    /// <summary>
+    /// 当前每帧追加几张。**按帧间隔自适应**(见 <see cref="OnPumpTiming"/>) ——
+    /// 固定值在 Debug 构建/弱机器上会偏大(一帧插入的容器更贵), 在强机器上又偏小(追加拖太久)。
+    /// </summary>
+    private int _appendBatch = AppendBatchStart;
+
+    /// <summary>上一次泵回调的时刻, 用来量"上一帧实际花了多久"(含布局/渲染, 比只量 Add 准)。</summary>
+    private long _lastPumpTick;
+
+    /// <summary>已填完后收到的追加条目(按到达顺序), 由 <see cref="FillChunk"/> 分帧搬进视图。</summary>
+    private readonly Queue<object> _appends = new();
+
     private DispatcherOperation? _pending;
     private int _index;
     private bool _completed;
@@ -1318,8 +1352,11 @@ internal sealed class DeferredFill
     public ItemsControl List => _list;
     public ObservableCollection<object> View => _view;
 
-    /// <summary>还没填完且没被丢弃(此间自动加载要暂停, 否则会拿"内容不够一屏"的假象去拉下一页)</summary>
-    public bool IsActive => !_completed && !_disposed;
+    /// <summary>
+    /// 还没填完 / 还有待补的追加 / 没被丢弃(此间自动加载要暂停, 否则会拿"内容不够一屏"的假象去拉下一页)。
+    /// ★ 待补队列也算"进行中": 追加分帧期间内容高度一格格在长, 判据同样不可信。
+    /// </summary>
+    public bool IsActive => (!_completed || _appends.Count > 0) && !_disposed;
 
     public void Start()
     {
@@ -1345,13 +1382,17 @@ internal sealed class DeferredFill
         {
             case NotifyCollectionChangedAction.Add:
                 // 填充中: 不动, 游标会自然扫到(直接塞会乱序 —— 游标后面还有没扫完的旧数据);
-                // 已填完: 这就是普通的滚动加载/刷新追加, 直接补进视图
+                // 已填完: 普通的滚动加载追加 —— 进队列由泵分帧补(见类注释, 不再当场逐条 Add)。
                 if (_completed && e.NewItems != null)
-                    foreach (var item in e.NewItems) _view.Add(item!);
+                {
+                    foreach (var item in e.NewItems) _appends.Enqueue(item!);
+                    Pump();
+                }
                 break;
             case NotifyCollectionChangedAction.Reset:
                 _index = 0;
                 _completed = false;
+                _appends.Clear();          // 整批换掉: 旧追加不再有意义, 快照游标会重新扫到
                 _rebuildPending = true;    // 换列表整段推迟到下一拍, 见 _rebuildPending 的说明
                 Pump();
                 break;
@@ -1359,6 +1400,7 @@ internal sealed class DeferredFill
             default:
                 _index = 0;
                 _completed = false;
+                _appends.Clear();
                 _rebuildPending = true;
                 Pump();
                 break;
@@ -1395,6 +1437,15 @@ internal sealed class DeferredFill
     {
         if (_disposed) return;
 
+        // ★★★ 2026-11-14(用户报"往下滑到未加载内容卡 1 秒"): 追加阶段**不再建数据源快照**。
+        //   旧写法每进一次 FillChunk 都要把整个过滤视图枚举一遍(每个条目都要过一遍屏蔽谓词),
+        //   而追加时每帧都会进来 —— 墙滚到几千张之后, 每追加一页就白跑好几次全表过滤。
+        if (_completed && !_rebuildPending)
+        {
+            DrainAppends();
+            return;
+        }
+
         if (_rebuildPending)
         {
             _rebuildPending = false;
@@ -1422,18 +1473,66 @@ internal sealed class DeferredFill
             added++;
         }
         if (_index >= snapshot.Count) _completed = true;
+
+        // ★ 已填完后的追加(滚动加载更多)跟着搬一小批 —— 首批与"数据到位"同帧落地,
+        //   用户到底时立刻有反馈; 其余的由泵按帧补完(见 DrainAppends)。
+        if (_completed) added += DrainAppends();
+
         if (added > 0) Progress?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// 把待补队列按**这一帧的批量**搬进视图, 返回搬了几条。
+    ///
+    /// ★ 追加的卡片不播入场淡入(见 <c>VideoCard.MarkNoEntranceAnimation</c>):
+    ///   一页 20~30 张同时起 160ms 的 Opacity 动画, 合成器要同时混合这么多动画层,
+    ///   那一下的卡顿有一半来自这里 —— 而"滚动中追加上来的卡片"本来就不该再演一次入场。
+    /// </summary>
+    private int DrainAppends()
+    {
+        if (_appends.Count == 0) return 0;
+
+        var added = 0;
+        while (_appends.Count > 0 && added < _appendBatch)
+        {
+            var item = _appends.Dequeue();
+            BiliDesk.Views.Controls.VideoCard.MarkNoEntranceAnimation(item);
+            _view.Add(item);
+            added++;
+        }
+        return added;
     }
 
     private void Pump()
     {
-        if (_disposed || _completed || _pending != null) return;
+        // 有存货 = 游标还没扫完 或 还有追加待补(见 IsActive: 追加也算"填充进行中")
+        if (_disposed || (_completed && _appends.Count == 0) || _pending != null) return;
         // Background 优先级: 让输入和渲染先走 —— 每一批都插在"用户还能操作"的间隙里
         _pending = _list.Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
         {
             _pending = null;
+            var now = Environment.TickCount64;
+            OnPumpTiming(now);
+            _lastPumpTick = now;
             FillChunk();
-            if (!_completed) Pump();   // 还有存货, 继续排下一帧
+            if (!_completed || _appends.Count > 0) Pump();   // 还有存货, 继续排下一帧
         });
+    }
+
+    /// <summary>
+    /// 按**帧间隔**自适应追加批量。
+    ///
+    /// ★ 为什么量帧间隔而不是量 FillChunk 自己花了多久: 插入容器的真正开销在**布局/渲染**里
+    ///   (标题换行排版、模板实例化), 不在 <c>_view.Add</c> 那一句上。泵运行在 Background
+    ///   优先级 = 渲染之后, 于是两次泵之间的间隔就近似"上一帧整帧花了多久"。
+    /// ★ 间隔偏长(>40ms) ⇒ 这机器/这个构建撑不住当前批量, 对半砍; 很宽裕(<20ms) ⇒ 慢慢加回来。
+    ///   Debug 构建下会自动收敛到 2~4 张/帧, Release 下会爬回 10+。
+    /// </summary>
+    private void OnPumpTiming(long now)
+    {
+        if (_lastPumpTick == 0) return;
+        var delta = now - _lastPumpTick;
+        if (delta > 40) _appendBatch = Math.Max(AppendBatchMin, _appendBatch / 2);
+        else if (delta < 20) _appendBatch = Math.Min(AppendBatchMax, _appendBatch + 1);
     }
 }

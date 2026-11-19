@@ -632,6 +632,9 @@ public class CardWallPanel : Panel
             _coverScroll = null;
         }
         _coverWindowTimer?.Stop();
+        // ★ 待收的内存回收跟着墙一起停: 墙被摘掉(页面销毁)后不该再排 GC
+        _trimIdleTimer?.Stop();
+        _trimPending = false;
         StopCoverHeartbeat();
     }
 
@@ -662,10 +665,60 @@ public class CardWallPanel : Panel
 
     private void OnCoverScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        // ★ 记下"用户正在滚"的时刻: 封面释放引发的强制 GC 必须等滚动停下来再做
+        //   (见 RequestTrimWhenIdle —— 滚动中触发 gen2 GC 正是"卡一下"的来源)。
+        _lastCoverScrollTick = Environment.TickCount64;
         // 只有纵向偏移/视口变化才影响可见带; 内容高度变化(分帧填充)也要重扫
         if (e.VerticalChange == 0 && e.ViewportHeightChange == 0 &&
             e.ExtentHeightChange == 0) return;
         QueueCoverWindow();
+    }
+
+    /// <summary>最近一次滚动事件的时刻(<see cref="Environment.TickCount64"/>)。见 <see cref="RequestTrimWhenIdle"/>。</summary>
+    private long _lastCoverScrollTick;
+
+    /// <summary>滚动停止多久之后才允许做内存回收。见 <see cref="RequestTrimWhenIdle"/>。</summary>
+    private const int TrimIdleMs = 1200;
+
+    private bool _trimPending;
+    private DispatcherTimer? _trimIdleTimer;
+
+    /// <summary>
+    /// 释放封面之后请求一次内存回收 —— 但**必须等滚动停下来**。
+    ///
+    /// ★★★ 2026-11-14(用户报"往下滑到未加载内容卡 1 秒"): 释放发生在**滚动中**
+    ///   (常驻张数超上限, 每 150ms 扫描淘汰一批), 而 <see cref="MemoryTrim.RequestTrim"/>
+    ///   会强制一次 gen2 回收; gen2 期间 UI 线程的新分配被迫等待回收收尾 ——
+    ///   卡片容器、绑定、布局对象全是新分配, 于是正好在"新内容进场"这一拍卡住。
+    ///   滚动中这批内存完全不必马上收(用户还在往前看), 推迟到停手 1.2s 后收一次,
+    ///   内存照样回落, 而这一下停顿落在用户已经不动的时候, 感知不到。
+    /// </summary>
+    private void RequestTrimWhenIdle()
+    {
+        _trimPending = true;
+        if (_trimIdleTimer == null)
+        {
+            _trimIdleTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(TrimIdleMs),
+            };
+            _trimIdleTimer.Tick += (_, _) =>
+            {
+                _trimIdleTimer?.Stop();
+                if (!_trimPending) return;
+                // 还在滚(或刚滚完): 再等一轮, 不跟用户的滚动抢 CPU
+                if (Environment.TickCount64 - _lastCoverScrollTick < TrimIdleMs)
+                {
+                    _trimIdleTimer?.Start();
+                    return;
+                }
+                _trimPending = false;
+                MemoryTrim.RequestTrim();
+            };
+        }
+        // 每次都重新计时: 期间又释放了新的封面, 统一在"最后一次释放之后"收一次
+        _trimIdleTimer.Stop();
+        _trimIdleTimer.Start();
     }
 
     /// <summary>
@@ -693,10 +746,15 @@ public class CardWallPanel : Panel
     ///   要等这一轮扫描才会去取图。用 150ms 防抖会让用户先看到一屏占位色再淡入;
     ///   排到 Loaded 优先级(本次布局之后、渲染之前)扫一次, 看起来就是"卡片出来即有图"。
     /// ★ 同一时刻只排一次: 分帧填充连续排版的十几帧里, 前一轮还没跑完就合并掉。
+    /// ★ 2026-11-14: 再叠一个**最短间隔**(<see cref="CoverImmediateMinGapMs"/>) —— 追加新卡片时
+    ///   每一帧都会走一次 Arrange(每次都会调这里), 而扫描本身是 O(全墙) 的; 每帧都扫一遍
+    ///   在长列表上就是每帧几毫秒的无谓开销。80ms 的间隔对"首屏立刻出图"完全看不出来,
+    ///   中间的帧由 150ms 防抖那条路兜住。
     /// </summary>
     private void QueueCoverWindowImmediate()
     {
         if (_coverImmediateQueued || CardWall.IsResizing) return;
+        if (Environment.TickCount64 - _lastCoverScanTick < CoverImmediateMinGapMs) return;
         _coverImmediateQueued = true;
         _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
@@ -704,6 +762,12 @@ public class CardWallPanel : Panel
             UpdateCoverWindow();
         });
     }
+
+    /// <summary>两次"排版后立刻扫描"之间的最小间隔(ms)。见 <see cref="QueueCoverWindowImmediate"/>。</summary>
+    private const int CoverImmediateMinGapMs = 80;
+
+    /// <summary>最近一次真扫过一次封面的时刻(用于限流, 见 <see cref="CoverImmediateMinGapMs"/>)。</summary>
+    private long _lastCoverScanTick;
 
     private DispatcherTimer CreateCoverWindowTimer()
     {
@@ -768,13 +832,18 @@ public class CardWallPanel : Panel
         if (bands == null) return;
         var b = bands.Value;
 
+        // 记下"真扫过"的时刻: 用来给"排版后立刻扫描"限流(见 QueueCoverWindowImmediate)。
+        _lastCoverScanTick = Environment.TickCount64;
+
         // ★★ 只在**确实需要**时付一次同步布局: 孩子数变了(分帧填充)或上一轮布局还没结算。
         //   旧版每轮扫描都无条件 UpdateLayout 两次 —— 扫描本身是 150ms 防抖 + 1.5s 心跳,
         //   但切 tab/首屏那几拍会连着来, 两次全量布局叠起来就是肉眼可见的顿。
-        if (!IsArrangeValid || _arrangeY.Count != InternalChildren.Count)
-        {
-            try { sv.UpdateLayout(); } catch { /* 布局异常: 按现有位置继续(总比不扫好) */ }
-        }
+        //
+        // ★★★ 2026-11-14 把这里的 `sv.UpdateLayout()` **整个删掉**(用户报"往下滑到未加载内容卡 1 秒"):
+        //   分帧填充/追加的每一帧, 孩子数都和上一轮 `_arrangeY` 对不上 ⇒ 每帧都在这里付一次
+        //   **全墙同步布局**。墙越长这笔钱越贵(测过 240 张卡全量重测 180~250ms), 而且它叠在
+        //   本该只花几毫秒的"批量插入"上, 正是"新卡片出现瞬间冻结"的直接来源。
+        //   (本次 Arrange 结束后 ArrangeOverride 自己会再排一轮扫描, 见 QueueCoverWindowImmediate。)
 
         // ★★ 面板在滚动区里的位置只量一次, 之后每个孩子的纵向坐标 = panelTop + _arrangeY[i]。
         //   旧写法对**每个孩子**做一次 TransformToAncestor(几百张卡 = 几百次可视树遍历),
@@ -808,15 +877,14 @@ public class CardWallPanel : Panel
                 var child = InternalChildren[i];
                 if (child is not FrameworkElement fe) continue;
 
-                // 优先用 ArrangeOverride 记下的坐标(见上面 panelTop 的说明);
-                // 极少数还没排过版的孩子才退回一次 TransformToAncestor。
+                // 优先用 ArrangeOverride 记下的坐标(见上面 panelTop 的说明)。
+                // ★ 本轮布局还没结算(分帧填充/追加的中间帧)时, 尾部的新孩子还没有可靠坐标 ——
+                //   直接跳过, 等 ArrangeOverride 结束后的那一轮扫描再处理。
+                //   旧的写法在这里做一次全墙 UpdateLayout 来"逼"出坐标, 每帧 180~250ms,
+                //   正是追加新卡片时整界面冻结的来源(见上面 2026-11-14 的说明)。
                 double top;
                 if (i < _arrangeY.Count) top = panelTop + _arrangeY[i];
-                else
-                {
-                    try { top = fe.TransformToAncestor(sv).Transform(new Point(0, 0)).Y; }
-                    catch { continue; }
-                }
+                else continue;
                 var bottom = i < _arrangeBottom.Count ? panelTop + _arrangeBottom[i] : top + fe.ActualHeight;
                 if (double.IsNaN(top) || double.IsNaN(bottom)) continue;
 
@@ -886,7 +954,7 @@ public class CardWallPanel : Panel
         //   ReleaseStalestCovers 里已经排除了"视口内"的卡片, 所以它永远动不到
         //   用户正看着的那一屏 —— 不需要再加一层"等补完"的门。
         var released = ReleaseStalestCovers(CoverWindow.ResidentCap(visibleCount), tick);
-        if (released > 0) MemoryTrim.RequestTrim();
+        if (released > 0) RequestTrimWhenIdle();
 
         // ★ 视口内还有空封面 ⇒ 再排一轮（恢复是异步的，本轮结束时它们还没贴上）。
         //   若这之后没有任何事件（用户不再滚动），就不会有下一轮扫描 —— 那几张会停在
@@ -1076,7 +1144,7 @@ public class CardWallPanel : Panel
                 released++;
             }
         }
-        if (released > 0) MemoryTrim.RequestTrim();
+        if (released > 0) RequestTrimWhenIdle();
     }
 
     // ------------------------------------------------------------ 隐藏后的延迟全放
@@ -1143,7 +1211,7 @@ public class CardWallPanel : Panel
                 released++;
             }
         }
-        if (released > 0) MemoryTrim.RequestTrim();
+        if (released > 0) RequestTrimWhenIdle();
     }
 
     /// <summary>孩子 → 它的封面 Border 列表(缓存, 避免每次扫描都做一次子树遍历)</summary>
