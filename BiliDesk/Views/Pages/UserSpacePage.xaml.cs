@@ -125,6 +125,30 @@ public partial class UserSpacePage : UserControl
     private bool _headerCollapsed;
 
     /// <summary>
+    /// 收起头部**至少要先滚过**"头部高度 + 这么多"。
+    ///
+    /// ★★★ 2026-11-19 修"往下滚动卡片上下跳然后被收起"(1.7.6 之前的版本不弹):
+    ///   光看"可滚高度够不够"挡不住弹跳。真正的条件在**偏移轴**上:
+    ///   触发收起要滚过 ~211px, 触发展开只要回到 8px 以内 —— 两条判据在偏移轴上
+    ///   相隔两百多像素, 物理上不可能在同一个位置来回触发。
+    ///   反过来说, 只要允许"滚 9px 就收起", 收起会把视口撑大、把偏移夹回顶部附近,
+    ///   于是立刻满足"回到顶部 ⇒ 展开", 而展开又把可滚高度长回去 —— 卡片跟着一帧一帧
+    ///   上下弹, 这就是用户看到的抽搐。
+    /// </summary>
+    private const double HeaderCollapseSlack = 40;
+
+    /// <summary>
+    /// 收起之后**至少还要能滚出这么多**才允许收起。
+    ///
+    /// ★★★ 2026-11-19 另一道保险(探针 win=714/718 实测反向 4~7 次):
+    ///   收起头部会让 ScrollViewer 的视口变大 H, 可滚高度随之少 H, 用户还会被夹回
+    ///   offset ≈ (可滚 − H)。这个余量一旦落进 <see cref="HeaderExpandAtTop"/>(8px) 里,
+    ///   收起立刻又满足"回到顶部 ⇒ 展开" —— 卡片墙跟着反复重排, 用户看到的就是抽搐。
+    ///   ⇒ 余量必须**明显大于** HeaderExpandAtTop, 把这两条判据彻底分开。
+    /// </summary>
+    private const double MinScrollAfterCollapse = 32;
+
+    /// <summary>
     /// 顶部信息区只在**滚到最顶端**时才展示(2026-11-14 用户要求):
     /// 一旦往下滚开(超过 <see cref="HeaderExpandAtTop"/>), 立刻收起;
     /// 只有滑回顶部那一点点范围内才重新展开。中间任何位置都保持收起。
@@ -210,22 +234,45 @@ public partial class UserSpacePage : UserControl
     ///   其余位置(只要还能滚) → 收起。
     /// ★ 不再按"上滑/下滑方向"判断(用户 2026-11-14 明确要求"滑到最顶端的时候再展示"),
     ///   所以上滑到中间位置也是收起的, 只有真正回到顶部才重新出现。
+    ///
+    /// ★★★ 2026-11-19 修"往下滑以后再上滑, tab 呼不出来":
+    ///   头部在 Grid 行 0、**不在** ScrollViewer 里, 所以把它收起会让 ScrollViewer 的
+    ///   **视口变大**, 可滚高度反而**变小**。老代码在展开之前先判 `extent - viewport <= 1`
+    ///   ("内容不够一屏就不折腾"), 结果内容只比一屏多一点点时(探针实测: 12 条投稿,
+    ///   展开时头部 171px、可滚 9px), 一收起可滚就变成 0 —— 页面不再可滚、不会再有
+    ///   ScrollChanged, 那句 return 就把头部钉死在收起状态, 怎么滑都回不来。
+    ///   ⇒ 展开这条路径必须**无条件**执行; "够不够一屏"只用来决定**要不要收起**。
     /// </summary>
     private void HandleHeaderAutoHide(double offset, double extent, double viewport)
     {
         if (HeaderHost == null) return;
 
-        // 第一次滚动时量出展开高度(此后收起/展开都用它还原)
+        // 第一次滚动时量出展开高度(此后收起/展开都用它还原)。
+        // ★ 量到 0 说明这一帧还没布局完, 保持 NaN 下次再量 —— 直接把 0 记下来会让
+        //   头部永远收不起来(SetHeaderCollapsed 里 _headerExpandedHeight <= 0 会 early return)。
         if (double.IsNaN(_headerExpandedHeight))
         {
-            _headerExpandedHeight = HeaderHost.ActualHeight;
-            if (_headerExpandedHeight <= 0) return;
+            var measured = HeaderHost.ActualHeight;
+            if (measured <= 0) return;
+            _headerExpandedHeight = measured;
         }
 
-        // 内容还不够一屏: 收起也没意义, 保持展开
-        if (extent - viewport <= 1) return;
+        // ---- 回到顶部: 无条件展开 ----
+        if (offset <= HeaderExpandAtTop)
+        {
+            SetHeaderCollapsed(false);
+            return;
+        }
 
-        SetHeaderCollapsed(offset > HeaderExpandAtTop);
+        // ---- 往下滚开了: 两道门槛都过了才收起 ----
+        // ① 偏移轴: 已经滚过"头部高度 + 余量"。没滚过去就收起, 等于在屏幕中间把内容
+        //    猛地往上抽一截, 接着又被夹回顶部、又展开 —— 卡片就上下弹个不停。
+        if (offset <= _headerExpandedHeight + HeaderCollapseSlack) return;
+
+        // ② 可滚高度: 收起之后仍然有得滚, 否则视口变大后整页刚好装下, 立刻又满足"回到顶部"。
+        if (extent - viewport <= _headerExpandedHeight + MinScrollAfterCollapse) return;
+
+        SetHeaderCollapsed(true);
     }
 
     private void SetHeaderCollapsed(bool collapse)
