@@ -675,6 +675,12 @@ public partial class PlayerWindow : FluentWindow
         //   放在这里而不是只放构造函数里, 是为了让"设置页改完 → 点开下一个视频"立刻生效,
         //   不必重启。
         ApplyPreferredQuality();
+        // 清晰度菜单属于"这一片": 换片先清空, 否则加载期间(或取流失败)点开菜单
+        // 看到的还是上一条视频的档位。按钮文案已由上面 ApplyPreferredQuality 用
+        // ShortLabelOf 写好, 这里不能改调 FillQualityMenu(0) —— 它用的是完整
+        // LabelOf("自动 (最高可用)"), 会把控制栏那个小按钮撑宽。
+        _qualities.Clear();
+        QualityList?.Items.Clear();
         _danmaku.Clear();
         _danmakuRaw.Clear();
         // 相关视频同属"上一条视频"的界面内容: 换片瞬间就必须清掉, 不能等新片的
@@ -1355,7 +1361,7 @@ public partial class PlayerWindow : FluentWindow
             var (playOk, playErr, main, backups, durMs, qualities, actualQn, audioUrl, remux,
                  lastPlayMs, lastPlayCid, _, _) =
                 await Svc.Api.GetPlayUrlAsync(_currentBvid, _currentCid, _currentQn,
-                    Svc.Settings.PreferredAudioTier);
+                    Svc.Settings.PreferredAudioTier, needFullQualityMenu: true);
             tPlayUrl = sw.ElapsedMilliseconds;
             if (_closing || gen != _loadGen) return;
             // 以前这里不判成败, 直接拿 main 往下走 —— 取不到地址时 main 是 null, 一路走到
@@ -1368,8 +1374,12 @@ public partial class PlayerWindow : FluentWindow
             }
             _totalMs = durMs;
             UpdateTotalDurationText();
+            // ★ 菜单只增不减(2026-11-20): 与切档同一条规则 —— 本视频已经见过的档位
+            //   不能被一次"只回了低档"的取流结果抹掉。换片时 ResetForNewMedia 已清空,
+            //   所以这里不会把上一条视频的档位带过来。
+            var mergedQualities = QualityMenuPolicy.Merge(_qualities, qualities);
             _qualities.Clear();
-            _qualities.AddRange(qualities);
+            _qualities.AddRange(mergedQualities);
             FillQualityMenu(actualQn);
             // 音质: 播放器不再提供切换入口(2026-11-14), 音轨偏好只在设置页选;
             // 取流时仍然把偏好带过去(见 GetPlayUrlAsync 的 PreferredAudioTier 参数)。

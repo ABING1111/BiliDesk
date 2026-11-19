@@ -533,6 +533,11 @@ public partial class PlayerWindow : FluentWindow
     private bool _playerRegistered;
 
     // --- 清晰度 ---
+    /// <summary>
+    /// 本视频已知可用的清晰度档位(从高到低), 清晰度弹层的唯一数据源。
+    /// ★ 同一视频内**只增不减**(见 QualityMenuPolicy): ≤720P 走 durl 时接口只回低档,
+    ///   直接替换会把 1080P/4K 抹掉。换视频由 ResetForNewMedia 整体清空。
+    /// </summary>
     private readonly List<(int qn, string label)> _qualities = new();
 
     /// <summary>

@@ -39,6 +39,13 @@ public partial class ApiClient
     private const long ShortVideoRemuxThresholdMs = 60_000;
 
     /// <summary>
+    /// 清晰度目录(可选请求)的最长等待时间。它只影响菜单, **绝不能**让起播陪它一起等:
+    /// 主 durl 地址已经拿到时, 目录晚到/被限流(GetJsonAsync 的 -412 退避最长 4.5s)
+    /// 都不该拖住第一帧。超时就直接用 durl 自己的 accept_quality 兜底。
+    /// </summary>
+    private static readonly TimeSpan QualityCatalogTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>
     /// 动态导航接口的**增量**查询(2026-11-06 新动态红点用)。
     ///
     /// 接口仍是 feed/nav(扁平、轻量), 与综合动态列表(feed/all, 见 ApiClient.Dynamic.cs)分开:
@@ -420,15 +427,28 @@ public partial class ApiClient
     /// 指定档位时只取那一档, 该档不可用则降到**不高于它**的最高可用档
     /// (见下方选轨分支), 与画质那边的降级规则同一套思路。
     /// </param>
+    /// <param name="needFullQualityMenu">
+    /// 首次加载时是否补一份完整的清晰度目录(2026-11-20)。
+    /// 只在 ≤720P 的 durl 主路上有意义: durl 封顶 720P, 它的 accept_quality 不足以
+    /// 支撑菜单(见 <see cref="FetchDashQualityCatalogAsync"/>)。切档不需要传 ——
+    /// 播放器会把新取到的档位合并进已有菜单, 见 Helpers.QualityMenuPolicy。
+    /// </param>
     public async Task<(bool ok, string? err, string? url, List<string> backups, long durationMs,
         List<(int qn, string label)> qualities, int actualQn, string? audioUrl, DashStreams? remux,
         long lastPlayMs, long lastPlayCid, List<int> audioIds, int actualAudioId)>
-        GetPlayUrlAsync(string bvid, long cid, int qn = 80, AudioTier? audioTier = null)
+        GetPlayUrlAsync(string bvid, long cid, int qn = 80, AudioTier? audioTier = null,
+            bool needFullQualityMenu = false)
     {
         var qualities = new List<(int qn, string label)>();
         try
         {
             await EnsureBuvidAsync();
+
+            // ★ 音质流的开关同时决定 fnval: 4048 才会带出 dash.flac / dash.dolby。
+            //   原来这段在 DASH 分支里, 现在提前到 durl 分支之前 —— 那里也要用它决定
+            //   清晰度目录请求的 fnval(保持与主 DASH 取流完全一致)。
+            var wantHighQualityStreams = Svc.Settings.PreferHighQualityAudio ||
+                (audioTier != null && AudioPreference.Normalize(audioTier ?? AudioTier.Auto) != AudioTier.Auto);
 
             // ★★★ 2026-10-17 播放器手术第 1 步: durl 合流单流**按需**优先(仅 ≤720P)。
             //
@@ -445,19 +465,56 @@ public partial class ApiClient
             // ★★★ 两个必须避开的坑(都实测踩过, 用户报"几乎所有视频都是 720p"):
             //   ① **"无条件先试 durl"是错的**: 默认档 1080P 时 durl 只返回 [64,16],
             //      `actualQn` 变 64, 而播放器用 actualQn 覆盖 `_currentQn`
-            //      (见 FillQualityMenu) ⇒ 之后每条视频都被钉死在 720P;
-            //      画质菜单也被换成 durl 的列表 ⇒ **1080P 那档直接消失**, 用户再也选不回去。
+            //      (见 FillQualityMenu) ⇒ 之后每条视频都被钉死在 720P。
+            //      ★ 2026-11-20 补: durl 的 accept_quality 只代表**这条通道**(封顶 720P),
+            //      不能当成整条视频的档位目录。首次加载用 FetchDashQualityCatalogAsync
+            //      并行补一份完整目录; 切档则靠播放器合并旧列表(QualityMenuPolicy)。
+            //      这样切到 720P 后 1080P/4K 仍留在菜单里, 不会再"切下去就回不来"。
             //   ② **AutoQn(=0) 不是最低画质, 而是"自动(最高可用)"**(见 QualityPreference,
             //      内部换算成 120/4K, 封顶在能正常渲染的最高档)。所以判"是否 ≤720P"必须
             //      **先排除它** —— 直接写 `qn <= 64` 会把 0 也吃进去, 于是用户默认就落进 durl 那条路。
             var isAuto = qn == QualityPreference.AutoQn;
             if (!isAuto && qn <= 64)
             {
+                // ★ 目录请求与 durl **并行**: 只在首次加载(needFullQualityMenu)时发,
+                //   起播延迟取两者较慢的那个, 而不是两次请求相加。失败返回空表, 下面回退
+                //   到 durl 自己的 accept_quality, 绝不影响能不能播。
+                var catalogTask = needFullQualityMenu
+                    ? FetchDashQualityCatalogAsync(bvid, cid, wantHighQualityStreams)
+                    : null;
+
                 var (mUrl, mBackups, mQn, mQualities, durMux, lastPlayMsMux, lastPlayCidMux) =
                     await FetchMuxedAsync(bvid, cid, qn);
-                if (!string.IsNullOrEmpty(mUrl))
+                // ★ durl 会**静默降档**(2026-11-20 用户报"点 480P 实际变成 360P"):
+                //   实测同一视频 qn=32 时 durl 返回 accept_quality=[64,16]、quality=16 ——
+                //   它根本没有 480P 单流(480P 往往只在 DASH 里有)。这时直接播就是
+                //   "点了 480 却在放 360"。所以只有 durl 真的给到请求档位(或更高)才用,
+                //   否则落到下面的 DASH 重新按 qn 选流。
+                var durlHonored = MuxedQualityPolicy.HonorsRequest(qn, mQn, mQualities);
+                if (!string.IsNullOrEmpty(mUrl) && !durlHonored)
+                    System.Diagnostics.Trace.WriteLine(
+                        $"[Muxed] qn={qn} 被服务端降级到 {mQn}, 改走 DASH 保证清晰度");
+                if (!string.IsNullOrEmpty(mUrl) && durlHonored)
                 {
-                    if (mQualities.Count > 0) qualities = FilterPlayableQualities(mQualities);
+                    // ★ 菜单优先级: DASH 目录 > durl 的 accept_quality。
+                    //   durl 列表只到 720P, 用它会把 1080P/4K 从菜单里抹掉。
+                    List<(int qn, string label)> menu;
+                    if (catalogTask != null)
+                    {
+                        // 目录是可选增强: 限时等待, 超时就用 durl 自己的列表, 不拖住起播。
+                        try { menu = await catalogTask.WaitAsync(QualityCatalogTimeout); }
+                        catch (TimeoutException) { menu = FilterPlayableQualities(mQualities); }
+                    }
+                    else menu = FilterPlayableQualities(mQualities);
+                    if (menu.Count == 0 && mQualities.Count > 0)
+                        menu = FilterPlayableQualities(mQualities);
+                    // durl 实际拿到的档位必须在菜单里(目录偶尔可能漏掉这一档)
+                    if (mQn > 0 && !menu.Any(q => q.qn == mQn))
+                    {
+                        menu.Add((mQn, QnToLabel(mQn)));
+                        menu.Sort((a, b) => b.qn.CompareTo(a.qn));
+                    }
+                    if (menu.Count > 0) qualities = menu;
                     return (true, null, mUrl, mBackups, durMux, qualities, mQn, null, null,
                         lastPlayMsMux, lastPlayCidMux, new List<int>(), 0);
                 }
@@ -469,8 +526,6 @@ public partial class ApiClient
             //   dash.flac(30251 Hi-Res 无损) / dash.dolby(30250 杜比)。
             //   关闭「优先高音质音轨」时仍用 16, 保持旧行为、避免改变视频流集合 ——
             //   除非用户在播放器里明确指定了音质档位(那时必须带 4048, 否则选无损等于没选)。
-            var wantHighQualityStreams = Svc.Settings.PreferHighQualityAudio ||
-                (audioTier != null && AudioPreference.Normalize(audioTier ?? AudioTier.Auto) != AudioTier.Auto);
             var ps = new Dictionary<string, string>
             {
                 ["bvid"] = bvid,
@@ -753,6 +808,10 @@ public partial class ApiClient
     ///   2. durl 可能是**多段**(长视频被切片, 每段带 order)。播放器只会播第一条,
     ///      所以这里要求"必须只有一段"才算可用 —— 宁可让上面回退到 DASH, 也不要给用户
     ///      一条"播到一半就没了"的地址。
+    ///   3. **可能静默降档**(2026-11-20): 部分视频 durl 没有 480P 单流
+    ///      (实测 qn=32 → quality=16, accept_quality=[64,16])。调用方必须用
+    ///      <see cref="MuxedQualityPolicy"/> 校验是否真的给到请求档, 不能直接把这份地址
+    ///      当成用户选择的结果。
     /// </summary>
     private async Task<(string? url, List<string> backups, int qn,
         List<(int qn, string label)> qualities, long durationMs,
@@ -836,6 +895,64 @@ public partial class ApiClient
     {
         qualities.RemoveAll(x => QualityPreference.IsUnsupportedTier(x.qn));
         return qualities;
+    }
+
+    /// <summary>
+    /// 只取 DASH 的**清晰度目录**(dash.video[].id), 供播放器清晰度菜单使用。
+    ///
+    /// ★ 为什么需要它(2026-11-20 用户报"切到 720P 后 1080P 从菜单消失"):
+    ///   ≤720P 为了 seek 可靠走 durl(fnval=1)合流单流, 而 durl **封顶 720P**,
+    ///   它的 accept_quality 只有 [64,16] 这类低档。把那份列表当成菜单, 1080P/4K
+    ///   就会被抹掉, 用户再也切不回去。菜单必须以 DASH 的 dash.video 为准 ——
+    ///   它才是"这个视频实际能拿到哪些档"的完整目录。
+    /// ★ 只解析目录: 不选 CDN、不选音轨、不生成播放地址。与 FetchMuxedAsync 并行跑,
+    ///   且只在"默认画质 ≤720P 的**首次**打开"调用一次(见 needFullQualityMenu);
+    ///   切档由播放器合并旧列表, 不会每次切档都多打请求。
+    /// ★ 固定用 <see cref="QualityPreference.HighestQn"/>(120) 请求: qn 只决定默认选哪条,
+    ///   不决定 dash.video 里列出哪些流(见 ApplyTryLook 的实测矩阵); 用最高请求档能把
+    ///   账号 / 免登录 1080P 能拿到的档位一次问全。失败返回空表, 调用方回退 durl 列表。
+    /// </summary>
+    private async Task<List<(int qn, string label)>> FetchDashQualityCatalogAsync(
+        string bvid, long cid, bool wantHighQualityStreams)
+    {
+        var catalog = new List<(int qn, string label)>();
+        try
+        {
+            var ps = new Dictionary<string, string>
+            {
+                ["bvid"] = bvid,
+                ["cid"] = cid.ToString(),
+                ["qn"] = QualityPreference.HighestQn.ToString(),
+                ["fnval"] = wantHighQualityStreams ? "4048" : "16",
+                ["fnver"] = "0",
+                ["fourk"] = "1"
+            };
+            ApplyTryLook(ps);
+            // ★ riskRetries: 0 —— 目录是可选请求, 命中 -412 时不要退避重试(1.5s→3s),
+            //   否则会白白把首次起播拖长; 直接返回空表交给 durl 列表兜底。
+            var (code, _, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/player/wbi/playurl", ps, sign: true, riskRetries: 0);
+            if (code != 0 || data == null) return catalog;
+            if (!data.Value.TryGetProperty("dash", out var dash) ||
+                dash.ValueKind != JsonValueKind.Object) return catalog;
+            if (!dash.TryGetProperty("video", out var videos) ||
+                videos.ValueKind != JsonValueKind.Array) return catalog;
+
+            var seen = new HashSet<int>();
+            foreach (var v in videos.EnumerateArray())
+            {
+                var id = GetInt(v, "id");
+                if (id > 0 && seen.Add(id))
+                    catalog.Add((id, QnToLabel(id)));
+            }
+            catalog.Sort((a, b) => b.qn.CompareTo(a.qn));
+            return FilterPlayableQualities(catalog);
+        }
+        catch
+        {
+            // 目录是"锦上添花": 失败就用 durl 自己的 accept_quality, 绝不影响起播。
+            return new List<(int qn, string label)>();
+        }
     }
 
     /// <summary>

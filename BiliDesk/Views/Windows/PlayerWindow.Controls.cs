@@ -915,8 +915,12 @@ public partial class PlayerWindow : FluentWindow
                 HideLoading();
                 return;
             }
+            // ★ 菜单只增不减(2026-11-20): ≤720P 走 durl, 它的 accept_quality 只到 720P。
+            //   直接替换会把 1080P/4K 从菜单里抹掉, 用户切一次低档就再也切不回去。
+            //   合并保留本视频已经见过的全部档位, 新列表只做补充。
+            var mergedQualities = QualityMenuPolicy.Merge(_qualities, qualities);
             _qualities.Clear();
-            _qualities.AddRange(qualities);
+            _qualities.AddRange(mergedQualities);
             FillQualityMenu(actualQn > 0 ? actualQn : qn);
 
             // 起播后(Playing 事件)自动恢复到切换前进度
