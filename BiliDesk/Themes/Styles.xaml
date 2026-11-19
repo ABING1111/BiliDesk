@@ -2462,4 +2462,83 @@
         </Style.Triggers>
     </Style>
 
+    <!-- ================================================================
+         页码栏的页码按钮(2026-11-19 从 UserSpacePage.xaml 的 UserControl.Resources
+         搬到应用级资源)
+
+         ★ 为什么要搬: 收藏页也用同一套页码栏了(见 Views/Controls/PagerBar)。
+           样式留在某个页面的局部资源里, 别的页面就只能复制一份 —— 两份迟早会走歪。
+           这与 2026-11-09 把 VideoCard 的样式搬到这里是同一个理由。
+         ★ 用法: <Views/Controls/PagerBar/> 里引用; 页面自己不需要再写样式。
+
+         数字页 36×36 圆角方块; 当前页强调色实底白字; 省略号单独渲染成不可点的 "…"。
+         ★ 悬停/按压只改 Opacity / 描边, 不在模板里换底色 —— 否则当前页的强调色底会被
+           悬停态顶掉(选中页鼠标一放上去就变回浅色, 看起来像没选中)。
+         ================================================================ -->
+    <Style x:Key="PageNumberButtonStyle" TargetType="Button">
+        <Setter Property="Width" Value="36" />
+        <Setter Property="Height" Value="36" />
+        <Setter Property="Margin" Value="3,0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" CornerRadius="8"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          TextElement.Foreground="{TemplateBinding Foreground}">
+                            <!-- ★ 必须挡一下全局隐式 TextBlock 样式: 它带 Foreground setter,
+                                 优先级高于这里继承的 TextElement.Foreground —— 不挡的话
+                                 "当前页"的白字会被它改成主文字色(深色), 压在强调色实底上很难看,
+                                 强调色偏深时甚至直接看不见。 (与 Styles.xaml 里多处同款处理一致) -->
+                            <ContentPresenter.Resources>
+                                <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                    <Setter Property="Foreground"
+                                            Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                    <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                </Style>
+                            </ContentPresenter.Resources>
+                        </ContentPresenter>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Opacity" Value="0.72" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <!-- 悬停"候选框": 鼠标移上去先出现浅强调底 + 强调色描边, 明确表示"这一格可以点"。
+                 ★ 选中态的 DataTrigger 写在后面: 鼠标停在当前页上时仍保持强调色实底。 -->
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource AccentSoftFillBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            </Trigger>
+            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- 上一页 / 下一页: 与数字页同款外观, 只是更宽 -->
+    <Style x:Key="PageNavButtonStyle" TargetType="Button"
+           BasedOn="{StaticResource PageNumberButtonStyle}">
+        <Setter Property="Width" Value="74" />
+        <Setter Property="Padding" Value="10,0" />
+    </Style>
+
 </ResourceDictionary>

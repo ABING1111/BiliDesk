@@ -18,6 +18,11 @@
           标题滚走之后也照样看得到。
         ★ 收藏夹条的溢出折叠逻辑(UpdateFolderOverflow)原样保留: 它量的是内容流里那个
           占位 Grid(FolderBarHost)的宽度, 与胶囊本体是不是浮层无关。
+
+        ★★ 2026-11-19 分页(用户要求对齐 UP 主主页投稿页): 卡片区从"滚动到底自动追加"
+          改成**页码分页** —— 一次只铺当前页 20 张, 底部是
+          `上一页 | 1 2 3 … N | 下一页`(Views/Controls/PagerBar)。
+          翻页后列表滚回顶部; 编辑模式的"全选"范围 = 当前页。
     -->
     <Grid>
         <ScrollViewer x:Name="PageScroll" VerticalScrollBarVisibility="Auto"
@@ -99,15 +104,12 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
 
-                        <!-- 底部状态 -->
-                        <StackPanel Margin="0,12,0,0" HorizontalAlignment="Center">
-                            <StackPanel Orientation="Horizontal"
-                                        Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
-                                <controls:LoadingRing Width="18" Height="18" />
-                                <TextBlock Text="加载中…" Margin="8,0,0,0"
-                                           VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
-                            </StackPanel>
-                        </StackPanel>
+                        <!-- 底部页码栏(2026-11-19): 上一页 | 1 2 3 … N | 下一页
+                             ★ 与 UP 主主页投稿用的是同一个控件(Views/Controls/PagerBar),
+                               样式在 Themes/Styles.xaml —— 两处视觉/禁点规则不会再走歪。
+                             ★ 只有一页时整块收起(控件内部绑 ShowPager)。
+                             ★ 翻页后由代码把列表滚回顶部(见 FavoritesPage.xaml.cs)。 -->
+                        <controls:PagerBar Margin="0,18,0,6" />
                     </StackPanel>
                 </StackPanel>
 
@@ -220,9 +222,10 @@
             </Grid>
         </ScrollViewer>
 
-        <!-- 加载中(页面级浮层, 不跟着滚) -->
+        <!-- 加载中(页面级浮层, 不跟着滚)。★ 绑 ShowLoadingOverlay 而不仅是 Loading:
+             切夹时列表会先清空, 只绑 Loading 的话那一小会儿是"页码栏 + 白板"。 -->
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Panel.ZIndex="10"
-                    Visibility="{Binding Loading, Converter={StaticResource BoolToVis}}">
+                    Visibility="{Binding ShowLoadingOverlay, Converter={StaticResource BoolToVis}}">
             <controls:LoadingRing Width="30" Height="30" HorizontalAlignment="Center" />
             <TextBlock Text="正在同步云端收藏夹…" Style="{StaticResource MetaTextStyle}"
                        Margin="0,12,0,0" HorizontalAlignment="Center" />

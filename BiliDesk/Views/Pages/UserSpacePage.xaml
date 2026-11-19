@@ -22,75 +22,10 @@
             </Style.Triggers>
         </Style>
 
-        <!-- ===== 页码按钮(参考 B 站投稿页) =====
-             数字页 36×36 圆角方块; 当前页强调色实底白字; 省略号单独渲染成不可点的 "…"。
-             ★ 悬停/按压只改 Opacity, 不在模板里换底色 —— 否则当前页的强调色底会被
-               悬停态顶掉(选中页鼠标一放上去就变回浅色, 看起来像没选中)。 -->
-        <Style x:Key="PageNumberButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="36" />
-            <Setter Property="Height" Value="36" />
-            <Setter Property="Margin" Value="3,0" />
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="FontSize" Value="13" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" CornerRadius="8"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
-                                              TextElement.Foreground="{TemplateBinding Foreground}">
-                                <!-- ★ 必须挡一下全局隐式 TextBlock 样式: 它带 Foreground setter,
-                                     优先级高于这里继承的 TextElement.Foreground —— 不挡的话
-                                     "当前页"的白字会被它改成主文字色(深色), 压在强调色实底上很难看,
-                                     强调色偏深时甚至直接看不见。 (与 Styles.xaml 里多处同款处理一致) -->
-                                <ContentPresenter.Resources>
-                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
-                                        <Setter Property="Foreground"
-                                                Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
-                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
-                                    </Style>
-                                </ContentPresenter.Resources>
-                            </ContentPresenter>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter Property="Opacity" Value="0.72" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.4" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <!-- 悬停"候选框": 鼠标移上去先出现浅强调底 + 强调色描边, 明确表示"这一格可以点"。
-                     ★ 选中态的 DataTrigger 写在后面: 鼠标停在当前页上时仍保持强调色实底。 -->
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource AccentSoftFillBrush}" />
-                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-                </Trigger>
-                <DataTrigger Binding="{Binding IsCurrent}" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-                    <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
-                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
-
-        <!-- 上一页 / 下一页: 与数字页同款外观, 只是更宽 -->
-        <Style x:Key="PageNavButtonStyle" TargetType="Button"
-               BasedOn="{StaticResource PageNumberButtonStyle}">
-            <Setter Property="Width" Value="74" />
-            <Setter Property="Padding" Value="10,0" />
-        </Style>
+        <!-- ===== 页码栏 =====
+             ★ 2026-11-19: 页码按钮样式(PageNumberButtonStyle / PageNavButtonStyle)与页码栏本体
+               一起搬到了应用级 —— 样式进 Themes/Styles.xaml, 控件是 Views/Controls/PagerBar。
+               收藏页现在用同一套页码栏, 这里再保留一份局部样式就会变成两份会走歪的副本。 -->
 
         <!-- 空间页 Tab(投稿 / 图文): 底部强调色下划线, 选中态由 code-behind 写 Tag="on" 驱动。 -->
         <Style x:Key="SpaceTabStyle" TargetType="Button">
@@ -351,48 +286,12 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- 页码栏(2026-11-08): 上一页 | 1 2 3 … 33 | 下一页
-                         ★ 只有一页或没有投稿时整块收起(ShowPager)。
+                    <!-- 页码栏(2026-11-08 起): 上一页 | 1 2 3 … 33 | 下一页
+                         2026-11-19: 换成公共控件 Views/Controls/PagerBar(收藏页用的是同一套),
+                         样式在 Themes/Styles.xaml。这里不再保留内联的一份。
+                         ★ 只有一页或没有投稿时整块收起(ShowPager, 由控件内部绑定)。
                          ★ 翻页后由代码把列表滚回顶部(见 UserSpacePage.xaml.cs)。 -->
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
-                                Margin="0,20,0,6"
-                                Visibility="{Binding ShowPager, Converter={StaticResource BoolToVis}}">
-                        <Button Content="上一页" Style="{StaticResource PageNavButtonStyle}"
-                                Command="{Binding PrevPageCommand}" IsEnabled="{Binding CanGoPrev}"
-                                Margin="0,0,6,0" />
-                        <ItemsControl ItemsSource="{Binding PageItems}" VerticalAlignment="Center">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <StackPanel Orientation="Horizontal" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid>
-                                        <!-- 省略号 -->
-                                        <TextBlock Text="…" Style="{StaticResource MetaTextStyle}"
-                                                   FontSize="14" Margin="8,0" VerticalAlignment="Center"
-                                                   Visibility="{Binding IsEllipsis, Converter={StaticResource BoolToVis}}" />
-                                        <!-- 数字页 -->
-                                        <Button Content="{Binding Display}"
-                                                Style="{StaticResource PageNumberButtonStyle}"
-                                                Command="{Binding DataContext.GoToPageCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                CommandParameter="{Binding Page}"
-                                                IsEnabled="{Binding DataContext.CanChangePage, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                ToolTip="{Binding Display, StringFormat=跳转到第 {0} 页}"
-                                                Visibility="{Binding IsEllipsis, Converter={StaticResource InvBoolToVis}}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <Button Content="下一页" Style="{StaticResource PageNavButtonStyle}"
-                                Command="{Binding NextPageCommand}" IsEnabled="{Binding CanGoNext}"
-                                Margin="6,0,0,0" />
-                        <!-- 翻页在途: 页码高亮已先跳到目标页, 这里再给一个"正在加载"的明确反馈 -->
-                        <controls:LoadingRing Width="16" Height="16" Margin="10,0,0,0"
-                                              VerticalAlignment="Center"
-                                              Visibility="{Binding IsPaging, Converter={StaticResource BoolToVis}}" />
-                    </StackPanel>
+                    <controls:PagerBar Margin="0,20,0,6" />
                 </StackPanel>
             </ScrollViewer>
         </Grid>

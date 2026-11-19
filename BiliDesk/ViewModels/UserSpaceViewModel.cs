@@ -18,7 +18,7 @@ namespace BiliDesk.ViewModels;
 ///   原来靠滚到底自动追加, 用户永远不知道一共有多少页、也没法直接跳到某一页;
 ///   现在一次只保留当前页, 底部页码栏负责翻页, 翻页后回到顶部。
 /// </summary>
-public class UserSpaceViewModel : ObservableObject
+public class UserSpaceViewModel : ObservableObject, IPagedViewModel
 {
     /// <summary>每页投稿数(与 B 站空间投稿页一致)</summary>
     private const int PageSize = 30;
@@ -690,23 +690,5 @@ public class UserSpaceViewModel : ObservableObject
         {
             Svc.Toast.Show("操作失败: " + (err ?? "未知错误"));
         }
-    }
-}
-
-/// <summary>页码栏的一项: 数字页或省略号。</summary>
-public sealed class PageItem : ObservableObject
-{
-    public int Page { get; init; }
-    public string Display { get; init; } = "";
-
-    /// <summary>true = 省略号(不可点)</summary>
-    public bool IsEllipsis { get; init; }
-
-    private bool _isCurrent;
-    /// <summary>当前页(强调色实底)</summary>
-    public bool IsCurrent
-    {
-        get => _isCurrent;
-        set => SetProperty(ref _isCurrent, value);
     }
 }

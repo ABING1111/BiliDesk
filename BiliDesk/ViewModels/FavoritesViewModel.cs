@@ -1,10 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
-using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Input;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
@@ -22,15 +20,37 @@ namespace BiliDesk.ViewModels;
 /// 现在统一以 B 站账号的收藏夹为准, 语义单一、跨端一致。
 ///
 /// 编辑模式(多选 + 批量移出 + 清空当前收藏夹)同样走云端接口, 不做本地假删。
+///
+/// ★★★ 2026-11-19: 列表从"滚动到底追加"改成**页码分页**(与 UP 主主页投稿同一套,
+///   用户要求对齐)。一次只保留当前页(20 条), 底部页码栏负责翻页:
+///     · 总数取自收藏夹列表接口的 <c>media_count</c>(选中夹子时就已经有了);
+///     · 翻页后把列表滚回顶部;
+///     · 编辑模式的"全选"范围 = **当前页**(只显示一页, 跨页勾选没有意义)。
+///   好处不只是"能跳页": 卡片墙是零虚拟化 + 每张卡攥着解码后的封面, 一次只铺 20 张
+///   比滚了几百张之后的内存小得多。
+///
+/// ★ 两个必须记住的接口坑(都实测过, 见 ApiClient.GetFavResourcesAsync 的注释):
+///   ① 请求**越界页**时接口仍然回 code=0, 但 medias 为 null 且 media_count 变成 0 ——
+///      所以绝不能无条件拿响应里的 total 覆盖总数;
+///   ② 越界页在旧代码里会解析成"空列表且成功", 于是一路显示"这个收藏夹还是空的"。
+///      现在按"本页 0 条 + 总数 > 0 ⇒ 页码越界"自动回退一页。
 /// </summary>
-public class FavoritesViewModel : VideoListSelectionViewModel
+public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
 {
+    /// <summary>每页条数(B 站网页版收藏夹也是 20; 与 pn/ps 的分页边界一致)</summary>
+    private const int PageSize = 20;
+
     private bool _loading;
-    private bool _loadingMore;
-    private bool _hasMore;
     private string _error = "";
-    private int _pn = 1;
     private long _currentFolderId;
+
+    // ---------------- 分页状态 ----------------
+    private int _currentPage = 1;
+    private int _totalPages;
+    private int _totalCount;
+    private bool _isPaging;
+    /// <summary>请求代次: 快速切夹 / 连点页码时只认最后一次的结果, 防止旧响应盖掉新页</summary>
+    private int _loadGen;
 
     private bool _isEditMode;
     private bool _busy;
@@ -39,13 +59,34 @@ public class FavoritesViewModel : VideoListSelectionViewModel
     public ObservableCollection<FavFolder> Folders { get; } = new();
     public ObservableCollection<VideoItem> Items { get; } = new();
 
-    public bool Loading { get => _loading; private set => SetProperty(ref _loading, value); }
-    public bool LoadingMore { get => _loadingMore; private set => SetProperty(ref _loadingMore, value); }
-    public bool HasMore { get => _hasMore; private set => SetProperty(ref _hasMore, value); }
+    /// <summary>底部页码栏的条目(数字页或省略号)</summary>
+    public ObservableCollection<PageItem> PageItems { get; } = new();
+
+    /// <summary>请求页面把列表滚回顶部(翻页后调; 由 FavoritesPage 订阅)</summary>
+    public event Action? ScrollToTopRequested;
+
+    public bool Loading
+    {
+        get => _loading;
+        private set
+        {
+            if (!SetProperty(ref _loading, value)) return;
+            OnPropertyChanged(nameof(ShowLoadingOverlay));
+        }
+    }
+
     public string Error { get => _error; private set => SetProperty(ref _error, value); }
 
-    /// <summary>已加载条目数(顶栏显示)</summary>
-    public string CountText => Items.Count > 0 ? $"({Items.Count})" : "";
+    /// <summary>
+    /// 是否显示居中的大菊花。
+    /// ★ 除了"整页加载收藏夹列表", 还包括"切夹/首次进页 && 当前页还没上屏" ——
+    ///   否则换夹的那一小会儿卡片区是空的(页码栏已经画出来了, 列表却是白板),
+    ///   看起来像"这个夹是空的"。翻到第 N 页时**不算**(那时旧页还在, 页码栏有自己的小转圈)。
+    /// </summary>
+    public bool ShowLoadingOverlay => Loading || (IsPaging && Items.Count == 0);
+
+    /// <summary>顶栏的条数(当前收藏夹的总条数, 不是"已加载条数")</summary>
+    public string CountText => _totalCount > 0 ? $"({_totalCount})" : "";
 
     /// <summary>是否处于编辑模式(每张卡片出现选中圆标, 顶部换成操作条)</summary>
     public bool IsEditMode
@@ -62,7 +103,15 @@ public class FavoritesViewModel : VideoListSelectionViewModel
     public bool Busy
     {
         get => _busy;
-        private set { if (SetProperty(ref _busy, value)) OnPropertyChanged(nameof(CanOperate)); }
+        private set
+        {
+            if (!SetProperty(ref _busy, value)) return;
+            OnPropertyChanged(nameof(CanOperate));
+            // 批量操作期间也不许翻页: 翻到别的页再回来会把"删的是哪一页"弄乱
+            OnPropertyChanged(nameof(CanGoPrev));
+            OnPropertyChanged(nameof(CanGoNext));
+            OnPropertyChanged(nameof(CanChangePage));
+        }
     }
 
     /// <summary>操作进度文案(如"正在移出 40/120…")</summary>
@@ -71,9 +120,71 @@ public class FavoritesViewModel : VideoListSelectionViewModel
     /// <summary>当前收藏夹名称, 编辑模式下显示"正在编辑: xxx"</summary>
     public string CurrentFolderTitle { get; private set; } = "";
 
-    // 选中计数一律基于**当前可见项** —— 被屏蔽掉的条目用户看不见, 不该被"全选"带走。
+    // 选中计数一律基于**当前可见项** —— 分页之后"可见项"就是当前页, 所以
+    // "全选"自然只作用于本页, 不会跨页乱选。
     // (实现见基类 VideoListSelectionViewModel: 全选的基数只有一处定义, 不会与历史/稍后再看漂移)
     public bool CanOperate => !Busy;
+
+    /// <summary>
+    /// 全选按钮文案。★ 分页之后基数只有当前页, 文案必须跟着说清楚 ——
+    /// 否则用户会以为"全选"选的是整个收藏夹(实际只选这一页的 20 条)。
+    /// </summary>
+    public override string SelectAllText => AllSelected ? "取消全选本页" : "全选本页";
+
+    // ---------------- 分页公开属性 ----------------
+
+    public int CurrentPage
+    {
+        get => _currentPage;
+        private set
+        {
+            if (!SetProperty(ref _currentPage, value)) return;
+            OnPropertyChanged(nameof(CanGoPrev));
+            OnPropertyChanged(nameof(CanGoNext));
+        }
+    }
+
+    public int TotalPages
+    {
+        get => _totalPages;
+        private set
+        {
+            if (!SetProperty(ref _totalPages, value)) return;
+            OnPropertyChanged(nameof(ShowPager));
+            OnPropertyChanged(nameof(CanGoPrev));
+            OnPropertyChanged(nameof(CanGoNext));
+        }
+    }
+
+    /// <summary>
+    /// 当前收藏夹的总条数(权威值来自接口的 media_count)。
+    /// ★ 名字别用 TotalCount: 基类 <see cref="VideoListSelectionViewModel.TotalCount"/> 是
+    ///   "当前可见项数"(全选的基数), 两者语义完全不同, 撞名会静默遮住基类成员。
+    /// </summary>
+    public int FolderTotalCount => _totalCount;
+
+    public bool CanGoPrev => !IsPaging && !Busy && CurrentPage > 1;
+    public bool CanGoNext => !IsPaging && !Busy && TotalPages > 0 && CurrentPage < TotalPages;
+
+    /// <summary>正在翻页(页码栏显示小转圈, 并暂时禁点, 防止连点)</summary>
+    public bool IsPaging
+    {
+        get => _isPaging;
+        private set
+        {
+            if (!SetProperty(ref _isPaging, value)) return;
+            OnPropertyChanged(nameof(CanGoPrev));
+            OnPropertyChanged(nameof(CanGoNext));
+            OnPropertyChanged(nameof(CanChangePage));
+            OnPropertyChanged(nameof(ShowLoadingOverlay));
+        }
+    }
+
+    /// <summary>页码数字是否可点(翻页在途 / 批量操作期间禁用)</summary>
+    public bool CanChangePage => !IsPaging && !Busy;
+
+    /// <summary>只有一页时页码栏没有意义, 直接收起</summary>
+    public bool ShowPager => TotalPages > 1;
 
     public ICommand ReloadCommand { get; }
     public ICommand SelectFolderCommand { get; }
@@ -81,6 +192,9 @@ public class FavoritesViewModel : VideoListSelectionViewModel
     public ICommand SelectAllCommand { get; }
     public ICommand RemoveSelectedCommand { get; }
     public ICommand ClearFolderCommand { get; }
+    public ICommand GoToPageCommand { get; }
+    public ICommand PrevPageCommand { get; }
+    public ICommand NextPageCommand { get; }
 
     /// <summary>
     /// 附加到视频卡片右键菜单里的"移出收藏"项。
@@ -127,12 +241,26 @@ public class FavoritesViewModel : VideoListSelectionViewModel
         SelectAllCommand = new RelayCommand(() =>
         {
             if (Busy) return;
-            // 只作用于**当前可见项** —— 被屏蔽掉的条目用户看不见, 不该被"全选"带走
+            // 只作用于**当前可见项** —— 分页之后就是当前页
             SetSelectionBulk(VisibleItems(), !AllSelected);
         });
 
         RemoveSelectedCommand = new AsyncRelayCommand(RemoveSelectedAsync);
         ClearFolderCommand = new AsyncRelayCommand(ClearFolderAsync);
+
+        // 页码栏(与 UP 主主页同一套命令形状)
+        PrevPageCommand = new AsyncRelayCommand(() => GoToPageAsync(CurrentPage - 1));
+        NextPageCommand = new AsyncRelayCommand(() => GoToPageAsync(CurrentPage + 1));
+        GoToPageCommand = new RelayCommand(p =>
+        {
+            var page = p switch
+            {
+                int i => i,
+                string s when int.TryParse(s, out var n) => n,
+                _ => 0
+            };
+            if (page > 0) _ = GoToPageAsync(page);
+        });
 
         HookSelectionSource();
     }
@@ -144,7 +272,11 @@ public class FavoritesViewModel : VideoListSelectionViewModel
     protected override ObservableCollection<VideoItem> SelectionSource => Items;
 
     /// <summary>集合增删时顺带刷一次顶栏的收藏夹条数(本页面特有, 另两个列表页没有)</summary>
-    protected override void OnSourceItemsChanged() => UpdateCount();
+    protected override void OnSourceItemsChanged()
+    {
+        UpdateCount();
+        OnPropertyChanged(nameof(ShowLoadingOverlay));
+    }
 
     // ------------------------------------------------------------ 加载
 
@@ -158,7 +290,6 @@ public class FavoritesViewModel : VideoListSelectionViewModel
         if (!Svc.Session.HasLogin)
         {
             Error = "云端收藏需要登录后查看";
-            HasMore = false;
             return;
         }
         if (Loading) return;
@@ -168,20 +299,21 @@ public class FavoritesViewModel : VideoListSelectionViewModel
         Folders.Clear();
         Items.Clear();
         _currentFolderId = 0;
-        _pn = 1;
         IsEditMode = false;
+        ResetPaging();
         UpdateCount();
 
         var (ok, err, folders) = await Svc.Api.GetFavFoldersAsync();
-        Loading = false;
 
         if (!ok || folders == null)
         {
+            Loading = false;
             Error = err ?? "云端收藏夹加载失败";
             return;
         }
         if (folders.Count == 0)
         {
+            Loading = false;
             Error = "账号下还没有创建收藏夹";
             return;
         }
@@ -194,10 +326,13 @@ public class FavoritesViewModel : VideoListSelectionViewModel
             ? Folders.FirstOrDefault(f => f.Id == PendingFolder.Id) ?? Folders[0]
             : Folders[0];
         PendingFolder = null;
+
+        // ★ 第一页没回来之前不收 Loading: 否则会先闪一下"空收藏夹"再出现卡片。
         await SelectFolderAsync(target);
+        Loading = false;
     }
 
-    /// <summary>切换收藏夹并加载其内容</summary>
+    /// <summary>切换收藏夹并加载其第一页</summary>
     public async Task SelectFolderAsync(FavFolder folder)
     {
         if (folder == null) return;
@@ -218,50 +353,198 @@ public class FavoritesViewModel : VideoListSelectionViewModel
         IsEditMode = false;
 
         Items.Clear();
+        ResetPaging();
         UpdateCount();
-        _pn = 1;
-        HasMore = false;
-        await LoadPageAsync();
+
+        // ★ 权威总数在收藏夹列表里就有(media_count), 不必等内容回来才知道页数 ——
+        //   于是页码栏可以立刻按真实页数画出来, 而不是先猜一个再改。
+        SetTotal(folder.MediaCount);
+        RecalcPages(1);
+
+        await LoadPageAsync(1);
+
+        // 换夹 = 换一整套内容: 回到顶部。否则会停在上一个夹的滚动位置,
+        // 看到的是新夹中间的一截(页码却是第 1 页)。
+        ScrollToTopRequested?.Invoke();
     }
 
-    /// <summary>列表滚动到底部时加载下一页</summary>
-    public async Task LoadMoreAsync()
+    // ------------------------------------------------------------ 分页
+
+    /// <summary>清空分页状态(重载 / 切夹共用)</summary>
+    private void ResetPaging()
     {
-        if (LoadingMore || !HasMore || _currentFolderId <= 0) return;
-        _pn++;
-        await LoadPageAsync();
+        // 让在途请求作废: 否则旧夹的响应回来会把内容填进新夹
+        _loadGen++;
+        _isPaging = false;
+        _currentPage = 1;
+        _totalPages = 0;
+        _totalCount = 0;
+        PageItems.Clear();
+
+        OnPropertyChanged(nameof(CurrentPage));
+        OnPropertyChanged(nameof(TotalPages));
+        OnPropertyChanged(nameof(FolderTotalCount));
+        OnPropertyChanged(nameof(CountText));
+        OnPropertyChanged(nameof(ShowPager));
+        OnPropertyChanged(nameof(IsPaging));
+        OnPropertyChanged(nameof(CanGoPrev));
+        OnPropertyChanged(nameof(CanGoNext));
+        OnPropertyChanged(nameof(CanChangePage));
     }
 
-    private async Task LoadPageAsync()
+    /// <summary>写总条数并重算总页数(同时刷新顶栏的"(N)")</summary>
+    private void SetTotal(int total)
+    {
+        if (total < 0) total = 0;
+        if (_totalCount == total && _totalPages == PagerMath.TotalPages(total, PageSize)) return;
+
+        _totalCount = total;
+        OnPropertyChanged(nameof(FolderTotalCount));
+        OnPropertyChanged(nameof(CountText));
+
+        TotalPages = PagerMath.TotalPages(_totalCount, PageSize);
+    }
+
+    /// <summary>
+    /// 加载指定页并**替换**当前列表(不是追加 —— 这是"页码分页"与"无限滚动"的分界)。
+    ///
+    /// ★ 用代次(_loadGen)丢弃过期响应: 用户快速点 1→2→3 时, 如果 1 的响应最后才回来,
+    ///   列表会被错误地盖回第 1 页的内容, 而页码栏显示的却是 3。
+    /// </summary>
+    /// <param name="allowFallback">
+    /// 允许"本页 0 条 ⇒ 判定页码越界并回退一页"。只允许回退一次, 防止接口异常时无限递归。
+    /// </param>
+    /// <param name="raiseScrollToTop">
+    /// 成功后是否请求页面滚回顶部。换页时 true; "删除后原地重取"时 false ——
+    /// 那时内容只是往前挪了几张, 把用户拽回顶部反而丢掉了观看位置。
+    /// </param>
+    /// <returns>这一页是否加载成功(失败时调用方负责回滚页码高亮)。</returns>
+    private async Task<bool> LoadPageAsync(int page, bool allowFallback = true, bool raiseScrollToTop = true)
+    {
+        if (_currentFolderId <= 0) return false;
+        if (page < 1) page = 1;
+        if (TotalPages > 0 && page > TotalPages) page = TotalPages;
+
+        var gen = ++_loadGen;
+        IsPaging = true;
+        try
+        {
+            var (ok, err, items, hasMore, total) =
+                await Svc.Api.GetFavResourcesAsync(_currentFolderId, page, PageSize);
+
+            if (gen != _loadGen) return false;   // 已经有更新的一次请求接管了, 这份结果作废
+
+            if (!ok || items == null)
+            {
+                // ★ 翻页失败**不要**用整页错误盖掉列表: 用户只想从第 46 页跳到 47 页,
+                //   一次请求失败就让他眼前一黑、连页码栏都没了(只能整页刷新回到第 1 页),
+                //   代价远大于收益。翻页失败改为 Toast 说明 + 保留原页内容 + 回滚高亮;
+                //   只有"第 1 页都拿不到"才走整页错误态(那时确实没有内容可显示)。
+                if (page > 1)
+                {
+                    Svc.Toast.Show($"第 {page} 页加载失败: {err ?? "未知错误"}");
+                    return false;
+                }
+                Error = err ?? "收藏夹内容加载失败";
+                return false;
+            }
+
+            // ★★ 越界页兜底(实测 pn 超过末页时: code=0 / medias=null / media_count=0):
+            //   "本页一条都没有, 但夹子里明明有内容" ⇒ 这个页码不存在。回退一页重取,
+            //   而不是给用户看一页空白 + 一句"这个收藏夹还是空的"。
+            if (items.Count == 0 && _totalCount > 0 && page > 1 && allowFallback)
+            {
+                var fallback = Math.Max(1, page - 1);
+                TotalPages = fallback;
+                RecalcPages(fallback);
+                return await LoadPageAsync(fallback, allowFallback: false, raiseScrollToTop);
+            }
+
+            // 换页 = 整页替换。按 bvid 去重只防"同一页里重复下发"(分页边界偶尔会重复)。
+            Items.Clear();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var it in items)
+            {
+                if (string.IsNullOrEmpty(it.Bvid) || !seen.Add(it.Bvid)) continue;
+                Items.Add(it);
+            }
+
+            CurrentPage = page;
+            // ★ 只有真有数据时才采纳总条数: 越界页会把 media_count 报成 0(见上)。
+            if (total > 0) SetTotal(total);
+            else if (items.Count == 0) SetTotal(0);   // 第 1 页就空: 夹子确实是空的
+
+            // hasMore 只是"接口认为还有下一页"的旁证; 页数以 media_count 为准,
+            // 兜底用: 总数拿不到时(0)至少按 has_more 让"下一页"可用。
+            if (TotalPages <= 1 && hasMore) TotalPages = page + 1;
+
+            RecalcPages(page);
+            Error = Items.Count == 0 ? "这个收藏夹还是空的" : "";
+
+            if (page > 1 && raiseScrollToTop) ScrollToTopRequested?.Invoke();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (gen == _loadGen)
+            {
+                if (page > 1) Svc.Toast.Show($"第 {page} 页加载失败: {ex.Message}");
+                else Error = ex.Message;
+            }
+            return false;
+        }
+        finally
+        {
+            if (gen == _loadGen) IsPaging = false;
+        }
+    }
+
+    /// <summary>翻到指定页。失败时把页码高亮回滚, 不会停在错误的高亮上。</summary>
+    private async Task GoToPageAsync(int page)
+    {
+        if (IsPaging || Busy) return;
+        if (page < 1) return;
+        if (TotalPages > 0 && page > TotalPages) return;
+        if (page == CurrentPage) return;
+
+        // ★ 先把高亮移到目标页, 让用户**立刻**看到"点到了"(与 UP 主主页同一套处理)。
+        //   请求失败时再回滚。
+        var previous = CurrentPage;
+        CurrentPage = page;
+        RecalcPages(page);
+
+        if (!await LoadPageAsync(page))
+        {
+            CurrentPage = previous;
+            RecalcPages(previous);
+        }
+    }
+
+    /// <summary>按当前总页数重建页码序列(0 表示省略号)</summary>
+    private void RecalcPages(int current)
+    {
+        PageItems.Clear();
+        if (TotalPages <= 1) return;
+        foreach (var p in PageBar.Build(current, TotalPages))
+        {
+            PageItems.Add(p == PageBar.Ellipsis
+                ? new PageItem { IsEllipsis = true, Display = "…" }
+                : new PageItem { Page = p, Display = p.ToString(), IsCurrent = p == current });
+        }
+    }
+
+    /// <summary>
+    /// 删除之后重取当前页。
+    /// ★ 为什么必须重取: 收藏夹是"按收藏时间倒序"的流, 删掉中间几条之后后面的内容会
+    ///   前移到当前页 —— 只在本页做本地移除会留下"空洞", 下一页的边界也对不上。
+    /// </summary>
+    private async Task RefreshCurrentPageAsync()
     {
         if (_currentFolderId <= 0) return;
-        LoadingMore = true;
-        Error = "";
-        var (ok, err, items, hasMore) = await Svc.Api.GetFavResourcesAsync(_currentFolderId, _pn, 20);
-        LoadingMore = false;
-
-        if (!ok || items == null)
-        {
-            Error = err ?? "收藏夹内容加载失败";
-            HasMore = false;
-            return;
-        }
-
-        // 去重(分页边界可能重复返回同一条)。
-        //
-        // 注意: 用来判重的集合必须从"**已经**在列表里的项"播种, 而不是从本页返回的 items 播种。
-        // 之前写成 new HashSet(items.Select(...)) 是个致命错误 —— 本页所有 bvid 都被提前塞进
-        // seen 了, 后面 seen.Add(bvid) 必然返回 false, 于是**一条都加不进列表**,
-        // 表现就是"收藏夹列表能看到, 但每个收藏夹都显示'还是空的'"。
-        var seen = new HashSet<string>(Items.Select(x => x.Bvid));
-        foreach (var it in items)
-        {
-            if (!string.IsNullOrEmpty(it.Bvid) && seen.Add(it.Bvid))
-                Items.Add(it);
-        }
-        UpdateCount();
-        HasMore = hasMore;
-        if (Items.Count == 0) Error = "这个收藏夹还是空的";
+        var page = CurrentPage;
+        // 不滚回顶部: 删除之后用户还想待在刚才那一屏附近
+        await LoadPageAsync(page, raiseScrollToTop: false);
+        if (Items.Count == 0 && page > 1) await GoToPageAsync(page - 1);
     }
 
     private void UpdateCount() => OnPropertyChanged(nameof(CountText));
@@ -271,8 +554,8 @@ public class FavoritesViewModel : VideoListSelectionViewModel
     {
         if (removed <= 0) return;
         var folder = Folders.FirstOrDefault(f => f.Id == _currentFolderId);
-        // FavFolder.MediaCount 自己会通知 DisplayText 刷新, 这里**不要**去动 Folders 集合:
-        // 移除再插回来会重建 RadioButton 容器, 把收藏夹标签的选中高亮弄丢。
+        // ★ FavFolder.MediaCount 自己会通知 DisplayText 刷新, 这里**不要**去动 Folders 集合:
+        //   移除再插回来会重建 RadioButton 容器, 把收藏夹标签的选中高亮弄丢。
         if (folder != null) folder.MediaCount = System.Math.Max(0, folder.MediaCount - removed);
     }
 
@@ -312,6 +595,14 @@ public class FavoritesViewModel : VideoListSelectionViewModel
         Items.Remove(item);
         UpdateCount();
         ShrinkFolderCount(1);
+        // 总条数少了一条 ⇒ 总页数可能要少一页(删到末页最后一条时)
+        SetTotal(Math.Max(0, _totalCount - 1));
+        RecalcPages(CurrentPage);
+
+        // ★ 本页被删空(只可能发生在末页只剩一条时): 退回上一页, 否则会停在一张空页上。
+        //   这里只在"真的空了"时补一次请求 —— 普通情况不做重取, 右键移出保持即时反馈。
+        if (Items.Count == 0 && CurrentPage > 1) await RefreshCurrentPageAsync();
+
         Svc.Toast.Show("已移出收藏");
     }
 
@@ -393,21 +684,22 @@ public class FavoritesViewModel : VideoListSelectionViewModel
 
         UpdateCount();
         ShrinkFolderCount(removed);
+        SetTotal(Math.Max(0, _totalCount - removed));
         RaiseSelection();
 
         if (fail == 0) Svc.Toast.Show($"已移出 {removed} 个视频");
         else if (removed == 0) Svc.Toast.Show("移出失败, 请稍后重试");
         else Svc.Toast.Show($"已移出 {removed} 个, {fail} 个失败");
 
-        if (Items.Count == 0)
-        {
-            Error = "这个收藏夹还是空的";
-            IsEditMode = false;
-        }
+        // ★ 批量移出之后后面的内容会前移到本页, 必须重取当前页(见 RefreshCurrentPageAsync)。
+        //   本页被删空且不是第一页时会自动退回上一页。
+        if (removed > 0) await RefreshCurrentPageAsync();
+
+        if (Items.Count == 0) IsEditMode = false;
     }
 
     /// <summary>
-    /// 清空当前收藏夹(移出**全部**内容, 不只是已加载的那几条)。
+    /// 清空当前收藏夹(移出**全部**内容, 不只是当前页那几条)。
     ///
     /// 做法是"反复取第 1 页 → 批量移出 → 再取第 1 页": 每批删掉之后后面的内容会自动补到第 1 页,
     /// 所以循环几轮就能把整个夹掏空, 不需要先把全部条目拉进内存。
@@ -421,7 +713,7 @@ public class FavoritesViewModel : VideoListSelectionViewModel
 
         if (!ConfirmDialog.Show(
                 $"确定要清空收藏夹「{CurrentFolderTitle}」吗?\n\n" +
-                "夹内全部内容都会被移出(不只是当前已加载的), 且无法撤销。",
+                "夹内全部内容都会被移出(不只是当前页已显示的), 且无法撤销。",
                 "清空收藏夹", "清空"))
             return;
 
@@ -434,7 +726,7 @@ public class FavoritesViewModel : VideoListSelectionViewModel
         {
             for (var round = 0; round < MaxRounds; round++)
             {
-                var (ok, err, items, _) = await Svc.Api.GetFavResourcesAsync(_currentFolderId, 1, 30);
+                var (ok, err, items, _, _) = await Svc.Api.GetFavResourcesAsync(_currentFolderId, 1, 30);
                 if (!ok || items == null)
                 {
                     stopped = err ?? "读取收藏夹内容失败";
@@ -473,6 +765,10 @@ public class FavoritesViewModel : VideoListSelectionViewModel
         UpdateCount();
         ShrinkFolderCount(removed);
         IsEditMode = false;
+
+        // 夹子被掏空 ⇒ 分页状态一起归零(否则页码栏还挂着一个不存在的页)
+        // ★ 用 _loadGen 让"清空途中还在飞的翻页请求"作废, 不然它回来会往空列表里灌内容。
+        ResetPaging();
 
         if (stopped.Length > 0 && removed == 0)
         {

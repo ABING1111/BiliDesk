@@ -54,12 +54,29 @@ public partial class FavoritesPage : UserControl
         // 纳入全局屏蔽(命中关键词的内容会被隐藏), 见 FilterService
         DataContextChanged += (_, e) =>
         {
-            if (e.NewValue is FavoritesViewModel vm) FilterService.Instance.Attach(vm.Items);
+            if (_vm != null) _vm.ScrollToTopRequested -= OnScrollToTopRequested;
+            _vm = e.NewValue as FavoritesViewModel;
+            if (_vm != null)
+            {
+                _vm.ScrollToTopRequested += OnScrollToTopRequested;
+                FilterService.Instance.Attach(_vm.Items);
+            }
             if (e.OldValue is FavoritesViewModel old && _observedFolders != null)
                 _observedFolders.CollectionChanged -= OnFoldersChanged;
             _observedFolders = null;
         };
     }
+
+    /// <summary>当前订阅的 VM(DataContext 可能被换掉, 必须自己记一份以便退订事件)</summary>
+    private FavoritesViewModel? _vm;
+
+    /// <summary>
+    /// 翻页成功后把列表滚回顶部 —— 否则用户点了第 2 页, 眼前还停在上一页的底部,
+    /// 会以为"点了没反应"。(与 UP 主主页投稿页是同一套处理。)
+    /// </summary>
+    private void OnScrollToTopRequested()
+        => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
+            new Action(() => PageScroll?.ScrollToTop()));
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
@@ -239,30 +256,14 @@ public partial class FavoritesPage : UserControl
     private void OnBackToMineClick(object sender, RoutedEventArgs e)
         => App.MainVm.Navigate(PageKey.Mine);
 
-    /// <summary>自动加载的公共闸门: 缩放/布局变化时不立即翻页(见 <see cref="AutoLoadThrottle"/>)。</summary>
-    private readonly AutoLoadThrottle _autoLoadThrottle = new();
-
-    /// <summary>列表滚动: 先算吸顶位移, 再判"到底自动加载下一页"</summary>
+    /// <summary>列表滚动: 吸顶位移 + 工具列按钮状态</summary>
     private void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (sender is not ScrollViewer sv) return;
         // 工具列顶部 = 刷新, 下滑 = 回到顶部
         BtnTopRefresh.UpdateForOffset(sv);
         // ★ 吸顶要在**任何**滚动事件上都算(包括布局变化那几拍), 否则缩放窗口时胶囊会脱钉。
-        //   它只改 RenderTransform, 不参与下面的翻页闸门。
+        //   它只改 RenderTransform, 不参与翻页。
         _sticky.Update();
-        // ★ 缩放/布局变化期间不要立即判; 交给 AutoLoadThrottle 在稳定后补一次(短列表也能补上)。
-        if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = MaybeLoadMoreAsync(sv))) return;
-        _ = MaybeLoadMoreAsync(sv);
-    }
-
-    private async Task MaybeLoadMoreAsync(ScrollViewer sv)
-    {
-        if (sv.ExtentHeight > 0 && sv.VerticalOffset >= sv.ExtentHeight - sv.ViewportHeight - 120
-            && Vm is { HasMore: true } vm)
-        {
-            if (!_autoLoadThrottle.TryEnter()) return;
-            await vm.LoadMoreAsync();
-        }
     }
 }

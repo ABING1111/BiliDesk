@@ -137,13 +137,21 @@ public partial class ApiClient
     /// <summary>
     /// 获取某个云端收藏夹内的视频(分页)。
     /// 接口: /x/v3/fav/resource/list —— 需要 wbi 签名, 未登录时会被风控。
+    ///
+    /// ★ 2026-11-19 返回值新增 <c>total</c>(夹内条目总数, 取 <c>data.info.media_count</c>):
+    ///   收藏页改成了"页码分页", 必须知道总条数才能算出总页数。
+    ///   ★★ 这个数**只在真有数据时才可信**: 实测请求越界页(pn 超过末页)时, 接口仍然回
+    ///     <c>code=0</c>, 但 <c>medias</c> 为 null 且 <c>info.media_count</c> 变成 **0**。
+    ///     所以调用方不要把越界页的 total 当真(见 FavoritesViewModel.LoadPageAsync)。
+    ///   ★ media_count 把"已失效视频"也算在内, 它与 pn/ps 的分页边界是一致的(实测
+    ///     1783 条的夹子, pn=90 正好给 3 条且 has_more=false) —— 直接按它算页数是对的。
     /// </summary>
-    public async Task<(bool ok, string? err, List<VideoItem>? items, bool hasMore)>
+    public async Task<(bool ok, string? err, List<VideoItem>? items, bool hasMore, int total)>
         GetFavResourcesAsync(long mediaId, int pn = 1, int ps = 20)
     {
         try
         {
-            if (!SessionManager.Instance.HasLogin) return (false, "云端收藏需要登录", null, false);
+            if (!SessionManager.Instance.HasLogin) return (false, "云端收藏需要登录", null, false, 0);
             await EnsureBuvidAsync();
             var mid = SessionManager.Instance.Current.DedeUserID;
 
@@ -164,14 +172,19 @@ public partial class ApiClient
                 sign: true,
                 referer: $"https://space.bilibili.com/{mid}/favlist?fid={mediaId}");
             if (code != 0 || data == null)
-                return (false, msg ?? $"请求失败 (code {code})", null, false);
+                return (false, msg ?? $"请求失败 (code {code})", null, false, 0);
 
             var items = new List<VideoItem>();
             var hasMore = false;
+            var total = 0;
             if (data.Value.ValueKind == JsonValueKind.Object)
             {
                 hasMore = data.Value.TryGetProperty("has_more", out var hm) &&
                           hm.ValueKind == JsonValueKind.True;
+                // 夹内总数(权威): 只在 info 是对象时取, 越界页这里是 0(见方法注释)
+                if (data.Value.TryGetProperty("info", out var info) &&
+                    info.ValueKind == JsonValueKind.Object)
+                    total = GetInt(info, "media_count");
                 if (data.Value.TryGetProperty("medias", out var arr) &&
                     arr.ValueKind == JsonValueKind.Array)
                 {
@@ -202,11 +215,11 @@ public partial class ApiClient
                     }
                 }
             }
-            return (true, null, items, hasMore);
+            return (true, null, items, hasMore, total);
         }
         catch (Exception ex)
         {
-            return (false, ex.Message, null, false);
+            return (false, ex.Message, null, false, 0);
         }
     }
 

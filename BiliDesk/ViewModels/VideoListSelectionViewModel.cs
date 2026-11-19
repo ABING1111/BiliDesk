@@ -80,8 +80,14 @@ public abstract class VideoListSelectionViewModel : ObservableObject
 
     public string SelectedText => SelectedCount > 0 ? $"已选 {SelectedCount} 项" : "未选择";
 
-    /// <summary>全选按钮的文案。已全选时点它就是取消, 所以文案要跟着变。</summary>
-    public string SelectAllText => AllSelected ? "取消全选" : "全选";
+    /// <summary>
+    /// 全选按钮的文案。已全选时点它就是取消, 所以文案要跟着变。
+    ///
+    /// ★ virtual: 收藏页改成页码分页之后,"全选"的基数只有**当前页**,
+    ///   文案必须说成"全选本页"(见 FavoritesViewModel.SelectAllText), 否则用户会以为
+    ///   选了整个收藏夹。历史/稍后再看仍是无限滚动, 沿用这里的默认文案。
+    /// </summary>
+    public virtual string SelectAllText => AllSelected ? "取消全选" : "全选";
 
     /// <summary>批量改选期间的静默标志: 压住逐条通知, 结束后统一报一次。</summary>
     private bool _bulkSel;
