@@ -77,9 +77,12 @@
     <SolidColorBrush x:Key="FlyoutBorderBrush" Color="#1FFFFFFF" />
     <SolidColorBrush x:Key="FlyoutItemHoverBrush" Color="#1FFFFFFF" />
 
-    <!-- 滚动条: 平时半透明, 悬停/拖动时加深, 不抢视线又找得到 -->
-    <SolidColorBrush x:Key="ScrollThumbBrush" Color="#33FFFFFF" />
+    <!-- 滚动条(2026-11-19 重做): 平时半透明细条 → 悬停加深 → 按住拖动最深。
+         取值理由见 Colors.Light.xaml 的同名注释。 -->
+    <SolidColorBrush x:Key="ScrollThumbBrush" Color="#3DFFFFFF" />
     <SolidColorBrush x:Key="ScrollThumbHoverBrush" Color="#73FFFFFF" />
+    <SolidColorBrush x:Key="ScrollThumbPressedBrush" Color="#A6FFFFFF" />
+    <SolidColorBrush x:Key="ScrollTrackBrush" Color="#1FFFFFFF" />
 
     <!-- 危险操作(删除 / 清空)。两套主题用同一组值: 深红色饱和度足够,
          在浅底和深底上都读得出来。红底上的文字固定白色(对比度 5.4:1)。 -->

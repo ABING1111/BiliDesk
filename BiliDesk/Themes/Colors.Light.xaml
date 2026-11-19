@@ -120,9 +120,15 @@
     <SolidColorBrush x:Key="FlyoutBorderBrush" Color="#1A000000" />
     <SolidColorBrush x:Key="FlyoutItemHoverBrush" Color="#14000000" />
 
-    <!-- 滚动条: 平时半透明, 悬停/拖动时加深, 不抢视线又找得到 -->
-    <SolidColorBrush x:Key="ScrollThumbBrush" Color="#33000000" />
-    <SolidColorBrush x:Key="ScrollThumbHoverBrush" Color="#66000000" />
+    <!-- 滚动条(2026-11-19 重做): 平时半透明细条 → 悬停加深 → 按住拖动最深。
+         因为滚动条改成"鼠标进入页面才淡入"(见 Helpers/ScrollBarAutoHide),
+         常态这一档要比以前略实一点, 否则自动隐藏后不容易被注意到。 -->
+    <SolidColorBrush x:Key="ScrollThumbBrush" Color="#3D000000" />
+    <SolidColorBrush x:Key="ScrollThumbHoverBrush" Color="#5C000000" />
+    <!-- 按住拖动: 最深一档, 和"变粗到 10px"一起构成按压反馈 -->
+    <SolidColorBrush x:Key="ScrollThumbPressedBrush" Color="#7A000000" />
+    <!-- 悬停在滚动条上时出现的极淡轨道底衬(12px 胶囊) -->
+    <SolidColorBrush x:Key="ScrollTrackBrush" Color="#0F000000" />
 
     <!-- 危险操作(删除 / 清空)。两套主题用同一组值: 深红色饱和度足够,
          在浅底和深底上都读得出来, 而且红色在深色界面上本来就更"沉"得下去。

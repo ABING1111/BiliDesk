@@ -68,10 +68,12 @@
                    Margin="24,20,24,0" TextTrimming="CharacterEllipsis"
                    Foreground="{DynamicResource TextPrimaryBrush}" />
 
-        <!-- 正文(内容多时在这里滚动, 不撑破窗口) -->
-        <ScrollViewer Grid.Row="1" Margin="24,0,24,0" VerticalScrollBarVisibility="Auto"
+        <!-- 正文(内容多时在这里滚动, 不撑破窗口)
+             ★ 横向边距挂在内容上(2026-11-19): 挂在 ScrollViewer 上会把滚动条一起内缩 24px,
+               与其它窗口的滚动条位置不一致。留白交给内容, 滚动条贴窗口右缘。 -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled">
-            <StackPanel>
+            <StackPanel Margin="24,0,24,0">
 
                 <!-- 加载态 -->
                 <StackPanel x:Name="LoadingPanel" Orientation="Horizontal" Margin="0,18,0,0"

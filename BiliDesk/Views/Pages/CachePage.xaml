@@ -71,9 +71,13 @@
             </StackPanel>
 
             <!-- 列表 -->
-            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="36,4,36,24"
+            <!-- ★ 横向边距挂在**内容**上而不是 ScrollViewer 上(2026-11-19):
+                 挂在 ScrollViewer 上会把滚动条一起往里推(这里是 36px), 于是各页滚动条
+                 有的贴窗口右缘、有的内缩 —— 就是用户报的"长度不一"。
+                 按全应用约定: 滚动条贴滚动区右缘, 留白一律交给内容。 -->
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,4,0,0"
                           Visibility="{Binding Error, Converter={StaticResource InvStrToVis}}">
-                <StackPanel>
+                <StackPanel Margin="36,0,36,24">
                     <!-- 空状态: 没有任何缓存文件时才显示 -->
                     <StackPanel Margin="0,40,0,0" HorizontalAlignment="Center"
                                 Visibility="{Binding ShowEmpty, Converter={StaticResource BoolToVis}}">

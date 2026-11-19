@@ -77,9 +77,10 @@
                        Margin="0,5,0,0" TextTrimming="CharacterEllipsis" />
         </StackPanel>
 
-        <!-- 收藏夹勾选列表 -->
-        <ScrollViewer x:Name="FolderScroll" Grid.Row="1" Margin="10,0,10,4" VerticalScrollBarVisibility="Auto">
-            <StackPanel>
+        <!-- 收藏夹勾选列表
+             ★ 横向边距挂在内容上(2026-11-19): 与其它页面/窗口统一, 滚动条贴窗口右缘 -->
+        <ScrollViewer x:Name="FolderScroll" Grid.Row="1" Margin="0,0,0,4" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="10,0,10,0">
                 <!-- 一个夹都没有时的提示(新建按钮在底部左侧, 见下) -->
                 <TextBlock x:Name="EmptyHint" Text="还没有收藏夹，点下方的「新建收藏夹」创建一个"
                            Visibility="Collapsed"

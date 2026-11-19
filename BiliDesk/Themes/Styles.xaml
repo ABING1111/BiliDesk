@@ -1,6 +1,7 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+                    xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+                    xmlns:helpers="clr-namespace:BiliDesk.Helpers">
 
     <!-- 浮动工具列的线性图标(单独一本字典便于维护; 并进 Styles 后,
          只要宿主加载了 Styles 就能解析 StaticResource, 离线探针也照常能用)。 -->
@@ -2013,42 +2014,200 @@
     </Style>
     <!-- ============ 滚动条 ============
          WPF 默认滚动条是系统原生的: 又宽(17px)又灰, 两端还带箭头按钮,
-         在深浅两套主题里都很出戏。这里统一换成 8px 的细滚动条:
-           - 去掉两端的箭头按钮(现代 Fluent 观感, 也省掉 4 个按钮的模板开销);
-           - 滑块圆角、平时半透明, 悬停/拖动时加深;
-           - 颜色全部走主题笔刷, 换肤自动跟随。
-         注意: 这里用的是**全局隐式样式**, 所有 ScrollViewer / ListBox 的滚动条都会被换掉,
-         不需要在各个页面单独指定。 -->
+         在深浅两套主题里都很出戏。这里统一换成"浮动胶囊"式滚动条(2026-11-19 重做):
 
-    <!-- 滑块: 圆角细条。
+           · 热区 12px、视觉细条 6px; 悬停变 8px、按住拖动变 10px ——
+             平时不抢视线, 要找它/抓它的时候又足够粗, 而且"按住"有明确的厚度反馈;
+           · 滑块长度**固定 88px**(2026-11-20 用户要求), 不再随内容多少变长变短;
+             实现见 Helpers/ScrollBarFixedThumb.cs;
+           · 上下各留 10px、右侧留 6px: 不顶到窗口边角, 6px 正好让开
+             WindowChrome 的 ResizeBorderThickness(见本段末尾的长注释);
+           · 颜色全走主题笔刷, 换肤自动跟随;
+           · 自动隐藏由 Helpers/ScrollBarAutoHide 负责(鼠标进入页面才淡入)。
+             ★ 这里**不写 Opacity**: 探针/设计器里没有装那个 helper 时滚动条仍应可见,
+               全隐形的滚动条会让"界面坏了"和"没装行为"分不清楚。
+
+         ★ 注意: 这里用的是**全局隐式样式**, 所有 ScrollViewer / ListBox / TextBox 的
+           滚动条都会被换掉, 不需要在各个页面单独指定。 -->
+
+    <!-- 滑块: 圆角细条。纵向 / 横向各一份 —— "变粗"在纵向上动 Width、横向上动 Height,
+         拆开比在模板里按 Orientation 硬套触发器清楚得多。
+
          两个细节都是被"滑块显示错误"这个 bug 逼出来的, 别改回去:
 
-         1) CornerRadius 必须 <= 宽度的一半。滑块在轨道里只有 6px 宽(Margin=1),
+         1) CornerRadius 必须 <= 视觉宽度的一半。常态视觉宽度是 6px, 半径只能用 3;
             半径 4 > 3 时 WPF 的 Border 几何会退化 —— 画出来的不是圆角矩形,
-            而是"圆头顶 + 平底"的一个小疙瘩(实测像素图确认)。用 3 正好等于半宽,
-            无论滑块多矮都是一条两端圆润的细条。
+            而是"圆头顶 + 平底"的一个小疙瘩(实测像素图确认)。
+            ★ 加粗动画只动 Width/Height, **不动 CornerRadius**: WPF 没有 CornerRadius
+              的动画类型, 而半径随宽度变化时中间帧必然踩进上面那个退化区间。
+              常态 6px 是标准药丸; 加粗到 10px 时半径 3 < 5, 只是"圆角方一点",
+              换来的是整个动画过程没有任何跳变。
 
          2) Thumb 上的 MinHeight **是无效的**: WPF 的 Track 在 ScrollBar 模式下
             (ViewportSize 有值) 按 `trackLength * viewport / extent` 纯比例算滑块长度,
-            下界只取 `floor(系统参数 VerticalScrollBarButtonHeight / 2)` ≈ 8px,
+            下界只取 `floor(系统参数 VerticalScrollBarButtonHeight / 2)`,
             **根本不读 Thumb.MinHeight / DesiredSize**(Slider 模式才读)。
-            所以最小长度要改的是**那个系统参数键**(见下面模板里的 Grid.Resources)。 -->
-    <Style x:Key="ScrollBarThumbStyle" TargetType="Thumb">
+            ★ 2026-11-20 起滑块长度已经由 Helpers/ScrollBarFixedThumb 固定成 88px,
+              这个"下界"正常用不上了; 但样式仍把它从 52 提到 88(→ 44px), 作为兜底:
+              探针/设计器里没装那个行为、或某个 ScrollBar 被单独拿出来用时,
+              也不会退回成 26px 的小疙瘩。
+
+         3) 动画里 Thumb 的 IsDragging 退出时回到 8px(悬停档)。绝大多数情况下松手时
+            鼠标仍压在滑块上, 8px 正是该有的值; 极少数"拖到滑块外才松手"的情况会短暂
+            停在 8px, 下次悬停/离开就自愈 —— 为此去加状态机不值得。 -->
+    <Style x:Key="VerticalScrollThumbStyle" TargetType="Thumb">
         <Setter Property="OverridesDefaultStyle" Value="True" />
         <Setter Property="IsTabStop" Value="False" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Thumb">
-                    <Border x:Name="Bd" Margin="1" CornerRadius="3"
-                            Background="{DynamicResource ScrollThumbBrush}" />
+                    <!-- Grid 铺满 12px 热区(Background=Transparent 才能稳定命中), 细条在其中居中 -->
+                    <Grid Background="Transparent">
+                        <Border x:Name="Bar" Width="6" CornerRadius="3"
+                                HorizontalAlignment="Center"
+                                Background="{DynamicResource ScrollThumbBrush}" />
+                    </Grid>
                     <ControlTemplate.Triggers>
+                        <!-- 悬停: 6 → 8px(160ms 缓出) + 换成悬停色 -->
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background"
+                            <Setter TargetName="Bar" Property="Background"
                                     Value="{DynamicResource ScrollThumbHoverBrush}" />
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Bar"
+                                                         Storyboard.TargetProperty="Width"
+                                                         To="8" Duration="0:0:0.16">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Bar"
+                                                         Storyboard.TargetProperty="Width"
+                                                         To="6" Duration="0:0:0.16">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
+                        </Trigger>
+                        <!-- 按住拖动: 8 → 10px(90ms 快速响应) + 按压色。这是用户要的"按压动画" -->
+                        <Trigger Property="IsDragging" Value="True">
+                            <Setter TargetName="Bar" Property="Background"
+                                    Value="{DynamicResource ScrollThumbPressedBrush}" />
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Bar"
+                                                         Storyboard.TargetProperty="Width"
+                                                         To="10" Duration="0:0:0.09">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Bar"
+                                                         Storyboard.TargetProperty="Width"
+                                                         To="8" Duration="0:0:0.16">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="HorizontalScrollThumbStyle" TargetType="Thumb">
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Thumb">
+                    <Grid Background="Transparent">
+                        <Border x:Name="Bar" Height="6" CornerRadius="3"
+                                VerticalAlignment="Center"
+                                Background="{DynamicResource ScrollThumbBrush}" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <!-- 悬停: 6 → 8px; 按住拖动: → 10px。与纵向完全对称 -->
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bar" Property="Background"
+                                    Value="{DynamicResource ScrollThumbHoverBrush}" />
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Bar"
+                                                         Storyboard.TargetProperty="Height"
+                                                         To="8" Duration="0:0:0.16">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Bar"
+                                                         Storyboard.TargetProperty="Height"
+                                                         To="6" Duration="0:0:0.16">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
                         </Trigger>
                         <Trigger Property="IsDragging" Value="True">
-                            <Setter TargetName="Bd" Property="Background"
-                                    Value="{DynamicResource ScrollThumbHoverBrush}" />
+                            <Setter TargetName="Bar" Property="Background"
+                                    Value="{DynamicResource ScrollThumbPressedBrush}" />
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Bar"
+                                                         Storyboard.TargetProperty="Height"
+                                                         To="10" Duration="0:0:0.09">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Bar"
+                                                         Storyboard.TargetProperty="Height"
+                                                         To="8" Duration="0:0:0.16">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CubicEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -2078,19 +2237,23 @@
                 Track 在 ScrollBar 模式下算滑块长度的下界是
                     Math.Floor(TryFindResource(SystemParameters.VerticalScrollBarButtonHeightKey) / 2)
                 而 TryFindResource 是从 Track 往上找 —— 所以在这里(它的父 Grid)声明同名键就能生效。
-                给 52 → 下界 26px, 和原来 Thumb 上那个形同虚设的 MinHeight="26" 数值一致。
+                给 88 → 下界 44px(旧值 52 → 26px 太短, 短内容时像个"小疙瘩")。
                 顺带: 我们的模板本来就没有上下箭头按钮, 这个"按钮高度"纯粹被当成最小长度的一半在用。
             -->
             <Grid.Resources>
-                <sys:Double x:Key="{x:Static SystemParameters.VerticalScrollBarButtonHeightKey}">52</sys:Double>
+                <sys:Double x:Key="{x:Static SystemParameters.VerticalScrollBarButtonHeightKey}">88</sys:Double>
             </Grid.Resources>
+            <!-- 轨道底衬: 只在鼠标压到滚动条上时淡入(半个"按压感"), 不吃命中 -->
+            <Border x:Name="TrackBg" Width="12" CornerRadius="6"
+                    Background="{DynamicResource ScrollTrackBrush}"
+                    Opacity="0" IsHitTestVisible="False" />
             <Track x:Name="PART_Track" IsDirectionReversed="True">
                 <Track.DecreaseRepeatButton>
                     <RepeatButton Command="{x:Static ScrollBar.PageUpCommand}"
                                   Style="{StaticResource ScrollBarPageButtonStyle}" />
                 </Track.DecreaseRepeatButton>
                 <Track.Thumb>
-                    <Thumb Style="{StaticResource ScrollBarThumbStyle}" />
+                    <Thumb Style="{StaticResource VerticalScrollThumbStyle}" />
                 </Track.Thumb>
                 <Track.IncreaseRepeatButton>
                     <RepeatButton Command="{x:Static ScrollBar.PageDownCommand}"
@@ -2098,13 +2261,39 @@
                 </Track.IncreaseRepeatButton>
             </Track>
         </Grid>
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions>
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetName="TrackBg"
+                                             Storyboard.TargetProperty="Opacity"
+                                             To="1" Duration="0:0:0.12" />
+                        </Storyboard>
+                    </BeginStoryboard>
+                </Trigger.EnterActions>
+                <Trigger.ExitActions>
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetName="TrackBg"
+                                             Storyboard.TargetProperty="Opacity"
+                                             To="0" Duration="0:0:0.18" />
+                        </Storyboard>
+                    </BeginStoryboard>
+                </Trigger.ExitActions>
+            </Trigger>
+        </ControlTemplate.Triggers>
     </ControlTemplate>
 
     <ControlTemplate x:Key="HorizontalScrollBarTemplate" TargetType="ScrollBar">
         <Grid Background="Transparent">
             <Grid.Resources>
-                <sys:Double x:Key="{x:Static SystemParameters.HorizontalScrollBarButtonWidthKey}">52</sys:Double>
+                <sys:Double x:Key="{x:Static SystemParameters.HorizontalScrollBarButtonWidthKey}">88</sys:Double>
             </Grid.Resources>
+            <!-- 轨道底衬(与纵向对称): 只在鼠标压到滚动条上时淡入 -->
+            <Border x:Name="TrackBg" Height="12" CornerRadius="6"
+                    Background="{DynamicResource ScrollTrackBrush}"
+                    Opacity="0" IsHitTestVisible="False" />
             <!-- Orientation 必须显式写成 Horizontal: Track 的默认方向是纵向,
                  漏了它横向滚动条的滑块会按纵向逻辑排布, 直接错位 -->
             <Track x:Name="PART_Track" Orientation="Horizontal">
@@ -2113,7 +2302,7 @@
                                   Style="{StaticResource ScrollBarPageButtonStyle}" />
                 </Track.DecreaseRepeatButton>
                 <Track.Thumb>
-                    <Thumb Style="{StaticResource ScrollBarThumbStyle}" />
+                    <Thumb Style="{StaticResource HorizontalScrollThumbStyle}" />
                 </Track.Thumb>
                 <Track.IncreaseRepeatButton>
                     <RepeatButton Command="{x:Static ScrollBar.PageRightCommand}"
@@ -2121,6 +2310,28 @@
                 </Track.IncreaseRepeatButton>
             </Track>
         </Grid>
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions>
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetName="TrackBg"
+                                             Storyboard.TargetProperty="Opacity"
+                                             To="1" Duration="0:0:0.12" />
+                        </Storyboard>
+                    </BeginStoryboard>
+                </Trigger.EnterActions>
+                <Trigger.ExitActions>
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetName="TrackBg"
+                                             Storyboard.TargetProperty="Opacity"
+                                             To="0" Duration="0:0:0.18" />
+                        </Storyboard>
+                    </BeginStoryboard>
+                </Trigger.ExitActions>
+            </Trigger>
+        </ControlTemplate.Triggers>
     </ControlTemplate>
 
     <!--
@@ -2128,10 +2339,10 @@
           上一版(66e11f1)给滚动条设了 `WindowChrome.IsHitTestVisibleInChrome=True`,
           想让"压在滚动条上"返回 HTCLIENT。**那个做法是错的**, 它把整条右边缘的缩放带
           一起废掉了:
-            · 滚动条是 8px 宽、通高、模板根是 `<Grid Background="Transparent">`;
+            · 滚动条是 12px 宽、通高、模板根是 `<Grid Background="Transparent">`;
             · 它按设计贴着窗口右缘(见 HomePage.xaml 的说明), 整条压在
               `ResizeBorderThickness=6` 的缩放带上;
-            · 该附加属性会继承到 Thumb / 翻页轨道 —— 于是整条 8px 都返回 HTCLIENT,
+            · 该附加属性会继承到 Thumb / 翻页轨道 —— 于是整条 12px 都返回 HTCLIENT,
               右边缘 6px 的缩放带被**完全吃掉**。
           用户看到的就是"光标不在滚动条上、也在右侧其它位置, 却拖不动窗口大小"
           (轨道是透明的, 看起来像空白, 其实还是 ScrollBar 的命中区)。
@@ -2146,18 +2357,27 @@
     -->
     <Style TargetType="ScrollBar">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Margin" Value="0,0,6,0" />
-        <Setter Property="Width" Value="8" />
-        <Setter Property="MinWidth" Value="8" />
+        <!-- 自动隐藏(鼠标进入所属滚动区才淡入, 离开 1s 后淡出)。
+             行为与取舍见 Helpers/ScrollBarAutoHide.cs —— 这里只是全局打开它。 -->
+        <Setter Property="helpers:ScrollBarAutoHide.Enabled" Value="True" />
+        <!-- 固定滑块长度(2026-11-20 用户要求): 不再随内容多少变长变短, 全应用统一 88px。
+             实现见 Helpers/ScrollBarFixedThumb.cs —— 它伪造 ViewportSize 让 Track 算出固定长度,
+             拖动/翻页/位置映射仍是原生一套。 -->
+        <Setter Property="helpers:ScrollBarFixedThumb.Length" Value="88" />
+        <!-- 上下各留 10px: 滚动条不顶到窗口/面板的上下沿, 观感上是一条浮起来的胶囊。
+             右侧 6px 必须保留, 见下面"窗口右边缘不能改大小"那段。 -->
+        <Setter Property="Margin" Value="0,10,6,10" />
+        <Setter Property="Width" Value="12" />
+        <Setter Property="MinWidth" Value="12" />
         <Setter Property="Template" Value="{StaticResource VerticalScrollBarTemplate}" />
         <Style.Triggers>
             <Trigger Property="Orientation" Value="Horizontal">
                 <!-- 横向时宽度交给布局, 改用 Height 约束, 并换上横向模板 -->
-                <Setter Property="Margin" Value="0,0,0,6" />
+                <Setter Property="Margin" Value="10,0,10,6" />
                 <Setter Property="Width" Value="Auto" />
                 <Setter Property="MinWidth" Value="0" />
-                <Setter Property="Height" Value="8" />
-                <Setter Property="MinHeight" Value="8" />
+                <Setter Property="Height" Value="12" />
+                <Setter Property="MinHeight" Value="12" />
                 <Setter Property="Template" Value="{StaticResource HorizontalScrollBarTemplate}" />
             </Trigger>
         </Style.Triggers>
