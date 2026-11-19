@@ -77,9 +77,9 @@ public partial class PlayerWindow : FluentWindow
             // ★ 走统一入口: 由它按片源类型决定"一步到位 / 看门狗重建"。
             SeekTo(targetMs);
         }
-        // 拖动结束后立刻补报一次: 用户主动跳转是"我在看这个位置"的强信号,
-        // 如果只等 15 秒周期上报, 此时关掉窗口会把位置记在拖动前的老地方。
-        SyncProgressNow();
+        // 拖动结束后**不要**立刻 SyncProgressNow: 此刻 _mp.Time 通常还只是 seek 的
+        // 受理回执(目标值), 写入记录会得到一条"从没真正播放过"的进度(issue #93)。
+        // 等看门狗确认落地后, 下一次 TimeChanged/心跳会自然把真实位置落库。
     }
 
     /// <summary>

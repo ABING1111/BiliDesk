@@ -224,6 +224,13 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool _eofSeekRebuildTried;
 
+    /// <summary>
+    /// 提前 EOF 的最后兜底(从头起播一次)是否已经用过。
+    /// 见 <see cref="PlaybackEndPolicy"/>: 连"续播/重建到目标"都救不回来时只允许再从头试一次,
+    /// 之后必须落到失败重试态 —— 绝不能再循环重建, 也不能显示"已播完"。
+    /// </summary>
+    private bool _eofFallbackToStartTried;
+
     /// <summary>进度条开始拖动那一刻的值(用来识别"点击轨道"这种伪拖动, 见 OnProgressDragEnd)。</summary>
     private double _progressDragStartValue;
 
@@ -510,6 +517,18 @@ public partial class PlayerWindow : FluentWindow
     // _teardownDone: 原生资源拆解完成标记, 让第二次 Close() 能正常放行。
     private volatile bool _closing;
     private bool _teardownDone;
+
+    /// <summary>
+    /// 当前 Media input 的代次(每次 <see cref="PlayMedia"/> / 换片 +1)。
+    ///
+    /// ★ 为什么需要(2026-11-19, issue #88 的"偶现"): LibVLC 的事件在它自己的线程上触发,
+    ///   再经 <see cref="System.Windows.Threading.Dispatcher"/> 异步派发到 UI 线程。用户换片
+    ///   恰好撞上旧 input 的 EOF 时, 那条 **旧事件** 会排在新片加载之后才执行 ——
+    ///   于是新视频刚起来就被盖上"已播完"。事件回调在**触发那一刻**记下代次,
+    ///   派发体里比对不上就直接丢弃, 旧 input 的 Ending/TimeChanged 再也污染不到新片。
+    /// ★ 只增不清: 它是窗口级单调计数, 换片不清(否则旧事件可能"撞"回同一个值)。
+    /// </summary>
+    private volatile int _mediaEpoch;
     // 是否已在 VlcCore 登记本窗口的 MediaPlayer(构造函数中途抛异常时可能没登记, 避免计数漂移)
     private bool _playerRegistered;
 

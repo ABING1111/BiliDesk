@@ -651,6 +651,11 @@ public partial class PlayerWindow : FluentWindow
         //   注意: 会话状态(队列/起点)**这里不清**, 由 EnsureAutoPlaySession 显式决定。
         CancelAutoPlayCountdown();
 
+        // ★ 2026-11-19(issue #88): 换片立刻让旧 input 的事件作废。
+        //   旧 input 的 EndReached/TimeChanged 可能在派发队列里排在新片加载之后才执行 ——
+        //   不换代次的话, 它会用"上一条视频播完了"把刚起来的新片盖成「已播完」。
+        _mediaEpoch++;
+
         _indexInLib = 0;
         // 换片: 音频链路诊断重新记一次(每个片源一条, 见 LogAudioStateOnce)
         _audioStateLogged = false;
@@ -758,8 +763,13 @@ public partial class PlayerWindow : FluentWindow
         _seekBounceAt = -1;
         _seekIssuedAt = -1;
         _lastSeekTargetMs = -1;
+        // ★★★ 2026-11-19(issue #93): 这条字段登记在 PerMediaStateFields 里, 但以前**从来没清过**。
+        //   上一条视频残留的续播目标会被新片的 Playing 事件消费 —— 轻则跳错位置("播放记录对不上"),
+        //   重则目标超过新视频长度, seek 直接落到流尾触发假 EOF("一打开就提示已播完")。
+        _resumeAfterSwitchMs = 0;
         _resumeByStartTime = false;
         _eofSeekRebuildTried = false;
+        _eofFallbackToStartTried = false;
         _progressDragStartValue = 0;
         // 拖动气泡也要收: 换片时若正好在拖进度条, 气泡会带着上一条视频的时间留在屏幕上。
         _progressDragMoved = false;
@@ -935,6 +945,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_seekRebuildTried), nameof(_seekBounceSeenMs), nameof(_seekBounceAt),
         nameof(_seekIssuedAt), nameof(_lastSeekTargetMs), nameof(_resumeByStartTime),
         nameof(_eofSeekRebuildTried), nameof(_progressDragStartValue),
+        nameof(_eofFallbackToStartTried),
         nameof(_progressDragMoved),
         nameof(_audioHealCheckAt),
         nameof(_volumeRestoreDeadline), nameof(_volumeRestoreTries),
@@ -1085,6 +1096,9 @@ public partial class PlayerWindow : FluentWindow
         // 加载链代次与闸门: 换片时**故意不清** —— 新一次加载会自己 ++_loadGen 让旧的作废;
         //   清成 0 反而可能让旧任务的代次与新任务撞上。闸门由 LoadVideoAsync 的 finally 收敛。
         nameof(_loadGen), nameof(_loadRunning),
+        // Media input 代次(2026-11-19): 窗口级**单调**计数, 换片不清 —— 它的语义正是
+        // "换片要作废旧事件", 清回同一个值反而会让旧事件重新撞上。
+        nameof(_mediaEpoch),
         // 首帧计时器(引用类型, 自检本来也不审, 这里登记只是表明它是窗口级瞬态)
         nameof(_playWatch),
         // 弹幕滑杆的回灌闸门(2026-10-30): 构造期间必须保持 true 挡住 XAML 初始 Value 的写回;
@@ -1448,7 +1462,18 @@ public partial class PlayerWindow : FluentWindow
             // ★★ 续播**不用** `:start-time`: 那个选项只作用于主视频流, 用 input-slave 挂进来的
             //   音轨仍然从 0 开始 ⇒ 音画不同步。改走项目里已经验证过的
             //   `_resumeAfterSwitchMs`(Playing 事件里统一 seek + 看门狗), 远端/本地两条路都适用。
-            if (resumeMs > 0) _resumeAfterSwitchMs = resumeMs;
+            // ★★★ 2026-11-19(issue #93): 这里必须**无条件赋值**(而不是 `if (resumeMs > 0)`)。
+            //   换片时若新片没有续播计划, 旧值会留在字段里, 被新片的 Playing 事件当成续播目标 ——
+            //   轻则"播放记录对不上", 重则 seek 到新片长度之外 → 假 EOF → 「已播完」。
+            // ★ 用接口时长先判一次"这个位置还值不值得续": 不然 Toast 会说"已从 xx 继续播放",
+            //   实际 Playing 里又因为片尾/越界被跳过 —— 用户看到的位置与提示对不上。
+            var resumeValid = resumePlan != null && resumeMs > 0 &&
+                              ResumePolicy.IsResumable(resumeMs, durMs);
+            _resumeAfterSwitchMs = resumeValid ? resumeMs : 0;
+            if (resumePlan != null)
+                WriteLibVLCDebug(
+                    $"[Resume] plan pos={resumeMs}ms source={resumePlan.Source} dur={durMs}ms " +
+                    $"valid={resumeValid}\n");
             var started = false;
             if (_isListenMode && !string.IsNullOrEmpty(_listenAudioUrl))
             {
@@ -1467,9 +1492,9 @@ public partial class PlayerWindow : FluentWindow
                 }
                 started = PlayMedia(BuildMedia(url, playAudio));
             }
-            if (started && resumePlan != null)
+            if (started && resumeValid)
             {
-                var prefix = resumePlan.Source == ResumeSource.Cloud ? "已从 B 站进度 " : "已从上次进度 ";
+                var prefix = resumePlan!.Source == ResumeSource.Cloud ? "已从 B 站进度 " : "已从上次进度 ";
                 Svc.Toast.Show(prefix + FormatClock(TimeSpan.FromMilliseconds(resumeMs)) + " 继续播放");
             }
             UpdateListenButtonState();
@@ -1510,6 +1535,10 @@ public partial class PlayerWindow : FluentWindow
     {
         try
         {
+            // ★ 2026-11-19(issue #88): 每次起一条新 input 都换代次。
+            //   旧 input 排队中的 Playing/EndReached/TimeChanged 会因为这个比对失败被丢弃,
+            //   不会再把"上一条播完了/上一条的时间"写到新片身上。
+            _mediaEpoch++;
             // 首帧计时只用于诊断日志: 每次起播(含切清晰度/重播/直播)都会重置。
             _playWatch = Stopwatch.StartNew();
             var ok = _mp.Play(media);

@@ -53,11 +53,8 @@ public sealed class PlaybackProgressService
 
     private static string FilePath => Path.Combine(AppPaths.DataDir, "playback_progress.json");
 
-    /// <summary>低于这个位置不续播(刚点开就关掉的噪声)。</summary>
-    private const long MinResumeMs = 5_000;
-
-    /// <summary>距结尾小于这个值就不续播/直接算看完, 避免下次一打开就播完。</summary>
-    private const long TailGuardMs = 10_000;
+    /// <summary>低于这个位置就连记录一起删掉(用户确实是"从头开始"了)。</summary>
+    private const long RestartGuardMs = 3_000;
 
     /// <summary>内存里最多保留多少条(超出按最后更新时间淘汰)。</summary>
     private const int MaxEntries = 1_000;
@@ -131,14 +128,13 @@ public sealed class PlaybackProgressService
     }
 
     /// <summary>进度是否值得续播: 不能太靠前, 也不能已经播到片尾。</summary>
+    /// <remarks>
+    /// ★ 2026-11-19(issue #88 / #93): 规则统一收进 <see cref="ResumePolicy"/>。
+    ///   以前这里用"距结尾 &lt; 10s"和"98%"两条, 播放器那边却只按 <c>_mp.Length</c> 直接 seek ——
+    ///   两边口径不一致时, 长视频会 seek 进最后一个分片, 触发假 EOF 并显示"已播完"。
+    /// </remarks>
     private static bool IsValidPosition(long posMs, long durationMs)
-    {
-        if (posMs < MinResumeMs) return false;
-        if (durationMs <= 0) return true;
-        if (posMs >= durationMs - TailGuardMs) return false;
-        // 兜底: 某些接口给的时长偏短/偏长, 超过 98% 一律算看完。
-        return posMs <= durationMs * 0.98;
-    }
+        => ResumePolicy.IsResumable(posMs, durationMs);
 
     /// <summary>
     /// 播放心跳里调用: 记录当前进度(内部节流, 不会每 500ms 写盘)。
@@ -155,15 +151,10 @@ public sealed class PlaybackProgressService
         {
             var map = Map;
 
-            // 刚起播/被拖回开头: 旧进度不再成立, 删掉, 否则下次还会跳回老位置。
-            if (posMs < 3_000)
-            {
-                if (map.Remove(key)) _dirty = true;
-                return;
-            }
-
-            // 已经播到片尾附近: 算看完, 下次从头开始。
-            if (durMs > 0 && posMs >= durMs - TailGuardMs)
+            // 刚起播/被拖回开头/已经播到片尾附近: 旧进度不再成立, 删掉, 否则下次还会跳回老位置。
+            // ★ 2026-11-19: "片尾"的判定与续播、EOF 共用 <see cref="ResumePolicy"/> ——
+            //   以前这里只看 10 秒尾差, 记录可能停在 98.5% 处, 下次照样拿来续播。
+            if (posMs < RestartGuardMs || (durMs > 0 && !ResumePolicy.IsResumable(posMs, durMs)))
             {
                 if (map.Remove(key)) { _dirty = true; FlushLocked(); }
                 return;
@@ -199,7 +190,7 @@ public sealed class PlaybackProgressService
         lock (_gate)
         {
             var map = Map;
-            if (posMs < 3_000 || (durMs > 0 && posMs >= durMs - TailGuardMs))
+            if (posMs < RestartGuardMs || (durMs > 0 && !ResumePolicy.IsResumable(posMs, durMs)))
             {
                 if (map.Remove(key)) _dirty = true;
             }

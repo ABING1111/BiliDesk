@@ -198,9 +198,11 @@ public partial class PlayerWindow : FluentWindow
         // 注意: LibVLC 事件都在其内部线程触发, 必须用 BeginInvoke 异步派发到 UI 线程。
         // 若用同步 Invoke, UI 线程可能正阻塞在 _mp 属性调用等 LibVLC 内部锁, 双方互相等待 => 死锁
         // 另外每个派发体都要先判 _closing: 窗口已开始关闭时回调可能仍在队列里, 必须丢弃。
-        _mp.Playing += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+        // ★ 2026-11-19(issue #88): 把事件触发时的 Media 代次一并派发到 UI 线程再比对。
+        //   旧 input 的 Playing 若排在新片之后执行, 会把新片的续播/遮罩状态整个搞乱。
+        _mp.Playing += (_, _) => Dispatcher.BeginInvoke(new Action<int>(epoch =>
         {
-            if (_closing) return;
+            if (_closing || epoch != _mediaEpoch) return;
             // 首帧耗时(从 PlayMedia 算起): 与 [Timing] 那行对齐, 用来验证起播优化有没有效果
             if (_playWatch != null)
             {
@@ -215,10 +217,48 @@ public partial class PlayerWindow : FluentWindow
             // 顺序反了会把静音状态顶掉(声音先于画面出来)。
             try { _mp.Volume = _volumeCache; } catch { }
             LogAudioStateOnce();
+            // ★★★ 2026-11-19(issue #88 / #93): 续播位置先按**真实流长**校验/夹取, 再决定要不要 seek。
+            //   旧代码直接 `_mp.Time = resume`: 目标落在片尾/超过流长时会立刻触发假 EOF,
+            //   用户看到的就是"打开长视频直接已播完""拖动进度条又已播完"。
+            var resumeTarget = _resumeAfterSwitchMs;
+            var resumeByStartTime = _resumeByStartTime;
+            _resumeAfterSwitchMs = 0;
+            _resumeByStartTime = false;
+            var effectiveLength = 0L;
+            try { effectiveLength = _mp.Length; } catch { /* 原生对象可能已失效 */ }
+            if (effectiveLength <= 0) effectiveLength = _totalMs;
+
+            if (resumeTarget > 0 && effectiveLength <= 0)
+            {
+                // 连总时长都不知道: 无法判断目标是否越界, 宁可从头播也不要 seek 到未知区域
+                // (那里一旦是流尾, 就会立刻假 EOF, 正好复现"一打开就提示已播完")。
+                WriteLibVLCDebug($"[Resume] 时长未知, 跳过续播 pos={resumeTarget}ms\n");
+                resumeTarget = 0;
+            }
+            else if (resumeTarget > 0 && !ResumePolicy.IsResumable(resumeTarget, effectiveLength))
+            {
+                // 已经到片尾/越界: 当作看完, 从头播。绝不 seek 进尾部 —— 那正是假 EOF 的来源。
+                WriteLibVLCDebug(
+                    $"[Resume] 跳过续播 pos={resumeTarget}ms length={effectiveLength}ms (片尾/越界)\n");
+                if (!_isLive && !_isLocalPlayback)
+                    Svc.PlaybackProgress.MarkCompleted(_currentBvid, _currentCid);
+                resumeTarget = 0;
+            }
+            else if (resumeTarget > 0)
+            {
+                var clamped = ResumePolicy.ClampResumeMs(resumeTarget, effectiveLength);
+                if (clamped != resumeTarget)
+                {
+                    WriteLibVLCDebug(
+                        $"[Resume] 夹取续播位置 {resumeTarget}→{clamped}ms length={effectiveLength}ms\n");
+                    resumeTarget = clamped;
+                }
+            }
+
             // ★ 2026-11-05: 这次起播后面还要"恢复进度"时不收遮罩 —— 否则遮罩淡出、
             //   下一秒 seek 等待又淡入, 就是用户看到的"闪一下"。让它一直盖到 seek 到位
             //   (由 ClearSeekWatchdog 统一收), 期间文案换成"正在缓冲…"。
-            var willResumeSeek = _resumeAfterSwitchMs > 0;
+            var willResumeSeek = resumeTarget > 0;
             if (!willResumeSeek) HideLoading();
             // 把 EOF 时切黑的手势层还原成近透明(见 OnEndReached 里切黑的原因):
             // 新 input 的 vout 已经起来, 后面要能看见画面。
@@ -249,18 +289,13 @@ public partial class PlayerWindow : FluentWindow
                 UpdateListenLabel();
                 StartListenWave();
             }
-            if (_resumeAfterSwitchMs > 0)
+            if (resumeTarget > 0)
             {
-                var resume = _resumeAfterSwitchMs;
-                _resumeAfterSwitchMs = 0;
-                var byStartTime = _resumeByStartTime;
-                _resumeByStartTime = false;
-
                 // ★★★ 2026-11-05: 重建路径用 Media 的 :start-time 定位时, **不要再设一次
                 //   Time** —— 那会在解复用器刚打开的窗口里二次打断 input, 实测正是
                 //   "重建后补跳又落回开头"的来源(用户报的"最后回到开头 8 秒")。
                 //   其余路径(切清晰度/本地文件/聆听退出)保持原样。
-                if (!byStartTime) { try { _mp.Time = resume; } catch { } }
+                if (!resumeByStartTime) { try { _mp.Time = resumeTarget; } catch { } }
 
                 // 遮罩不在这里收: 换成"正在缓冲…"继续盖着, 由看门狗确认到位后统一收。
                 ShowLoading(BufferingText);
@@ -270,13 +305,10 @@ public partial class PlayerWindow : FluentWindow
                 // ★ 不再叠"补跳"定时器(2026-10-17 手术删): 补跳那一套(反复重设 Time
                 //   + 要求连续 3 次稳住)实测会把位置冲过头, 而且主路已换成 seek 一次
                 //   就准的合流单流。万一这一次没接住, 交给下面的看门狗重建一次即可。
-                MarkSeekIssued(resume);
+                MarkSeekIssued(resumeTarget);
             }
-            else
-            {
-                _resumeByStartTime = false;
-            }
-        }));
+            // _resumeAfterSwitchMs / _resumeByStartTime 已在上面取出并清零。
+        }), _mediaEpoch);
         // 暂停/停止时同步按钮图标(否则起播后图标停留在初始状态, 看起来像"反了")
         _mp.Paused += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -291,9 +323,10 @@ public partial class PlayerWindow : FluentWindow
             UpdatePlayButton();
             ShowControls();   // 暂停时控制栏常显(没有"遮挡内容"的问题, 且用户多半要操作)
         }));
-        _mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+        // 旧 input 的错误同样可能在换片后才派发到 UI, 不能让它给新片弹失败遮罩。
+        _mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(new Action<int>(epoch =>
         {
-            if (_closing) return;
+            if (_closing || epoch != _mediaEpoch) return;
             // 诊断: 把出错时正在播的 URL 也写进 debug 文件
             WriteLibVLCDebug(
                 $"\n[EncounteredError] bvid={_currentBvid} cid={_currentCid} lastUrl={_lastPlayUrl}\n");
@@ -303,7 +336,7 @@ public partial class PlayerWindow : FluentWindow
             HideLoading();
             FailOverlay.Visibility = Visibility.Visible;
             FailText.Text = "视频播放出错, 请检查网络或尝试其他清晰度";
-        }));
+        }), _mediaEpoch);
 
         // ★★★ vout 建立/重建的那一刻就把原生窗口底色处理掉(2026-10-17, 修"最大化/还原后白块")。
         //   为什么必须要这个事件、不能只靠定时器: libvlc 的 `Static` 子窗口是**新建**出来的,
