@@ -227,8 +227,13 @@ public partial class PlayerWindow : FluentWindow
         if (string.IsNullOrEmpty(_lastPlayUrl) ||
             !_lastPlayUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return;
 
-        var next = _backups[0];
-        _backups.RemoveAt(0);
+        // ★ 2026-11-20: 候选里可能混着"不能 seek"的线路(见 CdnService.IsSeekHostileUrl)。
+        //   卡顿自愈经常紧接着一次拖动/续播, 换到那类线路上会让进度条整个失效 ——
+        //   优先挑一条友好的, 实在没有才退回原来的顺序。
+        var idx = _backups.FindIndex(u => !CdnService.IsSeekHostileUrl(u));
+        if (idx < 0) idx = 0;
+        var next = _backups[idx];
+        _backups.RemoveAt(idx);
         if (string.IsNullOrEmpty(next) || string.Equals(next, _lastPlayUrl, StringComparison.Ordinal))
             return;
         _lastPlayUrl = next;
