@@ -27,59 +27,132 @@ namespace BiliDesk.Views;
 
 public partial class PlayerWindow : FluentWindow
 {
-    private void OnProgressDragStart(object sender, DragStartedEventArgs e)
+    // ------------------------------------------------------------ 进度条拖动(2026-11-20 重做)
+
+    /// <summary>
+    /// 进度条左键按下: **按住轨道任意位置**即进入拖动。
+    ///
+    /// ★ 为什么要自己接管, 而不是继续用 WPF 的 <c>IsMoveToPointEnabled</c>:
+    ///   那个属性只解决"点一下轨道直接跳过去", 按住后**拖不动** —— 指针离开滑块那 11px
+    ///   范围就不再产生 DragDelta, 想微调只能反复点。用户要的是"按住哪都能拖着走"
+    ///   (与网页播放器一致)。WPF 的 Track 只把拖动交给 Thumb, 没有"整轨拖动"模式,
+    ///   所以按下/移动/松开这条链由这里全权负责。
+    ///
+    /// ★ 由此带来的三个约定(改这里时别丢):
+    ///   ① <b>拖动期间不发 seek</b>: 只把指针位置换算成 Value + 气泡。拖动中反复 seek
+    ///      会打断正在飞的解复用器, 表现是"越拖越卡、最后无限缓冲"。
+    ///   ② <b>松手才发一次 seek</b>(见 <see cref="FinishProgressScrub"/>)。
+    ///   ③ <b>捕获鼠标</b>: 指针拖出轨道(甚至拖到控制栏外)时事件仍回到这里,
+    ///      否则拖到边缘就"断了", 松手也收不到 Up —— 进度条会卡在 _isSeeking 上永不恢复。
+    /// </summary>
+    private void OnProgressSliderPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        // ★ 记下起点值: WPF 的 IsMoveToPointEnabled 在**点击轨道**时会先改 Value
-        //   (ValueChanged 已经把 seek 发出去了), 再把这次点击当成一次 Thumb 拖动。
-        //   松手时若值没变, 就只是"点了一下", 不能再发第二条 seek。
-        _progressDragStartValue = ProgressSlider.Value;
+        if (_closing || ProgressSlider == null || _mp == null) return;
+        // 直播没有总时长(进度条已被 IsEnabled=false 置灰, 这里再兜一道)
+        if (!ProgressSlider.IsEnabled) return;
+        // 只认左键; 右键在视频区有"铺满窗口"的语义, 不能在这里被吃掉
+        if (e.ChangedButton != MouseButton.Left) return;
+
         _isSeeking = true;
-        // ★ 气泡**先不亮**: WPF 把"点一下轨道"也当成一次拖动(DragStarted 照样来),
-        //   此时亮气泡会闪一下又消失 —— 用户看到的是"莫名其妙弹了个 12:34"。
-        //   真正的"拖动"由 DragDelta 判定(见 OnProgressDragDelta): 只有鼠标真的移动了才算。
-        //   ★ 悬停态例外: 气泡在拖动**之前**就已经亮着(悬停亮起的), DragStart 不动它,
-        //     按下去的瞬间气泡从"悬停位置"无缝切成"当前值", 不闪不跳。
-        _progressDragMoved = false;
+        // 起点值用于松手时判"有没有真的动过": 原地按一下松手不该发 seek
+        _progressDragStartValue = ProgressSlider.Value;
+        // 按下即算"进入拖动": 指针可能一动不动就松手(等于一次点击跳转),
+        // 那种情况也要在松手时跳过去 —— 所以这里就置上, 不再等鼠标移动。
+        _progressDragMoved = true;
+
+        // 立刻把滑块移到指针处并亮气泡: 按下的那一刻就该看到"要跳到哪",
+        // 而不是等第一次 MouseMove —— 原地按住不动时用户会以为没反应。
+        // ★ 长度未知时也照样让滑块跟手(否则按下毫无反馈), 只是松手时不会发 seek ——
+        //   判据在 FinishProgressScrub 里(那里才需要 _mp.Length 做换算)。
+        TrackProgressFromPointer(e.GetPosition(ProgressSlider));
+
+        ProgressSlider.CaptureMouse();
+        // 吃掉这一下: 不让 Slider 自己的 Track/RepeatButton 再处理(那会按 DecreaseLarge/
+        // IncreaseLarge 翻页, 与我们的"跟手拖动"打架)。Slider 的 Thumb 拖动也一并被挡掉。
+        e.Handled = true;
+    }
+
+    /// <summary>进度条左键松开: 结束拖动并**只发一次** seek。</summary>
+    private void OnProgressSliderPreviewMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+        if (!_isSeeking) return;
+        e.Handled = true;
+        FinishProgressScrub();
     }
 
     /// <summary>
-    /// 拖动过程中的鼠标移动 —— 判定"用户真的在拖"而不是"点了一下轨道"。
+    /// 鼠标捕获丢失(拖出窗口后松开、Alt+Tab、弹窗抢焦点…): 同样要收尾。
     ///
-    /// ★ 为什么需要它: WPF 的 <c>IsMoveToPointEnabled</c> 让"点击轨道"也走完整的拖动流程
-    ///   (ValueChanged → DragStarted → DragCompleted)。如果气泡跟着 DragStarted 就亮,
-    ///   点一下轨道会"闪出一个时间气泡再消失" —— 纯噪音。
-    ///   而 <c>DragDelta</c> 只在鼠标**真的移动**时才来(轨道点击不产生它),
-    ///   所以它是"真拖动"的准确信号。
+    /// ★ 没有这条的话, 上面那条 Up 收不到时 _isSeeking 会一直为真 —— 进度条不再回写、
+    ///   控制栏不再自动隐藏、Sponsor 跳转全停, 整个播放器像"卡住了"。这是必须的兜底。
     /// </summary>
-    private void OnProgressDragDelta(object sender, DragDeltaEventArgs e)
+    private void OnProgressSliderLostMouseCapture(object sender, MouseEventArgs e)
     {
-        if (_closing || !_isSeeking) return;
-        _progressDragMoved = true;
-        // 这里的 Value 可能比鼠标位置**落后一拍**(WPF 是先发 DragDelta 再回写 Slider.Value),
-        // 下一条 ValueChanged 会立刻用新值纠正 —— 只是首帧可能差一点点, 无所谓。
-        UpdateProgressDragHint(ProgressSlider.Value);
+        if (!_isSeeking) return;
+        FinishProgressScrub();
     }
 
-    private void OnProgressDragEnd(object sender, DragCompletedEventArgs e)
+    /// <summary>
+    /// 结束一次拖动: 收气泡、放捕获, 值真的变了才发 seek。
+    ///
+    /// ★ 必须先把 <c>_isSeeking</c> 放掉再发 seek: SeekTo → MarkSeekIssued 会按
+    ///   "不在拖动中"的路径钉滑块与时间文字(见 Playback.cs 里的判断), 顺序反了那次钉值会被吞掉。
+    /// ★ 与旧实现(Thumb.DragCompleted)的差别: 旧版要区分"点轨道"(WPF 先改 Value 再算拖动)
+    ///   与"真拖动", 靠 DragDelta 是否来过判定; 现在两者是同一条路, 按下就已经把滑块移到指针处,
+    ///   所以只需比较"松手时的值 vs 按下时的值"。
+    /// </summary>
+    private void FinishProgressScrub()
     {
+        var value = ProgressSlider?.Value ?? 0;
+
         _isSeeking = false;
+        _progressDragMoved = false;
         // 气泡立刻收: 松手后画面会跳到新位置, 气泡留着是多余的。
         // (若鼠标还压在轨道上, 下一条 MouseMove 会以"悬停"身份把气泡重新亮起 —— 那是对的。)
         HideProgressDragHint();
-        // 点击轨道 / 点在滑块上但没拖动 ⇒ ValueChanged 已经处理过(或本来就不需要跳),
-        // 这里不再重复 seek。重复 seek 会打断正在飞的解复用器, 表现为无限缓冲。
-        // 阈值取 0.01(0~1000 量程): 1px 的拖动在常见轨道宽度下约等于 1, 不会被误吞;
-        // 而轨道点击本身不会产生 DragDelta, 值严格不变。
-        var moved = Math.Abs(ProgressSlider.Value - _progressDragStartValue) > 0.01;
-        if (moved && _mp.Length > 0)
-        {
-            var targetMs = (long)Math.Round(ProgressSlider.Value / 1000.0 * _mp.Length);
-            // ★ 走统一入口: 由它按片源类型决定"一步到位 / 看门狗重建"。
-            SeekTo(targetMs);
-        }
+        if (ProgressSlider != null && ProgressSlider.IsMouseCaptured)
+            ProgressSlider.ReleaseMouseCapture();
+
+        // 原地按一下松手(值没变)不 seek: 已经在目标附近时 SeekTo 内部也会挡,
+        // 但这里先挡掉更省一次换算, 也让"点滑块不拖动"完全无副作用。
+        if (!Helpers.ProgressScrub.ShouldSeek(_progressDragStartValue, value)) return;
+        if (_mp == null || _mp.Length <= 0) return;
+
+        var targetMs = (long)Math.Round(value / 1000.0 * _mp.Length);
+        // ★ 走统一入口: 由它按片源类型决定"一步到位 / 看门狗重建"。
+        SeekTo(targetMs);
         // 拖动结束后**不要**立刻 SyncProgressNow: 此刻 _mp.Time 通常还只是 seek 的
         // 受理回执(目标值), 写入记录会得到一条"从没真正播放过"的进度(issue #93)。
         // 等看门狗确认落地后, 下一次 TimeChanged/心跳会自然把真实位置落库。
+    }
+
+    /// <summary>
+    /// 把"指针在进度条内的横坐标"换算成量程值(0~1000), 同步滑块并更新气泡。
+    ///
+    /// ★ 换算用 <see cref="TrackMetrics"/> 的真实行程(滑块中心从 halfThumb 走到 width-halfThumb),
+    ///   与 SponsorMarks 色块、时刻气泡、以及松手时的 seek 全部同一套公式 ——
+    ///   否则"气泡说到 12:34、实际跳到 12:31"这种偏差在长视频里非常刺眼。
+    /// ★ 指针拖出轨道时夹到两端: 拖过头就是"跳到片头/片尾", 而不是失控。
+    /// </summary>
+    private void TrackProgressFromPointer(Point p)
+    {
+        if (_closing || ProgressSlider == null) return;
+        var (offset, usable) = TrackMetrics();
+        if (usable <= 0) return;
+
+        var value = Helpers.ProgressScrub.ValueFromPointer(
+            p.X, offset, usable, ProgressSlider.Minimum, ProgressSlider.Maximum);
+
+        // ★ 必须走 _updatingSlider 闸门: 直接赋 Value 会触发 OnProgressValueChanged,
+        //   那条路在"非拖动"时会把值当跳转发 seek(拖动期间由 _isSeeking 挡住, 但放闸后
+        //   的最后一帧可能漏出去)。这里明确表示"这是拖动写进去的, 别当跳转"。
+        _updatingSlider = true;
+        try { ProgressSlider.Value = value; }
+        finally { _updatingSlider = false; }
+
+        // 拖动中的气泡由这里驱动, 不用等 ValueChanged(它的时序比指针落后一拍)
+        UpdateProgressDragHint(value);
     }
 
     /// <summary>
@@ -91,7 +164,7 @@ public partial class PlayerWindow : FluentWindow
     /// ★ 两路输入共用本方法: 拖动(显示将要跳到的时间)与悬停(显示鼠标指的位置)。
     ///   本质都是"轨道上这个点是什么时间", 没必要两套浮层。
     /// ★ 拖动期间**不发 seek**: 发 seek 会打断正在飞的解复用器(表现: 无限缓冲),
-    ///   真正的跳转等松手(见 OnProgressDragEnd)。悬停本来就不改 Value, 天然不涉及。
+    ///   真正的跳转等松手(见 FinishProgressScrub)。悬停本来就不改 Value, 天然不涉及。
     /// </summary>
     /// <param name="sliderValue">进度条量程上的值(0~1000): 拖动时 = 当前 Value, 悬停时 = 鼠标位置反推值</param>
     private void UpdateProgressDragHint(double sliderValue)
@@ -100,7 +173,7 @@ public partial class PlayerWindow : FluentWindow
         if (_mp == null || _mp.Length <= 0) return;   // 直播/本地文件没有总时长, 没什么可提示
 
         // 目标时间与真正 seek 的换算**必须一致** —— 否则气泡显示的时间和实际落点对不上,
-        // 用户会以为跳错了。公式见 SeekTo / OnProgressDragEnd。
+        // 用户会以为跳错了。公式见 SeekTo / FinishProgressScrub。
         var targetMs = (long)Math.Round(sliderValue / 1000.0 * _mp.Length);
         targetMs = Math.Clamp(targetMs, 0, _mp.Length);
 
@@ -139,7 +212,7 @@ public partial class PlayerWindow : FluentWindow
     private void HideProgressDragHint()
     {
         if (_closing || ProgressHint == null) return;
-        // ★ 拖动中不能收: 悬停(MouseLeave)与拖动(DragEnd)之外, 还有"拖动期间鼠标
+        // ★ 拖动中不能收: 悬停(MouseLeave)与拖动(松手)之外, 还有"拖动期间鼠标
         //   恰好滑出了轨道边界"这条交叉路径 —— 拖动未结束气泡必须留着。
         if (_isSeeking) return;
         ProgressHint.Visibility = Visibility.Collapsed;
@@ -148,21 +221,28 @@ public partial class PlayerWindow : FluentWindow
     // ------------------------------------------------------------ 进度条悬停提示(2026-11-07)
 
     /// <summary>
-    /// 鼠标悬停进度条: 气泡浮出, 显示鼠标指的位置对应的时间。
+    /// 进度条上的鼠标移动: 拖动中跟手更新, 否则按"悬停"显示指针位置对应的时间。
     ///
     /// ★ 事件挂在 Slider 上而不是轨道 Grid 上: Slider 的命中区比那条 3px 的白轨道大得多
-    ///   (模板里 MinHeight=18 的透明 Grid), 挂 Slider 才能覆盖"压在轨道附近"的全部区域。
-    /// ★ 拖动中此路**不更新气泡**(拖动有自己的更新路径, 且拖动时鼠标位置 ≠ 目标位置 ——
-    ///   WPF 拖滑块时鼠标可以在轨道外任意远处), 只把悬停标志置上。
-    /// ★ 与拖动的交接: DragCompleted 时鼠标几乎必然还压在轨道上, 那时会落进来一次
-    ///   MouseMove —— 气泡从"拖动的时间"无缝切成"悬停位置的时间", 体验是对的。
+    ///   (模板里 Height=14 的透明 Grid), 挂 Slider 才能覆盖"压在轨道附近"的全部区域。
+    /// ★ 拖动中**也走这里**(2026-11-20 起): 指针被捕获在 Slider 上, 拖出轨道后事件仍会来,
+    ///   由 <see cref="TrackProgressFromPointer"/> 换算目标值 —— 这正是"按住任意位置拖"的核心。
+    ///   旧版这里 `if (_isSeeking) return`, 因为那时拖动由 Thumb 自己管、鼠标位置不等于目标值;
+    ///   现在拖动本身就是"指针位置 = 目标位置", 这条早退反而会让拖出轨道后画面跟不上。
     /// </summary>
     private void OnProgressSliderMouseMove(object sender, MouseEventArgs e)
     {
-        if (_closing || ProgressHint == null) return;
-        if (_isSeeking) return;   // 拖动优先: 气泡由拖动路径更新, 不被鼠标位置覆盖
+        if (_closing || ProgressSlider == null) return;
 
-        // 鼠标在 Slider 里的横坐标 → 量程值。方向键等程序化改动不走这里。
+        // 拖动中: 指针位置就是目标位置, 跟手更新(不 seek)
+        if (_isSeeking)
+        {
+            TrackProgressFromPointer(e.GetPosition(ProgressSlider));
+            return;
+        }
+
+        if (ProgressHint == null) return;
+        // 悬停: 只显示指针位置对应的时间, 不改 Value(方向键等程序化改动不走这里)
         var p = e.GetPosition(ProgressSlider);
         var (offset, usable) = TrackMetrics();
         if (usable <= 0) return;
@@ -180,11 +260,14 @@ public partial class PlayerWindow : FluentWindow
     // ------------------------------------------------------------ 音量条"靠近才展开"(2026-11-14)
 
     /// <summary>
-    /// 音量滑杆展开后的宿主宽度 = 滑杆 74 + 左侧 7px 间隙。
+    /// 音量滑杆展开后的宿主宽度 = 滑杆 74 + 左侧 7px 间隙 + 右侧 2px 余量。
     /// ★ 必须与 XAML 里 Slider 的 Width=74 / Margin="7,0,0,0" 对齐:
     ///   宿主比内容窄会裁掉滑块右端, 宽了则收起/展开之间多一截空白。
+    /// ★ 那 2px 余量是给**按压动画**的(2026-11-20): 白点按住时放大到 1.2 倍(11 → 13.2),
+    ///   在音量满格时圆心贴着右端, 放大后右缘会超出滑杆 1.1px。宿主带 ClipToBounds,
+    ///   不预留就会被切平一条边 —— 而那正好是用户按住滑块的时候, 最容易被看见。
     /// </summary>
-    private const double VolumeExpandedWidth = 81;
+    private const double VolumeExpandedWidth = 83;
 
     private void OnVolumeAreaMouseEnter(object sender, MouseEventArgs e)
     {

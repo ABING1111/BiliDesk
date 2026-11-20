@@ -111,6 +111,13 @@ public partial class PlayerWindow : FluentWindow
             // 拖动气泡: 关闭时若还挂着, 会跟着浮层窗口一起残留在屏幕上。
             HideProgressDragHint();
             HideVolumePctHint();
+            // ★ 关窗时若正按着进度条, 鼠标捕获也要放掉(2026-11-20 拖动改由代码接管后新增):
+            //   浮层窗口会存活约 1 秒, 捕获留在上面的期间, 整个桌面上的点击都会被重定向给它。
+            //   ★ 先清 _isSeeking 再释放: 释放会触发 LostMouseCapture → FinishProgressScrub,
+            //     那时它看到"已经不在拖动"就直接返回, 不会去碰正在拆解的 _mp。
+            _isSeeking = false;
+            if (ProgressSlider != null && ProgressSlider.IsMouseCaptured)
+                ProgressSlider.ReleaseMouseCapture();
 
             // 先把覆盖层摘掉再隐藏窗口, 否则底部控制栏会以残影形式留在屏幕上
             DetachVideoOverlay();

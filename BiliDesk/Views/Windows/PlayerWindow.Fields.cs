@@ -126,8 +126,10 @@ public partial class PlayerWindow : FluentWindow
     ///     **全新的 input**(与"点重播"走同一条路)。这条判断由 <see cref="_ended"/> 负责。
     ///
     /// ★ 本字段负责的是**另一件事**: 同一次点进度条会被 WPF 走**两条路**
-    ///   (ValueChanged + Thumb.DragCompleted, 见 OnProgressDragEnd 的说明)。
-    ///   第一条走重建路径时已经把 `_ended` 清掉了, 第二条若按普通 seek 处理,
+    ///   (ValueChanged + Thumb.DragCompleted)。这条在 2026-11-20 重做拖动后**已不复存在**
+    ///   (拖动由代码接管, 松手只发一次 seek, 见 FinishProgressScrub), 但闸门保留 ——
+    ///   重建 Media 那条路径仍可能被别的入口(方向键连按、跳过片段)在同一时刻重入。
+    ///   历史原因: 第一条走重建路径时已经把 `_ended` 清掉了, 第二条若按普通 seek 处理,
     ///   就会对**刚起播的新 input** 再发一次 seek —— 正好把它的解复用器打断,
     ///   于是"画面卡住/又要缓冲一次"; 更糟的是它可能落在新 input 还没稳定的窗口里,
     ///   把 :start-time 定位好的落点又冲掉(就是"回到开头 8 秒"那类问题)。
@@ -231,15 +233,19 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool _eofFallbackToStartTried;
 
-    /// <summary>进度条开始拖动那一刻的值(用来识别"点击轨道"这种伪拖动, 见 OnProgressDragEnd)。</summary>
+    /// <summary>
+    /// 进度条按下那一刻的值(松手时比对, 判断"有没有真的挪动过", 见 <see cref="FinishProgressScrub"/>)。
+    /// </summary>
     private double _progressDragStartValue;
 
     /// <summary>
-    /// 用户**真的拖动**过进度条(与"点击轨道"区分开, 见 OnProgressDragDelta)。
+    /// 这次按下之后滑块**真的被移动过**(2026-11-20 起: 按下即置真, 松手清掉)。
     ///
-    /// ★ 为什么单独记: WPF 的 <c>IsMoveToPointEnabled</c> 让"点击轨道"也走完整的拖动流程,
-    ///   光看 <c>_isSeeking</c> 分不清"点了轨道"和"拖着走"。而"点一下轨道就闪出个时间气泡"
-    ///   是纯噪音, 只有真拖动才该提示。
+    /// ★ 历史: 旧实现靠 WPF 的 <c>IsMoveToPointEnabled</c>, 点击轨道也会走完整拖动流程,
+    ///   于是需要这个标志区分"点一下轨道"与"拖着走"(见旧版 OnProgressDragDelta)。
+    ///   现在按下/移动/松开全部由代码接管(见 OnProgressSliderPreviewMouseDown),
+    ///   按下那一刻就已经把滑块移到指针处 —— 它现在只用于
+    ///   <see cref="OnProgressValueChanged"/> 判断"拖动中要不要刷气泡"。
     /// </summary>
     private bool _progressDragMoved;
 

@@ -1210,19 +1210,23 @@ public partial class PlayerWindow : FluentWindow
         WriteLibVLCDebug("[Seek] 重建失败 → 退回「已播完」态(保留重播入口)\n");
     }
 
-    /// <summary>进度条值变化: 点击轨道任意位置直接跳转(IsMoveToPointEnabled + 本处理器)。
-    /// 拖动过程由 _isSeeking 屏蔽, 松手才生效</summary>
+    /// <summary>
+    /// 进度条值变化。
+    ///
+    /// ★ 2026-11-20 起"按下/拖动/松手"由 PlayerWindow.Controls.cs 全权接管
+    ///   (见 OnProgressSliderPreviewMouseDown / FinishProgressScrub), 本处理器只剩两个职责:
+    ///     ① 拖动期间**一个 seek 都不发**(拖动中反复 seek 会打断解复用器 → 无限缓冲);
+    ///     ② 非拖动的程序化改动(心跳回写 / seek 钉值)不碰气泡。
+    ///   ★ 正常操作下它**不会再**触发跳转 —— 拖动写 Value 走的是 _updatingSlider 闸门,
+    ///     松手那次 seek 由 FinishProgressScrub 显式发出。这里保留兜底: 若哪天有别的路径
+    ///     直接改 Value(键盘/脚本), 行为与旧版一致(直接跳)。
+    /// </summary>
     private void OnProgressValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_closing || _mp == null || _updatingSlider) return;
 
-        // ★ 拖动中: 只更新气泡, **一个 seek 都不发**。
-        //   发 seek 会打断正在飞的解复用器(表现: 无限缓冲), 所以拖动期间只提示目标时间,
-        //   真正的跳转等松手(见 OnProgressDragEnd)。
-        //   ★ _isSeeking 必须是**单独**一条分支: 它原先和别的条件合在一起提前 return,
-        //     那样气泡就永远等不到"拖动中"这个信号。
-        //   ★ 还要看 _progressDragMoved: "点击轨道"也会走这条路(见 OnProgressDragDelta),
-        //     那种情况下不该冒气泡。
+        // 拖动中: 只更新气泡, 不发 seek。气泡通常已由 TrackProgressFromPointer 更新过,
+        // 这里补一次是为了"拖动中别的地方改了 Value"这类边界不至于没有反馈。
         if (_isSeeking)
         {
             if (_progressDragMoved) UpdateProgressDragHint(e.NewValue);

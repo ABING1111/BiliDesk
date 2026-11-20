@@ -359,6 +359,13 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>视频区左键松开: 若是长按 → 恢复 1x; 否则延迟触发播放/暂停(给双击留窗口)</summary>
     private void OnVideoAreaMouseLeftUp(object sender, MouseButtonEventArgs e)
     {
+        // ★★ 进度条拖动中(2026-11-20): 这次 Up 属于进度条, 必须原样放行。
+        //   进度条捕获了鼠标, 而这里是**隧道**阶段的祖先 —— 比 Slider 自己的
+        //   PreviewMouseLeftButtonUp 先跑。用户把指针拖出控制栏再松手时,
+        //   ControlBar.IsMouseOver 已经是 false, 下面那句"没有配对 Down 的 Up"会把这次
+        //   Up 当成弹层余波吞掉(Handled=true) ⇒ 进度条收不到松手 ⇒ _isSeeking 永远为真
+        //   (进度条不再回写、控制栏不再自动隐藏)。所以这里必须先让路。
+        if (_isSeeking) return;
         // 与 Down 对称: 控制栏上的点击不触发单击暂停
         if (ControlBar != null && ControlBar.IsMouseOver) return;
         // ★ 与 Down 对称: 跳过提示条上的「撤回」点击也不触发单击暂停

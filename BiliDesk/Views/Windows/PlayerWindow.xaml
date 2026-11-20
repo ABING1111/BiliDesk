@@ -104,10 +104,68 @@
                                                      原来写了 Margin="-2,0" 让圆点左右各溢出 2px, 音量条满格时
                                                      右半边正好压出音量宿主的裁剪边界 —— 圆点被切平成一块。
                                                      去掉负边距后, 圆点两端都完整; 代价只是极值时圆心内缩 5.5px,
-                                                     本来也是标准滑杆的观感。 -->
+                                                     本来也是标准滑杆的观感。
+                                                     ★ 按压动画(2026-11-20)同样**不能改 Width/Height**:
+                                                     那会改变 Thumb 的实际宽度, 而音量/进度的换算都按 11px 算
+                                                     (见 VolumeThumbWidth / TrackMetrics)。所以放大走
+                                                     RenderTransform(不参与布局), Thumb 槽仍是 11px。 -->
                                                 <Grid Background="Transparent">
-                                                    <Ellipse Width="11" Height="11" Fill="White" />
+                                                    <Ellipse x:Name="Dot" Width="11" Height="11" Fill="White"
+                                                             RenderTransformOrigin="0.5,0.5">
+                                                        <Ellipse.RenderTransform>
+                                                            <ScaleTransform ScaleX="1" ScaleY="1" />
+                                                        </Ellipse.RenderTransform>
+                                                    </Ellipse>
                                                 </Grid>
+                                                <ControlTemplate.Triggers>
+                                                    <!-- 按住拖动: 圆点放大 11 → 13.2(90ms 快出、160ms 慢回)。
+                                                         ★ 用 Thumb 自己的 IsDragging: 音量条走的是 WPF 原生拖动,
+                                                           这个属性天然就是"按在圆点上拖着"。
+                                                         ★ 放大只有 1.1px 会溢出 11px 槽; 满格时右侧那 1.1px 正好压在
+                                                           音量宿主的裁剪边上, 所以 VolumeExpandedWidth 预留了 2px。 -->
+                                                    <Trigger Property="IsDragging" Value="True">
+                                                        <Trigger.EnterActions>
+                                                            <BeginStoryboard>
+                                                                <Storyboard>
+                                                                    <DoubleAnimation Storyboard.TargetName="Dot"
+                                                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                        To="1.2" Duration="0:0:0.09">
+                                                                        <DoubleAnimation.EasingFunction>
+                                                                            <CubicEase EasingMode="EaseOut" />
+                                                                        </DoubleAnimation.EasingFunction>
+                                                                    </DoubleAnimation>
+                                                                    <DoubleAnimation Storyboard.TargetName="Dot"
+                                                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                        To="1.2" Duration="0:0:0.09">
+                                                                        <DoubleAnimation.EasingFunction>
+                                                                            <CubicEase EasingMode="EaseOut" />
+                                                                        </DoubleAnimation.EasingFunction>
+                                                                    </DoubleAnimation>
+                                                                </Storyboard>
+                                                            </BeginStoryboard>
+                                                        </Trigger.EnterActions>
+                                                        <Trigger.ExitActions>
+                                                            <BeginStoryboard>
+                                                                <Storyboard>
+                                                                    <DoubleAnimation Storyboard.TargetName="Dot"
+                                                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                        To="1" Duration="0:0:0.16">
+                                                                        <DoubleAnimation.EasingFunction>
+                                                                            <CubicEase EasingMode="EaseOut" />
+                                                                        </DoubleAnimation.EasingFunction>
+                                                                    </DoubleAnimation>
+                                                                    <DoubleAnimation Storyboard.TargetName="Dot"
+                                                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                        To="1" Duration="0:0:0.16">
+                                                                        <DoubleAnimation.EasingFunction>
+                                                                            <CubicEase EasingMode="EaseOut" />
+                                                                        </DoubleAnimation.EasingFunction>
+                                                                    </DoubleAnimation>
+                                                                </Storyboard>
+                                                            </BeginStoryboard>
+                                                        </Trigger.ExitActions>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </Thumb.Template>
                                     </Thumb>
@@ -274,10 +332,16 @@
                时刻气泡的换算(TrackMetrics)就仍然对得上; 若让 Thumb 宽度随悬停变化,
                色块和气泡会在鼠标进出时左右跳一下。
              ★ 悬停加粗用 DataTrigger 绑 AncestorType=Slider: 轨道三件套各自在自己的
-               ControlTemplate 里, 外层 ControlTemplate.Triggers 够不到它们(TargetName 跨不了模板)。 -->
+               ControlTemplate 里, 外层 ControlTemplate.Triggers 够不到它们(TargetName 跨不了模板)。
+
+             ★★★ 2026-11-20「按住任意位置快速拖动」: 按下/移动/松开全部由代码接管
+               (PlayerWindow.Controls.cs 的 OnProgressSliderPreviewMouseDown /
+               OnProgressSliderMouseMove / FinishProgressScrub), 所以这里**不再设
+               IsMoveToPointEnabled** —— 那个属性只让"点轨道"跳一下, 按住拖动仍只认滑块本身。
+               按压态因此不能看 Thumb.IsDragging(WPF 原生拖动根本不启动),
+               改看 Slider.IsMouseCaptureWithin(代码在按下时 CaptureMouse)。 -->
         <Style x:Key="PlayerProgressSlider" TargetType="Slider">
             <Setter Property="Foreground" Value="White" />
-            <Setter Property="IsMoveToPointEnabled" Value="True" />
             <!-- 不吃键盘焦点, 保证空格键始终控制播放/暂停 -->
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Template">
@@ -307,6 +371,11 @@
                                                                  Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Slider}}">
                                                         <Setter TargetName="Bar" Property="Height" Value="5" />
                                                     </DataTrigger>
+                                                    <!-- 按压中指针可能被拖到滑条外(有鼠标捕获): 已播段保持加粗 -->
+                                                    <DataTrigger Value="True"
+                                                                 Binding="{Binding IsMouseCaptureWithin, RelativeSource={RelativeSource AncestorType=Slider}}">
+                                                        <Setter TargetName="Bar" Property="Height" Value="5" />
+                                                    </DataTrigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </RepeatButton.Template>
@@ -329,14 +398,73 @@
                                     <Thumb Focusable="False">
                                         <Thumb.Template>
                                             <ControlTemplate TargetType="Thumb">
+                                                <!-- ★ 圆点默认透明、悬停才亮; 按压时再放大一圈(见下方触发器)。
+                                                     放大走 RenderTransform 而不是改 Width/Height:
+                                                     Thumb 槽必须保持 11px, 否则 TrackMetrics / SponsorMarks /
+                                                     时刻气泡的换算会全部跟着漂移。 -->
                                                 <Grid Width="11" Background="Transparent">
                                                     <Ellipse x:Name="Dot" Width="10" Height="10"
-                                                             Fill="White" Opacity="0" />
+                                                             Fill="White" Opacity="0"
+                                                             RenderTransformOrigin="0.5,0.5">
+                                                        <Ellipse.RenderTransform>
+                                                            <ScaleTransform ScaleX="1" ScaleY="1" />
+                                                        </Ellipse.RenderTransform>
+                                                    </Ellipse>
                                                 </Grid>
                                                 <ControlTemplate.Triggers>
                                                     <DataTrigger Value="True"
                                                                  Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Slider}}">
                                                         <Setter TargetName="Dot" Property="Opacity" Value="1" />
+                                                    </DataTrigger>
+                                                    <!-- 按压动画(2026-11-20): 10 → 12.5(90ms 快出 / 160ms 慢回)。
+                                                         ★ Opacity 用 **Setter** 而不是动画: 动画的优先级高于 Setter,
+                                                           淡入动画一结束(或 FillBehavior=Hold)就会把"悬停熄灭"的
+                                                           Setter 一起压住, 圆点再也暗不下去(与 ShowSpeedHint 同一个坑)。
+                                                         ★ 触发器顺序有意义: 两条同时成立时后一条的 Setter 生效,
+                                                           所以按压这条必须排在悬停之后。 -->
+                                                    <DataTrigger Value="True"
+                                                                 Binding="{Binding IsMouseCaptureWithin, RelativeSource={RelativeSource AncestorType=Slider}}">
+                                                        <Setter TargetName="Dot" Property="Opacity" Value="1" />
+                                                        <DataTrigger.EnterActions>
+                                                            <BeginStoryboard>
+                                                                <Storyboard>
+                                                                    <DoubleAnimation Storyboard.TargetName="Dot"
+                                                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                        To="1.25" Duration="0:0:0.09">
+                                                                        <DoubleAnimation.EasingFunction>
+                                                                            <CubicEase EasingMode="EaseOut" />
+                                                                        </DoubleAnimation.EasingFunction>
+                                                                    </DoubleAnimation>
+                                                                    <DoubleAnimation Storyboard.TargetName="Dot"
+                                                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                        To="1.25" Duration="0:0:0.09">
+                                                                        <DoubleAnimation.EasingFunction>
+                                                                            <CubicEase EasingMode="EaseOut" />
+                                                                        </DoubleAnimation.EasingFunction>
+                                                                    </DoubleAnimation>
+                                                                </Storyboard>
+                                                            </BeginStoryboard>
+                                                        </DataTrigger.EnterActions>
+                                                        <DataTrigger.ExitActions>
+                                                            <BeginStoryboard>
+                                                                <Storyboard>
+                                                                    <DoubleAnimation Storyboard.TargetName="Dot"
+                                                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                        To="1" Duration="0:0:0.16">
+                                                                        <DoubleAnimation.EasingFunction>
+                                                                            <CubicEase EasingMode="EaseOut" />
+                                                                        </DoubleAnimation.EasingFunction>
+                                                                    </DoubleAnimation>
+                                                                    <DoubleAnimation Storyboard.TargetName="Dot"
+                                                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                        To="1" Duration="0:0:0.16">
+                                                                        <DoubleAnimation.EasingFunction>
+                                                                            <CubicEase EasingMode="EaseOut" />
+                                                                        </DoubleAnimation.EasingFunction>
+                                                                    </DoubleAnimation>
+                                                                </Storyboard>
+                                                            </BeginStoryboard>
+                                                        </DataTrigger.ExitActions>
                                                     </DataTrigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
@@ -347,6 +475,10 @@
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="TrackBg" Property="Height" Value="5" />
+                            </Trigger>
+                            <!-- 按压中(指针可能已拖出滑条)整条保持加粗 -->
+                            <Trigger Property="IsMouseCaptureWithin" Value="True">
                                 <Setter TargetName="TrackBg" Property="Height" Value="5" />
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -1467,17 +1599,25 @@
                                         BorderBrush="#1FFFFFFF" BorderThickness="1"
                                         Padding="10,8,10,8">
                                     <StackPanel>
-                                        <!-- 进度条(点击轨道任意位置可直接跳转)。
+                                        <!-- 进度条(按住任意位置即可拖动/跳转, 2026-11-20)。
                                              ★ 外面套一层 Grid 是为了压一层"片段色块": 它必须和进度条
                                                严丝合缝地对齐, 放同一个格子里最省事(几何换算见 RenderSponsorMarks)。
                                              ★ 这一格高度 14 就是轨道的点击热区: 细线只有 3px, 但鼠标
-                                               不必精确戳中那 3px(可用性优先, 与旧版 18px 热区一致)。 -->
+                                               不必精确戳中那 3px(可用性优先, 与旧版 18px 热区一致)。
+                                             ★ 事件接线的分工(改动前务必读 PlayerWindow.Controls.cs 的
+                                               "进度条拖动"整段):
+                                                 · PreviewMouseLeftButtonDown: 按下就接管, 按住轨道**任意位置**
+                                                   直接拖 —— 不再依赖 WPF 的 IsMoveToPointEnabled(那个只跳不拖);
+                                                 · MouseMove: 拖动中由它把指针位置换算成目标时间(不 seek);
+                                                 · PreviewMouseLeftButtonUp / LostMouseCapture: 松手才发**一次** seek。
+                                               ValueChanged 保留: 程序化回写(心跳/seek 钉值)仍会走它,
+                                               拖动期间由 _isSeeking 挡住, 不会被当成跳转。 -->
                                         <Grid Height="14">
                                             <Slider x:Name="ProgressSlider" Style="{StaticResource PlayerProgressSlider}"
                                                     Minimum="0" Maximum="1000" Value="0"
-                                                    Thumb.DragStarted="OnProgressDragStart"
-                                                    Thumb.DragDelta="OnProgressDragDelta"
-                                                    Thumb.DragCompleted="OnProgressDragEnd"
+                                                    PreviewMouseLeftButtonDown="OnProgressSliderPreviewMouseDown"
+                                                    PreviewMouseLeftButtonUp="OnProgressSliderPreviewMouseUp"
+                                                    LostMouseCapture="OnProgressSliderLostMouseCapture"
                                                     MouseMove="OnProgressSliderMouseMove"
                                                     MouseLeave="OnProgressSliderMouseLeave"
                                                     ValueChanged="OnProgressValueChanged" />

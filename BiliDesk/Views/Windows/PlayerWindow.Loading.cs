@@ -846,6 +846,15 @@ public partial class PlayerWindow : FluentWindow
         _progressDragMoved = false;
         HideProgressDragHint();
         HideVolumePctHint();
+        // ★ 换片时若正按着进度条: 除了清标志, 还必须**放掉鼠标捕获并复位 _isSeeking**
+        //   (2026-11-20 拖动改由代码接管后新增)。否则捕获会一直留在进度条上, 新片的
+        //   每一次点击都被重定向过去; 而 _isSeeking 为真会让进度条永不回写、控制栏永不隐藏。
+        //   ★ 顺序: 先复位 _isSeeking 再 ReleaseMouseCapture —— 释放会触发
+        //     LostMouseCapture → FinishProgressScrub, 那时它看到"已经不在拖动"就直接返回,
+        //     不会拿着新片的 _mp 发一条莫名其妙的 seek。
+        _isSeeking = false;
+        if (ProgressSlider != null && ProgressSlider.IsMouseCaptured)
+            ProgressSlider.ReleaseMouseCapture();
         // ★ 长按快进也要收: 若停在长按态换片, MediaPlayer 上的速率会**跟着留到新片子**
         //   (速率是 MediaPlayer 的属性, 不随 Media 重置 —— 实测)。所以这里必须先恢复。
         //   顺带把 _longPressFired 清掉 —— 否则新片的第一次 Up 会走进"结束快进"分支。
