@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using BiliDesk.Models;
 using LibVLCSharp.Shared;
 
 namespace BiliDesk.Services;
@@ -91,6 +94,19 @@ public static class VlcCore
                 "--no-osd",
                 "--network-caching=" + caching
             };
+
+            // 视频输出模块(2026-11-20, issue #98): 默认自动 = 不传, 让 libvlc 自己挑。
+            // ★ 非自动时把插件名写死在这里, 不让用户直接填字符串: 填错会得到"打不开任何视频"
+            //   且没有任何提示。可用插件已核对过(libdirect3d9_plugin / libglwin32_plugin)。
+            var vout = SettingsStore.Instance.VideoOutputMode switch
+            {
+                VideoOutputMode.Direct3D11 => "direct3d11",
+                VideoOutputMode.Direct3D9 => "direct3d9",
+                VideoOutputMode.OpenGL => "glwin32",
+                _ => null
+            };
+            if (vout != null) args.Add("--vout=" + vout);
+
             // ★ 2026-11-14(issue #81): 原生日志开关。
             //   排查"播放几小时后卡死/断流"时必须看 libvlc 自己怎么说 ——
             //   "got disconnected, trying to reconnect" / "reconnection failed" /
@@ -110,6 +126,26 @@ public static class VlcCore
                     // 数据目录不可写: 宁可不记日志, 也不能让播放器起不来
                     args.Remove("--file-logging");
                     args.Remove("--verbose=2");
+                }
+
+                // 2026-11-20(issue #98): 排查"NVIDIA 叠加层把本应用当成游戏"时,
+                // 先确认叠加层模块(nvspcap64.dll)到底有没有注入到本进程 —— 没有注入的话,
+                // 换 vout 也是白换, 应该去 NVIDIA App 侧关叠加层。只在 debug 开关下记一条。
+                try
+                {
+                    var nvModules = Process.GetCurrentProcess().Modules
+                        .Cast<ProcessModule>()
+                        .Select(m => m.ModuleName)
+                        .Where(n => n.Contains("nvspcap", StringComparison.OrdinalIgnoreCase)
+                                 || n.Contains("nvoglv", StringComparison.OrdinalIgnoreCase))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    App.ReportNote(
+                        $"视频输出={vout ?? "auto"}, NVIDIA 图形模块={(nvModules.Length == 0 ? "未加载" : string.Join(", ", nvModules))}");
+                }
+                catch
+                {
+                    // 拿不到模块列表只是少一条诊断, 不影响播放
                 }
             }
 

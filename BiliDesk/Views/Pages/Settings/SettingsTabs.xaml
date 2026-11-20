@@ -516,6 +516,24 @@
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
+                    <!-- 主界面窗口记忆(2026-11-20, issue #98): 与播放器分开一个开关 ——
+                         两者是不同窗口, 用户可能只想让播放器沿用上次位置。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="记住主界面窗口大小和位置" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding RememberMainWindowPlacementHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding RememberMainWindowPlacement, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -825,6 +843,28 @@
                         <Button Grid.Column="1" Content="开始测速" Style="{StaticResource SubtleButtonStyle}"
                                 VerticalAlignment="Center"
                                 Command="{Binding TestCdnCommand}" />
+                    </Grid>
+
+                    <!-- ★ 组七: 兼容性(2026-11-20, issue #98)
+                         视频输出模块由 libvlc 插件决定, 出问题时(花屏/黑屏/NVIDIA 叠加层误判)
+                         换一档常能绕开。默认"自动"不改变现有行为。 -->
+                    <Border Style="{StaticResource SettingsGroupDivider}" />
+                    <ContentControl Content="兼容性" Style="{StaticResource SettingsGroupHeaderStyle}" />
+
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="视频输出" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding VideoOutputHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
+                                  Width="170" VerticalAlignment="Center"
+                                  ItemsSource="{Binding VideoOutputOptions}"
+                                  SelectedItem="{Binding VideoOutputSelected, Mode=TwoWay}" />
                     </Grid>
                 </StackPanel>
             </Border>

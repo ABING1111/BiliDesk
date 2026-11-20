@@ -332,22 +332,28 @@ public partial class PlayerWindow : FluentWindow
         _suppressSingleClick = false;
         _longPressFired = false;
         _longPressTimer?.Stop();
-        _longPressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        _longPressTimer.Tick += (_, _) =>
+        // ★ 直播没有"快进"这回事(StartFastForward 内部也有 _isLive 闸门) —— 不要起这个计时器。
+        //   否则按住 500ms 会弹一句"2.0x 快进中", 而直播画面纹丝不动, 纯误导
+        //   (2026-11-20, issue #98: 直播间里只允许控制栏按钮暂停, 手势一律不对直播起作用)。
+        if (!_isLive)
         {
-            _longPressTimer!.Stop();
-            _longPressFired = true;
-            // ★ 长按快进: 改倍速(SetRate)。为什么不用 seek 式、以及松手那点静音为何
-            //   不值得用花招去治 —— 见 FastForwardRate 那段(含三个实测更糟的方案)。
-            StartFastForward();
-            // ★ 浮出提示(2026-10-13 用户要求): 长按快进是**无入口手势**,
-            //   不提示的话用户只看到画面变快, 不知道发生了什么、也不知道松手会恢复。
-            //   hold=true: 整个长按期间一直挂着, 松手时由 Up 那边换成"已恢复"并淡出。
-            ShowSpeedHint(FormatRate(_fastForwardTarget) + " 快进中", hold: true);
-            // 长按触发了, 不再触发单击
-            _singleClickTimer?.Stop();
-        };
-        _longPressTimer.Start();
+            _longPressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+            _longPressTimer.Tick += (_, _) =>
+            {
+                _longPressTimer!.Stop();
+                _longPressFired = true;
+                // ★ 长按快进: 改倍速(SetRate)。为什么不用 seek 式、以及松手那点静音为何
+                //   不值得用花招去治 —— 见 FastForwardRate 那段(含三个实测更糟的方案)。
+                StartFastForward();
+                // ★ 浮出提示(2026-10-13 用户要求): 长按快进是**无入口手势**,
+                //   不提示的话用户只看到画面变快, 不知道发生了什么、也不知道松手会恢复。
+                //   hold=true: 整个长按期间一直挂着, 松手时由 Up 那边换成"已恢复"并淡出。
+                ShowSpeedHint(FormatRate(_fastForwardTarget) + " 快进中", hold: true);
+                // 长按触发了, 不再触发单击
+                _singleClickTimer?.Stop();
+            };
+            _longPressTimer.Start();
+        }
     }
 
     /// <summary>视频区左键松开: 若是长按 → 恢复 1x; 否则延迟触发播放/暂停(给双击留窗口)</summary>
@@ -402,6 +408,8 @@ public partial class PlayerWindow : FluentWindow
         {
             _singleClickTimer!.Stop();
             if (_suppressSingleClick) return;
+            // 直播: 点画面不切播放/暂停(只认控制栏按钮), 见 Keyboard.cs 里空格那条说明。
+            if (_isLive) return;
             OnPlayPauseClick(this, new RoutedEventArgs());
         };
         _singleClickTimer.Start();

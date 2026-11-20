@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
@@ -42,6 +43,13 @@ public partial class MainWindow : FluentWindow
     {
         InitializeComponent();
         DataContext = _vm;
+
+        // 窗口几何记忆(2026-11-20, issue #98): 必须在 Show 之前套用 ——
+        // 位置配合 WindowStartupLocation=Manual 才不会被 CenterScreen 覆盖。
+        ApplyRememberedMainWindowPlacement();
+        // 拖动/缩放停下来后再落盘(600ms 尾部防抖), 不在每个 LocationChanged 上写文件。
+        SizeChanged += (_, _) => QueueMainWindowPlacementSave();
+        LocationChanged += (_, _) => QueueMainWindowPlacementSave();
 
         // DataContext 在构造时就赋好了, 导航栏的 RadioButton 绑的就是 Current,
         // 所以高亮会停在启动项上(启动固定进首页)。
@@ -257,6 +265,9 @@ public partial class MainWindow : FluentWindow
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        // 主界面窗口记忆: 构造期的定位在 PerMonitorV2 高缩放下可能是偏的(与播放器同因),
+        // 实体化后再套一次, 再按真实显示器做一次"副屏被拔"的可见性兜底。
+        ReapplyRememberedMainPlacement();
         // 首次显示不播入场动画: 窗口刚出来, 再叠一层淡入会很怪。
         ShowPage(_vm.Current, animate: false);
         _ = (PageOf(PageKey.Home) as HomePage)?.Init();
@@ -277,6 +288,9 @@ public partial class MainWindow : FluentWindow
     /// </summary>
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
+        // ★ 必须放在"关闭到托盘"分支之前: 那条路会 Cancel 这次关闭,
+        //   用户的心智仍然是"我关了一次窗口", 位置应该被记住。
+        SaveMainWindowPlacement();
         if (!App.IsExiting && Svc.Settings.CloseToTray)
         {
             e.Cancel = true;
@@ -879,5 +893,167 @@ public partial class MainWindow : FluentWindow
         { FillBehavior = FillBehavior.Stop };
         a.Completed += (_, _) => Toast.Visibility = Visibility.Collapsed;
         Toast.BeginAnimation(OpacityProperty, a);
+    }
+
+    // ------------------------------------------------------------ 窗口几何记忆(2026-11-20, issue #98)
+    //
+    // 播放器从 2026-11-03 起就有"记住窗口大小和位置", 主界面一直没有 —— 每次启动都要重新拖。
+    // 这里复用播放器那套纯逻辑(Helpers/PlayerWindowPlacement): 夹取、可见性兜底、
+    // DPI 二次定位都与播放器保持同一套规则, 不另写一份容易漂移的几何代码。
+    //
+    // ★ 只在**常规态**采几何: 最大化/最小化时 ActualWidth/Height 是屏幕尺寸,
+    //   记下来下次启动就会"一打开就铺满"(用户没这么要求过)。
+    // ★ 采几何走 600ms 尾部防抖: 拖动时 LocationChanged 每帧都来, 直接写盘会同步 I/O 卡住拖动。
+
+    /// <summary>主界面窗口几何的落盘延迟(ms)。</summary>
+    private const int MainPlacementSaveDelayMs = 600;
+
+    /// <summary>记忆位置不可用时, 至少留多少可见面积(与播放器同一套救援标准)。</summary>
+    private const double MainPlacementVisibleMinWidth = 160;
+    private const double MainPlacementVisibleMinHeight = 120;
+
+    private DispatcherTimer? _mainPlacementTimer;
+
+    /// <summary>构造期套用的记忆位置(供 Loaded 时二次套用, 见 ReapplyRememberedMainPlacement)。</summary>
+    private PlayerWindowPlacement.PlacementRect? _rememberedMainPlacement;
+
+    /// <summary>首次布局 + 二次定位结束前不采几何 —— 那时读到的是默认居中/半成品布局。</summary>
+    private bool _mainPlacementArmed;
+
+    private void ApplyRememberedMainWindowPlacement()
+    {
+        if (!Svc.Settings.RememberMainWindowPlacement) return;
+
+        var w = Svc.Settings.MainWindowWidth;
+        var h = Svc.Settings.MainWindowHeight;
+        if (w <= 0 || h <= 0) return;
+
+        // 尺寸夹到当前主屏工作区: 用户换到更小的显示器/改过缩放后, 旧尺寸不能把窗口顶出屏幕。
+        var maxW = Math.Max(MinWidth, SystemParameters.WorkArea.Width - 32);
+        var maxH = Math.Max(MinHeight, SystemParameters.WorkArea.Height - 32);
+        Width = Math.Clamp((double)w, MinWidth, maxW);
+        Height = Math.Clamp((double)h, MinHeight, maxH);
+
+        // 没记过位置 ⇒ 保持 XAML 的 CenterScreen, 只还原大小(与播放器一致)。
+        if (Svc.Settings.MainWindowLeft is not { } left || Svc.Settings.MainWindowTop is not { } top) return;
+
+        var virtualScreen = new PlayerWindowPlacement.PlacementRect(
+            SystemParameters.VirtualScreenLeft,
+            SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth,
+            SystemParameters.VirtualScreenHeight);
+        var clamped = PlayerWindowPlacement.ClampToBounds(
+            new PlayerWindowPlacement.PlacementRect(left, top, Width, Height),
+            virtualScreen,
+            MainPlacementVisibleMinWidth, MainPlacementVisibleMinHeight);
+
+        // ★ 必须改 Manual: XAML 里是 CenterScreen, 不改的话 WPF 会用居中结果覆盖手写的 Left/Top。
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = clamped.Left;
+        Top = clamped.Top;
+        _rememberedMainPlacement = clamped;
+    }
+
+    /// <summary>
+    /// 窗口实体化后按真实 DPI 再套一次位置(dotnet/wpf#4127: 构造期的 Left/Top 是按猜的 DPI 换算的),
+    /// 然后按"离它最近的显示器"确认至少有一块可点面积, 最后才放开几何采集。
+    /// </summary>
+    private void ReapplyRememberedMainPlacement()
+    {
+        if (!Svc.Settings.RememberMainWindowPlacement)
+        {
+            _mainPlacementArmed = true;
+            return;
+        }
+
+        if (_rememberedMainPlacement is { } target)
+        {
+            Left = target.Left;
+            Top = target.Top;
+        }
+
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            EnsureMainWindowVisible();
+            _mainPlacementArmed = true;
+        }));
+    }
+
+    /// <summary>
+    /// 副屏被拔掉 / 显示器重新排列后, 记忆点可能落在虚拟桌面的"洞"里。
+    /// 按真实显示器兜一次: 可见面积不足就把窗口居中到那块显示器的工作区。
+    /// </summary>
+    private void EnsureMainWindowVisible()
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero) return;
+
+            var screen = System.Windows.Forms.Screen.FromHandle(hwnd);
+            if (screen == null) return;
+
+            var dpi = VisualTreeHelper.GetDpi(this);
+            var scaleX = dpi.DpiScaleX > 0 ? dpi.DpiScaleX : 1;
+            var scaleY = dpi.DpiScaleY > 0 ? dpi.DpiScaleY : 1;
+            var work = new PlayerWindowPlacement.PlacementRect(
+                screen.WorkingArea.Left / scaleX,
+                screen.WorkingArea.Top / scaleY,
+                screen.WorkingArea.Width / scaleX,
+                screen.WorkingArea.Height / scaleY);
+            var actual = new PlayerWindowPlacement.PlacementRect(Left, Top, ActualWidth, ActualHeight);
+            if (PlayerWindowPlacement.IntersectionArea(actual, work)
+                >= MainPlacementVisibleMinWidth * MainPlacementVisibleMinHeight) return;
+
+            var w = Math.Min(actual.Width, work.Width);
+            var h = Math.Min(actual.Height, work.Height);
+            Width = w;
+            Height = h;
+            Left = work.Left + (work.Width - w) / 2;
+            Top = work.Top + (work.Height - h) / 2;
+        }
+        catch
+        {
+            // 拿不到屏幕/窗口句柄时保持现状: 位置记忆失败不该影响启动。
+        }
+    }
+
+    /// <summary>几何变化 → (重新)启动落盘定时器。首次定位/最大化期间由 <see cref="_mainPlacementArmed"/> 挡住。</summary>
+    private void QueueMainWindowPlacementSave()
+    {
+        if (!_mainPlacementArmed) return;
+        if (!Svc.Settings.RememberMainWindowPlacement) return;
+        if (!IsLoaded || WindowState != WindowState.Normal) return;
+
+        _mainPlacementTimer ??= new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(MainPlacementSaveDelayMs)
+        };
+        _mainPlacementTimer.Tick -= OnMainPlacementSaveTick;
+        _mainPlacementTimer.Tick += OnMainPlacementSaveTick;
+        _mainPlacementTimer.Stop();
+        _mainPlacementTimer.Start();
+    }
+
+    private void OnMainPlacementSaveTick(object? sender, EventArgs e)
+    {
+        _mainPlacementTimer?.Stop();
+        SaveMainWindowPlacement();
+    }
+
+    /// <summary>
+    /// 把当前常规几何写进设置。关闭时(含"关闭到托盘")也会调用一次。
+    /// ★ 只认常规态: 最大化/最小化/未布局时读到的是屏幕尺寸或 0, 存进去会变成坏配置。
+    /// </summary>
+    private void SaveMainWindowPlacement()
+    {
+        if (!Svc.Settings.RememberMainWindowPlacement) return;
+        if (!IsLoaded || WindowState != WindowState.Normal) return;
+        if (!double.IsFinite(Left) || !double.IsFinite(Top)) return;
+
+        var rect = new PlayerWindowPlacement.PlacementRect(Left, Top, ActualWidth, ActualHeight);
+        if (!PlayerWindowPlacement.IsUsable(rect, 100, 100)) return;
+
+        Svc.Settings.SetMainWindowPlacement(rect.Width, rect.Height, rect.Left, rect.Top);
     }
 }

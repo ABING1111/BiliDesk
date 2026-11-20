@@ -184,4 +184,81 @@ public partial class ApiClient
     /// </summary>
     public const int FollowerPageSize = 20;
 
+    // ------------------------------------------------------------ 黑名单(issue #98)
+
+    /// <summary>黑名单每页条数(服务端接受 50; 用满少打几次请求)。</summary>
+    private const int BlacklistPageSize = 50;
+
+    /// <summary>一次导入最多取多少条 —— 与 FilterService 的 MaxRulesPerKind(500)对齐。</summary>
+    public const int BlacklistImportLimit = 500;
+
+    /// <summary>
+    /// 当前登录账号的 B 站黑名单(2026-11-20, issue #98: 「已屏蔽的 UP 主」支持导入)。
+    ///
+    /// ★ 接口需要登录 Cookie + WBI 签名(/x/relation/blacks), 未登录返回 -101, 统一转成"请先登录"。
+    /// ★ 部分版本**只返回 mid**、不含昵称(实测响应形状随灰度变化):
+    ///   昵称字段按 uname / name 依次尝试, 都没有就让调用方用 "UID {mid}" 占位 ——
+    ///   屏蔽匹配优先按 mid, 昵称只是给面板显示用的。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<(long Mid, string Name)> data)> GetBlacklistAsync(
+        int maxCount = BlacklistImportLimit)
+    {
+        var result = new List<(long Mid, string Name)>();
+        if (maxCount <= 0) return (true, null, result);
+
+        try
+        {
+            var total = int.MaxValue;
+            for (var pn = 1; result.Count < maxCount && pn <= 20; pn++)
+            {
+                var (code, msg, data) = await GetJsonAsync(
+                    "https://api.bilibili.com/x/relation/blacks",
+                    new Dictionary<string, string>
+                    {
+                        ["pn"] = pn.ToString(),
+                        ["ps"] = BlacklistPageSize.ToString(),
+                    },
+                    sign: true,
+                    referer: "https://www.bilibili.com/");
+                if (code != 0 || data == null)
+                {
+                    var errMsg = msg ?? $"获取黑名单失败 (code {code})";
+                    if (code == -101) errMsg = "请先登录后再导入黑名单";
+                    return (false, errMsg, result);
+                }
+
+                if (data.Value.TryGetProperty("total", out var t) && t.ValueKind == JsonValueKind.Number)
+                    total = t.GetInt32();
+
+                if (!data.Value.TryGetProperty("list", out var list) || list.ValueKind != JsonValueKind.Array)
+                    break;
+
+                var pageCount = 0;
+                foreach (var item in list.EnumerateArray())
+                {
+                    var mid = GetLong(item, "mid");
+                    if (mid <= 0) continue;
+
+                    var name = GetStr(item, "uname");
+                    if (string.IsNullOrWhiteSpace(name)) name = GetStr(item, "name");
+                    name = name.Trim();
+                    if (name.Length == 0) name = $"UID {mid}";
+
+                    result.Add((mid, name));
+                    pageCount++;
+                    if (result.Count >= maxCount) break;
+                }
+
+                // 空页 / 已取满 / 已到总数: 三种收口, 否则会用空页无限翻下去
+                if (pageCount == 0 || result.Count >= total) break;
+            }
+
+            return (true, null, result);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "获取黑名单失败: " + ex.Message, result);
+        }
+    }
 }

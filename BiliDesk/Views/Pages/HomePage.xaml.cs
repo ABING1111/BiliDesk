@@ -351,6 +351,85 @@ public partial class HomePage : UserControl, IRefreshable
             FilterService.Instance.RemoveRule(rule);
     }
 
+    // ------------------------------------------------------------ 关键词标签(issue #98)
+
+    /// <summary>添加关键词后清空输入框并留在原地, 方便连着加几个词。</summary>
+    private void AddFilterKeywords(FilterRuleKind kind, TextBox box)
+    {
+        var raw = box.Text;
+        if (string.IsNullOrWhiteSpace(raw)) { box.Focus(); return; }
+
+        FilterService.Instance.AddKeywords(kind, raw);
+        box.Clear();
+        box.Focus();
+    }
+
+    /// <summary>回车 = 添加。不用为加一个词先把鼠标挪到「添加」按钮上。</summary>
+    private void OnFilterTitleBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        AddFilterKeywords(FilterRuleKind.TitleKeyword, FilterTitleBox);
+    }
+
+    private void OnFilterUpBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        AddFilterKeywords(FilterRuleKind.UpKeyword, FilterUpBox);
+    }
+
+    private void OnAddTitleKeywordClick(object sender, RoutedEventArgs e)
+        => AddFilterKeywords(FilterRuleKind.TitleKeyword, FilterTitleBox);
+
+    private void OnAddUpKeywordClick(object sender, RoutedEventArgs e)
+        => AddFilterKeywords(FilterRuleKind.UpKeyword, FilterUpBox);
+
+    /// <summary>导入期间不要再点第二次(接口要翻页, 连点会叠出两轮请求)。</summary>
+    private bool _importingBlacklist;
+
+    /// <summary>
+    /// 把当前登录账号的 B 站黑名单导入「已屏蔽的 UP 主」(issue #98)。
+    /// ★ 幂等: 已存在的规则不重复加, 重复点击只会得到"都已经在列表里"。
+    /// ★ 走 <see cref="FilterService.BlockUps"/> 批量入口: 500 条逐条加会刷 500 次全列表。
+    /// </summary>
+    private async void OnImportBlacklistClick(object sender, RoutedEventArgs e)
+    {
+        if (_importingBlacklist) return;
+        if (!Svc.Session.HasLogin)
+        {
+            Svc.Toast.Show("请先登录后再导入 B 站黑名单");
+            return;
+        }
+
+        _importingBlacklist = true;
+        try
+        {
+            var (ok, err, data) = await Svc.Api.GetBlacklistAsync();
+            if (!ok)
+            {
+                Svc.Toast.Show(err ?? "获取黑名单失败");
+                return;
+            }
+            if (data.Count == 0)
+            {
+                Svc.Toast.Show("B 站黑名单是空的");
+                return;
+            }
+
+            var added = FilterService.Instance.BlockUps(
+                data.Select(x => new BlockedUpEntry { Mid = x.Mid, Name = x.Name }));
+            RefreshFilterButton();
+            Svc.Toast.Show(added > 0
+                ? $"已从 B 站黑名单导入 {added} 个 UP 主"
+                : "黑名单里的 UP 主都已经在屏蔽列表里了");
+        }
+        finally
+        {
+            _importingBlacklist = false;
+        }
+    }
+
     /// <summary>
     /// 屏蔽条件刚落到列表上。等这次布局跑完再判断"当前页内容够不够一屏",
     /// 不够就补下一页 —— 否则一键屏蔽十几个 UP 之后, 页面会停在一大片空白上。

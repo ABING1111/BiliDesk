@@ -152,6 +152,26 @@ public class AppSettings
     /// <summary>上次播放器窗口左上角的 Y(DIP; null = 尚未记录, 保持居中)。契约同 <see cref="PlayerWindowLeft"/>。</summary>
     public int? PlayerWindowTop { get; set; }
 
+    // ------------------------------------------------------------ 主界面窗口几何(issue #98)
+
+    /// <summary>
+    /// 是否记住主界面窗口大小与位置(默认开)。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool RememberMainWindowPlacement { get; set; } = true;
+
+    /// <summary>上次主界面窗口宽度(DIP; 0 = 尚未记录, 用默认 1280)</summary>
+    public int MainWindowWidth { get; set; }
+
+    /// <summary>上次主界面窗口高度(DIP; 0 = 尚未记录, 用默认 800)</summary>
+    public int MainWindowHeight { get; set; }
+
+    /// <summary>上次主界面窗口左上角的 X(DIP; null = 尚未记录, 保持居中)。契约同 <see cref="PlayerWindowLeft"/>。</summary>
+    public int? MainWindowLeft { get; set; }
+
+    /// <summary>上次主界面窗口左上角的 Y(DIP; null = 尚未记录, 保持居中)</summary>
+    public int? MainWindowTop { get; set; }
+
     /// <summary>
     /// LibVLC 网络缓冲(毫秒)。控制流式播放的预读深度: 越小越省内存, 越大越抗网络抖动。
     /// 老配置没有这个字段 ⇒ 反序列化保持初始化值(1000, 与旧版全局值一致)。
@@ -167,6 +187,14 @@ public class AppSettings
     /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
     /// </summary>
     public bool? AutoBufferPolicy { get; set; }
+
+    /// <summary>
+    /// LibVLC 视频输出模块(见 <see cref="VideoOutputMode"/>; 0=自动)。
+    /// ★ 老配置没有这个字段 ⇒ 反序列化得到 0 = 自动, 正是期望的默认。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致;
+    ///   越界值由 SettingsStore 读取时回落 Auto。
+    /// </summary>
+    public VideoOutputMode VideoOutputMode { get; set; } = VideoOutputMode.Auto;
 
     /// <summary>
     /// 上次用的搜索类别(见 <see cref="ContentKind"/>: 0=视频 1=直播间 2=番剧 3=UP主)。

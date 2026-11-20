@@ -410,6 +410,9 @@ public partial class PlayerWindow : FluentWindow
     private void OnOverlayActivated(object? sender, EventArgs e)
     {
         if (_closing || _mp == null) return;
+        // 直播: 点画面本来就不该切播放/暂停, 这套"补一次被吞掉的单击"对直播没有意义
+        // (2026-11-20, issue #98 —— 只认控制栏按钮)。
+        if (_isLive) return;
         // 只认"鼠标按着把窗口激活": Alt+Tab / 程序自己激活时左键是松开的
         if (Mouse.LeftButton != MouseButtonState.Pressed) return;
         // 控制栏按钮 / 跳过提示条 / 弹层上的点击有各自的处理, 不能补成"暂停"

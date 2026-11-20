@@ -2361,6 +2361,28 @@
 
                             <Grid Margin="0,12,0,0" MinHeight="120">
                                 <StackPanel x:Name="IntroPanel">
+                                    <!-- 视频标签(2026-11-20, issue #98): 属于「简介」内容的一部分 ——
+                                         切到「评论」/「合集」时随简介一起隐藏。
+                                         ★ 2026-11-20 用户要求移到这里并加底衬: TagChipStyle 常态就有浅底
+                                           (与搜索历史的词条胶囊同一个样式), 不再像纯文字按钮那样"飘"在正文上。
+                                         ★ 接口异步取, 取不到就隐藏整块; 点击 = 用 BiliDesk 自己的搜索页搜这个标签
+                                           (不打开内置浏览器, 结果直接是原生视频卡片)。 -->
+                                    <ItemsControl x:Name="TagList" Margin="0,0,0,10" Visibility="Collapsed">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button Content="{Binding}" Tag="{Binding}"
+                                                        Style="{StaticResource TagChipStyle}"
+                                                        Padding="10,4" FontSize="11" Margin="0,0,6,6"
+                                                        ToolTip="在 BiliDesk 中搜索该标签"
+                                                        Click="OnTagClick" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
                                     <!-- ============ 简介(2026-10-12 加折叠) ============
                                          ★ 折叠是**给下面的「相关视频」让位置**: 很多 UP 主的简介
                                            动辄几百字, 不折的话右半屏全被它吃掉,

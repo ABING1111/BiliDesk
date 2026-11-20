@@ -92,8 +92,18 @@ public sealed class FilterService : INotifyPropertyChanged
         public long Mid;
     }
 
-    /// <summary>面板里展示的规则(只含一键屏蔽的 UP / 标题; 关键词在输入框里有回显, 不重复列)</summary>
+    /// <summary>面板里展示的规则(只含一键屏蔽的 UP / 标题; 关键词单独两份, 见下)</summary>
     public ObservableCollection<FilterRule> Rules { get; } = new();
+
+    /// <summary>
+    /// 「屏蔽标题含」当前生效的词条(面板里画成可单条删除的标签)。
+    /// ★ 与 <see cref="Rules"/> 分开: 两者的数据来源与增删入口都不同,
+    ///   挤进同一个集合会让面板只能靠 Badge 猜该显示在哪一栏。
+    /// </summary>
+    public ObservableCollection<FilterRule> TitleKeywordRules { get; } = new();
+
+    /// <inheritdoc cref="TitleKeywordRules"/>
+    public ObservableCollection<FilterRule> UpKeywordRules { get; } = new();
 
     private readonly DispatcherTimer _debounce;
 
@@ -150,8 +160,15 @@ public sealed class FilterService : INotifyPropertyChanged
             var parts = new List<string>();
             if (_blockedUps.Count > 0) parts.Add($"UP 主 {_blockedUps.Count} 个");
             if (_blockedTitles.Count > 0) parts.Add($"标题 {_blockedTitles.Count} 条");
-            if (_titleTerms.Length > 0) parts.Add($"标题含「{string.Join(" / ", _titleTerms)}」");
-            if (_upTerms.Length > 0) parts.Add($"UP 含「{string.Join(" / ", _upTerms)}」");
+            // ★ 词条可能多达 200 个: 超过 3 个就只报数量, 否则这行会被撑成一条长带。
+            if (_titleTerms.Length > 0)
+                parts.Add(_titleTerms.Length <= 3
+                    ? $"标题含「{string.Join(" / ", _titleTerms)}」"
+                    : $"标题含 {_titleTerms.Length} 个词");
+            if (_upTerms.Length > 0)
+                parts.Add(_upTerms.Length <= 3
+                    ? $"UP 含「{string.Join(" / ", _upTerms)}」"
+                    : $"UP 含 {_upTerms.Length} 个词");
             return "已屏蔽 " + string.Join("  ·  ", parts);
         }
     }
@@ -237,6 +254,56 @@ public sealed class FilterService : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// 批量屏蔽 UP 主(2026-11-20, issue #98): 导入 B 站黑名单时一次加几十上百条。
+    /// ★ 不能循环调 <see cref="BlockUp"/>: 每一条都会 RebuildIndexes + 落盘 + RefreshAll,
+    ///   500 条就是 500 次全列表刷新(界面会卡住几秒)。这里合并成一次。
+    /// 已存在(同 UID 或同名)的规则不重复加; 缺 UID 的顺手补上。
+    /// </summary>
+    /// <returns>实际新增的条数</returns>
+    public int BlockUps(IEnumerable<BlockedUpEntry>? entries)
+    {
+        if (entries == null) return 0;
+
+        var added = 0;
+        var changed = false;
+        foreach (var e in entries)
+        {
+            if (e == null) continue;
+            var name = (e.Name ?? "").Trim();
+            var mid = e.Mid > 0 ? e.Mid : 0;
+            if (name.Length == 0 && mid == 0) continue;
+
+            var existing = _blockedUps.FirstOrDefault(u =>
+                (mid > 0 && u.Mid == mid) ||
+                (name.Length > 0 && string.Equals(u.Name, name, StringComparison.OrdinalIgnoreCase)));
+            if (existing != null)
+            {
+                if (existing.Mid <= 0 && mid > 0)
+                {
+                    existing.Mid = mid;
+                    changed = true;
+                }
+                continue;
+            }
+
+            if (_blockedUps.Count >= MaxRulesPerKind) break;
+            _blockedUps.Add(new BlockedUp
+            {
+                Name = name.Length > 0 ? name : $"UID {mid}",
+                Mid = mid
+            });
+            added++;
+            changed = true;
+        }
+
+        // 只补了 UID、一条没新增时也要落盘(下次启动才拦得住改名的 UP)
+        if (!changed) return 0;
+        RebuildIndexes();
+        AfterRulesChanged();
+        return added;
+    }
+
+    /// <summary>
     /// 屏蔽一个标题。只有**标题完全相同**的条目才隐藏 —— 用户点的是"这一条",
     /// 不该顺手把同 UP 的其它视频一起干掉。要屏蔽整个系列请用标题关键词。
     /// </summary>
@@ -273,6 +340,14 @@ public sealed class FilterService : INotifyPropertyChanged
                     string.Equals(t, rule.Value, StringComparison.OrdinalIgnoreCase)) > 0;
                 break;
 
+            // 关键词标签走自己的增删入口(改的是 _titleTerms / _upTerms):
+            // 这两个集合不是"一键规则", 不经过 BlockedUps/BlockedTitles 那套索引。
+            case FilterRuleKind.TitleKeyword:
+                return RemoveKeyword(FilterRuleKind.TitleKeyword, rule.Value);
+
+            case FilterRuleKind.UpKeyword:
+                return RemoveKeyword(FilterRuleKind.UpKeyword, rule.Value);
+
             default:
                 return false;
         }
@@ -281,6 +356,70 @@ public sealed class FilterService : INotifyPropertyChanged
         RebuildIndexes();
         AfterRulesChanged();
         return true;
+    }
+
+    /// <summary>
+    /// 添加屏蔽关键词(2026-11-20, issue #98)。<paramref name="raw"/> 可以一次带多个词
+    /// (空格 / 逗号 / 顿号 / 分号分隔) —— 与旧版单行文本框的分隔规则完全一致,
+    /// 老用户"一次贴一串词"的习惯不用改。
+    /// ★ 单条超长直接截断、重复(忽略大小写)跳过、总数封顶 <see cref="FilterKeywords.MaxTerms"/>:
+    ///   面板是标签墙, 一条超长词会把整行撑开, 而配置被手改坏时也不能让列表无限长。
+    /// </summary>
+    /// <returns>实际新增的条数(重复/空项不计)</returns>
+    public int AddKeywords(FilterRuleKind kind, string? raw)
+    {
+        if (kind is not (FilterRuleKind.TitleKeyword or FilterRuleKind.UpKeyword)) return 0;
+
+        var current = kind == FilterRuleKind.TitleKeyword ? _titleTerms : _upTerms;
+        var merged = FilterKeywords.Merge(current, raw);
+        var added = merged.Count - current.Length;
+        if (added <= 0) return 0;
+
+        CommitKeywords(kind, merged);
+        return added;
+    }
+
+    /// <summary>删除一个屏蔽关键词(面板里点标签上的 ×); 命中返回 true。</summary>
+    public bool RemoveKeyword(FilterRuleKind kind, string? value)
+    {
+        if (kind is not (FilterRuleKind.TitleKeyword or FilterRuleKind.UpKeyword)) return false;
+
+        var term = (value ?? "").Trim();
+        if (term.Length == 0) return false;
+
+        var current = kind == FilterRuleKind.TitleKeyword ? _titleTerms : _upTerms;
+        var next = FilterKeywords.Remove(current, term);
+        if (next.Count == current.Length) return false;
+
+        CommitKeywords(kind, next);
+        return true;
+    }
+
+    /// <summary>关键词增删的唯一落点: 同步字符串/数组/标签集合, 落盘并排一次刷新。</summary>
+    private void CommitKeywords(FilterRuleKind kind, List<string> terms)
+    {
+        if (kind == FilterRuleKind.TitleKeyword)
+        {
+            _title = FilterKeywords.Join(terms);
+            _titleTerms = terms.ToArray();
+            Raise(nameof(TitleKeyword));
+        }
+        else
+        {
+            _up = FilterKeywords.Join(terms);
+            _upTerms = terms.ToArray();
+            Raise(nameof(UpKeyword));
+        }
+
+        RebuildRules();
+        Raise(nameof(HasFilter));
+        Raise(nameof(HasRules));
+        Raise(nameof(Description));
+
+        Persist();
+        // 与文本框那条同款: 攒 220ms 再刷。连续加几个词时不会每加一个就重建全场列表。
+        _debounce.Stop();
+        _debounce.Start();
     }
 
     /// <summary>清空条件</summary>
@@ -318,8 +457,8 @@ public sealed class FilterService : INotifyPropertyChanged
 
         _title = s.FilterTitleKeyword ?? "";
         _up = s.FilterUpKeyword ?? "";
-        _titleTerms = SplitTerms(_title);
-        _upTerms = SplitTerms(_up);
+        _titleTerms = FilterKeywords.Split(_title);
+        _upTerms = FilterKeywords.Split(_up);
 
         _blockedUps.Clear();
         _blockedTitles.Clear();
@@ -388,6 +527,24 @@ public sealed class FilterService : INotifyPropertyChanged
                 Value = t,
                 Label = t
             });
+
+        // 关键词单独两份(2026-11-20, issue #98): 面板里分栏展示, 每条都能单独删。
+        TitleKeywordRules.Clear();
+        foreach (var t in _titleTerms)
+            TitleKeywordRules.Add(new FilterRule
+            {
+                Kind = FilterRuleKind.TitleKeyword,
+                Value = t,
+                Label = t
+            });
+        UpKeywordRules.Clear();
+        foreach (var t in _upTerms)
+            UpKeywordRules.Add(new FilterRule
+            {
+                Kind = FilterRuleKind.UpKeyword,
+                Value = t,
+                Label = t
+            });
     }
 
     private void RebuildIndexes()
@@ -432,27 +589,18 @@ public sealed class FilterService : INotifyPropertyChanged
         var v = value ?? "";
         if (field == v) return;
         field = v;
-        terms = SplitTerms(v);
+        terms = FilterKeywords.Split(v);
+        RebuildRules();   // 关键词标签墙跟着变(即使今天没有界面再绑这两个属性)
 
         Raise(propName);
         Raise(nameof(HasFilter));
+        Raise(nameof(HasRules));
         Raise(nameof(Description));
 
         Persist();
         // 不在这里直接 Refresh: 交给定时器攒一会儿, 见构造函数里的说明
         _debounce.Stop();
         _debounce.Start();
-    }
-
-    /// <summary>
-    /// 把输入拆成屏蔽词。空格 / 逗号 / 顿号 / 分号都当分隔符, 顺便去掉空白项。
-    /// 支持多个词是为了真正好用 —— "鬼畜"和"剪辑"常常要一起屏蔽。
-    /// </summary>
-    private static string[] SplitTerms(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return Array.Empty<string>();
-        return raw.Split(new[] { ' ', ',', '，', '、', ';', '；', '\t' },
-                         StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
     private void Raise(string name)
@@ -535,10 +683,14 @@ public sealed class FilterService : INotifyPropertyChanged
 public enum FilterRuleKind
 {
     Up,
-    Title
+    Title,
+    /// <summary>标题关键词(手打 / 标签墙), 与 <see cref="Title"/> 的"精确整条标题"不同</summary>
+    TitleKeyword,
+    /// <summary>UP 主关键词(包含匹配)</summary>
+    UpKeyword
 }
 
-/// <summary>面板里的一条一键屏蔽规则(UP 主 / 标题)。值本身不可变, 删掉后重建即可。</summary>
+/// <summary>面板里的一条屏蔽规则(UP 主 / 标题 / 关键词)。值本身不可变, 删掉后重建即可。</summary>
 public sealed class FilterRule
 {
     public FilterRuleKind Kind { get; set; }
@@ -547,5 +699,11 @@ public sealed class FilterRule
     public string Label { get; set; } = "";
 
     /// <summary>标签左侧的小徽标文字</summary>
-    public string Badge => Kind == FilterRuleKind.Up ? "UP" : "标题";
+    public string Badge => Kind switch
+    {
+        FilterRuleKind.Up => "UP",
+        FilterRuleKind.Title => "标题",
+        FilterRuleKind.TitleKeyword => "标题词",
+        _ => "UP词",
+    };
 }

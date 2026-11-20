@@ -400,6 +400,34 @@ public class SettingsStore
     /// <summary>上一次播放器窗口左上角的 Y(DIP; null = 还没记过, 保持 CenterScreen 居中)</summary>
     public int? PlayerWindowTop { get; set; }
 
+    // ------------------------------------------------------------ 主界面窗口几何(issue #98)
+
+    /// <summary>
+    /// 是否记住**主界面**窗口大小与位置(2026-11-20, issue #98; 默认开)。
+    /// ★ 与播放器的开关**独立**: 用户可能只想让播放器记忆、主界面固定, 反之亦然;
+    ///   合并成一个开关会让"我只想改播放器"变成两边一起变。
+    /// ★ 同样不记最大化状态: 那是临时态, 不该带到下一次启动。
+    /// </summary>
+    public bool RememberMainWindowPlacement { get; set; } = true;
+
+    /// <summary>上一次主界面窗口的宽度(DIP; 0 = 还没记过, 用 XAML 默认值)</summary>
+    public int MainWindowWidth { get; set; }
+
+    /// <summary>上一次主界面窗口的高度(DIP; 0 = 还没记过, 用 XAML 默认值)</summary>
+    public int MainWindowHeight { get; set; }
+
+    /// <summary>上一次主界面窗口左上角的 X(DIP; null = 还没记过, 保持 CenterScreen 居中)。契约同 <see cref="PlayerWindowLeft"/>。</summary>
+    public int? MainWindowLeft { get; set; }
+
+    /// <summary>上一次主界面窗口左上角的 Y(DIP; null = 还没记过, 保持 CenterScreen 居中)</summary>
+    public int? MainWindowTop { get; set; }
+
+    /// <summary>主界面窗口记忆尺寸的合法下限(与 MainWindow.xaml 的 MinWidth/MinHeight 一致)</summary>
+    public const int MainWindowMinWidth = 840;
+
+    /// <inheritdoc cref="MainWindowMinWidth"/>
+    public const int MainWindowMinHeight = 660;
+
     /// <summary>播放器窗口记忆尺寸的合法下限(与 PlayerWindow 的 FillWindowMin 一致, 防止存入不可用的小窗)</summary>
     public const int PlayerWindowMinWidth = 320;
 
@@ -457,6 +485,27 @@ public class SettingsStore
     {
         if (AutoBufferPolicy == auto) return;
         AutoBufferPolicy = auto;
+        Save();
+    }
+
+    /// <summary>
+    /// LibVLC 的视频输出模块(2026-11-20, issue #98)。
+    ///
+    /// ★ 默认 <see cref="Models.VideoOutputMode.Auto"/>: 让 libvlc 自己挑(Windows 上通常 direct3d11)。
+    /// ★ 为什么把它做成设置: 用户报"启动后首次打开视频, NVIDIA App 的叠加层弹出来,
+    ///   像是被识别成游戏"。叠加层挂在"创建了 D3D 交换链"的进程上, 而这条链路由 vout 插件决定;
+    ///   OpenGL 输出通常不创建 DXGI 交换链, 可作为规避手段。本机没有 NVIDIA App 无法复现,
+    ///   所以只提供**可切换 + 可回退**, 不声称已根除(它是 NVIDIA 侧的行为)。
+    /// ★ LibVLC 是进程级单例: 运行中改这项不生效, 必须重启应用(设置页的 Hint 会写明)。
+    /// </summary>
+    public VideoOutputMode VideoOutputMode { get; set; } = VideoOutputMode.Auto;
+
+    /// <summary>设置视频输出模块并落盘(未定义的值回落 Auto)</summary>
+    public void SetVideoOutputMode(VideoOutputMode mode)
+    {
+        if (!Enum.IsDefined(typeof(VideoOutputMode), mode)) mode = VideoOutputMode.Auto;
+        if (VideoOutputMode == mode) return;
+        VideoOutputMode = mode;
         Save();
     }
 
@@ -559,6 +608,46 @@ public class SettingsStore
         PlayerWindowHeight = h;
         PlayerWindowLeft = x;
         PlayerWindowTop = y;
+        Save();
+    }
+
+    /// <summary>
+    /// 改"是否记住主界面窗口大小与位置"并落盘(2026-11-20, issue #98)。
+    /// 关掉时保留已记录的值(下次再开还能沿用), 只是不再读取/写入。
+    /// </summary>
+    public void SetRememberMainWindowPlacement(bool value)
+    {
+        if (RememberMainWindowPlacement == value) return;
+        RememberMainWindowPlacement = value;
+        Save();
+    }
+
+    /// <summary>
+    /// 记录主界面窗口大小与位置并落盘(2026-11-20, issue #98)。规则与
+    /// <see cref="SetPlayerWindowPlacement"/> 完全一致: DIP 取整、坏尺寸丢弃、
+    /// 坏坐标沿用旧值, 不做 0/负数的"清空"。
+    /// </summary>
+    public void SetMainWindowPlacement(double width, double height, double left, double top)
+    {
+        if (!RememberMainWindowPlacement) return;
+        if (!double.IsFinite(width) || !double.IsFinite(height)) return;
+
+        var w = (int)Math.Round(width);
+        var h = (int)Math.Round(height);
+        if (!IsValidPlayerWindowSize(w, MainWindowMinWidth, PlayerWindowMaxWidth)) return;
+        if (!IsValidPlayerWindowSize(h, MainWindowMinHeight, PlayerWindowMaxHeight)) return;
+
+        int? x = double.IsFinite(left) ? (int)Math.Round(left) : null;
+        int? y = double.IsFinite(top) ? (int)Math.Round(top) : null;
+        if (!IsValidPlayerWindowPos(x, y)) { x = MainWindowLeft; y = MainWindowTop; }
+
+        if (MainWindowWidth == w && MainWindowHeight == h
+            && MainWindowLeft == x && MainWindowTop == y) return;
+
+        MainWindowWidth = w;
+        MainWindowHeight = h;
+        MainWindowLeft = x;
+        MainWindowTop = y;
         Save();
     }
 
@@ -727,8 +816,10 @@ public class SettingsStore
         // 列表屏蔽: 老配置没有这些字段 ⇒ 空串 / 空列表 = 不屏蔽, 正是期望的默认。
         // ★ 仍要清洗: 配置可能被手改坏(空项、重复、超长、负 mid),
         //   脏数据会让面板里出现一条删不掉的空标签。
-        FilterTitleKeyword = s.FilterTitleKeyword ?? "";
-        FilterUpKeyword = s.FilterUpKeyword ?? "";
+        // ★ 关键词串按"标签墙"的口径清洗(2026-11-20, issue #98): 去空/去重/限长/限条数,
+        //   与 FilterService.AddKeywords 的规则一致, 否则界面重建标签时会和配置对不上。
+        FilterTitleKeyword = SanitizeFilterKeywords(s.FilterTitleKeyword);
+        FilterUpKeyword = SanitizeFilterKeywords(s.FilterUpKeyword);
         FilterBlockedUps = SanitizeBlockedUps(s.FilterBlockedUps);
         FilterBlockedTitles = SanitizeBlockedTitles(s.FilterBlockedTitles);
 
@@ -830,6 +921,17 @@ public class SettingsStore
         PlayerWindowLeft = hasPlayerWindowPos ? s.PlayerWindowLeft : null;
         PlayerWindowTop = hasPlayerWindowPos ? s.PlayerWindowTop : null;
 
+        // 主界面窗口几何(2026-11-20, issue #98): 老配置没有这些字段 ⇒ 开启 + 未记过,
+        // 与属性初始化值一致, 不需要版本兼容。清洗规则与播放器逐条对齐。
+        RememberMainWindowPlacement = s.RememberMainWindowPlacement;
+        MainWindowWidth = IsValidPlayerWindowSize(s.MainWindowWidth, MainWindowMinWidth, PlayerWindowMaxWidth)
+            ? s.MainWindowWidth : 0;
+        MainWindowHeight = IsValidPlayerWindowSize(s.MainWindowHeight, MainWindowMinHeight, PlayerWindowMaxHeight)
+            ? s.MainWindowHeight : 0;
+        var hasMainWindowPos = IsValidPlayerWindowPos(s.MainWindowLeft, s.MainWindowTop);
+        MainWindowLeft = hasMainWindowPos ? s.MainWindowLeft : null;
+        MainWindowTop = hasMainWindowPos ? s.MainWindowTop : null;
+
         // 网络缓冲: 老配置缺字段 ⇒ AppSettings 的初始化值 1000(与旧版一致)。
         // ★ 这里仍要夹取: 手改配置可能塞进 0(等于关掉缓冲)或十万(白占内存)。
         // ★ 0 不能直接 Math.Clamp 成 300 —— 那会把"坏了的值"悄悄推进最容易卡的那一档。
@@ -843,6 +945,12 @@ public class SettingsStore
         //   null = 老配置没这个字段 = 自动(true)。
         AutoBufferPolicy = s.AutoBufferPolicy ?? true;
 
+        // 视频输出模块(2026-11-20, issue #98): 未定义的值(手改配置)一律回落"自动",
+        // 不让它流到 VlcCore 里拼成一个 libvlc 不认识的 --vout。
+        VideoOutputMode = Enum.IsDefined(typeof(VideoOutputMode), s.VideoOutputMode)
+            ? s.VideoOutputMode
+            : VideoOutputMode.Auto;
+
         // 上次的搜索类别: 老配置没这个字段 ⇒ 视频(与搜索页初始类别一致)。
         SearchKind = Enum.IsDefined(typeof(ContentKind), s.LastSearchKind)
             ? (ContentKind)s.LastSearchKind
@@ -853,6 +961,15 @@ public class SettingsStore
 
     /// <summary>每类一键屏蔽规则最多存多少条(面板里也不可能有人翻 500 条)</summary>
     private const int MaxFilterRules = 500;
+
+    /// <summary>
+    /// 清洗关键词串(2026-11-20, issue #98): 拆词、去空、去重(忽略大小写)、截断超长词、
+    /// 限制总条数, 再拼回空格分隔的存储格式。
+    /// ★ 规则统一由 <see cref="FilterKeywords"/> 定义, 不在这里另写一份(两处各写必然漂移)。
+    /// ★ 存储格式**故意不变**(仍是一个字符串): 老版本读得懂, 降级回去不会丢配置。
+    /// </summary>
+    private static string SanitizeFilterKeywords(string? raw)
+        => FilterKeywords.Join(FilterKeywords.Merge(Array.Empty<string>(), raw));
 
     /// <summary>
     /// 清洗"一键屏蔽 UP"列表: 去空、去重(UID 优先, 其次同名)、限制长度。
@@ -918,8 +1035,8 @@ public class SettingsStore
         IEnumerable<BlockedUpEntry>? blockedUps = null,
         IEnumerable<string>? blockedTitles = null)
     {
-        var nextTitle = titleKeyword ?? FilterTitleKeyword;
-        var nextUp = upKeyword ?? FilterUpKeyword;
+        var nextTitle = SanitizeFilterKeywords(titleKeyword ?? FilterTitleKeyword);
+        var nextUp = SanitizeFilterKeywords(upKeyword ?? FilterUpKeyword);
         var nextUps = blockedUps != null
             ? SanitizeBlockedUps(blockedUps.ToList())
             : FilterBlockedUps;
@@ -1027,8 +1144,14 @@ public class SettingsStore
         PlayerWindowHeight = PlayerWindowHeight,
         PlayerWindowLeft = PlayerWindowLeft,
         PlayerWindowTop = PlayerWindowTop,
+        RememberMainWindowPlacement = RememberMainWindowPlacement,
+        MainWindowWidth = MainWindowWidth,
+        MainWindowHeight = MainWindowHeight,
+        MainWindowLeft = MainWindowLeft,
+        MainWindowTop = MainWindowTop,
         NetworkCachingMs = NetworkCachingMs,
         AutoBufferPolicy = AutoBufferPolicy,
+        VideoOutputMode = VideoOutputMode,
         LastSearchKind = (int)SearchKind
     };
 

@@ -204,6 +204,24 @@ public enum RecommendSource
     Web = 1
 }
 
+/// <summary>
+/// LibVLC 的视频输出模块(2026-11-20, issue #98)。
+///
+/// ★ Auto(默认)= 让 libvlc 自己挑, Windows 上通常是 Direct3D 11。
+/// ★ 为什么要开放切换: NVIDIA App 的"游戏内叠加"会挂到创建了 D3D 交换链的进程上,
+///   而用户报"启动后首次打开视频会弹出 NVIDIA 覆盖层, 像被识别成游戏"。
+///   OpenGL(direct3d9 之外的 glwin32)在不创建 DXGI 交换链这点上通常能绕开它。
+/// ★ 这是**规避手段**: 叠加层是否出现最终由 NVIDIA App 的检测策略决定, 应用侧无法保证。
+/// </summary>
+public enum VideoOutputMode
+{
+    /// <summary>自动(不传 --vout, 交给 libvlc)</summary>
+    Auto = 0,
+    Direct3D11 = 1,
+    Direct3D9 = 2,
+    OpenGL = 3
+}
+
 /// <summary>URL 工具(纯函数, 不依赖 WPF)</summary>
 public static class UrlUtil
 {

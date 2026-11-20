@@ -199,6 +199,62 @@ public partial class PlayerWindow : FluentWindow
         DescText.Focus();
     }
 
+    // ------------------------------------------------------------ 视频标签(issue #98)
+
+    /// <summary>
+    /// 异步取当前视频的标签并挂到信息栏(2026-11-20, issue #98)。
+    /// ★ 与相关视频/字幕同款: 不 await 在起播链里; 失败静默 —— 标签只是补充信息,
+    ///   不能因为它没拿到就让标题/简介/播放出问题。
+    /// ★ 代次闸门: 用户连点两个视频时, 慢的那份标签不能盖到新视频上。
+    /// </summary>
+    private async Task LoadVideoTagsAsync(int gen, string bvid)
+    {
+        if (_closing || string.IsNullOrEmpty(bvid)) return;
+
+        var (ok, _, tags) = await Svc.Api.GetVideoTagsAsync(bvid);
+        if (_closing || gen != _loadGen) return;
+        if (TagList == null) return;
+
+        if (!ok || tags.Count == 0)
+        {
+            TagList.ItemsSource = null;
+            TagList.Visibility = Visibility.Collapsed;
+            return;
+        }
+        TagList.ItemsSource = tags;
+        TagList.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>换片 / 直播 / 本地文件时先把标签收掉, 免得停在上一片视频的 tag 上。</summary>
+    private void ClearVideoTags()
+    {
+        if (TagList == null) return;
+        TagList.ItemsSource = null;
+        TagList.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// 点标签 = 用 BiliDesk 自己的搜索页搜这个标签(2026-11-20, issue #98)。
+    ///
+    /// ★ 不走内置浏览器: 标签点开就是要看这个标签下的视频, 在应用内搜出来的就是原生卡片,
+    ///   点开直接进原生播放器; 跳 WebView2 反而要重新加载网页、还得再点一次才能播。
+    /// ★ 主窗口正常存在时走 <see cref="MainWindow.NavigateToSearch"/>: 切到搜索页、不新开窗口,
+    ///   并把最小化的主窗口还原到前台。极端情况(启动早期/主窗口未登记)退回独立搜索窗口 ——
+    ///   那条路同样是原生 SearchPage, 仍然不碰 WebView。
+    /// </summary>
+    private void OnTagClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string tag } || tag.Length == 0) return;
+
+        if (SvcWindow.Main is { } main)
+        {
+            main.NavigateToSearch(tag);
+            return;
+        }
+
+        Svc.Navigate?.OpenSearch(tag);
+    }
+
     /// <summary>
     /// 载入当前视频的相关视频。
     ///
@@ -484,6 +540,8 @@ public partial class PlayerWindow : FluentWindow
             // 直播没有"相关视频"(接口只认视频稿件 bvid), 直接把整块藏掉,
             // 否则会停在上一片残留的推荐列表上 —— 那是**别的视频**的推荐。
             ClearRelatedPanel();
+            // 直播也没有标签: 别让上一个视频的 tag 留在信息栏里
+            ClearVideoTags();
             UpAvatarBox.Background = (Brush)FindResource("AccentSoftFillBrush");
             UpAvatarFallback.Visibility = Visibility.Visible;
 
@@ -1212,6 +1270,7 @@ public partial class PlayerWindow : FluentWindow
             UpNameText.Text = "本地文件";
             UpDescText.Text = "离线缓存";
             DescText.Text = "这是离线缓存里的本地文件, 没有在线视频的简介与评论。";
+            ClearVideoTags();
             UpAvatarBox.Background = (Brush)FindResource("AccentSoftFillBrush");
             UpAvatarFallback.Visibility = Visibility.Visible;
             UpdateButtonState();
@@ -1305,6 +1364,8 @@ public partial class PlayerWindow : FluentWindow
 
         ShowLoading("正在获取视频信息…");
         FailOverlay.Visibility = Visibility.Collapsed;
+        // 换片先把标签收掉: 新视频的 tag 要等接口回来, 不能停在上一片上面
+        ClearVideoTags();
         try
         {
             var (detailOk, detailErr, detail) = await Svc.Api.GetVideoAsync(_currentBvid);
@@ -1325,6 +1386,8 @@ public partial class PlayerWindow : FluentWindow
             _ownerMid = detail.OwnerMid;
             _ownerName = detail.Owner;
             UpdateUiFromDetail(detail);
+            // 标签: 与字幕/相关视频同款, 后台取, 不挡起播(失败静默, 见 LoadVideoTagsAsync)
+            _ = LoadVideoTagsAsync(gen, _currentBvid);
             // 合集数据在详情里就已经解析好了(见 ApiClient.GetVideoAsync), 这里零额外请求。
             // 放在 UpdateUiFromDetail 之后: 它要用刚设好的 _currentCid/_aid 来定位"当前是第几集"。
             // ★ 番剧(PGC)的分集表不在 view 接口里, 由选集页带进来(见 BuildBangumiSeason);

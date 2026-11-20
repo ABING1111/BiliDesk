@@ -871,6 +871,63 @@ public class SettingsViewModel : ObservableObject
         ? "关闭播放器时记住窗口大小和位置, 下次打开沿用"
         : "播放器每次打开都用默认窗口大小并居中显示";
 
+    /// <summary>
+    /// 是否记住**主界面**窗口大小和位置(2026-11-20, issue #98)。
+    /// ★ 与播放器开关独立: 两者是完全不同的窗口, 用户可能只想让其中一个保持固定。
+    /// </summary>
+    public bool RememberMainWindowPlacement
+    {
+        get => Svc.Settings.RememberMainWindowPlacement;
+        set
+        {
+            if (value == Svc.Settings.RememberMainWindowPlacement) return;
+            Svc.Settings.SetRememberMainWindowPlacement(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(RememberMainWindowPlacementHint));
+        }
+    }
+
+    /// <summary>副标题: 同一套"开启后沿用、关闭后回到 XAML 默认"的说法, 两个开关才好对比。</summary>
+    public string RememberMainWindowPlacementHint => Svc.Settings.RememberMainWindowPlacement
+        ? "退出时记住主界面窗口大小和位置, 下次启动沿用"
+        : "主界面每次启动都用默认窗口大小并居中显示";
+
+    // ----------------- 视频输出(2026-11-20, issue #98) -----------------
+
+    /// <summary>下拉框显示项; 下标与 <see cref="VideoOutputMode"/> 的数值一一对应。</summary>
+    public string[] VideoOutputOptions { get; } =
+        { "自动(推荐)", "Direct3D 11", "Direct3D 9", "OpenGL" };
+
+    /// <summary>
+    /// 当前视频输出模块(用字符串投影, 理由同 QualitySelected: SettingsStore 没有变化通知)。
+    /// ★ LibVLC 是进程级单例, 改完要重启应用才生效 —— Hint 里写清楚, 免得用户以为没生效。
+    /// </summary>
+    public string VideoOutputSelected
+    {
+        get
+        {
+            var mode = Svc.Settings.VideoOutputMode;
+            var index = Enum.IsDefined(typeof(VideoOutputMode), mode) ? (int)mode : 0;
+            return VideoOutputOptions[index];
+        }
+        set
+        {
+            var index = Array.IndexOf(VideoOutputOptions, value);
+            if (index < 0) return;
+
+            var mode = (VideoOutputMode)index;
+            if (mode == Svc.Settings.VideoOutputMode) return;
+            Svc.Settings.SetVideoOutputMode(mode);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(VideoOutputHint));
+        }
+    }
+
+    /// <summary>说明默认行为、排查方向与"需要重启"这件容易踩的事。</summary>
+    public string VideoOutputHint => Svc.Settings.VideoOutputMode == VideoOutputMode.Auto
+        ? "由播放器自动选择(通常是 Direct3D 11); 修改后需重启应用生效"
+        : "若画面异常或 NVIDIA 叠加层误判为游戏, 可换一档; 修改后需重启应用生效";
+
     // ----------------- 默认画质 -----------------
 
     /// <summary>默认画质下拉框的显示项(顺序即 QualityPreference.All 的顺序)</summary>

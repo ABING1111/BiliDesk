@@ -44,7 +44,9 @@ public partial class PlayerWindow : FluentWindow
         if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) != 0) return;
         switch (e.Key)
         {
-            case Key.Space: OnPlayPauseClick(this, new RoutedEventArgs()); e.Handled = true; return;
+            // ★ 直播的暂停只留控制栏那颗按钮(2026-11-20, issue #98): 空格/点画面太容易误触,
+            //   而直播暂停是低频操作。这里只是不放行**键盘**入口, 按钮本身仍走 OnPlayPauseClick。
+            case Key.Space: if (!_isLive) OnPlayPauseClick(this, new RoutedEventArgs()); e.Handled = true; return;
             // ★ 2026-10-31 长视频快进体验: 普通方向键 ±5s(原样), **Shift+方向键 ±30s** ——
             //   长视频里 5s 一跳要按十几下才够用, Shift 档一下抵六下。走同一条 SeekRelative,
             //   所有 seek 防护(看门狗/静音/进度钉制)自动继承。
@@ -76,7 +78,8 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// "返回上一层"的统一处理(键盘 Esc / 鼠标侧键共用)。
     ///
-    /// 三层语义, **由内到外**逐级退, 与所有播放器一致:
+    /// 四层语义, **由内到外**逐级退, 与所有播放器一致:
+    ///   评论详情中 → 先回评论列表(用户点进楼中楼后, "返回"指的是这一层);
     ///   全屏中     → 先退全屏(而不是直接关窗口, 否则用户按一下就"连界面一起没了");
     ///   已铺满窗口 → 再退铺满窗口(信息栏回来);
     ///   都没有     → 关闭播放器回到主界面。
@@ -87,6 +90,14 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void HandleBackRequest()
     {
+        // ★ 2026-11-20(issue #98): 评论详情是**最内层**. 旧实现不知道它开着, 在楼中楼里按侧键
+        //   会直接 Close() —— 用户看到的是"播放器整个没了, 回到主界面", 而光标下方随即变成
+        //   后面的其它窗口(用户报的还是 Firefox 跟着后退)。Esc 与侧键共用本方法, 一处修两边。
+        if (IsCommentDetailOpen)
+        {
+            CloseCommentDetail();
+            return;
+        }
         if (_isFullscreen)
         {
             // ★ 先进稳定期再退: WPF 的 SizeChanged/LocationChanged 会先于 StateChanged 到达,

@@ -839,6 +839,47 @@ public partial class ApiClient
     }
 
     /// <summary>
+    /// 视频标签(tag) —— 2026-11-20, issue #98:「视频详情页面看不到 tag」。
+    ///
+    /// ★ 走 <c>/x/tag/archive/tags</c>(实测匿名 + 不带 WBI 也返回 code=0),
+    ///   而不是 <c>/x/web-interface/view</c> 或 <c>view/detail</c>: 前者本来就不含标签,
+    ///   后者会把整份详情再拉一遍, 白付一次请求。
+    /// ★ 失败只影响标签区(界面直接隐藏), 不能连累已经加载好的标题/简介。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<string> data)> GetVideoTagsAsync(string bvid)
+    {
+        var tags = new List<string>();
+        if (string.IsNullOrWhiteSpace(bvid)) return (false, "缺少 BV 号", tags);
+
+        try
+        {
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/tag/archive/tags",
+                new Dictionary<string, string> { ["bvid"] = bvid });
+            if (code != 0 || data == null)
+                return (false, msg ?? $"获取视频标签失败 (code {code})", tags);
+
+            if (data.Value.ValueKind != JsonValueKind.Array) return (true, null, tags);
+
+            // 去重(忽略大小写) + 封顶 30 个: 信息栏只有 400px 宽, 再多也只是一整屏标签墙。
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in data.Value.EnumerateArray())
+            {
+                var name = GetStr(t, "tag_name").Trim();
+                if (name.Length == 0 || !seen.Add(name)) continue;
+                tags.Add(name);
+                if (tags.Count >= 30) break;
+            }
+            return (true, null, tags);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "获取视频标签失败: " + ex.Message, tags);
+        }
+    }
+
+    /// <summary>
     /// 视频详情。
     ///
     /// ★ 2026-10-01 由裸 <c>Task&lt;VideoDetail?&gt;</c> 改为 (ok, err, data):

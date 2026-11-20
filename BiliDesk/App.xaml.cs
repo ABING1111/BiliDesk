@@ -329,6 +329,25 @@ public partial class App : Application
     /// <summary>日志写入闸门: 多线程同时 AppendAllText 会抛 IOException("正由另一进程使用"), 串行化之。</summary>
     private static readonly object LogGate = new();
 
+    /// <summary>
+    /// 记一条**非异常**的诊断信息(2026-11-20, issue #98: 视频输出模块 / NVIDIA overlay 是否注入)。
+    /// ★ 只在排查开关(如 BILIDESK_VLC_DEBUG=1)下调用, 普通运行不写;
+    ///   因此不做单独的轮转 —— 它会追加到与错误日志同一个文件, 轮转由 <see cref="ReportError"/> 负责。
+    /// </summary>
+    public static void ReportNote(string note)
+    {
+        try
+        {
+            lock (LogGate)
+                File.AppendAllText(AppPaths.LogFile,
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [诊断] {note}\n\n");
+        }
+        catch
+        {
+            // 诊断写入失败不影响任何功能
+        }
+    }
+
     /// <summary>错误弹框节流: 同一分钟内最多弹两次, 其余只记日志(见 DispatcherUnhandledException 里的说明)。</summary>
     private static DateTime _lastErrorDialogUtc;
     private static int _errorDialogCountThisMinute;
