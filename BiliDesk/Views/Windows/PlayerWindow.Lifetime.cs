@@ -110,6 +110,7 @@ public partial class PlayerWindow : FluentWindow
             StopSpeedOsd();
             // 拖动气泡: 关闭时若还挂着, 会跟着浮层窗口一起残留在屏幕上。
             HideProgressDragHint();
+            HideVolumePctHint();
 
             // 先把覆盖层摘掉再隐藏窗口, 否则底部控制栏会以残影形式留在屏幕上
             DetachVideoOverlay();
@@ -194,6 +195,7 @@ public partial class PlayerWindow : FluentWindow
         StopVolumeOsd();
         StopSpeedOsd();
         HideProgressDragHint();
+        HideVolumePctHint();
         // 正常路径下 _mp / VideoView 已在 TeardownAndCloseAsync 里释放过了,
         // 这里只兜底那些没走完正常关闭流程的情况(例如构造中途抛异常),
         // 避免对同一个 MediaPlayer 重复 Dispose。

@@ -843,6 +843,7 @@ public partial class PlayerWindow : FluentWindow
         // 拖动气泡也要收: 换片时若正好在拖进度条, 气泡会带着上一条视频的时间留在屏幕上。
         _progressDragMoved = false;
         HideProgressDragHint();
+        HideVolumePctHint();
         // ★ 长按快进也要收: 若停在长按态换片, MediaPlayer 上的速率会**跟着留到新片子**
         //   (速率是 MediaPlayer 的属性, 不随 Media 重置 —— 实测)。所以这里必须先恢复。
         //   顺带把 _longPressFired 清掉 —— 否则新片的第一次 Up 会走进"结束快进"分支。

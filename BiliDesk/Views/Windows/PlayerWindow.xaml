@@ -1570,6 +1570,8 @@
                                                                 Minimum="0" Maximum="100" Value="80" Width="74"
                                                                 Margin="7,0,0,0"
                                                                 Thumb.DragCompleted="OnVolumeDragCompleted"
+                                                                MouseMove="OnVolumeSliderMouseMove"
+                                                                MouseLeave="OnVolumeSliderMouseLeave"
                                                                 ValueChanged="OnVolumeChanged" />
                                                     </Border>
                                                 </StackPanel>
@@ -1774,6 +1776,24 @@
                                                            FontSize="15" Foreground="White" />
                                             </Button>
                                         </Grid>
+
+                                        <!-- 音量条悬停百分比卡片(2026-11-20)。
+                                             ★ 必须挂在**操作行外层**的 StackPanel 里: 气泡要浮到音量滑条上方,
+                                               而 VolumeSliderHost 带 ClipToBounds + 宽度动画, 放在里面会被裁掉。
+                                             ★ Canvas 不参与布局(高度 0), 子元素用负的 Canvas.Top 画出边界;
+                                               IsHitTestVisible=False —— 气泡压在滑条上方, 不能吃拖动手势。
+                                             ★ 底色与进度条时间气泡同一套写死深色: 这块永远浮在视频画面上,
+                                               跟主题走的话浅色主题下会变成深字压亮画面。 -->
+                                        <Canvas x:Name="VolumePctLayer" IsHitTestVisible="False"
+                                                ClipToBounds="False">
+                                            <Border x:Name="VolumePctHint" Visibility="Collapsed"
+                                                    Background="#E6121318" BorderBrush="#26FFFFFF"
+                                                    BorderThickness="1" CornerRadius="8" Padding="8,3">
+                                                <TextBlock x:Name="VolumePctText" Text="80%"
+                                                           Foreground="White" FontSize="12"
+                                                           HorizontalAlignment="Center" />
+                                            </Border>
+                                        </Canvas>
                                     </StackPanel>
                                 </Border>
 

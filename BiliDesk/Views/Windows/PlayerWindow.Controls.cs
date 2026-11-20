@@ -197,6 +197,10 @@ public partial class PlayerWindow : FluentWindow
     private void OnVolumeAreaMouseLeave(object sender, MouseEventArgs e)
     {
         if (_closing || VolumeSliderHost == null) return;
+        // 指针已经离开整块音量热区: 没在拖动就把百分比卡片收掉。
+        // 拖动中则留着 —— 捕获还在滑条上, 松手时 OnVolumeDragCompleted 会按指针位置
+        // 决定收起滑杆并隐藏卡片; 拖出界时卡片也仍然是"当前音量"的正确反馈。
+        if (VolumeSlider == null || !VolumeSlider.IsMouseCaptureWithin) HideVolumePctHint();
         // ★ 拖动中不收起: 鼠标拖到轨道边缘稍微出界一下, 滑杆就缩回去的话,
         //   手指还在按着却已经没有可拖的东西了(捕获还在 Slider 上, 但视觉上整个消失)。
         if (VolumeSlider != null && VolumeSlider.IsMouseCaptureWithin) return;
@@ -223,7 +227,73 @@ public partial class PlayerWindow : FluentWindow
     private void OnVolumeDragCompleted(object sender, RoutedEventArgs e)
     {
         if (_closing || VolumeHoverArea == null) return;
-        if (!VolumeHoverArea.IsMouseOver) AnimateVolumeHost(0);
+        if (!VolumeHoverArea.IsMouseOver)
+        {
+            AnimateVolumeHost(0);
+            HideVolumePctHint();
+        }
+    }
+
+    // ------------------------------------------------------------ 音量条悬停百分比(2026-11-20)
+
+    /// <summary>
+    /// 音量滑条的 Thumb 宽度, 与 PlayerSlider 模板里的白点一致。
+    /// 换算鼠标位置时要把这份宽度从行程里让出去 —— 与进度条的 TrackMetrics 同一个公式。
+    /// </summary>
+    private const double VolumeThumbWidth = 11;
+
+    /// <summary>
+    /// 鼠标在音量滑条上移动: 浮出"鼠标指的位置对应多少音量"的小卡片。
+    /// 只做显示, 不改音量 —— 与进度条的时间气泡同语义(悬停时看到的是目标位置, 不是当前值)。
+    /// </summary>
+    private void OnVolumeSliderMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_closing || VolumeSlider == null || VolumePctHint == null || VolumePctLayer == null) return;
+        var usable = VolumeSlider.ActualWidth - VolumeThumbWidth;
+        if (usable <= 0) return;
+
+        var p = e.GetPosition(VolumeSlider);
+        var ratio = Math.Clamp((p.X - VolumeThumbWidth / 2) / usable, 0, 1);
+        UpdateVolumePctHint(p.X, ratio);
+    }
+
+    private void OnVolumeSliderMouseLeave(object sender, MouseEventArgs e) => HideVolumePctHint();
+
+    /// <summary>
+    /// 摆出音量百分比卡片。
+    ///
+    /// ★ 卡片挂在玻璃面板的 StackPanel 里而不是 VolumeSliderHost 里: 宿主为宽度动画带了
+    ///   ClipToBounds, 气泡放在里面会被裁掉(连展开中的滑杆一起)。
+    /// ★ 先 Visible 再 Measure: Collapsed 的元素量不到尺寸(DesiredSize 为 0),
+    ///   第一次悬停时卡片会以左边缘而不是中心对准光标。
+    /// </summary>
+    /// <param name="sliderX">鼠标在滑条内的横坐标(像素)</param>
+    /// <param name="ratio">鼠标在轨道上的比例(0~1)</param>
+    private void UpdateVolumePctHint(double sliderX, double ratio)
+    {
+        VolumePctText.Text = (int)Math.Round(ratio * 100) + "%";
+
+        VolumePctHint.Visibility = Visibility.Visible;
+        VolumePctHint.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var w = VolumePctHint.DesiredSize.Width;
+        var h = VolumePctHint.DesiredSize.Height;
+
+        // 换算到浮层坐标(浮层贴在操作行下方, 所以锚点的 Y 是负值 —— 正是滑条上方)。
+        var anchor = VolumeSlider.TranslatePoint(new Point(sliderX, 0), VolumePctLayer);
+        var x = anchor.X - w / 2;
+        var layerWidth = VolumePctLayer.ActualWidth;
+        if (layerWidth > 0) x = Math.Clamp(x, 0, Math.Max(0, layerWidth - w));
+        x = Math.Max(0, x);
+
+        Canvas.SetLeft(VolumePctHint, x);
+        Canvas.SetTop(VolumePctHint, anchor.Y - h - 6);
+    }
+
+    /// <summary>收起音量百分比卡片(离开滑条 / 滑条收起 / 换片 / 关闭时调用)。</summary>
+    private void HideVolumePctHint()
+    {
+        if (VolumePctHint == null) return;
+        VolumePctHint.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>
