@@ -776,6 +776,12 @@ public partial class PlayerWindow : FluentWindow
         _commentLoadingMore = false;
         _commentLoadMoreFailed = false;
         ResetCommentCardParts();
+        // 工具列的"滚动自动收起"状态(issue #89)同属"这一片"的评论区: 换片先把它放回来。
+        // ★ 这里必须**先**复位字段再交给 SetCommentFabBarHidden: 该方法在 CommentFabBar
+        //   还没就绪(构造期/尚未应用模板)时会直接返回, 字段若留在 true, 新片的评论区
+        //   会一进去就是隐藏态, 而且要等到第一次反向滚动才恢复。
+        _commentFabBarHidden = false;
+        SetCommentFabBarHidden(false, animate: false);
         _commentItems.Clear();
         _commentContentWindowTimer?.Stop();
         _commentContentWindowTimer = null;
@@ -1088,6 +1094,11 @@ public partial class PlayerWindow : FluentWindow
         // 回到顶部按钮显隐、分批展示调度闸、列表代次、内容窗口扫描闸, 全部是"这一片"的。
         nameof(_commentBackToTopShown), nameof(_commentRevealScheduled),
         nameof(_commentListVersion), nameof(_commentWindowUpdating),
+        // 评论工具列的滚动收起态(2026-11-20, issue #89): 换片时已显式复位(见 ResetForNewMedia)。
+        nameof(_commentFabBarHidden),
+        // 评论预取的滚动方向与"截断续排"闸(2026-11-20): 由 ResetCommentCardParts 归零 ——
+        // 它们描述的是"这一份列表"的滚动历史, 换列表后必须重新判断方向。
+        nameof(_commentScrollDirection), nameof(_commentPrefetchContinueScheduled),
         // 长按点赞三连: "最近一次长按触发时刻"与在途闸都属于这一片 ——
         // 换片后必须复位, 否则上一片留下的 1.5 秒抑制窗口会吞掉新片的第一次点赞。
         nameof(_tripleComboAt), nameof(_tripleComboBusy),
@@ -1195,6 +1206,24 @@ public partial class PlayerWindow : FluentWindow
         // 评论限流冷却是 **IP 级**的(见 Comments.cs 的说明): 换一个视频照样被拦,
         // 所以必须跨片保持 —— 清了会让用户"换个视频又立刻撞一轮限流"。
         nameof(_commentCooldownUntilUtc), nameof(_commentCooldownSeconds),
+        // ---- 2026-11-20 补登记: 以下 6 个都是**窗口级**的瞬态/闸门/代次, 换片不该清 ----
+        //
+        // 「听视频」的切换闸: 它是 async 停流期间的防重入标记, 由自己的 finally 收尾。
+        //   换片时若清成 false, 那条在途链回来仍会按 loadGen 自行作废; 清了反而多一个
+        //   "闸门被外力打开"的窗口, 让第二次点击另起一条链。
+        nameof(_listenSwitching),
+        // 「播放页」按钮的状态广播缓存: 它记的是"上一次通知出去的值", 换片时新片一开播
+        //   就会由 UpdatePlayButton 重新收敛(暂停/停止 → 播放必有一次变化), 不需要清。
+        nameof(_reportedIsPlaying),
+        // 字幕加载代次: 与 _mediaEpoch 同为**单调**计数, 换片时 CancelSubtitleFetch 自己 +1。
+        //   清回 0 反而可能让旧请求的代次与新请求撞上(正是它要防的事)。
+        nameof(_subtitleGen),
+        // 背景材质的三个 resize 闸(见 VideoArea.cs): 全部挂在**窗口尺寸**上, 与片源无关。
+        //   _backdropSuspendQueued 是"已排一次延迟停材质"的合并标记(回调自己复位);
+        //   _backdropResizeArmed 是"首次定位已结束"的一次性闸门(只在 OnLoaded 后置 true);
+        //   _modalResizeInProgress 跟踪 WM_ENTERSIZEMOVE/EXITSIZEMOVE 的模态循环 ——
+        //   换片时若正好在拖窗口, 清掉它会让 SuspendBackdropForResize 改走"尺寸静止恢复"分支。
+        nameof(_backdropSuspendQueued), nameof(_backdropResizeArmed), nameof(_modalResizeInProgress),
     };
 
     /// <summary>
