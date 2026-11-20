@@ -306,8 +306,19 @@ public sealed class LiveDanmakuService : IDisposable
         }
     }
 
-    /// <summary>依次尝试 host_list(第一个连不上就换下一个)。全部失败返回 null。</summary>
-    private static async Task<ClientWebSocket?> ConnectAsync(LiveDanmakuEndpoint endpoint, CancellationToken ct)
+    /// <summary>
+    /// 尝试连接候选弹幕服务器, 返回最先握手成功的那一个。全部失败返回 null。
+    ///
+    /// ★★★ 2026-11-20: 从"依次试"改成"并发试"。
+    ///   原来是一个 foreach 串行: 首选那台不通时要等满 <see cref="ConnectTimeoutMs"/>(8s)
+    ///   才开始试第二台, 两三台候选叠起来最坏十几秒 —— 用户看到的就是"进了直播间
+    ///   一直没弹幕, 过很久才突然开始动"。
+    ///   ⇒ 现在所有候选**同时**握手, 第一个成功的就是它; 正常情况(首选就通)耗时不变,
+    ///     最坏情况从"台数 × 8s"降到"一次握手"。
+    ///   ★ 收尾必须干净: 输掉的那些如果也握手成功了, 由 discard 释放, 否则每进一次
+    ///     直播间就漏一个 WebSocket(见 FirstSuccessRace 的说明)。
+    /// </summary>
+    private static Task<ClientWebSocket?> ConnectAsync(LiveDanmakuEndpoint endpoint, CancellationToken ct)
     {
         var hosts = endpoint.Hosts.Count > 0
             ? endpoint.Hosts
@@ -317,37 +328,57 @@ public sealed class LiveDanmakuService : IDisposable
                 new("broadcastlv.chat.bilibili.com", 2245),
             };
 
+        // 候选台数交给并发协调器, 每一条路一个委托; 单个连接仍然保留自己的 8s 超时
+        // (兜住"TCP 通了但对端不说话"这种半死状态)。
+        var attempts = new List<Func<CancellationToken, Task<ClientWebSocket?>>>(hosts.Count);
         foreach (var host in hosts)
         {
-            var socket = new ClientWebSocket();
-            try
-            {
-                socket.Options.SetRequestHeader("User-Agent", HttpDefaults.UserAgent);
-                socket.Options.SetRequestHeader("Origin", "https://live.bilibili.com");
-
-                // ★ Cookie 必须带: getDanmuInfo 拿到的 token 与请求时的登录态绑定,
-                //   不带 Cookie 的连接会在鉴权阶段被踢(未登录时至少也要有 buvid)。
-                var cookie = Svc.Session.BuildCookieHeader();
-                if (cookie.Length > 0)
-                {
-                    try { socket.Options.SetRequestHeader("Cookie", cookie); }
-                    catch { /* 个别平台不允许直接设 Cookie 头, 退化为无 Cookie 连接 */ }
-                }
-
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(ConnectTimeoutMs);
-                await socket.ConnectAsync(new Uri($"wss://{host.Host}:{host.Port}/sub"), timeout.Token)
-                    .ConfigureAwait(false);
-                return socket;
-            }
-            catch
-            {
-                socket.Dispose();
-                if (ct.IsCancellationRequested) return null;
-                // 换下一个 host 继续试
-            }
+            var target = host;   // 闭包捕获(foreach 变量在新 C# 里本就独立, 这里写明意图)
+            attempts.Add(token => ConnectOneAsync(target, token));
         }
-        return null;
+
+        // 整体上限: 比单个连接的超时略宽一点 —— 让"某一路慢慢失败"不至于把整体拖过这个值。
+        // 多一路候选就多给一点余量, 但不再随台数线性增长(并发后它们同时在跑)。
+        var overallTimeout = ConnectTimeoutMs + 1_000;
+
+        return FirstSuccessRace.RunAsync(
+            attempts,
+            discard: socket => socket.Dispose(),
+            timeoutMs: overallTimeout,
+            ct);
+    }
+
+    /// <summary>连一台候选服务器。失败返回 null(不抛, 交给并发协调器判胜负)。</summary>
+    private static async Task<ClientWebSocket?> ConnectOneAsync(
+        LiveDanmakuHost host, CancellationToken ct)
+    {
+        var socket = new ClientWebSocket();
+        try
+        {
+            socket.Options.SetRequestHeader("User-Agent", HttpDefaults.UserAgent);
+            socket.Options.SetRequestHeader("Origin", "https://live.bilibili.com");
+
+            // ★ Cookie 必须带: getDanmuInfo 拿到的 token 与请求时的登录态绑定,
+            //   不带 Cookie 的连接会在鉴权阶段被踢(未登录时至少也要有 buvid)。
+            var cookie = Svc.Session.BuildCookieHeader();
+            if (cookie.Length > 0)
+            {
+                try { socket.Options.SetRequestHeader("Cookie", cookie); }
+                catch { /* 个别平台不允许直接设 Cookie 头, 退化为无 Cookie 连接 */ }
+            }
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(ConnectTimeoutMs);
+            await socket.ConnectAsync(new Uri($"wss://{host.Host}:{host.Port}/sub"), timeout.Token)
+                .ConfigureAwait(false);
+            return socket;
+        }
+        catch
+        {
+            // 失败(含"别人已胜出"导致的取消): 自己释放, 绝不把半开的 socket 交出去。
+            socket.Dispose();
+            return null;
+        }
     }
 
     private static async Task HeartbeatLoopAsync(ClientWebSocket socket, CancellationToken ct)
