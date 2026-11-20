@@ -150,7 +150,7 @@ public partial class ApiClient
     ///     1783 条的夹子, pn=90 正好给 3 条且 has_more=false) —— 直接按它算页数是对的。
     /// </summary>
     public async Task<(bool ok, string? err, List<VideoItem>? items, bool hasMore, int total)>
-        GetFavResourcesAsync(long mediaId, int pn = 1, int ps = 20)
+        GetFavResourcesAsync(long mediaId, int pn = 1, int ps = 20, string? keyword = null)
     {
         try
         {
@@ -165,7 +165,10 @@ public partial class ApiClient
                     ["media_id"] = mediaId.ToString(),
                     ["pn"] = pn.ToString(),
                     ["ps"] = ps.ToString(),
-                    ["keyword"] = "",
+                    // 关键词搜索(2026-11-20): 传空串是"整个收藏夹"。★ 实测带 keyword 时,
+                    // 响应里的 info.media_count 是**命中数**而不是夹子总数, 所以收藏页的
+                    // 分页/总数逻辑不用改 —— 按它算出来的就是搜索结果的页数。
+                    ["keyword"] = keyword ?? "",
                     ["order"] = "mtime",   // 按收藏时间倒序
                     ["type"] = "0",
                     ["tid"] = "0",

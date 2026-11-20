@@ -37,7 +37,7 @@ public partial class FavoritesPage : UserControl
     public FavoritesPage()
     {
         InitializeComponent();
-        _sticky = new StickyPin(PageScroll, FolderBarSlot, StickyFolderBar, StickyFolderShift);
+        _sticky = new StickyPin(PageScroll, FolderBarSlot, StickyRow, StickyRowShift);
         Loaded += OnLoaded;
         SizeChanged += (_, _) => ScheduleOverflowUpdate();
         // 页面常驻 PageLayer、只切 Visibility: 切回来时 Loaded 不会再发,
@@ -114,6 +114,13 @@ public partial class FavoritesPage : UserControl
     private void OnFoldersChanged(object? sender, NotifyCollectionChangedEventArgs e)
         => ScheduleOverflowUpdate();
 
+    /// <summary>
+    /// 吸顶行右侧给"可折叠搜索圆"预留的宽度: 圆(与胶囊等高) + 与胶囊的间距 10。
+    /// ★ 搜索是浮层(同一行的右对齐 Grid 列), 不占胶囊布局; 夹子折叠算法必须主动扣掉这一条,
+    ///   否则排满时最后一颗 chip /「⋯」会被那颗圆压住(2026-11-20)。
+    /// </summary>
+    private const double SearchReserveWidth = 44 + 10;
+
     /// <summary>夹子条的文字宽度全部按这个字号/字体估 —— 与 chip 样式(SettingsTabStyle)一致</summary>
     private const double ChipFontSize = 13;
     /// <summary>chip 的左右内边距(SettingsTabStyle Padding 20,8)+ 描边 + 右间距 4 的合计</summary>
@@ -159,7 +166,9 @@ public partial class FavoritesPage : UserControl
     {
         if (Vm == null || FolderBarHost.ActualWidth <= 0) return;
 
-        var availW = FolderBarHost.ActualWidth;
+        // 扣掉右侧搜索圆的位置(见 SearchReserveWidth)
+        var availW = FolderBarHost.ActualWidth - SearchReserveWidth;
+        if (availW <= 0) return;
 
         // 「⋯」按钮自己的宽度(有折叠才显示, 但估算时先按"显示"算, 少一颗也比溢出强)
         var moreW = 46;

@@ -49,12 +49,21 @@ public abstract class VideoListSelectionViewModel : ObservableObject
     ///   过滤视图 + 一个新 List。历史页搜索是高频路径(每敲一个字防抖到点就来一次),
     ///   这点重复乘上去不小。缓存成"每轮一份", 值与原来逐个算出来的完全一致。
     /// </summary>
+    /// <summary>
+    /// 页面自己的可见性条件(除全局屏蔽之外的第二种筛选)。默认全部可见。
+    ///
+    /// ★ 历史页的搜索走这条: 未命中的条目被收成 Collapsed, 但它们**仍在集合里** ——
+    ///   "全选 / 删除所选"必须跟着一起排除, 否则用户会删掉屏幕上看不见的记录
+    ///   (见 HistoryViewModel.IsSearchMatch / VideoItem.IsSearchMatch)。
+    /// </summary>
+    protected virtual bool IsItemVisible(VideoItem item) => true;
+
     protected List<VideoItem> VisibleItems()
     {
         // null = 本轮还没算过。RaiseSelection 开头会清掉, 所以缓存只活在一次通知内,
         // 不会跨状态陈旧(选择态变了、集合变了、过滤变了都会重新算)。
         if (_visibleCache != null) return _visibleCache;
-        _visibleCache = FilterService.Visible(SelectionSource).ToList();
+        _visibleCache = FilterService.Visible(SelectionSource).Where(IsItemVisible).ToList();
         return _visibleCache;
     }
 

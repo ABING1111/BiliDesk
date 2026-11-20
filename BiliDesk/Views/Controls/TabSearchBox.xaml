@@ -1,0 +1,91 @@
+<UserControl x:Class="BiliDesk.Views.Controls.TabSearchBox"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Width="44" Height="44" Focusable="False">
+    <UserControl.RenderTransform>
+        <TranslateTransform x:Name="SlideX" />
+    </UserControl.RenderTransform>
+    <!--
+        ============ 吸顶 Tab 栏右侧的可折叠搜索(2026-11-20 用户要求) ============
+
+        形态参考 iOS 26/27 液态玻璃的 tab 搜索:
+          · 未展开 = 一颗 34×34 的磨砂圆, 中间一枚放大镜, 与左侧 tab 胶囊留一小段空白;
+          · 点击后宽度动画展开成胶囊输入框(向右对齐 ⇒ 向左生长), 输入框淡入并自动聚焦;
+          · 清空 / 失焦且无内容时收回到圆。
+
+        ★ 搜索框是**浮层**: 它和 tab 胶囊同处一行(见页面 XAML 的 StickyRow),
+          展开时只改自己的宽度, tab 胶囊不会跟着动; 收藏夹很多时它会盖住胶囊右端,
+          收起后原样让出来。
+        ★ 背景/描边/投影与页面吸顶胶囊同一套(FrostedPanelBrush + CardBorderBrush),
+          保证"它就是 tab 栏的一部分"。
+    -->
+    <Grid>
+        <!-- 磨砂圆底。Effect 挂在这层空 Border 上, 不要挂到内容上 —— 否则文字会被
+             整棵子树栅格化而发糊(与 FloatingIconButtonStyle 同一个坑)。 -->
+        <Border x:Name="Shell" CornerRadius="22"
+                Background="{DynamicResource FrostedPanelBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
+            </Border.Effect>
+        </Border>
+
+        <!-- 放大镜: 收起/展开都在同一个位置, 展开时它自然变到输入框左端 -->
+        <!-- 放大镜: 收起态水平居中(圆里), 展开时在代码后置切到左端(输入框图标位)。 -->
+        <TextBlock x:Name="SearchGlyph" Text="&#xE721;"
+                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                   FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"
+                   IsHitTestVisible="False"
+                   Foreground="{DynamicResource TextTertiaryBrush}" />
+
+        <!-- 展开后的输入区 -->
+        <Grid x:Name="ContentHost" Visibility="Collapsed" Opacity="0">
+            <TextBox x:Name="Box"
+                     Background="Transparent" BorderThickness="0"
+                     Foreground="{DynamicResource TextPrimaryBrush}"
+                     CaretBrush="{DynamicResource TextPrimaryBrush}"
+                     SelectionBrush="{DynamicResource AccentBrush}"
+                     FontSize="12.5" Padding="30,0,26,0"
+                     VerticalContentAlignment="Center"
+                     FocusVisualStyle="{x:Null}"
+                     TextChanged="OnTextChanged"
+                     KeyDown="OnBoxKeyDown"
+                     LostKeyboardFocus="OnBoxLostFocus"
+                     Text="{Binding Text, RelativeSource={RelativeSource AncestorType=UserControl}, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+            <TextBlock x:Name="Placeholder" Text="搜索"
+                       FontSize="12.5" VerticalAlignment="Center"
+                       Margin="30,0,26,0" IsHitTestVisible="False"
+                       Foreground="{DynamicResource TextTertiaryBrush}" />
+
+            <Button x:Name="ClearButton" Content="&#xE711;"
+                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                    FontSize="10" Width="22" Height="22" Padding="0"
+                    HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,3,0"
+                    Style="{StaticResource BareIconButtonStyle}"
+                    Foreground="{DynamicResource TextTertiaryBrush}"
+                    ToolTip="清除搜索" Click="OnClearClick"
+                    Visibility="Collapsed" />
+        </Grid>
+
+        <!-- 收起态的点击区: 透明按钮盖住整个圆, 展开后让位给输入框。
+             ★ 悬停底改成**圆形**(CornerRadius=17); 直接用 IconButtonStyle 会得到圆角 8 的
+               小方块, 在圆里一眼能看出来。 -->
+        <Button x:Name="OpenButton" Padding="0"
+                HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                Cursor="Hand" FocusVisualStyle="{x:Null}"
+                ToolTip="搜索" Click="OnOpenClick">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" CornerRadius="22" Background="Transparent" />
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background"
+                                    Value="{DynamicResource ControlFillHoverBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
+    </Grid>
+</UserControl>

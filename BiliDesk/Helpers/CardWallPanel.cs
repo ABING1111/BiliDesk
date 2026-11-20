@@ -246,6 +246,8 @@ public class CardWallPanel : Panel
         for (var i = 0; i < InternalChildren.Count; i++)
         {
             var child = InternalChildren[i];
+            if (child.Visibility == Visibility.Collapsed) continue;   // 隐藏项不需要收敛尺寸
+
             if (CardWall.GetItemWidth(child) == targetW &&
                 CardWall.GetCoverHeight(child) == targetCover) continue;   // 已收敛
 
@@ -365,9 +367,16 @@ public class CardWallPanel : Panel
     /// </summary>
     private int AnchorIndex(double offset)
     {
+        var lastVisible = -1;
         for (var i = 0; i < _arrangeY.Count; i++)
+        {
+            // 隐藏项(搜索未命中)不参与锚定: 它没有高度, 钉住它对"可见区不动"毫无作用
+            if (i < InternalChildren.Count && InternalChildren[i].Visibility == Visibility.Collapsed)
+                continue;
+            lastVisible = i;
             if (_arrangeY[i] >= offset) return i;
-        return _arrangeY.Count > 0 ? _arrangeY.Count - 1 : -1;
+        }
+        return lastVisible;
     }
 
     /// <summary>
@@ -463,7 +472,7 @@ public class CardWallPanel : Panel
         if (_anchorChild != null)
         {
             var i = InternalChildren.IndexOf(_anchorChild);
-            if (i >= 0) return i;
+            if (i >= 0) return _anchorChild.Visibility == Visibility.Collapsed ? -1 : i;
         }
         if (_anchorItem == null) return -1;
         for (var i = 0; i < InternalChildren.Count; i++)
@@ -877,6 +886,15 @@ public class CardWallPanel : Panel
                 var child = InternalChildren[i];
                 if (child is not FrameworkElement fe) continue;
 
+                // ★ 隐藏项(历史页搜索未命中的卡片)不参与补图: 它排在同一个 Y、尺寸为 0,
+                //   不挡掉的话会被当成"在视口里", 给几百张看不见的卡片一起解码封面。
+                //   顺手把"上次在视口内"的标记清掉, 免得它继续占用常驻名额。
+                if (child.Visibility == Visibility.Collapsed)
+                {
+                    child.SetValue(WasInViewportProperty, false);
+                    continue;
+                }
+
                 // 优先用 ArrangeOverride 记下的坐标(见上面 panelTop 的说明)。
                 // ★ 本轮布局还没结算(分帧填充/追加的中间帧)时, 尾部的新孩子还没有可靠坐标 ——
                 //   直接跳过, 等 ArrangeOverride 结束后的那一轮扫描再处理。
@@ -993,6 +1011,9 @@ public class CardWallPanel : Panel
         {
             var child = InternalChildren[i];
             if (child is not DependencyObject d) continue;
+            // 隐藏项(搜索未命中)不占常驻名额: 它的封面留在原地(重新可见时立刻能用),
+            // 但不该把"视口内张数"撑大而挤掉真正在看的那一屏。
+            if (child.Visibility == Visibility.Collapsed) continue;
 
             var inViewport = (bool)d.GetValue(WasInViewportProperty);
             if (inViewport) visibleCards++;
@@ -1191,7 +1212,9 @@ public class CardWallPanel : Panel
     {
         for (var i = 0; i < InternalChildren.Count; i++)
         {
-            foreach (var border in CacheCoverBorders(InternalChildren[i]))
+            var child = InternalChildren[i];
+            if (child.Visibility == Visibility.Collapsed) continue;   // 隐藏项不补图
+            foreach (var border in CacheCoverBorders(child))
             {
                 if (!Cover.HasImage(border)) Cover.Restore(border, force: true);
             }
@@ -1256,7 +1279,11 @@ public class CardWallPanel : Panel
 
         foreach (UIElement child in InternalChildren)
         {
-            EnsureLocalOverride(child);
+            // ★ 隐藏项(历史页搜索未命中的卡片): **仍然要 Measure 一次** ——
+            //   WPF 对 Collapsed 元素会在 Measure 里直接把 DesiredSize 清成 0;
+            //   跳过这次调用的话它会留着"可见时"的旧尺寸, 下面的折行仍会为它占一个槽
+            //   (看不见但位置空着)。只是不再给它写 ItemWidth/CoverHeight 覆盖值。
+            if (child.Visibility != Visibility.Collapsed) EnsureLocalOverride(child);
 
             // 与 WrapPanel(ItemWidth=NaN 路径)一致: 孩子按自己的显式 Width 自量。
             // 干净的孩子在这步直接命中 WPF 的测量缓存 —— 这就是"当帧只剩排位置"的关键。
@@ -1395,6 +1422,7 @@ public class CardWallPanel : Panel
         for (int i = 0; i < InternalChildren.Count; i++)
         {
             var child = InternalChildren[i];
+            if (child.Visibility == Visibility.Collapsed) continue;   // 隐藏项等重新可见时再收敛
             if (CardWall.GetItemWidth(child) != targetW ||
                 CardWall.GetCoverHeight(child) != targetCover)
             {

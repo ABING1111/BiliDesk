@@ -119,6 +119,31 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
         }
     }
 
+    private bool _isSearchMatch = true;
+
+    /// <summary>
+    /// 本页搜索的命中标记(仅 UI 用, 不参与业务)。false = 当前关键词没搜到这一条。
+    ///
+    /// ★★ 为什么做成条目属性, 而不是给列表挂 CollectionView.Filter(2026-11-20):
+    ///   历史 / 收藏的卡片墙是**零虚拟化**的(ItemsControl + CardWallPanel), 一次 Reset
+    ///   会让整墙卡片销毁重建 —— 当年历史页的搜索就是因此被整个拿掉(2000 条时一次清空
+    ///   筛选冻结 24.7 秒)。这里改成只翻条目上的这个 bool, 卡片容器**原地保留**,
+    ///   列表模板只把未命中的容器收成 Collapsed(见 HistoryPage 的 ItemContainerStyle),
+    ///   所以输入 / 清空关键词都不会重建任何卡片。
+    /// ★ 默认 true: 其它页面(首页/搜索/稍后再看…)根本不绑它, 也就永远不会藏东西。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsSearchMatch
+    {
+        get => _isSearchMatch;
+        set
+        {
+            if (_isSearchMatch == value) return;
+            _isSearchMatch = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsSearchMatch)));
+        }
+    }
+
     /// <summary>
     /// 播放数展示串。0 时返回空串 —— 动态时间线等来源拿不到播放数,
     /// 显示"▶ 0"是错误信息(截图实测), 拿不到就整个胶囊隐藏(与弹幕数同款约定)。

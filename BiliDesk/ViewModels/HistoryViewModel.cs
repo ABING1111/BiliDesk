@@ -41,6 +41,78 @@ public class HistoryViewModel : VideoListSelectionViewModel
     private bool _busy;
     private string _busyText = "";
 
+    // ------------------------------------------------------------ 搜索(2026-11-20)
+
+    /// <summary>搜索框里的原始文本(绑定用, 输入即触发 250ms 防抖)。</summary>
+    private string _searchText = "";
+
+    /// <summary>真正生效的关键词拆分结果(空格/逗号分隔 = AND), 判定新加载条目时用。</summary>
+    private string[] _searchTerms = Array.Empty<string>();
+
+    private readonly DispatcherTimer _searchDebounce;
+
+    /// <summary>搜索代次: 每换一次关键词 +1, 让在途的"继续翻页找命中"立即作废。</summary>
+    private int _searchGen;
+
+    private bool _searchingDeeper;
+
+    /// <summary>
+    /// 搜索框文本。输入后 250ms 才真正过滤 —— 每敲一个字都改一遍几百上千条卡片的
+    /// 可见性, 不防抖的话 IME 组字期间会连续触发布局。
+    /// </summary>
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (!SetProperty(ref _searchText, value)) return;
+            OnPropertyChanged(nameof(HasSearch));
+            RaiseSearchState();
+            _searchDebounce.Stop();
+            // 清空关键词立刻恢复整墙(不等防抖) —— 否则会看到"搜索框已经空了, 卡片还少着"
+            if (value.Trim().Length == 0) ApplySearch();
+            else _searchDebounce.Start();
+        }
+    }
+
+    public bool HasSearch => _searchText.Trim().Length > 0;
+
+    /// <summary>
+    /// 当前命中的条数(未搜索时就是已加载条数)。
+    /// ★ 搜索时叠上全局屏蔽: 被屏蔽的记录用户看不见, 不该算进"找到 N 条"。
+    /// </summary>
+    public int SearchMatchCount => _searchTerms.Length == 0
+        ? Entries.Count
+        : FilterService.Visible(Entries).Count(x => x.IsSearchMatch);
+
+    /// <summary>标题旁的数字: 搜索时显示命中数, 平时显示已加载条数。</summary>
+    public string HeaderCountText => HasSearch ? $" · 找到 {SearchMatchCount} 条" : $" ({TotalCount})";
+
+    /// <summary>正在为"零命中"继续往下翻页找(界面上给一行说明, 别让用户以为卡住了)</summary>
+    public bool SearchingDeeper
+    {
+        get => _searchingDeeper;
+        private set
+        {
+            if (!SetProperty(ref _searchingDeeper, value)) return;
+            OnPropertyChanged(nameof(ShowNoMatch));
+        }
+    }
+
+    /// <summary>
+    /// 搜索零命中时的空态。★ 必须等"继续翻页找"结束再显示: 关键词可能在很靠后的记录里,
+    /// 一搜不到就弹"没有匹配"会让人以为历史里真的没有。
+    /// </summary>
+    public bool ShowNoMatch => HasSearch && !SearchingDeeper && !Loading
+                               && Error.Length == 0 && SearchMatchCount == 0;
+
+    public string NoMatchHint => HasMore
+        ? $"已在最近 {Entries.Count} 条记录中查找，关闭搜索后下滑加载更多可继续找"
+        : "换个关键词试试";
+
+    /// <summary>底部"已经到底啦": 搜索中不显示(列表里可能一条都没命中, 那句话会误导)。</summary>
+    public bool ShowEndOfList => !HasSearch && !HasMore;
+
     // ------------------------------------------------------------ 类别(视频 / 直播间)
 
     private ContentKind _kind = ContentKind.Video;
@@ -69,6 +141,9 @@ public class HistoryViewModel : VideoListSelectionViewModel
             // ★ 先让在途的那次加载作废(否则它回来会把旧类别的数据填进新类别的列表),
             //   再清一次 Loading/LoadingMore —— 防重入那道闸看到它们还立着就会直接返回。
             BumpGeneration();
+            // 换类别 = 换一整套数据: 在途的"继续翻页找命中"同样作废(关键词保留, 新数据照样过滤)
+            _searchGen++;
+            SearchingDeeper = false;
             Loading = false;
             LoadingMore = false;
             _ = LoadAsync(reset: true);
@@ -111,10 +186,37 @@ public class HistoryViewModel : VideoListSelectionViewModel
     /// <summary>云端历史条目(接口顺序, 新的在前)。分页追加。</summary>
     public ObservableCollection<VideoItem> Entries { get; } = new();
 
-    public bool Loading { get => _loading; private set => SetProperty(ref _loading, value); }
+    public bool Loading
+    {
+        get => _loading;
+        private set
+        {
+            if (!SetProperty(ref _loading, value)) return;
+            OnPropertyChanged(nameof(ShowNoMatch));
+        }
+    }
+
     public bool LoadingMore { get => _loadingMore; private set => SetProperty(ref _loadingMore, value); }
-    public bool HasMore { get => _hasMore; private set => SetProperty(ref _hasMore, value); }
-    public string Error { get => _error; private set => SetProperty(ref _error, value); }
+
+    public bool HasMore
+    {
+        get => _hasMore;
+        private set
+        {
+            if (!SetProperty(ref _hasMore, value)) return;
+            OnPropertyChanged(nameof(ShowEndOfList));
+            OnPropertyChanged(nameof(NoMatchHint));
+        }
+    }
+    public string Error
+    {
+        get => _error;
+        private set
+        {
+            if (!SetProperty(ref _error, value)) return;
+            OnPropertyChanged(nameof(ShowNoMatch));
+        }
+    }
 
     /// <summary>是否处于编辑模式(每行出现复选框, 顶部换成操作条)</summary>
     public bool IsEditMode
@@ -123,6 +225,7 @@ public class HistoryViewModel : VideoListSelectionViewModel
         private set
         {
             if (!SetProperty(ref _isEditMode, value)) return;
+            OnPropertyChanged(nameof(ShowNoMatch));
             // 退出编辑模式时把选择清掉, 免得下次进来还留着上次的勾
             if (!value) ClearSelection();
         }
@@ -167,6 +270,13 @@ public class HistoryViewModel : VideoListSelectionViewModel
     {
         ReloadCommand = new RelayCommand(() => _ = LoadAsync(reset: true));
 
+        _searchDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _searchDebounce.Tick += (_, _) =>
+        {
+            _searchDebounce.Stop();
+            ApplySearch();
+        };
+
         ToggleEditCommand = new RelayCommand(() =>
         {
             if (Busy) return;
@@ -209,6 +319,9 @@ public class HistoryViewModel : VideoListSelectionViewModel
             Error = "";
             Loading = true;
             IsEditMode = false;
+            // 清空列表 = 上一次搜索的"继续翻页找"也该作废(关键词保留, 新数据照样按它过滤)
+            _searchGen++;
+            SearchingDeeper = false;
             // 直播历史是**游标式**接口: 重新从头拉之前必须把游标清掉, 否则第 2 页会接着上次的位置
             if (_kind == ContentKind.Live) Svc.Api.ResetLiveHistoryCursor();
             // "从头加载"开启新的一代(见 _generation)。翻页不换代 —— 它属于同一批数据。
@@ -242,7 +355,12 @@ public class HistoryViewModel : VideoListSelectionViewModel
             foreach (var it in items.Where(x => kind == ContentKind.Live
                                                     ? x.RoomId > 0
                                                     : !string.IsNullOrEmpty(x.Bvid)))
+            {
+                // 搜索中追加进来的条目先标好命中态 —— 卡片容器一生成就是对的,
+                // 不会先"露一下再消失"。
+                it.IsSearchMatch = MatchesCurrent(it);
                 Entries.Add(it);
+            }
             // 视频一页 30 条、直播一页 20 条(见各自接口的 ps); 不满一页说明到底了。
             // ★ 直播还有个额外信号: 游标归零时接口会返回空列表, 上面的 items.Count==0 就涵盖了。
             var pageSize = kind == ContentKind.Live ? 20 : 30;
@@ -256,7 +374,156 @@ public class HistoryViewModel : VideoListSelectionViewModel
             // 下次成功的加载会重新决定它。
         }
         RaiseSelection();
+
+        // 搜索零命中: 继续往下翻, 直到找到一条或到底(有上限)。在流里做而不是等用户滚 ——
+        // 零命中时墙是空的, 没有滚动条, 用户根本没法"下滑加载更多"。
+        if (HasSearch && SearchMatchCount == 0 && HasMore && !Loading && !LoadingMore)
+            _ = DeepenSearchAsync();
     }
+
+    // ------------------------------------------------------------ 搜索
+
+    /// <summary>
+    /// 防抖时间到: 把关键词应用到**已有条目**上(不重建任何卡片, 见 VideoItem.IsSearchMatch)。
+    ///
+    /// ★★ 2026-11-20(用户报"清除搜索后画面卡住再恢复"): 清空关键词等于一次性把几百张
+    ///   卡片重新参与排版, 单独一帧付清就是肉眼可见的冻结。现在拆成两步:
+    ///     · 不命中的卡片**立刻**收起(收起很便宜: 0 尺寸, 不参与折行);
+    ///     · 要恢复可见的按每帧 <see cref="RevealChunk"/> 张慢慢放出来(见 RevealMatchesAsync)。
+    ///   用户的观感是"卡片一批批回来", 输入与滚动全程不卡。
+    /// </summary>
+    private void ApplySearch()
+    {
+        _searchTerms = _searchText.Trim().Split(
+            new[] { ' ', '　', ',' }, StringSplitOptions.RemoveEmptyEntries);
+
+        // 每次换词都是一代新的搜索: 上一次"继续翻页找"与上一次分帧恢复都不再作数
+        _searchGen++;
+        var gen = _searchGen;
+        SearchingDeeper = false;
+
+        var matches = 0;
+        var needReveal = false;
+        foreach (var it in Entries)
+        {
+            if (MatchesCurrent(it))
+            {
+                matches++;
+                if (!it.IsSearchMatch) needReveal = true;
+            }
+            else if (it.IsSearchMatch)
+            {
+                // 收起是便宜的: WPF 对 Collapsed 只给 0 尺寸, 不参与折行
+                it.IsSearchMatch = false;
+            }
+        }
+
+        RaiseSearchState();
+        RaiseSelection();
+
+        if (needReveal) _ = RevealMatchesAsync(gen);
+        else if (_searchTerms.Length > 0 && matches == 0 && HasMore && !Loading)
+            _ = DeepenSearchAsync();
+    }
+
+    /// <summary>分帧恢复时每帧放出多少张。★ 按单帧预算取: 一张卡重测约 0.8ms, 12 张 ≈ 10ms。</summary>
+    private const int RevealChunk = 12;
+
+    /// <summary>
+    /// 把命中的卡片按帧恢复可见(清空搜索 / 放宽关键词时用)。
+    /// 从列表顶部往下放 —— 用户视线通常在上面, 上面的先回来, 下面的逐步补。
+    /// 换关键词 / 刷新 / 切类别都会让代次失效, 这一轮立刻停手。
+    /// </summary>
+    private async Task RevealMatchesAsync(int gen)
+    {
+        var shown = 0;
+        for (var i = 0; i < Entries.Count && gen == _searchGen; i++)
+        {
+            var it = Entries[i];
+            if (it.IsSearchMatch || !MatchesCurrent(it)) continue;
+
+            it.IsSearchMatch = true;
+            if (++shown < RevealChunk) continue;
+
+            shown = 0;
+            RaiseSearchState();
+            RaiseSelection();
+            // ★ 用 Task.Delay 而不是 Dispatcher.Yield: Yield 的续体还排在 dispatcher 队列里,
+            //   队列一空就立刻接着跑, 一帧之内仍可能把几百张全部放出来(等于没拆分)。
+            //   走一次计时器消息, 中间必然能过渲染/输入。
+            await Task.Delay(1);
+        }
+
+        if (gen != _searchGen) return;
+        RaiseSearchState();
+        RaiseSelection();
+    }
+
+    /// <summary>这条记录是否命中当前关键词(标题 / UP 主名, 忽略大小写; 多词 = AND)。</summary>
+    private bool MatchesCurrent(VideoItem it)
+    {
+        if (_searchTerms.Length == 0) return true;
+        foreach (var term in _searchTerms)
+        {
+            if (it.Title.Contains(term, StringComparison.OrdinalIgnoreCase)) continue;
+            if (it.Author.Contains(term, StringComparison.OrdinalIgnoreCase)) continue;
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// 搜索零命中时继续翻页找的最大页数。
+    /// ★ 不能无限翻: 卡片墙是零虚拟化的, 每翻一页都会为隐藏条目生成一份卡片容器。
+    ///   10 页(视频 300 条 / 直播 200 条)足以覆盖"最近在看"的范围, 再往前的交给
+    ///   "关闭搜索 → 下滑加载更多 → 再搜"(空态提示里写明了这条路)。
+    /// </summary>
+    private const int MaxSearchDeepenPages = 10;
+
+    private async Task DeepenSearchAsync()
+    {
+        if (_searchingDeeper) return;
+        var gen = _searchGen;
+        SearchingDeeper = true;
+        try
+        {
+            for (var i = 0; i < MaxSearchDeepenPages; i++)
+            {
+                if (gen != _searchGen || !HasSearch) return;
+                if (!HasMore || Loading || LoadingMore) return;
+
+                await LoadAsync(reset: false);
+
+                if (gen != _searchGen) return;
+                if (SearchMatchCount > 0) return;
+            }
+        }
+        finally
+        {
+            if (gen == _searchGen)
+            {
+                SearchingDeeper = false;
+                RaiseSearchState();
+            }
+        }
+    }
+
+    /// <summary>刷新搜索相关的派生属性(命中数 / 空态 / 底部提示)。</summary>
+    private void RaiseSearchState()
+    {
+        OnPropertyChanged(nameof(HasSearch));
+        OnPropertyChanged(nameof(SearchMatchCount));
+        OnPropertyChanged(nameof(HeaderCountText));
+        OnPropertyChanged(nameof(ShowNoMatch));
+        OnPropertyChanged(nameof(NoMatchHint));
+        OnPropertyChanged(nameof(ShowEndOfList));
+    }
+
+    /// <summary>选择态的派生属性更新时, 顺带刷新搜索计数(命中数与标题/空态都跟它走)。</summary>
+    protected override void RaiseSelectionExtra() => RaiseSearchState();
+
+    /// <summary>搜索与全局屏蔽一起决定"哪些条目是用户看得见的" —— 全选/删除只作用于这一批。</summary>
+    protected override bool IsItemVisible(VideoItem item) => item.IsSearchMatch;
 
     // ------------------------------------------------------------ 删除 / 清空
 

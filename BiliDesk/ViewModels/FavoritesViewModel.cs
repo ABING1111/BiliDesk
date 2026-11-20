@@ -56,6 +56,41 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
     private bool _busy;
     private string _busyText = "";
 
+    // ------------------------------------------------------------ 搜索(2026-11-20)
+
+    /// <summary>搜索框文本(输入即触发 350ms 防抖, 然后走服务端 keyword 搜索)。</summary>
+    private string _searchText = "";
+
+    /// <summary>当前生效的关键词(空串 = 整个收藏夹)。分页请求带着它, 翻页不会跳回全量列表。</summary>
+    private string _activeKeyword = "";
+
+    private readonly System.Windows.Threading.DispatcherTimer _searchDebounce;
+
+    /// <summary>搜索请求在整页加载/切夹途中被搁置, 等那一轮结束后补跑。</summary>
+    private bool _searchPending;
+
+    /// <summary>搜索框文本。</summary>
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (!SetProperty(ref _searchText, value)) return;
+            OnPropertyChanged(nameof(HasSearch));
+            _searchDebounce.Stop();
+            if (value.Trim().Length == 0) _ = ApplySearchAsync();   // 清空立刻回到整个收藏夹
+            else _searchDebounce.Start();
+        }
+    }
+
+    public bool HasSearch => _searchText.Trim().Length > 0;
+
+    /// <summary>搜索零命中: 只替换卡片区, 不弹整页错误(更不要「重试」按钮)。</summary>
+    public bool ShowNoMatch => HasSearch && !IsPaging && !Loading
+                               && Items.Count == 0 && Error.Length == 0;
+
+    public string NoMatchText => $"没有找到包含「{_searchText.Trim()}」的视频";
+
     /// <summary>正在新建收藏夹(弹窗/请求期间禁用「+」, 防止连点建出两个同名夹)</summary>
     private bool _creatingFolder;
 
@@ -101,10 +136,19 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
             OnPropertyChanged(nameof(ShowLoadingOverlay));
             OnPropertyChanged(nameof(CanCreateFolder));
             OnPropertyChanged(nameof(CanDeleteFolder));
+            OnPropertyChanged(nameof(ShowNoMatch));
         }
     }
 
-    public string Error { get => _error; private set => SetProperty(ref _error, value); }
+    public string Error
+    {
+        get => _error;
+        private set
+        {
+            if (!SetProperty(ref _error, value)) return;
+            OnPropertyChanged(nameof(ShowNoMatch));
+        }
+    }
 
     /// <summary>
     /// 是否显示居中的大菊花。
@@ -263,6 +307,7 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
             OnPropertyChanged(nameof(CanGoNext));
             OnPropertyChanged(nameof(CanChangePage));
             OnPropertyChanged(nameof(ShowLoadingOverlay));
+            OnPropertyChanged(nameof(ShowNoMatch));
         }
     }
 
@@ -304,6 +349,16 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
 
     public FavoritesViewModel()
     {
+        _searchDebounce = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(350),
+        };
+        _searchDebounce.Tick += (_, _) =>
+        {
+            _searchDebounce.Stop();
+            _ = ApplySearchAsync();
+        };
+
         CardMenuItems.Add(new CardMenuItem
         {
             Header = "移出收藏",
@@ -373,6 +428,7 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
     {
         UpdateCount();
         OnPropertyChanged(nameof(ShowLoadingOverlay));
+        OnPropertyChanged(nameof(ShowNoMatch));
     }
 
     // ------------------------------------------------------------ 加载
@@ -435,6 +491,13 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
         // ★ 第一页没回来之前不收 Loading: 否则会先闪一下"空收藏夹"再出现卡片。
         await SelectFolderAsync(target);
         Loading = false;
+
+        // 整页加载期间用户已经在搜索框里打字了: 现在才轮到这次搜索
+        if (_searchPending)
+        {
+            _searchPending = false;
+            await ApplySearchAsync();
+        }
     }
 
     // ------------------------------------------------------------ 新建收藏夹
@@ -564,6 +627,14 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
         OnPropertyChanged(nameof(CanDeleteFolder));
         OnPropertyChanged(nameof(DeleteFolderToolTip));
 
+        // ★ 换夹时**保留搜索词**, 用它在新夹里重新搜一次(2026-11-20):
+        //   清掉输入框里的字会让人以为"搜索被取消", 而显示全量列表又与输入框里的词矛盾。
+        //   停掉尚在防抖中的那一跳, 直接以当前文本为准。
+        _searchDebounce.Stop();
+        _activeKeyword = _searchText.Trim();
+        OnPropertyChanged(nameof(HasSearch));
+        OnPropertyChanged(nameof(ShowNoMatch));
+
         // chip 高亮跟着数据走: 用户点击时 RadioButton 自己会选上, 但"程序切夹"
         // (我的页点卡片 / PendingFolder)不经过点击, 高亮必须在这里同步,
         // 否则就是"点了 A、视频是 A 的、高亮却停在 B"(2026-09-26 用户实测踩中)。
@@ -590,6 +661,55 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
         // 换夹 = 换一整套内容: 回到顶部。否则会停在上一个夹的滚动位置,
         // 看到的是新夹中间的一截(页码却是第 1 页)。
         ScrollToTopRequested?.Invoke();
+    }
+
+    // ------------------------------------------------------------ 搜索(2026-11-20)
+
+    /// <summary>
+    /// 执行一次关键词搜索(整个收藏夹范围, 走服务端 keyword)。
+    ///
+    /// ★ 不清空 Items: 保留上一批卡片直到新结果回来, 避免每次输入都闪一下整页大菊花;
+    ///   返回 0 条时由 <see cref="ShowNoMatch"/> 给一行轻提示。
+    /// ★ 页码 / 总数按**命中数**重算 —— 接口带 keyword 时 info.media_count 就是命中数
+    ///   (实测, 见 ApiClient.GetFavResourcesAsync), 所以分页栏不用特殊处理。
+    /// </summary>
+    private async Task ApplySearchAsync()
+    {
+        if (_currentFolderId <= 0 || Loading)
+        {
+            _searchPending = true;
+            return;
+        }
+
+        var keyword = _searchText.Trim();
+        if (keyword == _activeKeyword) return;
+
+        _activeKeyword = keyword;
+        OnPropertyChanged(nameof(HasSearch));
+        OnPropertyChanged(nameof(NoMatchText));
+        OnPropertyChanged(nameof(ShowNoMatch));
+
+        // 结果集换了, 上一批的勾选/编辑态没有意义
+        IsEditMode = false;
+        // 页码归 1、总数清零; 让在途的翻页作废(_loadGen 自增)
+        ResetPaging();
+
+        await LoadPageAsync(1);
+        ScrollToTopRequested?.Invoke();
+    }
+
+    /// <summary>静默清空搜索(不触发搜索请求): 收藏夹被清空 / 删空之后, 搜索词已经无处可搜。</summary>
+    private void ClearSearchQuietly()
+    {
+        _searchDebounce.Stop();
+        _activeKeyword = "";
+        _searchPending = false;
+        if (_searchText.Length == 0) return;
+        _searchText = "";
+        OnPropertyChanged(nameof(SearchText));
+        OnPropertyChanged(nameof(HasSearch));
+        OnPropertyChanged(nameof(NoMatchText));
+        OnPropertyChanged(nameof(ShowNoMatch));
     }
 
     // ------------------------------------------------------------ 分页
@@ -650,11 +770,12 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
         if (TotalPages > 0 && page > TotalPages) page = TotalPages;
 
         var gen = ++_loadGen;
+        var keyword = _activeKeyword;   // 钉住这一代的关键词(请求途中换词/换夹都靠 gen 作废)
         IsPaging = true;
         try
         {
             var (ok, err, items, hasMore, total) =
-                await Svc.Api.GetFavResourcesAsync(_currentFolderId, page, PageSize);
+                await Svc.Api.GetFavResourcesAsync(_currentFolderId, page, PageSize, keyword);
 
             if (gen != _loadGen) return false;   // 已经有更新的一次请求接管了, 这份结果作废
 
@@ -703,7 +824,9 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
             if (TotalPages <= 1 && hasMore) TotalPages = page + 1;
 
             RecalcPages(page);
-            Error = Items.Count == 0 ? "这个收藏夹还是空的" : "";
+            // ★ 搜索无结果不是"收藏夹为空" —— 给空字符串, 由 ShowNoMatch 那个轻量提示接管,
+            //   不能把整页错误面板(带「重试」)盖上来。
+            Error = Items.Count == 0 ? (keyword.Length > 0 ? "" : "这个收藏夹还是空的") : "";
 
             if (page > 1 && raiseScrollToTop) ScrollToTopRequested?.Invoke();
             return true;
@@ -989,6 +1112,8 @@ public class FavoritesViewModel : VideoListSelectionViewModel, IPagedViewModel
         UpdateCount();
         ShrinkFolderCount(removed);
         IsEditMode = false;
+        // 夹子被掏空: 搜索框里的词也没东西可搜了, 一并静默清掉
+        ClearSearchQuietly();
 
         // 夹子被掏空 ⇒ 分页状态一起归零(否则页码栏还挂着一个不存在的页)
         // ★ 用 _loadGen 让"清空途中还在飞的翻页请求"作废, 不然它回来会往空列表里灌内容。

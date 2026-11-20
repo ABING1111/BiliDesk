@@ -25,13 +25,16 @@
           · 编辑态胶囊用 Hidden 而不是 Collapsed: 占位块的高度绑着它的 ActualHeight,
             Collapsed 会让占位塌成 0, 进出编辑时整墙上下跳一下。
 
-        ★★ 2026-10-06: 搜索历史记录功能**整体移除**(用户要求)。
+        ★★ 2026-10-06: 搜索历史记录功能曾整体移除(用户要求)。
           起因是它每次过滤都要 view.Refresh() ⇒ 非虚拟化卡片墙**整墙重建**:
-          实测 2000 条时一次清空冻结 UI 线程 24.7 秒、内存涨到 1.37GB(探针
-          .probes/bd-probe-clearfilter, 反复 20 轮不单调上涨 ⇒ 不是泄漏, 是活着的卡片太重)。
-          入口按钮、弹出面板、输入框、防抖、匹配谓词、空态提示一并删除,
-          HistoryViewModel 上的 SearchKeyword / HasSearch / ShowNoMatch / SearchHintText
-          / ClearSearch 也全部移除。列表只剩"加载更多"这一种增长方式。
+          实测 2000 条时一次清空冻结 UI 线程 24.7 秒、内存涨到 1.37GB。
+
+        ★★ 2026-11-20: 搜索**加回来了**, 但换了实现 —— 不再动 CollectionView:
+          · 命中判定写在 VideoItem.IsSearchMatch 上, 列表模板只把未命中的**容器**
+            收成 Collapsed(见下方 ItemContainerStyle), 卡片不销毁、不重建;
+          · 输入 250ms 防抖, 清空立刻恢复整墙;
+          · 关键词在更早的记录里时, VM 自动往下翻页找(有页数上限, 见 DeepenSearchAsync);
+          · 全选/批量删除的基数排除未命中项(见 VideoListSelectionViewModel.IsItemVisible)。
 
         ★ 虚拟化的取舍: 原来那个 ListBox 是虚拟化的, 换成卡片墙之后就**没有虚拟化**了
           (WrapPanel 不实现 IScrollPosInfo, 挂上去等于关掉)。这是"与首页一致"的必然代价,
@@ -65,7 +68,7 @@
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Top"
                                         Visibility="{Binding IsEditMode, Converter={StaticResource InvBoolToVis}}">
                                 <TextBlock Text="历史记录" Style="{StaticResource PageTitleStyle}" />
-                                <TextBlock Text="{Binding TotalCount, StringFormat=' ({0})'}"
+                                <TextBlock Text="{Binding HeaderCountText}"
                                            VerticalAlignment="Bottom" Margin="6,0,0,6"
                                            Foreground="{DynamicResource TextTertiaryBrush}" FontSize="14" />
                             </StackPanel>
@@ -87,7 +90,7 @@
                         <!-- 胶囊占位: 只撑高度, 不渲染; StickyPin 用它量"自然顶边"。
                              ★ 编辑态也保留(胶囊只是 Hidden), 进出编辑时内容不会上下跳。 -->
                         <Border x:Name="TabSlot" Margin="0,14,0,0" Visibility="Hidden"
-                                Height="{Binding ActualHeight, ElementName=StickyTabBar}" />
+                                Height="{Binding ActualHeight, ElementName=StickyRow}" />
                     </StackPanel>
 
                     <!-- ===== 卡片墙(与首页同构: ItemsControl + CardWallPanel + VideoCard) =====
@@ -100,6 +103,21 @@
                                     <behaviors:CardWallPanel behaviors:CardWall.Enable="True" />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
+                            <!-- 搜索未命中的卡片收成 Collapsed(2026-11-20):
+                                 ★ 挂在**容器**上而不是卡片内部: CardWallPanel 在排列/补图扫描时
+                                   看的是容器, 容器 Collapsed 后 WPF 直接给它 0 尺寸, 隐藏的卡片
+                                   也不会再被"可见带扫描"当成在屏幕里(见 CardWallPanel 里的跳过)。
+                                 ★ 容器**不销毁** —— 清空关键词时原地恢复可见, 不重建整墙。
+                                   这正是历史页搜索当年因卡顿被拿掉的反面做法。 -->
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsSearchMatch}" Value="False">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <!-- Selectable 在编辑模式下打开: 卡片左上角出现选中圆标, 点击变成勾选。
@@ -111,6 +129,19 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
 
+                        <!-- 搜索空态(2026-11-20): 关键词在已加载的记录里一条都没命中。
+                             ★ 与页面的错误态分开: 这里是"搜索没结果", 不是"加载失败",
+                               不该出现「重试」按钮。 -->
+                        <StackPanel HorizontalAlignment="Center" Margin="0,48,0,24"
+                                    Visibility="{Binding ShowNoMatch, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="没有找到匹配的记录" FontSize="13"
+                                       HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding NoMatchHint}" FontSize="12" Margin="0,8,0,0"
+                                       HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </StackPanel>
+
                         <!-- 底部状态(与首页同一套写法: 放在滚动流里, 不再浮在列表下沿) -->
                         <StackPanel Margin="0,12,0,0" HorizontalAlignment="Center">
                             <StackPanel Orientation="Horizontal"
@@ -119,52 +150,83 @@
                                 <TextBlock Text="加载中…" Margin="8,0,0,0"
                                            VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
                             </StackPanel>
+                            <!-- 零命中时的自动深翻: 在加载状态下说清楚在找什么 -->
+                            <StackPanel Orientation="Horizontal"
+                                        Visibility="{Binding SearchingDeeper, Converter={StaticResource BoolToVis}}">
+                                <controls:LoadingRing Width="14" Height="14" />
+                                <TextBlock Text="正在更早的记录中查找…" Margin="8,0,0,0" FontSize="12"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                            </StackPanel>
                             <TextBlock Text="已经到底啦" Style="{StaticResource MetaTextStyle}"
-                                       Visibility="{Binding HasMore, Converter={StaticResource InvBoolToVis}}" />
+                                       Visibility="{Binding ShowEndOfList, Converter={StaticResource BoolToVis}}" />
                         </StackPanel>
                     </StackPanel>
                 </StackPanel>
 
-                <!-- ============ 吸顶类别胶囊: 视频 / 直播间 ============
+                <!-- ============ 吸顶行: 类别胶囊(左) + 可折叠搜索(右) ============
                      ★ 只有一个实例, 必须是滚动内容的**最后一个子元素**(画在卡片之上);
                        滚动时由 StickyPin 反向平移抵消滚动量, 到距顶端 8px 处钉住。
-                     ★ 白色椭圆底 + 投影, 与收藏页/设置页同一形态。
-                     ★ GroupName 必须给: 同组 RadioButton 才有互斥。
+                     ★ 胶囊: 白色椭圆底 + 投影, 与收藏页/设置页同一形态; GroupName 必须给,
+                       同组 RadioButton 才有互斥。
+                     ★ 搜索(2026-11-20 用户要求合并进 tab 栏): 收起是一颗 34 的磨砂圆,
+                       与胶囊之间留 12px 空白; 点击后原地向右展开成输入框(右对齐 ⇒ 向左长),
+                       胶囊位置纹丝不动。视觉参考 iOS 26/27 液态玻璃 tab 里的搜索钮。
                      ★ IsHitTestVisibleInChrome: 钉住后顶端进入窗口标题栏区(CaptionHeight=20),
-                       不标的话那块区域里的点击会被 WindowChrome 当成"拖动窗口"吞掉。 -->
+                       不标的话那块区域里的点击会被 WindowChrome 当成"拖动窗口"吞掉。
+                       整行都标上 —— 搜索圆比胶囊更靠右, 它同样会进入标题栏区。 -->
                 <!-- ★ 底色用 FrostedPanelBrush(磨砂浮层): 胶囊吸顶后压在卡片封面上,
                      亚克力下半透明但把封面压住保证标签可读(太透糊字 / 全不透明死白都不行, 见 ThemeService)。 -->
-                <Border x:Name="StickyTabBar" VerticalAlignment="Top" HorizontalAlignment="Left"
-                        Margin="36,72,0,0"
-                        Background="{DynamicResource FrostedPanelBrush}"
-                        BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
-                        CornerRadius="22" Padding="5"
-                        shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <Border.RenderTransform>
-                        <TranslateTransform x:Name="StickyTabShift" />
-                    </Border.RenderTransform>
-                    <Border.Effect>
-                        <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
-                    </Border.Effect>
-                    <Border.Style>
-                        <Style TargetType="Border">
+                <Grid x:Name="StickyRow" VerticalAlignment="Top"
+                      Margin="36,72,36,0"
+                      shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Grid.RenderTransform>
+                        <TranslateTransform x:Name="StickyRowShift" />
+                    </Grid.RenderTransform>
+                    <Grid.Style>
+                        <Style TargetType="Grid">
                             <Setter Property="Visibility" Value="Visible" />
                             <Style.Triggers>
-                                <!-- 编辑态收起胶囊, 但**占位保留**(Hidden 仍参与排版) -->
+                                <!-- 编辑态收起整行(胶囊 + 搜索), 但**占位保留**(Hidden 仍参与排版) -->
                                 <DataTrigger Binding="{Binding IsEditMode}" Value="True">
                                     <Setter Property="Visibility" Value="Hidden" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
-                    </Border.Style>
-                    <StackPanel Orientation="Horizontal">
-                        <RadioButton GroupName="HistoryKind" Style="{StaticResource SettingsTabStyle}"
-                                     Content="视频" IsChecked="{Binding IsVideoKind, Mode=TwoWay}" />
-                        <RadioButton GroupName="HistoryKind" Style="{StaticResource SettingsTabStyle}"
-                                     Content="直播间" Margin="2,0,0,0"
-                                     IsChecked="{Binding IsLiveKind, Mode=TwoWay}" />
-                    </StackPanel>
-                </Border>
+                    </Grid.Style>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border x:Name="StickyTabBar" Grid.Column="0"
+                            VerticalAlignment="Top" HorizontalAlignment="Left"
+                            Background="{DynamicResource FrostedPanelBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                            CornerRadius="22" Padding="5">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
+                        </Border.Effect>
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton GroupName="HistoryKind" Style="{StaticResource SettingsTabStyle}"
+                                         Content="视频" IsChecked="{Binding IsVideoKind, Mode=TwoWay}" />
+                            <RadioButton GroupName="HistoryKind" Style="{StaticResource SettingsTabStyle}"
+                                         Content="直播间" Margin="2,0,0,0"
+                                         IsChecked="{Binding IsLiveKind, Mode=TwoWay}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 可折叠搜索: 与胶囊同一行、右侧对齐; 展开只改自己的 Width。 -->
+                    <Canvas x:Name="SearchLayer" Grid.Column="1" Panel.ZIndex="2"
+                            VerticalAlignment="Center"
+                            Height="{Binding ActualHeight, ElementName=StickyTabBar}">
+                        <controls:TabSearchBox x:Name="SearchPill" Canvas.Left="10"
+                                               Height="{Binding ActualHeight, ElementName=StickyTabBar}"
+                                               shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                                               PlaceholderText="搜索历史记录"
+                                               Text="{Binding SearchText, Mode=TwoWay}" />
+                    </Canvas>
+                </Grid>
             </Grid>
         </ScrollViewer>
 

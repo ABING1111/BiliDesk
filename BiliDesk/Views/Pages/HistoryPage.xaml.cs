@@ -38,7 +38,7 @@ public partial class HistoryPage : UserControl
     public HistoryPage()
     {
         InitializeComponent();
-        _sticky = new StickyPin(PageScroll, TabSlot, StickyTabBar, StickyTabShift);
+        _sticky = new StickyPin(PageScroll, TabSlot, StickyRow, StickyRowShift);
         Loaded += OnLoaded;
         // 页面常驻 PageLayer、只切 Visibility: 切回来时 Loaded 不会再发,
         // 而折叠期间量到的是过期版式 —— 变可见时补量一次。
@@ -118,6 +118,9 @@ public partial class HistoryPage : UserControl
     {
         if (sv.ExtentHeight <= 0 || sv.ViewportHeight <= 0) return;
         if (sv.VerticalOffset < sv.ExtentHeight - sv.ViewportHeight - 240) return;
+        // ★ 搜索零命中时墙是空的(extent=0), 这条"滚到底就补一页"会一直成立, 一有布局事件
+        //   就继续翻 —— 交给 HistoryViewModel 那一轮有上限的 DeepenSearch, 这里让路。
+        if (Vm is { HasSearch: true, SearchMatchCount: 0 }) return;
         if (!_autoLoadThrottle.TryEnter()) return;
         if (Vm is { HasMore: true, Loading: false, LoadingMore: false } vm)
             await vm.LoadAsync(reset: false);

@@ -118,27 +118,13 @@ public partial class FollowPage : UserControl, IRefreshable
         // 屏蔽把动态流筛空后补下一页(否则会停在一片空白上)
         FilterService.Instance.Changed += OnFilterApplied;
 
-        // 搜索框占位符显隐(2026-11-07): 由 TextChanged **直接**控制, 不走绑定。
-        // ★ 为什么不用绑定: 先后试过 UserSearchText(string)+InvStrToVis 与
-        //   HasUserSearch(bool)+InverseBool 两条路线, 源码与 BAML 均正确, 用户实测仍复现
-        //   "输入文字后占位符不消失"。绑定失败是静默的(只写 Output 窗口), 与其继续猜,
-        //   不如换成与首页搜索框同款(RefreshSearchPlaceholder)的确定性方案:
-        //   TextChanged 是输入/删除/粘贴/清空/代码赋值**必然**会走的事件, 零依赖。
-        // ★ 判据用 IsNullOrWhiteSpace: 纯空格不算"有内容"(与 VM.HasUserSearch 同语义)。
-        UserSearchBox.TextChanged += (_, _) => RefreshUserSearchPlaceholder();
-        RefreshUserSearchPlaceholder();   // 初始状态(页面被缓存复用时输入框可能已有文字)
-    }
-
-    /// <summary>
-    /// 同步左栏搜索框占位符的显隐: 有非空白内容就藏, 否则显示。
-    /// 与首页 <c>RefreshSearchPlaceholder</c> 同一套思路 —— 只是这里不需要淡入淡出,
-    /// 小输入框里瞬间切换更干脆。
-    /// </summary>
-    private void RefreshUserSearchPlaceholder()
-    {
-        if (UserSearchPlaceholder == null) return;
-        var empty = string.IsNullOrWhiteSpace(UserSearchBox.Text);
-        UserSearchPlaceholder.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        // 搜索框占位符/清除按钮现在由 SearchBox 自己维护(TextChanged 直接置 Visibility),
+        // 页面不需要再挂钩子。这里只补一次"左栏宽度对齐": 列表可见性变化时重新量,
+        // 否则搜完 UP 清空搜索后, 列表重新出现、滚动条状态可能变了, 胶囊还停在旧宽度上。
+        UsersList.IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) SyncAllDynamicEntry();
+        };
     }
 
     /// <summary>
@@ -168,6 +154,11 @@ public partial class FollowPage : UserControl, IRefreshable
     {
         if (DataContext is FollowViewModel vm)
         {
+            // ★ 先按**上一次的布局值**对齐一次(页面实例是缓存复用的, UsersList 的视口宽度
+            //   通常已经量过了): 不然要等 InitAsync(网络) 回来才对齐, 搜索框会先保持
+            //   XAML 里的拉伸宽度、过一会儿再缩到行宽, 看起来就是"时宽时窄"。
+            SyncAllDynamicEntry();
+
             // 动态流与"关注的主播正在直播"都纳入全局屏蔽(与首页/收藏/历史同一套条件)
             FilterService.Instance.Attach(vm.FeedItems, isActive: () => IsVisible);
             FilterService.Instance.Attach(vm.LiveNow, isActive: () => IsVisible);
@@ -179,9 +170,6 @@ public partial class FollowPage : UserControl, IRefreshable
             // 看板默认折叠: 页面实例会被 MainWindow 缓存, 每次进入都归位到收起。
             vm.LiveBoardOpen = false;
             UpdateLayoutChips(vm);
-            // 占位符显隐再同步一次: 页面被缓存复用, VM 侧可能在页面不可见时清过搜索词
-            // (ClearUserSearch), 回来时输入框文字已变但 TextChanged 未必触发过。
-            RefreshUserSearchPlaceholder();
             // 「全部动态」底衬要与 UP 行对齐: 在列表布局完成后量一次。
             // 先 -= 再 += : 页面实例被缓存复用, Loaded 每次进入都会响, 不能叠处理器。
             UsersList.SizeChanged -= OnUsersListSizeChanged;
@@ -338,46 +326,39 @@ public partial class FollowPage : UserControl, IRefreshable
         _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(TryAutoFillShortContent));
     }
 
-    private void OnClearUserSearch(object sender, RoutedEventArgs e)
-    {
-        if (DataContext is FollowViewModel vm) vm.ClearUserSearchCommand.Execute(null);
-    }
-
     /// <summary>
-    /// 让「全部动态」入口的底衬与下面 UP 行的底衬**像素级对齐**(2026-11-06)。
+    /// 让「全部动态」入口 + 搜索框与下面 UP 行**像素级等宽对齐**。
     ///
     /// ★ 为什么需要代码来同步, 而不是写死一个 Margin:
-    ///   「全部动态」在 UsersList **外面**, UP 行在 UsersList **里面**。
-    ///   ListBox 的内容区宽度要扣掉垂直滚动条(实测约 10px), 所以:
-    ///     · UP 行底衬的右缘 = 列表右缘 - 滚动条宽;
-    ///     · 「全部动态」底衬的右缘 = 列表右缘(不受滚动条影响)。
-    ///   两块粉色底衬因此长短不一 —— 用户看着就是"上下两行没对齐"。
+    ///   搜索框 /「全部动态」在 UsersList **外面**, UP 行在 UsersList **里面**。
+    ///   ListBox 的内容区宽度要扣掉垂直滚动条(18px 含右边距), 所以:
+    ///     · UP 行底衬的右缘 = 列表右缘 - 滚动条;
+    ///     · 外面的元素如果按列表外缘铺宽, 就会比行多出一条滚动条。
     ///   而且滚动条出没出现会变(内容不足时没有), 写死的数值必然对不上。
-    /// ⇒ 这里直接量出**第一行 UP 底衬**的左缘与宽度, 套到「全部动态」上, 两者就完全重合。
+    ///
+    /// ★★ 2026-11-20: 宽度改为取 ListBox 内部 ScrollViewer 的 **ViewportWidth**。
+    ///   旧写法量第 0 行底衬, 而 UsersList 是虚拟化列表 —— 滚过一屏后第 0 项会被回收,
+    ///   量不到就退回 UsersList.ActualWidth(没扣滚动条), 搜索框于是"时长时短"。
+    ///   视口宽度是布局的权威值: 有没有行都能读到, 只在滚动条真正出现/消失时变化。
     /// </summary>
     private void SyncAllDynamicEntry()
     {
         if (AllDynamicEntry == null || UsersList == null) return;
-        var container = UsersList.ItemContainerGenerator.ContainerFromIndex(0) as FrameworkElement;
-        if (container == null) return;
+        if (AllDynamicEntry.Parent is not FrameworkElement host) return;
 
-        // 第一行 UP 的底衬(圆角 10 的那个 Border)
-        var rowBorder = FindRowBorder(container);
-        if (rowBorder == null) return;
+        var sv = FindChild<ScrollViewer>(UsersList);
+        var width = sv?.ViewportWidth ?? 0;
+        if (width <= 0) return;      // 还没进布局: 等 SizeChanged / Loaded 那一拍再来, 不写错值
 
-        var p = rowBorder.TransformToAncestor(UsersList).Transform(new Point(0, 0));
-        var width = rowBorder.ActualWidth;
-        if (width <= 0) return;
+        // 左缘 = 列表内容区(含 ListBox 的 1px 描边)相对左栏 Grid 的 X
+        var left = sv!.TransformToAncestor(host).Transform(new Point(0, 0)).X;
 
-        // 「全部动态」的坐标是相对左栏 Grid 的, UP 行底衬是相对 UsersList 的;
-        // UsersList 相对左栏 Grid 有 Margin="8,0,8,0" 的左内边距 8。
-        var listOffset = UsersList.TransformToAncestor(AllDynamicEntry.Parent as FrameworkElement ?? AllDynamicEntry)
-            .Transform(new Point(0, 0)).X;
+        ApplyLeftColumnWidth(AllDynamicEntry, width, left, top: 4, bottom: 6);
 
-        AllDynamicEntry.Margin = new Thickness(listOffset + p.X, 4, 0, 6);
-        AllDynamicEntry.Width = width;
+        // 搜索胶囊与 UP 行同宽、同左缘; 高度仍由控件自己(34)决定
+        ApplyLeftColumnWidth(UserSearchBox, width, left, top: 2, bottom: 6);
 
-        // ★ 尺寸量准的这一拍才让入口可见(同一帧生效, 窄条状态从未被渲染过)。
+        // 尺寸量准的这一拍才让入口可见(上一帧已经生效, 窄条状态从未被渲染过)
         if (!_allEntrySized)
         {
             _allEntrySized = true;
@@ -385,27 +366,18 @@ public partial class FollowPage : UserControl, IRefreshable
         }
     }
 
-    /// <summary>在容器里找行底衬(圆角 10、且是那一行的直接内容)。</summary>
-    private static Border? FindRowBorder(FrameworkElement container)
+    /// <summary>把左栏里"应该与 UP 行等宽"的元素摆到 <paramref name="left"/> / <paramref name="width"/>。</summary>
+    private static void ApplyLeftColumnWidth(FrameworkElement el, double width, double left,
+                                             double top, double bottom)
     {
-        Border? found = null;
-        WalkVisual(container, d =>
-        {
-            if (found != null) return;
-            if (d is Border b && b.CornerRadius.TopLeft == 10 && b.ActualWidth > 0) found = b;
-        });
-        return found;
-    }
+        var margin = new Thickness(left, top, 0, bottom);
+        if (el.HorizontalAlignment == HorizontalAlignment.Left &&
+            Math.Abs(el.Width - width) < 0.5 && el.Margin.Equals(margin))
+            return;
 
-    private static void WalkVisual(DependencyObject root, Action<DependencyObject> visit)
-    {
-        var n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
-        for (var i = 0; i < n; i++)
-        {
-            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
-            visit(child);
-            WalkVisual(child, visit);
-        }
+        el.HorizontalAlignment = HorizontalAlignment.Left;
+        el.Margin = margin;
+        el.Width = width;
     }
 
     /// <summary>工具列的「刷新 / 回到顶部」二合一按钮: 顶部刷新, 下滑回顶(右栏动态流)。</summary>
@@ -626,6 +598,10 @@ public partial class FollowPage : UserControl, IRefreshable
     /// <summary>左栏: UP 列表滚到底自动补(一页 50 个)。搜索结果显示时不平铺翻页。</summary>
     private void UpListScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        // ★ 垂直滚动条出现/消失会改变列表内容宽度(视口宽度变化) ——
+        //   搜索框与「全部动态」的宽度要跟着重新对齐, 否则滚动条一冒出来就错位。
+        if (e.ViewportWidthChange != 0) SyncAllDynamicEntry();
+
         if (DataContext is not FollowViewModel vm) return;
         if (vm.HasUserSearch || vm.LoadingMoreUsers || vm.HasUsersLoadError || !vm.HasMoreUsers) return;
         if (vm.Users.Count == 0) return;

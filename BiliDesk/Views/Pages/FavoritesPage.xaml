@@ -72,6 +72,9 @@
                                        FontSize="12" Foreground="{DynamicResource DangerTextBrush}"
                                        Visibility="{Binding BusyText, Converter={StaticResource StrToVis}}" />
                         </StackPanel>
+
+                        <!-- 搜索已合并进下方吸顶 tab 栏(2026-11-20): 收起是一颗圆, 展开是输入框。
+                             服务端 keyword 搜索, 范围是整个收藏夹(不只是当前页)。 -->
                     </Grid>
 
                     <!-- 收藏夹条的**占位**(登录后才有内容)。
@@ -81,7 +84,7 @@
                     <Grid x:Name="FolderBarHost" Margin="0,14,0,10"
                           Visibility="{Binding Folders.Count, Converter={StaticResource CountToVis}}">
                         <Border x:Name="FolderBarSlot" Visibility="Hidden"
-                                Height="{Binding ActualHeight, ElementName=StickyFolderBar}" />
+                                Height="{Binding ActualHeight, ElementName=StickyRow}" />
                     </Grid>
 
                     <!-- ============ 卡片墙 ============ -->
@@ -110,6 +113,18 @@
                              ★ 只有一页时整块收起(控件内部绑 ShowPager)。
                              ★ 翻页后由代码把列表滚回顶部(见 FavoritesPage.xaml.cs)。 -->
                         <controls:PagerBar Margin="0,18,0,6" />
+
+                        <!-- 搜索零命中(2026-11-20): 轻提示, 不占整页错误面板的位置 -->
+                        <StackPanel HorizontalAlignment="Center" Margin="0,44,0,24"
+                                    Visibility="{Binding ShowNoMatch, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding NoMatchText}" FontSize="13"
+                                       HorizontalAlignment="Center" TextWrapping="Wrap" MaxWidth="420"
+                                       TextAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <TextBlock Text="可以换个关键词，或清除搜索查看整个收藏夹" FontSize="12"
+                                       Margin="0,8,0,0" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </StackPanel>
                     </StackPanel>
                 </StackPanel>
 
@@ -121,13 +136,20 @@
                        不标的话那块区域里的点击会被 WindowChrome 当成"拖动窗口"吞掉。
                      ★ 用 RadioButton + GroupName 而不是 Button: 单选中状态由控件自己维护,
                        选中样式能直接写在样式触发器里, 不必在代码后置里手动遍历改 FontWeight。 -->
-                <Grid x:Name="StickyFolderBar" VerticalAlignment="Top" HorizontalAlignment="Left"
-                      Margin="36,74,0,0"
+                <Grid x:Name="StickyRow" VerticalAlignment="Top"
+                      Margin="36,74,36,0"
                       Visibility="{Binding Folders.Count, Converter={StaticResource CountToVis}}"
                       shell:WindowChrome.IsHitTestVisibleInChrome="True">
                     <Grid.RenderTransform>
-                        <TranslateTransform x:Name="StickyFolderShift" />
+                        <TranslateTransform x:Name="StickyRowShift" />
                     </Grid.RenderTransform>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Grid x:Name="StickyFolderBar" Grid.Column="0"
+                          VerticalAlignment="Top" HorizontalAlignment="Left">
 
                     <!-- ★ 底色用 FrostedPanelBrush(磨砂浮层): 胶囊吸顶后压在卡片封面上,
                          亚克力下半透明但把封面压住保证标签可读(太透糊字 / 全不透明死白都不行, 见 ThemeService)。 -->
@@ -218,6 +240,22 @@
                             </ItemsControl>
                         </Border>
                     </Popup>
+                    </Grid>
+
+                    <!-- 可折叠搜索: 与收藏夹胶囊同一行、右侧对齐; 收起是圆, 点击展开成输入框。
+                         ★ 展开时只改它自己的 Width(右对齐 ⇒ 向左长), 胶囊不动; 夹子很多时
+                           会临时盖住胶囊右端, 收起后原样让出来。
+                         ★ 收藏夹折叠算法(UpdateFolderOverflow)已经为这颗圆预留了宽度,
+                           不展开时永远不会压到最后一颗 chip /「⋯」。 -->
+                    <Canvas x:Name="SearchLayer" Grid.Column="1" Panel.ZIndex="2"
+                            VerticalAlignment="Center"
+                            Height="{Binding ActualHeight, ElementName=StickyFolderBar}">
+                        <controls:TabSearchBox x:Name="SearchPill" Canvas.Left="10"
+                                               Height="{Binding ActualHeight, ElementName=StickyFolderBar}"
+                                               shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                                               PlaceholderText="搜索收藏夹"
+                                               Text="{Binding SearchText, Mode=TwoWay}" />
+                    </Canvas>
                 </Grid>
             </Grid>
         </ScrollViewer>
