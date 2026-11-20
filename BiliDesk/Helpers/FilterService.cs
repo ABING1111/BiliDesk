@@ -63,6 +63,22 @@ public sealed class FilterService : INotifyPropertyChanged
     {
         /// <summary>页面自己的附加条件(目前没有调用方传, 保留给"页内搜索"接入)</summary>
         public Func<object, bool>? Extra;
+
+        /// <summary>
+        /// 这个视图所属页面当前是不是"用户看得见"。null = 不区分(启动早期/探针这类没有页面的宿主),
+        /// 一律当场刷新。
+        ///
+        /// ★★★ 2026-11-20(用户报"屏蔽/取消屏蔽卡 1 秒再刷新"):
+        ///   页面都常驻 PageLayer, 一次 RefreshAll 会把**所有**缓存页的列表一起 Refresh ——
+        ///   隐藏页的容器虽然不渲染, 但非虚拟化卡片墙(首页/历史/稍后再看…)的几百个卡片
+        ///   容器会被逐个销毁重建, 全压在这一拍里就是那 1 秒。
+        ///   有了这个谓词, 隐藏页只记账(见 <see cref="Pending"/>), 等它下次显示时
+        ///   由 <see cref="RefreshPendingVisible"/> 补刷。
+        /// </summary>
+        public Func<bool>? IsActive;
+
+        /// <summary>规则变过, 但这个视图当时不在显示页上 —— 等页面可见时补刷。</summary>
+        public bool Pending;
     }
 
     // ---- 关键词(包含匹配) ----
@@ -176,8 +192,11 @@ public sealed class FilterService : INotifyPropertyChanged
     /// <summary>
     /// 把某个集合的默认视图纳入屏蔽。页面初始化时调用一次即可(重复调用不会重复注册)。
     /// <paramref name="extra"/> 是页面自己的附加条件(例如页内搜索), 与全局屏蔽取"与"。
+    /// <paramref name="isActive"/> 告诉服务"这个视图现在是否在显示页上"; 不传 = 总是立即刷新。
+    /// 页面常驻缓存, 传一个 `() => IsVisible` 就能让隐藏页的刷新推迟到它真正显示时(见 ViewScope)。
     /// </summary>
-    public void Attach(System.Collections.IEnumerable source, Func<object, bool>? extra = null)
+    public void Attach(System.Collections.IEnumerable source, Func<object, bool>? extra = null,
+        Func<bool>? isActive = null)
     {
         if (source == null) return;
         try
@@ -185,7 +204,7 @@ public sealed class FilterService : INotifyPropertyChanged
             var view = CollectionViewSource.GetDefaultView(source);
             if (view == null || _views.TryGetValue(view, out _)) return;
 
-            var scope = new ViewScope { Extra = extra };
+            var scope = new ViewScope { Extra = extra, IsActive = isActive };
             _views.Add(view, scope);
             _viewOrder.Add(new WeakReference<ICollectionView>(view));
 
@@ -194,12 +213,24 @@ public sealed class FilterService : INotifyPropertyChanged
             view.Filter = item => Matches(item) && ScopeAllows(scope, item);
 
             // 挂上来时立即按当前条件过滤一次, 否则新页面会先把被屏蔽的内容显示出来再消失
-            if (HasFilter) view.Refresh();
+            if (HasFilter)
+            {
+                if (IsScopeActive(scope)) view.Refresh();
+                else scope.Pending = true;
+            }
         }
         catch
         {
             // 个别集合拿不到默认视图(比如已经绑到别的视图上), 忽略即可 —— 只是它不参与屏蔽
         }
+    }
+
+    /// <summary>视图现在是否在显示页上; 没给谓词或谓词抛异常时按"是"处理(宁可当场刷)。</summary>
+    private static bool IsScopeActive(ViewScope scope)
+    {
+        if (scope.IsActive == null) return true;
+        try { return scope.IsActive(); }
+        catch { return true; }
     }
 
     private static bool ScopeAllows(ViewScope scope, object? item)
@@ -660,8 +691,31 @@ public sealed class FilterService : INotifyPropertyChanged
         return false;
     }
 
+    /// <summary>这条内容在当前屏蔽条件下是否可见(不做 ScopeAllows —— 调用方要的是全局规则)。</summary>
+    public bool IsVisible(object? item) => Matches(item);
+
+    /// <summary>
+    /// 规则变化后：**只当场刷新显示页上的视图**，隐藏页的视图挂起（Pending），
+    /// 等它下次显示时由 <see cref="RefreshPendingVisible"/> 补刷。
+    ///
+    /// ★★★ 2026-11-20(用户报"屏蔽/取消屏蔽卡 1 秒再刷新"):
+    ///   旧版对所有注册视图同步 `view.Refresh()`。页面全部常驻 PageLayer, 于是一次屏蔽要把
+    ///   首页四面墙、关注页、历史、稍后再看…全刷一遍 —— 非虚拟化卡片墙的几百个容器在这一拍里
+    ///   被同步销毁重建, 就是那 1 秒。现在隐藏页只记账, 代价挪到用户真正翻到那一页时。
+    /// </summary>
     private void RefreshAll()
     {
+        RefreshActiveViews();
+
+        // 页面可能因为"筛掉一屏"而需要补内容。回调里不要抛到筛选流程上。
+        try { Changed?.Invoke(); }
+        catch { /* 页面自己的补内容失败, 不该让屏蔽失效 */ }
+    }
+
+    /// <summary>刷新所有"当前显示中"的视图；隐藏的标记 Pending。返回是否刷过至少一个。</summary>
+    private bool RefreshActiveViews()
+    {
+        var any = false;
         // 倒序遍历, 顺手把已经失效(页面/集合被回收)的视图摘掉
         for (var i = _viewOrder.Count - 1; i >= 0; i--)
         {
@@ -670,14 +724,87 @@ public sealed class FilterService : INotifyPropertyChanged
                 _viewOrder.RemoveAt(i);
                 continue;
             }
-            try { view.Refresh(); }
+
+            if (!_views.TryGetValue(view, out var scope))
+            {
+                // 注册表里找不到(理论上不会): 按旧行为当场刷, 别让这条内容漏出屏蔽
+                try { view.Refresh(); } catch { _viewOrder.RemoveAt(i); }
+                continue;
+            }
+
+            if (!IsScopeActive(scope))
+            {
+                // 隐藏页: 记一笔, 显示时再刷 —— 别在这一拍销毁/重建它的几百个卡片容器
+                scope.Pending = true;
+                continue;
+            }
+
+            scope.Pending = false;
+            try
+            {
+                view.Refresh();
+                any = true;
+            }
+            catch { _viewOrder.RemoveAt(i); }
+        }
+        return any;
+    }
+
+    /// <summary>把"规则变过、但当时页面不可见"的视图补刷一遍（页面显示 / 首页切 Tab 时调用）。</summary>
+    public void RefreshPendingVisible()
+    {
+        var any = false;
+        for (var i = _viewOrder.Count - 1; i >= 0; i--)
+        {
+            if (!_viewOrder[i].TryGetTarget(out var view))
+            {
+                _viewOrder.RemoveAt(i);
+                continue;
+            }
+            if (!_views.TryGetValue(view, out var scope) || !scope.Pending) continue;
+            if (!IsScopeActive(scope)) continue;
+
+            scope.Pending = false;
+            try
+            {
+                view.Refresh();
+                any = true;
+            }
             catch { _viewOrder.RemoveAt(i); }
         }
 
-        // 页面可能因为"筛掉一屏"而需要补内容。回调里不要抛到筛选流程上。
-        try { Changed?.Invoke(); }
-        catch { /* 页面自己的补内容失败, 不该让屏蔽失效 */ }
+        // 补刷后列表变短了: 页面要检查"够不够一屏"并补页。与 RefreshAll 的 Changed 同义。
+        if (any)
+        {
+            try { Changed?.Invoke(); }
+            catch { /* 页面自己的补内容失败, 不该让屏蔽失效 */ }
+        }
     }
+
+    /// <summary>
+    /// 排一次"显示页补刷"(Background, 同一时刻只排一次)。
+    /// 给切页/切 Tab 这种**紧接着就要渲染**的路径用 —— 别让补刷抢在过渡动画前面。
+    /// </summary>
+    public void RequestPendingRefresh()
+    {
+        if (_pendingRefreshQueued) return;
+        _pendingRefreshQueued = true;
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null)
+        {
+            _pendingRefreshQueued = false;
+            RefreshPendingVisible();
+            return;
+        }
+        dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            _pendingRefreshQueued = false;
+            RefreshPendingVisible();
+        }));
+    }
+
+    private bool _pendingRefreshQueued;
 }
 
 public enum FilterRuleKind

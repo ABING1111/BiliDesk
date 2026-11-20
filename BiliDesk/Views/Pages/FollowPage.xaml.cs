@@ -169,9 +169,12 @@ public partial class FollowPage : UserControl, IRefreshable
         if (DataContext is FollowViewModel vm)
         {
             // 动态流与"关注的主播正在直播"都纳入全局屏蔽(与首页/收藏/历史同一套条件)
-            FilterService.Instance.Attach(vm.FeedItems);
-            FilterService.Instance.Attach(vm.WallItems);
-            FilterService.Instance.Attach(vm.LiveNow);
+            FilterService.Instance.Attach(vm.FeedItems, isActive: () => IsVisible);
+            FilterService.Instance.Attach(vm.LiveNow, isActive: () => IsVisible);
+            // ★ 卡片墙**不再挂 view.Filter**(2026-11-20)。它不虚拟化, view.Refresh 一发 Reset,
+            //   几百张 VideoCard 会在下一拍里全部销毁重建 —— 正是"屏蔽后卡 1 秒"的来源。
+            //   现在由 FollowViewModel.SyncWallItems 自己按 IsVisible 过滤, 并只对差异做
+            //   增量增删(挡掉一条就只摘掉那张卡); 规则变化由 OnFilterApplied 调 RefreshWallFilter 接住。
 
             // 看板默认折叠: 页面实例会被 MainWindow 缓存, 每次进入都归位到收起。
             vm.LiveBoardOpen = false;
@@ -209,10 +212,15 @@ public partial class FollowPage : UserControl, IRefreshable
     /// <summary>屏蔽条件落地后, 等布局量完再判断要不要补一页动态</summary>
     private void OnFilterApplied()
     {
-        if (!IsLoaded) return;
+        if (!IsLoaded || !IsVisible) return;
+        if (DataContext is FollowViewModel vm)
+        {
+            // 卡片墙自己维护显示集合(不挂 view.Filter): 只把差异摘掉/补回, 不整墙重建
+            vm.RefreshWallFilter();
+        }
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(async () =>
         {
-            if (!IsLoaded || DataContext is not FollowViewModel vm) return;
+            if (!IsLoaded || !IsVisible || DataContext is not FollowViewModel vm) return;
             var sv = GetVisibleFeedScroll();
             if (sv == null) return;
             var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;

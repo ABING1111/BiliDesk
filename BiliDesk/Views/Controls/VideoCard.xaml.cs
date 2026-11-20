@@ -66,7 +66,9 @@ public partial class VideoCard : UserControl
     /// </summary>
     internal static void MarkNoEntranceAnimation(object? item)
     {
-        if (item is VideoItem vi) _seenItems.Add(vi, null);
+        // 幂等: 卡片墙分帧追加时, reset 后可能对同一条 VideoItem 再打一次标,
+        // 而 ConditionalWeakTable.Add 遇到已存在的键会抛异常。
+        if (item is VideoItem vi && !_seenItems.TryGetValue(vi, out _)) _seenItems.Add(vi, null);
     }
 
     /// <summary>

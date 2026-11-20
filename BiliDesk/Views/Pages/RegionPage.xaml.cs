@@ -64,7 +64,7 @@ public partial class RegionPage : UserControl
         _hookedVm.PropertyChanged += OnVmPropertyChanged;
 
         // 分区列表纳入全局屏蔽(以前这里怎么屏蔽都不生效)
-        FilterService.Instance.Attach(vm.Items);
+        FilterService.Instance.Attach(vm.Items, isActive: () => IsVisible);
     }
 
     private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -140,10 +140,10 @@ public partial class RegionPage : UserControl
     /// <summary>屏蔽条件落地后, 等布局量完再补内容</summary>
     private void OnFilterApplied()
     {
-        if (!IsLoaded) return;
+        if (!IsLoaded || !IsVisible) return;
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(async () =>
         {
-            if (IsLoaded) await MaybeAutoLoadAsync(ListScroll);
+            if (IsLoaded && IsVisible) await MaybeAutoLoadAsync(ListScroll);
         }));
     }
 

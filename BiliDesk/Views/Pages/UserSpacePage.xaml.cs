@@ -62,8 +62,8 @@ public partial class UserSpacePage : UserControl
         _vm = vm;
         if (vm == null) return;
         vm.ScrollToTopRequested += OnScrollToTopRequested;
-        FilterService.Instance.Attach(vm.Videos);
-        FilterService.Instance.Attach(vm.ImageDynamics);
+        FilterService.Instance.Attach(vm.Videos, isActive: () => IsVisible);
+        FilterService.Instance.Attach(vm.ImageDynamics, isActive: () => IsVisible);
         UpdateTabs(vm);
         ResetHeaderState();
     }

@@ -378,6 +378,8 @@ public partial class MainWindow : FluentWindow
         // 释放页面对象: 下次点进来重新 new 一个, 顺带重新拉一次数据(而不是显示上次的旧资料)
         EmbeddedContent.Content = null;
         PageLayer.Visibility = Visibility.Visible;
+        // 回来时把"离开期间变过的屏蔽条件"补刷掉(内嵌的 UP 主主页也一样)
+        FilterService.Instance.RefreshPendingVisible();
     }
 
     private void OnEmbeddedBackClick(object sender, RoutedEventArgs e) => HideEmbedded();
@@ -499,6 +501,8 @@ public partial class MainWindow : FluentWindow
         page.IsHitTestVisible = true;
         Panel.SetZIndex(page, 1);
         _currentPage = page;
+        // 这页离开期间屏蔽条件可能变过: 先把挂起的视图补刷掉, 再交还给渲染(同一拍, 不会闪旧内容)
+        FilterService.Instance.RefreshPendingVisible();
         MemoryTrim.RequestTrim();
     }
 
@@ -527,6 +531,8 @@ public partial class MainWindow : FluentWindow
         PageTransition.PrepareIncoming(target);
         target.Visibility = Visibility.Visible;
         target.IsHitTestVisible = false;
+        // 旧页还完整盖在上面, 这里补刷挂起的屏蔽视图 —— 花的时间藏在过渡里, 用户看不到
+        FilterService.Instance.RefreshPendingVisible();
         target.UpdateLayout();
 
         // 旧页保持可见, 内容淡出; 中点换页; 新页内容再淡入。

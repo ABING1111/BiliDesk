@@ -59,7 +59,7 @@ public partial class FavoritesPage : UserControl
             if (_vm != null)
             {
                 _vm.ScrollToTopRequested += OnScrollToTopRequested;
-                FilterService.Instance.Attach(_vm.Items);
+                FilterService.Instance.Attach(_vm.Items, isActive: () => IsVisible);
             }
             if (e.OldValue is FavoritesViewModel old && _observedFolders != null)
                 _observedFolders.CollectionChanged -= OnFoldersChanged;

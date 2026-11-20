@@ -69,7 +69,7 @@ public partial class SearchPage : UserControl
         {
             ResetCard();
             // 搜索结果也纳入全局屏蔽。以前只挂了首页/收藏/历史, 在搜索页怎么屏蔽都不生效。
-            if (e.NewValue is SearchViewModel vm) FilterService.Instance.Attach(vm.Results);
+            if (e.NewValue is SearchViewModel vm) FilterService.Instance.Attach(vm.Results, isActive: () => IsVisible);
         };
         // 屏蔽筛掉一批结果后, 结果区可能不够一屏: 主动补下一页(滚动事件不会因此触发)
         FilterService.Instance.Changed += OnFilterApplied;
@@ -170,10 +170,10 @@ public partial class SearchPage : UserControl
     /// <summary>屏蔽条件落地后, 等布局量完再决定要不要补一页(否则会停在半屏空白上)</summary>
     private void OnFilterApplied()
     {
-        if (!IsLoaded) return;
+        if (!IsLoaded || !IsVisible) return;
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(async () =>
         {
-            if (IsLoaded) await MaybeAutoLoadAsync(ResultScroll);
+            if (IsLoaded && IsVisible) await MaybeAutoLoadAsync(ResultScroll);
         }));
     }
 

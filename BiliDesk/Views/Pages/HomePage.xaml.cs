@@ -230,10 +230,17 @@ public partial class HomePage : UserControl, IRefreshable
     private void AttachFilterViews()
     {
         if (Vm == null) return;
-        FilterService.Instance.Attach(Vm.RecommendItems);
-        FilterService.Instance.Attach(Vm.PopularItems);
-        FilterService.Instance.Attach(Vm.RankingItems);
-        FilterService.Instance.Attach(Vm.LiveItems);
+        // ★ 2026-11-20: 传"这一面墙现在是否真的在显示" —— 四个 tab 常驻, 但一次只显示一个。
+        //   隐藏 tab 的墙有几百个卡片容器, 规则一变就 Refresh 会同步销毁/重建整墙;
+        //   现在它只记账, 切到那个 tab 时再由 FilterService.RequestPendingRefresh 补刷。
+        FilterService.Instance.Attach(Vm.RecommendItems,
+            isActive: () => IsVisible && Vm?.IsRecommendTab == true);
+        FilterService.Instance.Attach(Vm.PopularItems,
+            isActive: () => IsVisible && Vm?.IsPopularTab == true);
+        FilterService.Instance.Attach(Vm.RankingItems,
+            isActive: () => IsVisible && Vm?.IsRankingTab == true);
+        FilterService.Instance.Attach(Vm.LiveItems,
+            isActive: () => IsVisible && Vm?.IsLiveTab == true);
     }
 
     private void OnFilterChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -440,10 +447,10 @@ public partial class HomePage : UserControl, IRefreshable
     /// </summary>
     private void OnFilterApplied()
     {
-        if (!IsLoaded) return;
+        if (!IsLoaded || !IsVisible) return;
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
         {
-            if (!IsLoaded || DataContext is not HomeViewModel vm) return;
+            if (!IsLoaded || !IsVisible || DataContext is not HomeViewModel vm) return;
             if (CurrentTabFromVm() is not { } tab) return;
             if (ScrollOf(tab) is not { } sv) return;
             _ = TriggerAutoLoad(sv, vm);
@@ -601,6 +608,9 @@ public partial class HomePage : UserControl, IRefreshable
         UpdateTopRefresh(ScrollOf(tab));
         // 分段标签的下划线跟着选中项走
         MoveTabIndicator(tab);
+        // 这个 tab 在别的页面显示期间可能被新的屏蔽规则标成了"待刷"(见 FilterService 的 isActive):
+        // 排到 Background 补刷 —— VM 的 tab 标志在这之后由 SwitchToXxxAsync 同步写好。
+        FilterService.Instance.RequestPendingRefresh();
         // ★ 2026-10-12 用户要求"彻底移除浮动动画" —— 切 tab 现在**没有任何转场动画**,
         //   只切显隐与下划线。早先的"闪白幕布"与"卡片上浮"都已删除。
     }
@@ -1525,13 +1535,9 @@ internal sealed class DeferredFill
             return;
         }
 
-        if (_rebuildPending)
-        {
-            _rebuildPending = false;
-            _view.Clear();
-        }
-
         // 过滤后的可见项快照。视图存在就用视图(屏蔽生效的关键); 拿不到时退回原始集合。
+        // ★ 2026-11-20: 快照提到重建分支之前 —— 屏蔽 Refresh 发的 Reset 要先拿它和当前画面
+        //   做增量对账, 对不上才退回"整批清空 + 分帧重填"。
         IList snapshot;
         if (_viewSource != null)
         {
@@ -1542,6 +1548,23 @@ internal sealed class DeferredFill
         else
         {
             snapshot = _source;
+        }
+
+        if (_rebuildPending)
+        {
+            _rebuildPending = false;
+            // ★★★ 2026-11-20(用户报"屏蔽/取消屏蔽卡 1 秒再刷新"):
+            //   屏蔽规则变化只是"可见集合少了几条 / 多回几条"。旧写法无条件 `_view.Clear()`
+            //   再按 24 张/帧重填 —— 首页几面墙各有上百张卡, Clear 会在同一拍里把它们
+            //   全部销毁, 重填又要几百毫秒, 用户看到的就是"点完屏蔽先卡 1 秒"。
+            //   现在先尝试**增量对账**: 只摘掉被屏蔽的卡、插回恢复可见的卡, 其余容器原地不动。
+            //   差得太多(刷新/换 tab)才退回整批重填。
+            if (TryReconcile(snapshot))
+            {
+                Progress?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+            _view.Clear();
         }
 
         var added = 0;
@@ -1558,6 +1581,67 @@ internal sealed class DeferredFill
         if (_completed) added += DrainAppends();
 
         if (added > 0) Progress?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// 把界面集合 <see cref="_view"/> 与新可见快照做增量对账，返回 true 表示已完成对账
+    /// （调用方不要再清空重填）。
+    ///
+    /// ★ 只用于"屏蔽规则变化"这种小改动: 两批内容大半相同、且保留下来的条目顺序一致。
+    ///   刷新 / 换 tab / 换 UP 是整批换掉 —— 那种情况交给原来的"清空 + 分帧重填"。
+    /// ★ 恢复可见的条目一次补太多会重新制造卡顿, 超过上限也走整批重填(分帧摊开)。
+    /// </summary>
+    private bool TryReconcile(IList snapshot)
+    {
+        if (_view.Count == 0 || snapshot.Count == 0) return false;
+
+        var wanted = new HashSet<object>();
+        foreach (var item in snapshot) wanted.Add(item!);
+
+        var survivors = 0;
+        foreach (var item in _view)
+            if (wanted.Contains(item)) survivors++;
+
+        // 保留下来不到一半 ⇒ 是整批数据被换掉, 不是屏蔽增删
+        if (survivors * 2 < Math.Min(_view.Count, snapshot.Count)) return false;
+
+        // 留下的条目在新快照里必须保持同序 —— 顺序全变说明换了一批内容, 整批重填更稳
+        // （马上要被摘掉的条目不在快照里, 不参与同序检查）
+        var j = 0;
+        foreach (var item in _view)
+        {
+            if (!wanted.Contains(item)) continue;
+            while (j < snapshot.Count && !ReferenceEquals(snapshot[j], item)) j++;
+            if (j >= snapshot.Count) return false;
+            j++;
+        }
+
+        // 一次性补回太多(取消一大批屏蔽)会重新制造一次长冻结 ⇒ 交给分帧重填
+        const int maxInserts = 6;
+        var missing = snapshot.Count - survivors;
+        if (missing > maxInserts) return false;
+
+        // 1) 摘掉被屏蔽/已不在快照里的条目(只销毁这几张卡的容器)
+        for (var i = _view.Count - 1; i >= 0; i--)
+            if (!wanted.Contains(_view[i])) _view.RemoveAt(i);
+
+        // 2) 把恢复可见的条目插回原位
+        j = 0;
+        foreach (var item in snapshot)
+        {
+            if (j < _view.Count && ReferenceEquals(_view[j], item))
+            {
+                j++;
+                continue;
+            }
+            _view.Insert(j, item!);
+            j++;
+        }
+
+        _appends.Clear();
+        _index = snapshot.Count;
+        _completed = true;
+        return true;
     }
 
     /// <summary>

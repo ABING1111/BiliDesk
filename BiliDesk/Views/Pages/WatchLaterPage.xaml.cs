@@ -30,7 +30,7 @@ public partial class WatchLaterPage : UserControl
             if (Vm != null)
             {
                 // 稍后再看也纳入全局屏蔽(以前这里怎么屏蔽都不生效)
-                FilterService.Instance.Attach(Vm.Items);
+                FilterService.Instance.Attach(Vm.Items, isActive: () => IsVisible);
                 await Vm.LoadAsync();
             }
         };
@@ -79,10 +79,10 @@ public partial class WatchLaterPage : UserControl
     /// <summary>屏蔽条件落地后, 等布局量完再补内容</summary>
     private void OnFilterApplied()
     {
-        if (!IsLoaded) return;
+        if (!IsLoaded || !IsVisible) return;
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
         {
-            if (IsLoaded) MaybeAutoLoad(ListScroll);
+            if (IsLoaded && IsVisible) MaybeAutoLoad(ListScroll);
         }));
     }
 

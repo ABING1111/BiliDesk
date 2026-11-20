@@ -55,7 +55,7 @@ public partial class HistoryPage : UserControl
         {
             if (e.NewValue is not HistoryViewModel vm) return;
             // 历史列表也纳入全局屏蔽(命中关键词的记录会被隐藏), 见 FilterService
-            FilterService.Instance.Attach(vm.Entries);
+            FilterService.Instance.Attach(vm.Entries, isActive: () => IsVisible);
             // ★ 这里原来还订阅 vm.PropertyChanged 去刷搜索按钮的"已筛选中"外观,
             //   2026-10-06 搜索功能整体移除后已无必要, 连同 OnVmPropertyChanged 一起删除。
         };
