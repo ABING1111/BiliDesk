@@ -43,6 +43,8 @@ public partial class PlayerWindow : FluentWindow
         UpdateCommentComposer();
         // 「回到顶部」只属于评论列表, 切走时一并熄灭
         UpdateCommentBackToTop(null);
+        // 工具列的"滚动自动收起"状态也复位: 下次进评论区先让它可见
+        SetCommentFabBarHidden(false, animate: false);
     }
 
     private async void TabComments_Checked(object sender, RoutedEventArgs e)
@@ -55,6 +57,8 @@ public partial class PlayerWindow : FluentWindow
         // 从简介切过来时外层 ScrollViewer 可能停在下滑位置: 按当前偏移重新判定一次,
         // 避免"已经滚过阈值、回到顶部却不亮"。
         UpdateCommentBackToTop(InfoScroll);
+        // 刚进评论区(或从简介切回来)先把工具列放出来; 之后的滚动再按方向收起/放回
+        SetCommentFabBarHidden(false, animate: false);
         await LoadCommentsAsync();
         // 上一轮离开评论 tab / 进入详情时可能把内容释放了(见 ReleaseAllCommentContent):
         // 切回来立刻按当前视口补回来, 否则用户看到的是整页空占位。
@@ -109,6 +113,52 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing) return;
         InfoScroll?.ScrollToTop();
+    }
+
+    // ------------------------------------------------------------ 工具列滚动自动收起(issue #89)
+
+    /// <summary>右下角工具列当前是否已被滚动手势收起。</summary>
+    private bool _commentFabBarHidden;
+
+    /// <summary>
+    /// 按滚动方向收起/放回右下角工具列(写评论 FAB + 回到顶部 / 返回)。
+    /// ★ 起因(issue #89): 三颗 46px 的悬浮按钮贴在信息栏右下角, 评论文字滚到那里时
+    ///   最右侧两三列字会被压住。向下滚时把整列按钮淡出(同时撤掉命中测试),
+    ///   往上滚 / 回到顶部附近再淡回来 —— 按钮只在"要排版/要找按钮"时出现。
+    /// ★ 具体规则见 <see cref="CommentFabAutoHide.Decide"/>: 输入面板展开时不收,
+    ///   内容被追加撑高不算"往下翻"。
+    /// </summary>
+    private void UpdateCommentFabAutoHide(ScrollChangedEventArgs e)
+    {
+        if (_closing || CommentFabBar == null) return;
+        if (CommentsPanel == null || CommentsPanel.Visibility != Visibility.Visible) return;
+
+        var hidden = CommentFabAutoHide.Decide(
+            _commentFabBarHidden, e.VerticalOffset, e.VerticalChange, e.ExtentHeightChange, _composerOpen);
+        SetCommentFabBarHidden(hidden, animate: true);
+    }
+
+    /// <summary>收起/放回右下角工具列。只动 Opacity 与命中测试, 不改 Visibility。</summary>
+    private void SetCommentFabBarHidden(bool hidden, bool animate)
+    {
+        if (_closing || CommentFabBar == null) return;
+        if (hidden == _commentFabBarHidden) return;
+        _commentFabBarHidden = hidden;
+        // 收起的按钮虽然透明, 但仍会挡住下面的评论文字(拖选/点链接), 必须一并撤掉命中测试
+        CommentFabBar.IsHitTestVisible = !hidden;
+
+        var target = hidden ? 0d : 1d;
+        if (!animate)
+        {
+            CommentFabBar.BeginAnimation(OpacityProperty, null);
+            CommentFabBar.Opacity = target;
+            return;
+        }
+        CommentFabBar.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(CommentFabBar.Opacity, target, TimeSpan.FromMilliseconds(160))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
     }
 
     private bool _commentsLoaded;

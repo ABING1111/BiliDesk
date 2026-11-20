@@ -378,4 +378,113 @@ public class DynamicParserTests
         Assert.Equal("恭喜恭喜", r.Text);
         Assert.Equal("1分钟前", r.PubTime);
     }
+
+    // ------------------------------------------------------------ 关注时间线过滤(issue #99)
+
+    /// <summary>构造一条最小可解析的视频动态, 只关心 module_author 里的 following。</summary>
+    private static DynamicItem? ParseWithFollowing(string followingJson)
+    {
+        var author = "\"mid\": 42, \"name\": \"up\", \"pub_time\": \"刚刚\"";
+        if (followingJson.Length > 0) author += ", \"following\": " + followingJson;
+        return Parse($$"""
+        {
+          "id_str": "968000000000000001",
+          "type": "DYNAMIC_TYPE_AV",
+          "modules": {
+            "module_author": { {{author}} },
+            "module_dynamic": {
+              "major": {
+                "type": "MAJOR_TYPE_ARCHIVE",
+                "archive": {
+                  "aid": 1,
+                  "bvid": "BV1xx411c7mD",
+                  "title": "未关注 UP 的视频",
+                  "jump_url": "//www.bilibili.com/video/BV1xx411c7mD/"
+                }
+              }
+            }
+          }
+        }
+        """);
+    }
+
+    [Fact]
+    public void Following_FollowedAuthorIsKept()
+    {
+        var item = ParseWithFollowing("true");
+        Assert.NotNull(item);
+        Assert.True(item!.AuthorFollowing);
+        Assert.True(DynamicParser.IsFromFollowedAuthor(item));
+    }
+
+    [Fact]
+    public void Following_RecommendedAuthorIsFiltered()
+    {
+        // feed/all 插播的推荐动态: 作者没关注(following=false) → 关注时间线里不展示
+        var item = ParseWithFollowing("false");
+        Assert.NotNull(item);
+        Assert.False(item!.AuthorFollowing);
+        Assert.False(DynamicParser.IsFromFollowedAuthor(item));
+    }
+
+    [Fact]
+    public void Following_NullOrMissingIsKept()
+    {
+        // 自己的动态 following 为 null; 旧形态/空间动态可能没有该字段 —— 都不能当成"未关注"滤掉
+        var own = ParseWithFollowing("null");
+        Assert.NotNull(own);
+        Assert.Null(own!.AuthorFollowing);
+        Assert.True(DynamicParser.IsFromFollowedAuthor(own));
+
+        var missing = ParseWithFollowing("");
+        Assert.NotNull(missing);
+        Assert.Null(missing!.AuthorFollowing);
+        Assert.True(DynamicParser.IsFromFollowedAuthor(missing));
+    }
+
+    [Fact]
+    public void Timeline_FiltersRecommendationsOnly()
+    {
+        // 一页里: 已关注 UP / 推荐(未关注) / 自己的动态 —— 只丢掉推荐那条
+        using var doc = JsonDocument.Parse("""
+        [
+          {
+            "id_str": "1", "type": "DYNAMIC_TYPE_AV",
+            "modules": {
+              "module_author": { "mid": 1, "name": "已关注", "following": true },
+              "module_dynamic": { "major": { "type": "MAJOR_TYPE_ARCHIVE",
+                "archive": { "bvid": "BV1aa", "title": "a", "jump_url": "//www.bilibili.com/video/BV1aa/" } } }
+            }
+          },
+          {
+            "id_str": "2", "type": "DYNAMIC_TYPE_AV",
+            "modules": {
+              "module_author": { "mid": 2, "name": "推荐UP", "following": false },
+              "module_dynamic": { "major": { "type": "MAJOR_TYPE_ARCHIVE",
+                "archive": { "bvid": "BV1bb", "title": "b", "jump_url": "//www.bilibili.com/video/BV1bb/" } } }
+            }
+          },
+          {
+            "id_str": "3", "type": "DYNAMIC_TYPE_AV",
+            "modules": {
+              "module_author": { "mid": 3, "name": "我自己", "following": null },
+              "module_dynamic": { "major": { "type": "MAJOR_TYPE_ARCHIVE",
+                "archive": { "bvid": "BV1cc", "title": "c", "jump_url": "//www.bilibili.com/video/BV1cc/" } } }
+            }
+          }
+        ]
+        """);
+
+        var kept = new List<DynamicItem>();
+        foreach (var e in doc.RootElement.EnumerateArray())
+        {
+            var item = DynamicParser.ParseTimelineItem(e.Clone());
+            if (item != null) kept.Add(item);
+        }
+
+        Assert.Equal(2, kept.Count);
+        Assert.DoesNotContain(kept, x => x.AuthorName == "推荐UP");
+        Assert.Contains(kept, x => x.AuthorName == "已关注");
+        Assert.Contains(kept, x => x.AuthorName == "我自己");
+    }
 }

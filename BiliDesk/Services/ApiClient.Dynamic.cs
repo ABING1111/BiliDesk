@@ -25,6 +25,10 @@ public partial class ApiClient
     /// <summary>
     /// 关注 UP 的综合动态时间线(「动态」页的"全部动态")。
     /// 返回 DynamicItem 列表, 视频/图文/文字/专栏/转发都在里面。
+    ///
+    /// ★ feed/all 会在关注动态之间插播"你可能感兴趣"的推荐条目(作者没关注),
+    ///   这些条目带 module_author.following=false, 在解析时统一滤掉(issue #99)。
+    ///   一页全被滤空时自动往后翻(最多 3 页), 免得动态流把"整页都是推荐"误判成到底。
     /// </summary>
     public async Task<(bool ok, string? err, List<DynamicItem>? items, string? nextOffset, bool hasMore)>
         GetDynamicFeedAsync(string? offset = null)
@@ -32,34 +36,51 @@ public partial class ApiClient
         try
         {
             await EnsureBuvidAsync();
-            var ps = new Dictionary<string, string>
-            {
-                ["type"] = "all",
-                ["features"] = DynamicFeedFeatures,
-                ["platform"] = "web",
-                ["web_location"] = "333.1365",
-            };
-            if (!string.IsNullOrEmpty(offset)) ps["offset"] = offset;
 
-            var (code, msg, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/all", ps,
-                sign: true, referer: "https://t.bilibili.com/");
+            var cursor = offset;
+            List<DynamicItem>? items = null;
+            string? next = null;
+            var hasMore = false;
 
-            if (code == 0 && data != null)
+            for (var attempt = 0; attempt < 3; attempt++)
             {
-                var (items, next, hasMore) = ReadDynamicPage(data.Value);
-                return (true, null, items, next, hasMore);
+                var ps = new Dictionary<string, string>
+                {
+                    ["type"] = "all",
+                    ["features"] = DynamicFeedFeatures,
+                    ["platform"] = "web",
+                    ["web_location"] = "333.1365",
+                };
+                if (!string.IsNullOrEmpty(cursor)) ps["offset"] = cursor;
+
+                var (code, msg, data) = await GetJsonAsync(
+                    "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/all", ps,
+                    sign: true, referer: "https://t.bilibili.com/");
+
+                if (code != 0 || data == null)
+                {
+                    // 未登录没必要再兜底, 直接给明确提示
+                    if (code == -101)
+                        return (false, "请先登录后查看动态", null, null, false);
+
+                    // feed/all 被风控/异常时退回 feed/nav 扁平路径(只有视频, 但页面不至于整体打不开)
+                    var fallback = await GetDynamicFeedNavFallbackAsync(offset);
+                    if (fallback.ok) return fallback;
+
+                    return (false, msg ?? "动态加载失败", null, null, false);
+                }
+
+                (items, next, hasMore) = ReadDynamicPage(data.Value, onlyFollowed: true);
+
+                // 还有内容、但这一页全被推荐过滤掉了: 顺着游标继续翻, 别让调用方以为到底
+                if (items.Count > 0 || !hasMore ||
+                    string.IsNullOrEmpty(next) || next == cursor)
+                    return (true, null, items, next, hasMore);
+
+                cursor = next;
             }
 
-            // 未登录没必要再兜底, 直接给明确提示
-            if (code == -101)
-                return (false, "请先登录后查看动态", null, null, false);
-
-            // feed/all 被风控/异常时退回 feed/nav 扁平路径(只有视频, 但页面不至于整体打不开)
-            var fallback = await GetDynamicFeedNavFallbackAsync(offset);
-            if (fallback.ok) return fallback;
-
-            return (false, msg ?? "动态加载失败", null, null, false);
+            return (true, null, items, next, hasMore);
         }
         catch (Exception ex)
         {
@@ -121,7 +142,7 @@ public partial class ApiClient
             if (code != 0 || data == null)
                 return (false, code == -101 ? "请先登录后查看动态" : (msg ?? "动态加载失败"), null, null, false);
 
-            var (items, next, hasMore) = ReadDynamicPage(data.Value);
+            var (items, next, hasMore) = ReadDynamicPage(data.Value, onlyFollowed: true);
             return (true, null, items, next, hasMore);
         }
         catch (Exception ex)
@@ -131,8 +152,13 @@ public partial class ApiClient
         }
     }
 
-    /// <summary>从 feed/all / feed/nav 的 data 里读 items + 游标。</summary>
-    private static (List<DynamicItem> items, string? nextOffset, bool hasMore) ReadDynamicPage(JsonElement d)
+    /// <summary>
+    /// 从 feed/all / feed/nav 的 data 里读 items + 游标。
+    /// ★ onlyFollowed：关注时间线(feed/all)用 true, 把接口标了"未关注作者"的推荐条目丢掉
+    ///   (判据见 <see cref="DynamicParser.IsFromFollowedAuthor"/>); 单 UP 空间动态用 false。
+    /// </summary>
+    private static (List<DynamicItem> items, string? nextOffset, bool hasMore) ReadDynamicPage(
+        JsonElement d, bool onlyFollowed = false)
     {
         var items = new List<DynamicItem>();
         var hasMore = d.TryGetProperty("has_more", out var hm) &&
@@ -153,7 +179,10 @@ public partial class ApiClient
         {
             foreach (var e in list.EnumerateArray())
             {
-                var item = DynamicParser.ParseItem(e);
+                // 关注时间线走 ParseTimelineItem: 推荐条目(未关注作者)在这一步就被丢掉
+                var item = onlyFollowed
+                    ? DynamicParser.ParseTimelineItem(e)
+                    : DynamicParser.ParseItem(e);
                 if (item != null) items.Add(item);
             }
         }

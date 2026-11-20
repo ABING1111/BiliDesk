@@ -416,6 +416,8 @@ public partial class PlayerWindow : FluentWindow
         if (sender is not ScrollViewer sv) return;
         // 回到顶部要先于"往上滚就返回"判定: 往上滚回阈值以内时它也要熄灭
         UpdateCommentBackToTop(sv);
+        // issue #89: 向下滚时把右下角工具列淡出, 别让它一直压着评论最右侧几列字
+        UpdateCommentFabAutoHide(e);
 
         // ★★ 评论内容窗口必须**两个方向都处理**(2026-11-09):
         //   旧实现 `VerticalChange < 0` 直接 return, 向上滚动时既不恢复也不释放 ——

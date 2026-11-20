@@ -56,6 +56,26 @@ public static class DynamicParser
         }
     }
 
+    /// <summary>
+    /// 这条动态能否进「关注时间线」。
+    /// ★ feed/all 会在关注动态之间插播"你可能感兴趣"的推荐条目, 它们的
+    ///   module_author.following 明确是 false —— 那正是 issue #99 里"动态页出现
+    ///   未关注者的视频"的来源, 必须滤掉。
+    /// ★ 只认接口明确给出的 false: 字段缺失(旧形态/空间动态)或为 null(自己的动态)
+    ///   一律放行, 否则一种返回形态变化就可能把整条时间线滤成空。
+    /// </summary>
+    public static bool IsFromFollowedAuthor(DynamicItem item) => item.AuthorFollowing != false;
+
+    /// <summary>
+    /// 解析关注时间线(feed/all)里的一条动态: 与 <see cref="ParseItem"/> 相同,
+    /// 但接口标了"未关注作者"的推荐条目直接丢弃(返回 null)。
+    /// </summary>
+    public static DynamicItem? ParseTimelineItem(JsonElement e)
+    {
+        var item = ParseItem(e);
+        return item != null && IsFromFollowedAuthor(item) ? item : null;
+    }
+
     /// <summary>解析 detail/forward 里的一条转发记录。</summary>
     public static DynamicRepostItem? ParseRepostItem(JsonElement e)
     {
@@ -189,6 +209,7 @@ public static class DynamicParser
         item.AuthorName = GetStr(author, "name");
         item.AuthorFace = UrlUtil.Normalize(GetStr(author, "face"));
         item.PubAction = GetStr(author, "pub_action");
+        item.AuthorFollowing = GetBoolNullable(author, "following");
     }
 
     private static void ReadPubTime(JsonElement e, DynamicItem item)
@@ -434,8 +455,10 @@ public static class DynamicParser
             item.AuthorName = GetStr(au, "name");
             item.AuthorMid = GetLongLoose(au, "mid");
             item.AuthorFace = UrlUtil.Normalize(GetStr(au, "face"));
+            item.AuthorFollowing = GetBoolNullable(au, "following");
         }
         if (item.AuthorMid <= 0) item.AuthorMid = GetLongLoose(e, "uid");
+        if (item.AuthorFollowing == null) item.AuthorFollowing = GetBoolNullable(e, "following");
         ReadPubTime(e, item);
     }
 
@@ -588,6 +611,18 @@ public static class DynamicParser
     private static string GetStr(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString() ?? "" : "";
+
+    /// <summary>读可能缺失/为 null 的布尔字段(如 module_author.following)。</summary>
+    private static bool? GetBoolNullable(JsonElement e, string name)
+    {
+        if (!e.TryGetProperty(name, out var v)) return null;
+        return v.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null,
+        };
+    }
 
     private static int GetIntSafe(JsonElement e, string name)
     {

@@ -80,6 +80,14 @@ public class DynamicItem : INotifyPropertyChanged
     public string AuthorName { get; set; } = "";
     public string AuthorFace { get; set; } = "";
 
+    /// <summary>
+    /// 接口给的「当前账号是否关注了这条动态的作者」(module_author.following)。
+    /// <c>null</c> = 接口没给 / 是自己的动态(自己的动态该字段为 null) —— 这两种都照常展示。
+    /// ★ 关注时间线里会插播 feed/all 的推荐动态(作者未关注), 靠它滤掉;
+    ///   单 UP 空间动态、详情等场景不能拿它过滤(用户本来就没关注那些人)。
+    /// </summary>
+    public bool? AuthorFollowing { get; set; }
+
     /// <summary>Unix 秒。扁平路径只有展示文本时是反推的近似值。</summary>
     public long Pubdate { get; set; }
 

@@ -440,6 +440,9 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_composerOpen || CommentComposerPanel == null || CommentFabIcon == null) return;
         _composerOpen = true;
+        // 滚动自动收起可能正把整列按钮藏着(issue #89): 面板开了就得把 FAB 放出来 ——
+        // 此刻它是「收起输入框」按钮, 藏着就没法关面板
+        SetCommentFabBarHidden(false, animate: true);
         CommentFabIcon.Text = "\uE74A";   // ChevronDown: 收起
         CommentFab.ToolTip = "收起评论框";
 
