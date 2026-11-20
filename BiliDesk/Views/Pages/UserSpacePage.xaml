@@ -209,7 +209,11 @@
                     </Button>
                     <Border Width="1" Height="30" Background="{DynamicResource DividerBrush}"
                             Margin="16,0" />
-                    <StackPanel MinWidth="64">
+                    <!-- ★ 2026-11-20: 必须 VerticalAlignment=Center ——
+                         左右两项是 Button(Padding 0,4 + 内容垂直居中), 这一项是裸 StackPanel;
+                         横向 StackPanel 默认把它拉到整行高, 内容从顶部排起, 结果整块比
+                         关注数/粉丝数高 4px。居中后自然高度在行内居中, 三项落在同一基线。 -->
+                    <StackPanel MinWidth="64" VerticalAlignment="Center">
                         <TextBlock Text="{Binding LikeText}" FontSize="18" FontWeight="SemiBold"
                                    HorizontalAlignment="Center" />
                         <TextBlock Text="获赞数" Style="{StaticResource MetaTextStyle}"
