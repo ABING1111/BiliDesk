@@ -33,9 +33,10 @@ public enum BufferMediaKind
 ///   · **手动**: 恒用用户设置的 NetworkCachingMs —— 与 2026-10-30 之前的旧行为一致,
 ///     用户特意调过缓冲的切到手动即可完全回到旧行为。直播仍保底 1000
 ///     (持续流被过早判定"卡住/结束"的代价远大于多等 0.7 秒缓冲)。
-///   · **自动**(默认): 按最近一轮 CDN 实测吞吐(CdnService.LastMeasuredBytesPerSecond)
-///     与流码率的比值挑档 —— 带宽越富余预读越浅(省内存、低延迟), 越紧张越深(抗抖动)。
-///     没测过(0)用 1000 兜底, 与旧默认一致。
+///   · **自动**(默认): 按播放源类型给固定档(直播/听视频各一档, 点播 1000ms),
+///     再叠加"同一线路反复卡顿就加深"的动态补偿。
+///     ★ 2026-11-21: 自动档**不再按 CDN 实测吞吐挑档** —— 测速策略已整条删除
+///       (见 CdnService 顶注), 那个吞吐值不再产生, 依赖它只会让分支永远走 0 兜底。
 ///
 /// 取值范围与设置页的夹取范围一致(300~3000, 见 SettingsStore.NetworkCachingMin/Max),
 /// 自动档只是在这个范围内"挑点", 不会越界。
@@ -46,9 +47,8 @@ public enum BufferMediaKind
 /// </summary>
 public static class BufferPolicy
 {
-    /// <summary>自动档假设的流码率。DASH 常见 1080P ≈ 2~3Mbps, 取中值; durl 单流略低</summary>
-    private const long AssumedDashBitrateBps = 2_500_000;
-    private const long AssumedSingleBitrateBps = 2_000_000;
+    /// <summary>点播的自动档预读(与 2026-10-30 之前的默认值一致)</summary>
+    private const int VodAutoMs = 1000;
 
     /// <summary>"极短片"的时长上限 —— 与 ApiClient.ShortVideoRemuxThresholdMs 对齐(60s)。
     /// 短片预读太深没有意义(还没缓冲满就播完了), 自动档给它封个顶。</summary>
@@ -104,27 +104,11 @@ public static class BufferPolicy
             return Math.Clamp(ListenAudioAutoMs + StallBoostMs(mediaUrl),
                 SettingsStore.NetworkCachingMinMs, SettingsStore.NetworkCachingMaxMs);
 
-        // 自动点播档: 实测吞吐 / 假设码率。比值含义是"带宽能同时拉几路这条流":
-        //   ≥10 路 → 随便缓冲, 500ms 足够扛抖动;
-        //   3~10 路 → 与旧默认一致, 1000ms;
-        //   1.5~3 路 → 带宽刚够, 多备一点, 2000ms;
-        //   <1.5 路 → 弱网兜底, 3000ms(再深 LibVLC 也只是白占内存, 不再往上加)。
-        var measured = CdnService.Instance.LastMeasuredBytesPerSecond;
-        int baseMs;
-        if (measured <= 0)
-        {
-            baseMs = 1000;   // 没测过: 与旧默认一致, 别瞎猜
-        }
-        else
-        {
-            var bitrate = kind == BufferMediaKind.VodDash
-                ? (double)AssumedDashBitrateBps : AssumedSingleBitrateBps;
-            var ratio = measured * 8.0 / bitrate;
-            baseMs = ratio >= 10 ? 500
-                   : ratio >= 3 ? 1000
-                   : ratio >= 1.5 ? 2000
-                   : 3000;
-        }
+        // 自动点播档: 固定 1000ms(与旧默认一致), 再叠加"同线路反复卡顿"的加深补偿。
+        // ★ 2026-11-21: 这里原来是"实测吞吐 / 假设码率"分四档。CDN 测速策略删除后
+        //   那个吞吐值恒为 0, 四档只会永远落到同一个分支 —— 与其留一段假装在自适应的
+        //   死代码, 不如把结论写实: 点播就 1000ms, 靠 StallBoostMs 应对真实抖动。
+        var baseMs = VodAutoMs;
 
         // 极短片: 预读超过 1 秒大概率白等(还没缓冲满就播完了)
         if (shortVideo) baseMs = Math.Min(baseMs, ShortVideoCapMs);

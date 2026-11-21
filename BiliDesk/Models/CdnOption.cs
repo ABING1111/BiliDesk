@@ -10,9 +10,10 @@ namespace BiliDesk.Models;
 ///   实测 8 个候选 host 全部返回 HTTP 206, 数据正常。
 ///
 ///   不同线路的速度差距很大: 同一时刻实测 2.5MB/s ~ 11MB/s(4 倍以上), 而且
-///   不同网络/地区/时段排名会变 —— 自动测速能挑到瞬时最快的一条, 但换 host 后
-///   部分线路的持续吞吐/抖动反而更差(用户实测卡顿更多)。因此 2026-11-05 起
-///   默认改为"跟随服务端", 自动测速仍保留为可选策略。
+///   不同网络/地区/时段排名会变。当年据此做过"自动测速挑最快", 但实测换 host 后
+///   部分线路的持续吞吐/抖动反而更差(用户反馈卡顿更多), 所以 2026-11-05 把默认
+///   改成"跟随服务端", 2026-11-21 则把自动测速**整条策略删掉** ——
+///   只留"跟随服务端"(默认)与"手动指定一家"。
 ///
 ///   另外 B 站会把一部分流指向 PCDN(点对点分发, 拿其他用户的带宽做节点)。
 ///   它有两个来源要一起防:
@@ -22,7 +23,14 @@ namespace BiliDesk.Models;
 /// </summary>
 public enum CdnSelectMode
 {
-    /// <summary>自动测速: 从候选线路里实测挑吞吐最高的</summary>
+    /// <summary>
+    /// ★ 2026-11-21 已**下线**的"自动测速"(实测吞吐挑最快的一条)。保留这个成员
+    /// **只为反序列化兼容**: settings.json 用 JsonStringEnumConverter, 旧配置里写着
+    /// `"CdnMode": "Auto"`, 删掉成员会让整份配置反序列化失败 —— 而 SettingsStore.Load
+    /// 是裸 catch, 后果是用户所有设置被静默重置。读到它时一律归一成
+    /// <see cref="ServerDefault"/>(见 SettingsStore.ApplySanitized)。
+    /// ★ 别在任何选择逻辑里再用它。
+    /// </summary>
     Auto = 0,
 
     /// <summary>手动指定: 固定用用户选定的那一家 CDN</summary>
@@ -73,6 +81,6 @@ public sealed record CdnOption(string Id, string Name, string Host)
     public static CdnOption? ById(string? id) =>
         string.IsNullOrEmpty(id) ? null : All.FirstOrDefault(o => o.Id == id);
 
-    /// <summary>自动测速完全失败时的兜底: 用第一个候选(阿里云), 而不是放弃替换</summary>
+    /// <summary>需要"某一家"而调用方又没指定时的兜底: 用第一个候选(阿里云)</summary>
     public static CdnOption Fallback => All[0];
 }

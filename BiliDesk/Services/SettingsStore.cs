@@ -281,16 +281,14 @@ public class SettingsStore
     // ----------------- CDN(线路)设置 -----------------
     // 详见 Models/CdnOption.cs 与 Services/CdnService.cs
 
-    /// <summary>线路选择策略(默认跟随服务端, 2026-11-05 起)</summary>
+    /// <summary>
+    /// 线路选择策略(默认跟随服务端)。
+    /// ★ 2026-11-21: "自动测速"已删除, 只剩 跟随服务端 / 手动指定。
+    ///   旧配置里的 Auto 由 <see cref="ApplySanitized"/> 归一成 ServerDefault。
+    /// </summary>
     public CdnSelectMode CdnMode { get; set; } = CdnSelectMode.ServerDefault;
 
-    /// <summary>
-    /// 线路默认值的一次性迁移标记: 旧配置(全是 Auto)升级后迁到 ServerDefault;
-    /// 迁移完成即置 true 并落盘, 之后用户手动选 Auto 不会再被改。见 Models.AppSettings。
-    /// </summary>
-    private bool _cdnModeMigratedToServer;
-
-    /// <summary>手动模式下选定的 CDN Id(见 CdnOption.All; 空/失效时自动退回测速)</summary>
+    /// <summary>手动模式下选定的 CDN Id(见 CdnOption.All; 空/失效时退回跟随服务端)</summary>
     public string CdnManualId { get; set; } = "";
 
     /// <summary>
@@ -857,13 +855,12 @@ public class SettingsStore
         //   留着它会让"手动模式"指到一条不存在的线路(见 CdnService.SelectUrlAsync)。
         CdnMode = s.CdnMode;
         CdnManualId = CdnOption.ById(s.CdnManualId)?.Id ?? "";
-        // ★★★ 2026-11-05 默认线路迁移: 旧版本的默认值是 Auto, 所有旧配置都带着
-        //   `"CdnMode": "Auto"` —— 只改属性初始化值的话老用户永远享受不到新默认。
-        //   这里做**一次性**迁移: 迁移标记(false/缺失)时把 Auto 改成 ServerDefault,
-        //   并把标记置 true 落盘; 之后再手动选回 Auto 会被正常保留。
-        if (!s.CdnModeMigratedToServer && CdnMode == CdnSelectMode.Auto)
+        // ★★★ 2026-11-21: "自动测速"策略已删除, 旧配置里的 Auto 一律归一成 ServerDefault。
+        //   枚举里保留 Auto 成员**只为反序列化不炸**(settings.json 用
+        //   JsonStringEnumConverter, 删成员会让整份配置解析失败, 而 Load 是裸 catch
+        //   ⇒ 用户所有设置被静默重置)。归一放在这里, 所以不需要额外的迁移标记。
+        if (CdnMode == CdnSelectMode.Auto)
             CdnMode = CdnSelectMode.ServerDefault;
-        _cdnModeMigratedToServer = true;
         // ★ "手动指定"却没选中任何线路(老配置写坏/用户从未选过)必须归一成默认策略 ——
         //   否则设置页显示"手动指定", 实际 SelectUrlAsync 因为拿不到目标而静默走了别的路,
         //   用户会以为手动设置没生效, 排查时也看不出真相(2026-10-30 实测).
@@ -1126,7 +1123,6 @@ public class SettingsStore
         NoLogin1080P = NoLogin1080P,
         CdnMode = CdnMode,
         CdnManualId = CdnManualId,
-        CdnModeMigratedToServer = _cdnModeMigratedToServer,
         BlockPcdn = BlockPcdn,
         DisclaimerAccepted = DisclaimerAccepted,
         DisclaimerVersion = AcceptedDisclaimerVersion,
@@ -1618,10 +1614,6 @@ public class SettingsStore
     /// 改 CDN 线路设置并落盘。
     /// 三个值放在同一个方法里: 它们总是被同一张设置卡片一起改,
     /// 分开写迟早出现"改了模式却把手动选的那家重置掉"。
-    ///
-    /// ★ 只要这三项里有任何一项变了, 就必须让测速缓存失效 ——
-    ///   否则用户从"自动"切到"手动指定腾讯云"后会仍然用着缓存里的阿里云,
-    ///   表现是"改了设置根本没生效"。
     /// </summary>
     public void SetCdn(CdnSelectMode mode, string manualId, bool blockPcdn)
     {
@@ -1633,11 +1625,7 @@ public class SettingsStore
         CdnMode = mode;
         CdnManualId = nextId;
         BlockPcdn = blockPcdn;
-        // 用户一旦显式改过线路设置, 就认为"默认值迁移"已完成:
-        // 否则新装用户主动选 Auto 后, 下次启动会被一次性迁移又推回 ServerDefault。
-        _cdnModeMigratedToServer = true;
         Save();
-        CdnService.Instance.InvalidateCache();
     }
 
     /// <summary>标记已同意免责声明并落盘(记下同意的是哪一版)</summary>

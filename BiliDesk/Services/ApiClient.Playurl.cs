@@ -642,11 +642,10 @@ public partial class ApiClient
                     if (bestId > 0)
                     {
                         // ★ 线路选择交给 CdnService(2026-10-03 新增, 设置页可配)。
-                        //   它负责三件事: 按用户策略(自动测速/手动指定/跟随服务端)选线路、
-                        //   剔除 PCDN、全部失败时回退。详细依据见 Services/CdnService.cs。
+                        //   它负责三件事: 按用户策略(跟随服务端/手动指定)选线路、
+                        //   剔除 PCDN、候选全被过滤时回退。详细依据见 Services/CdnService.cs。
                         //
                         //   以前这里只有一条静态规则"优先非 mcdn", 问题是:
-                        //     · 无法利用"各家 CDN 同一时刻吞吐差 4 倍"这件事(实测 2.5~11MB/s);
                         //     · 认不出**伪装域名** —— 实测 B 站给过
                         //       `mv0bz14m.edge.mountaintoys.cn`(query 里 os=mcdn), 域名看不出
                         //       PCDN 特征, 旧规则会把它当成正常线路用。
@@ -1042,72 +1041,6 @@ public partial class ApiClient
         var bytes = new byte[n];
         Random.Shared.NextBytes(bytes);
         return Convert.ToBase64String(bytes);
-    }
-
-    /// <summary>
-    /// 取一组"带签名的真实媒体 URL", 专门给 CDN 测速当样本用(设置页「重新测速」)。
-    ///
-    /// 为什么单独一个方法、而不是复用 GetPlayUrlAsync:
-    ///   GetPlayUrlAsync 返回的是**已经按用户策略选好线路**的那一条, 拿它测速等于
-    ///   "只测了当前用的这条", 测不出别的线路更快。测速需要的是**原始候选集**
-    ///   (baseUrl + 所有 backupUrl), 所以这里返回全部候选。
-    ///
-    /// 返回空列表 = 没有可用样本(取流失败/付费视频), 调用方据此提示用户。
-    /// </summary>
-    public async Task<List<string>> GetCdnSampleUrlsAsync(string bvid, long cid, int qn = 80)
-    {
-        var urls = new List<string>();
-        try
-        {
-            await EnsureBuvidAsync();
-            var ps = new Dictionary<string, string>
-            {
-                ["bvid"] = bvid,
-                ["cid"] = cid.ToString(),
-                ["qn"] = qn.ToString(),
-                ["fnval"] = "16",
-                ["fnver"] = "0",
-                ["fourk"] = "1"
-            };
-            ApplyTryLook(ps);
-            var (code, _, data) = await GetJsonAsync(
-                "https://api.bilibili.com/x/player/wbi/playurl", ps, sign: true);
-            if (code != 0 || data == null) return urls;
-
-            if (!data.Value.TryGetProperty("dash", out var dash) ||
-                dash.ValueKind != JsonValueKind.Object ||
-                !dash.TryGetProperty("video", out var videos) ||
-                videos.ValueKind != JsonValueKind.Array ||
-                videos.GetArrayLength() == 0)
-                return urls;
-
-            // 用最高那段视频当样本(它最吃带宽, 测出来的差距最有代表性)
-            JsonElement best = default;
-            var bestId = 0;
-            foreach (var v in videos.EnumerateArray())
-            {
-                var id = GetInt(v, "id");
-                if (id > bestId) { bestId = id; best = v; }
-            }
-            if (bestId <= 0) return urls;
-
-            var baseUrl = GetStr(best, "baseUrl");
-            if (baseUrl.Length > 0) urls.Add(baseUrl);
-            if (best.TryGetProperty("backupUrl", out var bu) && bu.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var u in bu.EnumerateArray())
-                {
-                    var s = u.GetString();
-                    if (!string.IsNullOrEmpty(s) && !urls.Contains(s)) urls.Add(s);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            // 测速样本拿不到不该弹错(那是设置页的一个辅助功能), 但要在日志里留痕
-            App.ReportError(ex);
-        }
-        return urls;
     }
 
     /// <summary>清晰度 id 转显示名</summary>

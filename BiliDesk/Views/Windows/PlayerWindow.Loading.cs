@@ -1778,7 +1778,7 @@ public partial class PlayerWindow : FluentWindow
         var cachingMs = BufferPolicy.Resolve(kind, url, isShortVideo,
             Svc.Settings.NetworkCachingMs, Svc.Settings.AutoBufferPolicy);
         WriteLibVLCDebug($"[BufferPolicy] kind={kind} short={isShortVideo} nc={cachingMs}ms " +
-                         $"auto={Svc.Settings.AutoBufferPolicy} measured={CdnService.Instance.LastMeasuredBytesPerSecond}B/s\n");
+                         $"auto={Svc.Settings.AutoBufferPolicy}\n");
         options.Add(":network-caching=" + cachingMs);
         return new Media(_libVLC, new Uri(url), options.ToArray());
     }

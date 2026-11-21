@@ -769,9 +769,9 @@
                     <Border Style="{StaticResource SettingsGroupDivider}" />
                     <ContentControl Content="网络线路" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
-                    <!-- CDN 线路: 跟随服务端(默认) / 自动测速挑最快 / 手动指定一家。
-                         自动测速虽能挑到瞬时最快, 但换 host 后部分线路持续吞吐/抖动更差,
-                         用户反馈卡顿反而更多; 所以 2026-11-05 起默认跟随服务端。
+                    <!-- CDN 线路: 跟随服务端(默认) / 手动指定一家。
+                         2026-11-21 起"自动测速"已删除: 换 host 后部分线路持续吞吐/抖动更差,
+                         用户反馈卡顿反而更多, 收益不抵风险。
                          逻辑与实测依据见 Services/CdnService.cs。 -->
                     <Grid Style="{StaticResource SettingsRowStyle}">
                         <Grid.ColumnDefinitions>
@@ -780,7 +780,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
                             <TextBlock Text="线路选择" Style="{StaticResource SettingsRowTitleStyle}" />
-                            <TextBlock Text="B 站为同一视频提供多家 CDN; 跟随服务端使用接口返回的线路, 自动测速会实测吞吐挑最快的一条"
+                            <TextBlock Text="B 站为同一视频提供多家 CDN; 跟随服务端使用接口返回的线路(最稳), 也可手动指定固定用某一家"
                                        Style="{StaticResource SettingsRowDescStyle}" />
                         </StackPanel>
                         <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
@@ -798,7 +798,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
                             <TextBlock Text="指定 CDN" Style="{StaticResource SettingsRowTitleStyle}" />
-                            <TextBlock Text="仅在「手动指定」时生效; 该线路不可用时会自动改用最快线路"
+                            <TextBlock Text="仅在「手动指定」时生效; 签名与线路不匹配等情况下会回落到服务端线路"
                                        Style="{StaticResource SettingsRowDescStyle}" />
                         </StackPanel>
                         <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
@@ -823,26 +823,6 @@
                         <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding BlockPcdn, Mode=TwoWay}" />
-                    </Grid>
-                    <Border Style="{StaticResource SettingsRowDivider}" />
-
-                    <!-- 重新测速: 换网络后排名会变, 而自动测速有 10 分钟缓存 -->
-                    <Grid Style="{StaticResource SettingsRowStyle}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                            <TextBlock Text="重新测速" Style="{StaticResource SettingsRowTitleStyle}" />
-                            <TextBlock Text="{Binding CdnSpeedReport}"
-                                       Style="{StaticResource SettingsRowDescStyle}" />
-                            <TextBlock Text="{Binding CdnTestStatus}"
-                                       Style="{StaticResource SettingsRowDescStyle}"
-                                       Visibility="{Binding CdnTestStatus, Converter={StaticResource StrToVis}}" />
-                        </StackPanel>
-                        <Button Grid.Column="1" Content="开始测速" Style="{StaticResource SubtleButtonStyle}"
-                                VerticalAlignment="Center"
-                                Command="{Binding TestCdnCommand}" />
                     </Grid>
 
                     <!-- ★ 组七: 兼容性(2026-11-20, issue #98)

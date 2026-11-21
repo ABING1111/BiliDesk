@@ -443,24 +443,19 @@ public class AppSettings
     public bool NoLogin1080P { get; set; } = true;
 
     /// <summary>
-    /// 视频线路(CDN)选择策略。默认**跟随服务端**(2026-11-05 改; 旧默认是自动测速) ——
-    /// 自动测速虽然能挑到瞬时吞吐最高的线路, 但换 host 后部分线路的持续吞吐/抖动更差,
-    /// 用户侧表现为播放中卡顿反而更多; 跟随服务端用接口原样返回的线路最稳。
-    /// 设置页仍可切回自动测速 / 手动指定。详见 Services/CdnService.cs。
+    /// 视频线路(CDN)选择策略。默认**跟随服务端** ——
+    /// 换 host 后部分线路的持续吞吐/抖动更差, 用户侧表现为播放中卡顿反而更多;
+    /// 跟随服务端用接口原样返回的线路最稳。
+    /// ★ 2026-11-21: "自动测速"已删除, 只剩 跟随服务端 / 手动指定。
+    ///   旧配置里的 Auto 由 SettingsStore.ApplySanitized 归一成 ServerDefault。
+    /// 详见 Services/CdnService.cs。
     /// </summary>
     public CdnSelectMode CdnMode { get; set; } = CdnSelectMode.ServerDefault;
 
     /// <summary>
-    /// "线路默认值迁移"标记(2026-11-05)。旧配置里 CdnMode 都是 Auto(旧默认),
-    /// 升级后只迁移一次到 ServerDefault; 之后用户手动选回 Auto 不会被再次改掉。
-    /// false/缺失 = 尚未迁移。
-    /// </summary>
-    public bool CdnModeMigratedToServer { get; set; }
-
-    /// <summary>
-    /// 手动模式下选定的 CDN Id(见 Models/CdnOption.All)。
+    /// 手动模式下选定的 CDN Id(见 Models.CdnOption.All)。
     /// 存 Id 而不是 host: B 站换域名时 Id 不变, 老配置才不会失效。
-    /// 读配置时用 CdnOption.ById 校验, 已下线的 Id 会被清成空串(退回自动)。
+    /// 读配置时用 CdnOption.ById 校验, 已下线的 Id 会被清成空串(退回跟随服务端)。
     /// </summary>
     public string CdnManualId { get; set; } = "";
 
