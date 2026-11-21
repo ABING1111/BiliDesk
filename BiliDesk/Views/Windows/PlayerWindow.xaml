@@ -251,6 +251,47 @@
             </Setter>
         </Style>
 
+        <!-- 章节条目(2026-11-21): 缩略图 76×43 + 章名 + 起始时间。
+             ★ 选中态在左侧点亮一条 accent 竖条 + 浅底: 弹层是"深色玻璃"不是主题面板,
+               所以底色写死白系(与其它播放器弹层一致); 竖条用 AccentBrush 是可以的 ——
+               它来自 Application 资源, Popup 这棵独立可视树也查得到。
+             ★ Bar 的槽位**常驻**(常态透明): 选中时若才撑开 3px, 整行内容会横向跳一下。 -->
+        <Style x:Key="PlayerChapterItemStyle" TargetType="ListBoxItem">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0,0,0,2" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="6,4,8,4">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="6" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="Bar" Grid.Column="0" Width="2.5" Height="22"
+                                        CornerRadius="1.25" Background="Transparent"
+                                        HorizontalAlignment="Left" VerticalAlignment="Center" />
+                                <ContentPresenter Grid.Column="1" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1FFFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1FFFFFFF" />
+                                <Setter TargetName="Bar" Property="Background"
+                                        Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- 播放器图标按钮(控制栏用): 32×32 透明底, 悬停才浮现一层淡白。
              ★ ContentPresenter.Resources 里那段"同名隐式 TextBlock 样式"补丁照抄 IconButtonStyle:
                全局那个隐式样式带了 Foreground setter(Style setter 优先于继承), 会把图标的颜色吃掉。
@@ -1627,6 +1668,13 @@
                                                  · ClipToBounds 防止算出来的宽度溢出到控制栏外面。 -->
                                             <Canvas x:Name="SponsorMarks" IsHitTestVisible="False"
                                                     ClipToBounds="True" />
+                                            <!-- 章节刻度(2026-11-21): 每章起点一条 1.5×9 竖线。
+                                                 · 必须排在 SponsorMarks **之后**: 色块是 5px 高的圆角色块压在
+                                                   轨道中心, 刻度要盖在它上面才不会被涂掉;
+                                                 · IsHitTestVisible=False —— 与色块同理, 绝不能挡住拖进度条;
+                                                 · 只有 ≥2 章时才画(见 RenderChapterMarks), 无章节的视频这里空的。 -->
+                                            <Canvas x:Name="ChapterMarks" IsHitTestVisible="False"
+                                                    ClipToBounds="True" />
                                             <!-- 拖动/悬停进度条时浮出的「目标时间气泡」。
                                                  ★ 放在进度条这个 Grid 里: Canvas 不参与布局(不撑高度),
                                                    气泡用负的 Canvas.Top 浮到轨道上方 —— 正好压出玻璃面板的
@@ -1640,9 +1688,20 @@
                                                 <Border x:Name="ProgressHint" Visibility="Collapsed"
                                                         Background="#E6121318" BorderBrush="#26FFFFFF"
                                                         BorderThickness="1" CornerRadius="8" Padding="10,4">
-                                                    <TextBlock x:Name="ProgressHintText" Text="00:00"
-                                                               Foreground="White" FontSize="12"
-                                                               HorizontalAlignment="Center" />
+                                                    <StackPanel>
+                                                        <TextBlock x:Name="ProgressHintText" Text="00:00"
+                                                                   Foreground="White" FontSize="12"
+                                                                   HorizontalAlignment="Center" />
+                                                        <!-- 章节名(2026-11-21): 第二行, 只有指针落在某一章里才显示。
+                                                             ★ MaxWidth 是为了长章名不把气泡撑到半条轨道宽;
+                                                               超出用省略号, 完整名字在章节弹层里看。 -->
+                                                        <TextBlock x:Name="ProgressHintChapter" Text=""
+                                                                   Visibility="Collapsed"
+                                                                   Foreground="#B3FFFFFF" FontSize="11"
+                                                                   Margin="0,2,0,0" MaxWidth="220"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   HorizontalAlignment="Center" />
+                                                    </StackPanel>
                                                 </Border>
                                             </Canvas>
                                         </Grid>
@@ -1671,10 +1730,98 @@
                                                 <Path Fill="White" Width="15" Height="15" Stretch="Uniform"
                                                       Data="M 7,4 L 18,11 L 7,18 Z" />
                                             </Button>
-                                            <TextBlock x:Name="TimeText" Grid.Column="1" Foreground="#E6FFFFFF"
-                                                       FontFamily="Consolas, Segoe UI" FontSize="12"
-                                                       VerticalAlignment="Center" Margin="8,0,0,0"
-                                                       Text="00:00 / 00:00" />
+                                            <!-- 时间 + 章节胶囊(2026-11-21)。
+                                                 ★ 为什么把章节入口放在时间旁边而不是再加一个图标按钮:
+                                                   它同时承担"当前在第几章"的**状态显示** —— 长课程视频里
+                                                   用户一眼要知道现在讲到哪一节, 弹层入口只是顺带。
+                                                 ★ 无章节时按钮整个 Collapsed(代码控制), 控制栏宽度回到原样。
+                                                 ★ 窄窗(<820px)由 SetChapterCompact 收成图标: 只换形态, 不收入口。 -->
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                        VerticalAlignment="Center" Margin="8,0,0,0">
+                                                <TextBlock x:Name="TimeText" Foreground="#E6FFFFFF"
+                                                           FontFamily="Consolas, Segoe UI" FontSize="12"
+                                                           VerticalAlignment="Center"
+                                                           Text="00:00 / 00:00" />
+                                                <Button x:Name="BtnChapters" Visibility="Collapsed"
+                                                        Style="{StaticResource PlayerGhostTextBtn}"
+                                                        Margin="10,0,0,0" Padding="8,3"
+                                                        Click="OnChaptersClick" ToolTip="章节">
+                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <!-- 窄窗形态的图标(E8FD = 列表)。Segoe Fluent Icons 在
+                                                             Win10 上叫 MDL2 Assets, 两个族名都要列, 缺一个就变豆腐块。 -->
+                                                        <TextBlock x:Name="ChapterGlyph" Text="&#xE8FD;"
+                                                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                   FontSize="12" Foreground="#F2FFFFFF"
+                                                                   Margin="0,0,6,0" VerticalAlignment="Center"
+                                                                   Visibility="Collapsed" />
+                                                        <TextBlock x:Name="ChapterCapsuleText" Text=""
+                                                                   FontSize="11.5" Foreground="#E6FFFFFF"
+                                                                   MaxWidth="132" TextTrimming="CharacterEllipsis"
+                                                                   VerticalAlignment="Center" />
+                                                        <TextBlock x:Name="ChapterCaret" Text="&#x2304;"
+                                                                   FontSize="11" Foreground="#99FFFFFF"
+                                                                   Margin="5,0,0,0" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <!-- 章节弹层。★ PlacementTarget 在构造函数里**代码直连**:
+                                                     XAML 的 ElementName 绑定在 VideoView 的浮层可视树里解析不到
+                                                     (与清晰度/字幕弹层当年踩的是同一个坑)。 -->
+                                                <Popup x:Name="ChapterPopup"
+                                                       Placement="Top" StaysOpen="False" AllowsTransparency="True"
+                                                       PopupAnimation="Fade">
+                                                    <Border Style="{StaticResource PlayerGlassPopupStyle}"
+                                                            Width="304" Padding="12,10">
+                                                        <StackPanel>
+                                                            <Grid>
+                                                                <TextBlock Text="章节" Foreground="#E6FFFFFF"
+                                                                           FontSize="12" VerticalAlignment="Center" />
+                                                                <TextBlock x:Name="ChapterMetaText" Text=""
+                                                                           HorizontalAlignment="Right"
+                                                                           Foreground="#80FFFFFF" FontSize="11"
+                                                                           VerticalAlignment="Center" />
+                                                            </Grid>
+                                                            <!-- ListBox 而非 ItemsControl: 靠 SelectedItem 给"正在播的
+                                                                 那一章"高亮, 且自带 BringIntoView(打开时滚到当前章)。 -->
+                                                            <ListBox x:Name="ChapterList" Background="Transparent"
+                                                                     BorderThickness="0" Foreground="White"
+                                                                     ItemContainerStyle="{StaticResource PlayerChapterItemStyle}"
+                                                                     MaxHeight="380" Margin="0,8,0,0"
+                                                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                                     SelectionChanged="OnChapterSelected">
+                                                                <ListBox.ItemTemplate>
+                                                                    <DataTemplate>
+                                                                        <Grid>
+                                                                            <Grid.ColumnDefinitions>
+                                                                                <ColumnDefinition Width="Auto" />
+                                                                                <ColumnDefinition Width="*" />
+                                                                                <ColumnDefinition Width="Auto" />
+                                                                            </Grid.ColumnDefinitions>
+                                                                            <!-- 章节缩略图: B 站按"该章起点"自动截的帧,
+                                                                                 地址形如 bfs/vchapter/<cid>_<秒>.jpg, 走统一的
+                                                                                 CoverLoader(内存/磁盘缓存 + 后台解码)。 -->
+                                                                            <Border Grid.Column="0" Width="76" Height="43"
+                                                                                    CornerRadius="6" Background="#26FFFFFF"
+                                                                                    helpers:Cover.Source="{Binding ImageUrl}" />
+                                                                            <TextBlock Grid.Column="1" Text="{Binding Content}"
+                                                                                       Margin="10,0,10,0" FontSize="12.5"
+                                                                                       VerticalAlignment="Center"
+                                                                                       TextWrapping="Wrap" MaxHeight="34"
+                                                                                       TextTrimming="CharacterEllipsis"
+                                                                                       Foreground="#F2FFFFFF" />
+                                                                            <TextBlock Grid.Column="2" Text="{Binding TimeText}"
+                                                                                       FontSize="11" Margin="0,0,2,0"
+                                                                                       FontFamily="Consolas, Segoe UI"
+                                                                                       VerticalAlignment="Center"
+                                                                                       Foreground="#80FFFFFF" />
+                                                                        </Grid>
+                                                                    </DataTemplate>
+                                                                </ListBox.ItemTemplate>
+                                                            </ListBox>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </Popup>
+                                            </StackPanel>
 
                                             <!-- 音量(2026-11-14 改成"靠近才展开"):
                                                  平时只留一个喇叭图标, 鼠标进到这块区域再从图标右侧把滑杆

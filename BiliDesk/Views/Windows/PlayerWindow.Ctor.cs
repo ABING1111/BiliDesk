@@ -81,6 +81,16 @@ public partial class PlayerWindow : FluentWindow
         SubtitlePopup.Opened += (_, _) => Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
                 RightAlignPopup(SubtitlePopup, BtnSubtitle)));
+        // 章节弹层(2026-11-21): 入口在控制栏左段(时间旁边), 左缘对齐即可 —— 弹层宽 304,
+        // 从那里往右铺不会出窗。打开时滚到当前章: 五小时的课程有几十章, 默认停在第一条
+        // 上等于"打开就找不到自己在哪"。
+        ChapterPopup.PlacementTarget = BtnChapters;
+        ChapterPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+            {
+                if (ChapterList?.SelectedItem != null)
+                    ChapterList.ScrollIntoView(ChapterList.SelectedItem);
+            }));
         SpeedPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
             {
@@ -98,6 +108,7 @@ public partial class PlayerWindow : FluentWindow
         HookPopupToggle(SpeedPopup, SpeedBtn);
         HookPopupToggle(SubtitlePopup, BtnSubtitle);
         HookPopupToggle(PagesPopup, BtnPages);
+        HookPopupToggle(ChapterPopup, BtnChapters);
         // ★ 视频区手势判定仍直接用"是否开着"作判据(见 AnyPlayerPopupOpen), 不订阅 Closed:
         //   2026-10-13 第一版在这里订阅过 Closed 记时间窗, 实测证明 Closed 晚于视频区的
         //   Up(70ms), 时间窗一次都没生效过 —— 已删除。
@@ -137,6 +148,9 @@ public partial class PlayerWindow : FluentWindow
         // 进度条色块是按像素摆的, 控件一改宽度就得重画(窗口缩放、切全屏、控制栏重排都会触发)。
         // 重画成本只有几个 Rectangle, 不必做节流。
         SponsorMarks.SizeChanged += (_, _) => RenderSponsorMarks();
+        // 章节刻度与色块同理: 按像素摆的, 宽度一变(缩放/全屏/铺满/控制栏重排)就得重画。
+        // 一章一个 Rectangle, 成本可忽略, 不做节流。
+        ChapterMarks.SizeChanged += (_, _) => RenderChapterMarks();
         // 显示相关视频: 开关一变, 已打开的信息栏立即隐藏/重新加载(2026-11-14)
         Svc.Settings.RelatedVideosChanged += OnRelatedVideosSettingChanged;
         // 自动连播(2026-11-19): 开关一变, 已打开的播放器立刻收掉/补上连播队列
@@ -387,6 +401,9 @@ public partial class PlayerWindow : FluentWindow
             // 必须在 UpdateProgressUi 之后 —— 后者在"跳转等待期"会提前 return, 而这里的
             // 判据(_pendingSeekMs)本来就要求"上一次跳转已经确认", 顺序正好对得上。
             MaybeSkipSponsorSegment();
+            // 当前章节(胶囊文案)也挂在同一条心跳上(2026-11-21): 章节是"跟着播放位置走"的
+            // 纯显示, 独立定时器没有任何收益, 反而多一个要清理的计时器。
+            UpdateChapterUi();
             // 播放地址保鲜(2026-11-14, issue #81): B 站 playurl 签名只有约 2 小时,
             // 长播放必须在到期前后台换一条新地址, 否则断流后重建会直接 403。
             MaybeRefreshPlayUrl();

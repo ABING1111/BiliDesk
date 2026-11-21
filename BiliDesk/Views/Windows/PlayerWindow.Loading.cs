@@ -819,6 +819,10 @@ public partial class PlayerWindow : FluentWindow
         // 字幕同属"上一条视频": 轨道/时间轴/开关态/延迟全部清掉, 在飞的请求立刻掐。
         // (自动显示偏好是跨片的设置值, 不在这里动 —— 新片加载后按它重新起显。)
         ResetSubtitleForNewMedia();
+        // 章节同理(2026-11-21): 列表/刻度/胶囊/弹层全部清掉。★ 必须在这里清而不是等
+        // 新片的响应: 从换片到 player/v2 回来有几百毫秒, 那期间挂在控制栏上的还是上一条
+        // 视频的章名, 点开也是上一个视频的章节列表。
+        ResetChaptersForNewMedia();
         // 清掉屏幕上残留的弹幕(防泄漏)并重置泳道占用
         DanmakuCanvas.Children.Clear();
         ResetLanes();
@@ -1113,6 +1117,8 @@ public partial class PlayerWindow : FluentWindow
         // 激活点击补偿(覆盖层第一次点击被吞, 见 PlayerWindow.VideoArea.cs): 三个量都是
         // "这一次点击"的瞬时态, 换片时鼠标多半早已抬起, 复位成初值即可。
         nameof(_activationClickPending), nameof(_activationLongPress), nameof(_activationClickStartTick),
+        // 章节(2026-11-21): 章节列表本身是引用类型(自检不审), 由 ResetChaptersForNewMedia 清。
+        // 这里没有需要登记的值类型字段 —— 当前章是每帧按播放位置现算的, 不落状态。
     };
 
     /// <summary>
@@ -1227,6 +1233,13 @@ public partial class PlayerWindow : FluentWindow
         //   _modalResizeInProgress 跟踪 WM_ENTERSIZEMOVE/EXITSIZEMOVE 的模态循环 ——
         //   换片时若正好在拖窗口, 清掉它会让 SuspendBackdropForResize 改走"尺寸静止恢复"分支。
         nameof(_backdropSuspendQueued), nameof(_backdropResizeArmed), nameof(_modalResizeInProgress),
+        // ---- 2026-11-21 章节 ----
+        // 控制栏的窄窗形态: 挂在**视频区宽度**上, 与片源无关, 换片不该把它弹回宽窗形态
+        //   (否则换一条视频的瞬间胶囊会先撑开再收起, 闪一下)。
+        nameof(_chaptersCompact),
+        // 填充章节弹层时抑制 SelectionChanged: 与 _fillingSpeedMenu 同款纯 UI 瞬时闸,
+        //   由 FillChapterMenu 的 finally 收尾, 与片源无关。
+        nameof(_fillingChapterMenu),
     };
 
     /// <summary>
@@ -1458,10 +1471,11 @@ public partial class PlayerWindow : FluentWindow
             // 否则由 500ms 心跳补跳(见 BeforePlayApplySponsorAsync)。
             var sponsorTask = FetchSponsorSegmentsAsync();
 
-            // ★ 字幕轨查询同样并行发起(2026-11-15): 用的是刚定下来的 cid, 且**不 await** ——
-            //   轨道列表晚几秒到完全没关系(字幕本来就该等画面出来), 绝不能挡在起播前面。
-            //   传本代次 gen: 用户连点两个视频时, 慢的那个字幕响应不能盖到新视频上。
-            _ = LoadSubtitleTracksAsync(gen);
+            // ★ 播放器信息(字幕轨 + 章节)**同样并行发起**(2026-11-15 / 2026-11-21):
+            //   用的是刚定下来的 cid, 且**不 await** —— 轨道列表/章节晚几秒到完全没关系
+            //   (本来就该等画面出来), 绝不能挡在起播前面。
+            //   传本代次 gen: 用户连点两个视频时, 慢的那个响应不能盖到新视频上。
+            _ = LoadPlayerInfoAsync(gen);
 
             SetLoadingText("正在获取播放地址…");
             // 默认请求 1080P(qn=80), B 站会按登录态/大会员返回实际可用的清晰度
@@ -1481,6 +1495,9 @@ public partial class PlayerWindow : FluentWindow
             }
             _totalMs = durMs;
             UpdateTotalDurationText();
+            // 章节通常比 playurl 先回来(它与字幕一起发, 不挡起播), 那时还不知道总时长,
+            // 刻度画不出来。这里拿到 durMs 后补画一次(2026-11-21)。
+            RenderChapterMarks();
             // ★ 菜单只增不减(2026-11-20): 与切档同一条规则 —— 本视频已经见过的档位
             //   不能被一次"只回了低档"的取流结果抹掉。换片时 ResetForNewMedia 已清空,
             //   所以这里不会把上一条视频的档位带过来。
