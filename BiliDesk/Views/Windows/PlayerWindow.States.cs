@@ -35,8 +35,15 @@ public partial class PlayerWindow : FluentWindow
     private async Task RefreshFavStateAsync()
     {
         if (_aid <= 0 || !Svc.Session.HasLogin || _closing) return;
-        var (ok, _, folders) = await Svc.Api.GetVideoFavFoldersAsync(_aid);
-        if (!ok || folders == null || _closing) return;
+        var folders = _favFoldersAid == _aid ? _favFolders : null;
+        if (folders == null)
+        {
+            var (ok, _, fetched) = await Svc.Api.GetVideoFavFoldersAsync(_aid);
+            if (!ok || fetched == null || _closing) return;
+            folders = fetched;
+            _favFolders = fetched;
+            _favFoldersAid = _aid;
+        }
         // 只要在任意一个收藏夹里, 就算"已收藏"
         var favorited = folders.Any(f => f.HasVideo);
         SetFavorited(favorited);
@@ -121,13 +128,22 @@ public partial class PlayerWindow : FluentWindow
         _favBusy = true;
         try
         {
-            var (ok, err, folders) = await Svc.Api.GetVideoFavFoldersAsync(_aid);
-            if (_closing) return;
-            if (!ok || folders == null)
+            // 点亮态查询已经拿过一次; 同一条视频点按钮时直接用那份, 不再打一次接口。
+            var folders = _favFoldersAid == _aid ? _favFolders : null;
+            if (folders == null)
             {
-                Svc.Toast.Show("收藏状态获取失败: " + (err ?? "未知错误"));
-                return;
+                var (ok, err, fetched) = await Svc.Api.GetVideoFavFoldersAsync(_aid);
+                if (_closing) return;
+                if (!ok || fetched == null)
+                {
+                    Svc.Toast.Show("收藏状态获取失败: " + (err ?? "未知错误"));
+                    return;
+                }
+                folders = fetched;
+                _favFolders = fetched;
+                _favFoldersAid = _aid;
             }
+            if (_closing) return;
             // ★ 一个收藏夹都没有时**也**打开勾选窗(2026-11-19): 窗口左下角就是「新建收藏夹」,
             //   建完默认勾选、点确定即可收藏。以前这里直接 Toast"请先去 B 站创建一个",
             //   在应用里根本没有出路 —— 新建入口补上之后那句话就可以删了。
@@ -147,6 +163,10 @@ public partial class PlayerWindow : FluentWindow
                 delIds.Count > 0 ? delIds : null);
             if (_closing) return;
             if (!ok2) { Svc.Toast.Show("收藏失败: " + (err2 ?? "未知错误")); return; }
+
+            // 勾选已提交, 缓存的夹列表过期了; 下次查询重新拉。
+            _favFolders = null;
+            _favFoldersAid = 0;
 
             // 高亮与提示跟最终勾选走(至少在一个夹里就算"已收藏")
             var final = picker.FinalCheckedIds;

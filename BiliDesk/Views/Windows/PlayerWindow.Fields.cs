@@ -602,6 +602,13 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>收藏动作进行中, 防止连点导致 add/del 交叉</summary>
     private bool _favBusy;
 
+    /// <summary>
+    /// 当前视频的收藏夹列表缓存。查询点亮态和打开勾选窗原本各请求一次,
+    /// 这里共用同一份结果; 换片 / 收藏提交成功后作废。
+    /// </summary>
+    private List<FavFolder>? _favFolders;
+    private long _favFoldersAid;
+
     /// <summary>当前视频是否已在「稍后再看」里(用于按钮的点亮态)</summary>
     private bool _isInWatchLater;
 

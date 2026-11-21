@@ -170,6 +170,8 @@ public class UserCenterViewModel : ObservableObject
     private string _followingsError = "";
     private int _followingsPage = 1;
     private int _followingsTotal;
+    // 一批 Add 期间先压住计算属性的通知, 每页只通知一次(50 人全量通知会卡 UI)。
+    private bool _followingsBatch;
 
     /// <summary>TA 关注的 UP 主。</summary>
     public ObservableCollection<FollowUser> Followings { get; } = new();
@@ -420,6 +422,7 @@ public class UserCenterViewModel : ObservableObject
         };
         Followings.CollectionChanged += (_, _) =>
         {
+            if (_followingsBatch) return;
             OnPropertyChanged(nameof(FollowingsSummary));
             OnPropertyChanged(nameof(SummaryText));
             RaiseTabState();
@@ -675,10 +678,18 @@ public class UserCenterViewModel : ObservableObject
                 return;
             }
 
-            foreach (var u in list)
+            _followingsBatch = true;
+            try
             {
-                if (u.Mid <= 0) continue;
-                Followings.Add(u);
+                foreach (var u in list)
+                {
+                    if (u.Mid <= 0) continue;
+                    Followings.Add(u);
+                }
+            }
+            finally
+            {
+                _followingsBatch = false;
             }
 
             if (total > 0) _followingsTotal = total;
@@ -693,6 +704,9 @@ public class UserCenterViewModel : ObservableObject
 
             OnPropertyChanged(nameof(FollowingsSummary));
             OnPropertyChanged(nameof(SummaryText));
+            // 批量 Add 期间压住了 CollectionChanged 里的 RaiseTabState, 这里补一次:
+            // 否则第一页加载完"还没有关注任何人"的空态会一直挂着。
+            RaiseTabState();
         }
         catch (Exception ex)
         {

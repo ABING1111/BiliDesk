@@ -364,16 +364,18 @@ public sealed class DynamicNotifyService
 
                 // 增量: 统计比"上次已见最新 id"更新的条目。旧版一轮只返回增量时
                 // 这些条目不会出现在后面的页里, 所以必须累加而不是重算。
+                // 同一个基准 id 一轮里比几十/几百条, 先解析一次别每条都 TryParse。
+                var baselineIsNumeric = ulong.TryParse(state.LatestId, out var baselineNum);
                 var added = 0;
                 foreach (var e in list)
                 {
-                    if (IsIdNewer(e.Id, state.LatestId)) added++;
+                    if (IsIdNewer(e.Id, state.LatestId, baselineIsNumeric, baselineNum)) added++;
                 }
                 if (added > 0)
                     state.NewCount = Math.Min(MaxCountPerUp, state.NewCount + added);
 
                 if (latest.Pubdate > state.LatestPubdate) state.LatestPubdate = latest.Pubdate;
-                if (IsIdNewer(latest.Id, state.LatestId)) state.LatestId = latest.Id;
+                if (IsIdNewer(latest.Id, state.LatestId, baselineIsNumeric, baselineNum)) state.LatestId = latest.Id;
                 if (!string.IsNullOrEmpty(latest.AuthorName)) state.Name = latest.AuthorName;
                 // 头像也跟着条目走(2026-11-07): 已有状态可能是在 face 还没解析的年代建的
                 // (旧进程残留 / portal 没收录它), 本轮条目带了 face 就补上 ——
@@ -398,9 +400,10 @@ public sealed class DynamicNotifyService
             return list.Count;
         }
 
+        var ackIsNumeric = ulong.TryParse(ack, out var ackNum);
         var n = 0;
         foreach (var e in list)
-            if (IsIdNewer(e.Id, ack)) n++;
+            if (IsIdNewer(e.Id, ack, ackIsNumeric, ackNum)) n++;
         return n;
     }
 
@@ -474,8 +477,15 @@ public sealed class DynamicNotifyService
 
     private static bool IsIdNewer(string id, string baseline)
     {
+        var baselineIsNumeric = ulong.TryParse(baseline, out var baselineNum);
+        return IsIdNewer(id, baseline, baselineIsNumeric, baselineNum);
+    }
+
+    /// <summary>基准已解析好的版本: 一轮里同一个基准只解析一次。</summary>
+    private static bool IsIdNewer(string id, string baseline, bool baselineIsNumeric, ulong baselineNum)
+    {
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(baseline)) return false;
-        if (ulong.TryParse(id, out var a) && ulong.TryParse(baseline, out var b)) return a > b;
+        if (baselineIsNumeric && ulong.TryParse(id, out var a)) return a > baselineNum;
         // 非雪花 id(极少见): 退化成字符串比较, 只用于"不同"判断。
         return !string.Equals(id, baseline, StringComparison.Ordinal);
     }
