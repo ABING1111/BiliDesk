@@ -6,10 +6,10 @@ using BiliDesk.Views;
 namespace BiliDesk.Services;
 
 /// <summary>
-/// 正文里的链接 → 用**内置浏览器**(WebView2 的 <see cref="BrowserWindow"/>)打开。
+/// 正文里的链接 → 按设置打开: 默认用**内置浏览器**(WebView2 的 <see cref="BrowserWindow"/>),
+/// 用户在设置里选了"系统浏览器"则交给 Windows 默认浏览器。
 ///
-/// ★ 为什么不用系统默认浏览器: 用户明确要求"点击即可用内置的浏览器打开";
-///   内置浏览器共用同一个 WebView2 Profile, B 站页面里是**已登录**状态,
+/// ★ 默认用内置浏览器: 内置浏览器共用同一个 WebView2 Profile, B 站页面里是**已登录**状态,
 ///   跳过去不用再登一次。
 /// ★ 为什么单独抽一层: 评论区、简介、图文正文三处都要这个动作, 各自 new 一个
 ///   BrowserWindow 会让 Owner 处理不一致(尤其播放器全屏时)。
@@ -30,7 +30,7 @@ public static class LinkLauncher
     private static readonly Dictionary<string, long> Recent = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// 用内置浏览器打开一个链接。
+    /// 按设置打开一个链接(默认内置浏览器, 设置里可改成系统浏览器)。
     /// </summary>
     /// <param name="url">已归一化的 http/https 地址(见 <c>LinkParser</c>)。</param>
     /// <param name="owner">宿主窗口; 传 null 时退回主窗口, 再不行就不挂 Owner。</param>
@@ -47,6 +47,13 @@ public static class LinkLauncher
             //      而且连环弹窗的每一步都会撞上它, 无论触发频率多低都挡得住。
             //   ② 时间窗去重: 覆盖"窗口还没进 Application.Windows 就被连点两次"的瞬间。
             if (HasOpenWindowFor(url) || IsDuplicate(url)) return;
+
+            // ★★ 2026-11-21(issue #111): 设置里选了系统浏览器就交给它 —— 但**必须放在去重之后**。
+            //   放在去重前面(初版)会让开启开关的路径完全绕开这两道闸: 同一次点击被触发多次
+            //   (2026-11-14 真出现过"连环弹窗")就会开出多个浏览器标签页。
+            //   系统浏览器起不来(没默认浏览器/被策略拦截)时继续往下走, 回落到内置浏览器,
+            //   保证点击至少能打开。
+            if (Svc.Settings.OpenLinksInExternalBrowser && OpenInSystemBrowser(url)) return;
 
             var host = owner ?? SvcWindow.Main;
             var win = new BrowserWindow(url, url);

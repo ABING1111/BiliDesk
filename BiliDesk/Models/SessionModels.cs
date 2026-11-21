@@ -418,6 +418,13 @@ public class AppSettings
     public bool CloseToTray { get; set; } = true;
 
     /// <summary>
+    /// 点击链接时用系统默认浏览器打开(默认 false = 用应用内置浏览器)。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// 老配置缺这个字段时保持初始化值 false, 行为与新增本设置项之前一致。
+    /// </summary>
+    public bool OpenLinksInExternalBrowser { get; set; }
+
+    /// <summary>
     /// 启动后自动检查更新(默认 true)。
     /// 检查是匿名的 GitHub Releases 请求, 不带任何账号信息; 关掉后仍可在设置页手动检查。
     /// 老配置缺这个字段时保持初始化值 ⇒ "默认打开"自动成立, 不需要版本号兼容。
