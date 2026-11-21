@@ -74,14 +74,19 @@ public class CardWallPanel : Panel
         //   · 普通宽度变化(不是连续缩放): 当帧收敛可见带 + 补锚点, 见 OnWallResized;
         //   · 缩放进行中(CardWall.IsResizing): 只登记 _resizePending, 等 ResizeSettled
         //     后一次性收敛 —— 逐帧重排正是"缩放时卡片抽搐"的来源。
+        //
+        // ★★★ 2026-11-21: "缩放"只认**宿主窗口**的宽度变化(见 CardWall.WindowResized)。
+        //   墙自己变窄的另一大来源是竖向滚动条出现(约 18px) —— 那个必须当帧收敛, 否则首屏
+        //   卡片会按旧槽宽折行, 每行少一张, 220ms 后才跳回来(用户报的"第一次进入只排 3 列")。
         SizeChanged += (_, e) =>
         {
-            // ★ 先登记"宽度变了"再走重排逻辑: 两者都挂在 SizeChanged 上时, 处理器顺序
-            //   取决于订阅先后 —— 在这里先置位, OnWallResized 才能可靠地看到"缩放中"
-            //   而暂缓逐帧收敛(见 CardWall.IsResizing)。
+            // ★ 先判断"窗口真的改大小了吗", 再走重排逻辑: OnWallResized 要靠它决定是当帧收敛
+            //   还是登记等 settle(见 CardWall.IsResizing)。
             //   ★ 0 → 实际宽度是首次布局, 不是用户缩放(见 CardWall.OnWallSizeChanged)。
-            if (e.WidthChanged && e.PreviousSize.Width > 0.5) CardWall.NotifyLayoutResize();
-            OnWallResized();
+            var windowResized = CardWall.WindowResized(this);
+            var widthChanged = e.WidthChanged && e.PreviousSize.Width > 0.5;
+            if (widthChanged && windowResized) CardWall.NotifyLayoutResize();
+            OnWallResized(widthChanged, windowResized);
         };
 
         // 封面内存窗口(2026-11-07 P1): 卡片是零虚拟化的, 容器永不销毁, 于是"滚过多少张"
@@ -144,27 +149,54 @@ public class CardWallPanel : Panel
     }
 
     /// <summary>
-    /// 墙宽变了(拖窗口边缘 / 最大化还原)。
+    /// 墙宽变了(拖窗口边缘 / 最大化还原 / **竖向滚动条出现消失** / 导航栏切档)。
     ///
-    /// ★★ 为什么必须**当帧**把可见带同步过去, 而不是交给渐进泵(2026-10-01 探针实测):
+    /// ★★ 为什么在"普通宽度变化"这条路上必须**当帧**把可见带同步过去, 而不是交给渐进泵
+    ///   (2026-10-01 探针实测):
     ///   折行是按孩子**当前**宽度算的, 而卡宽是"上一次可用宽度"算出来的 ⇒ 窗口一窄, 一行里
     ///   最后那张就塞不下、掉进下一行(整墙行数 +1, 可见内容整体下移一行); 等泵把卡宽换过来
     ///   它又跳回来。探针实测: 一次 1700→1100 的拖动里可见内容这样上下跳 30 多次、累计 6000px。
     ///   SizeChanged 是在**排列之后**发的, 此刻改孩子的本地尺寸值并让布局重新失效, WPF 会在
     ///   **同一次布局更新里**重排完 —— 那个"多塞/少塞一张"的中间态一帧都不会被渲染。
     ///
+    /// ★★★ 2026-11-21(用户报"第一次进入卡片页每行少一张, 一秒后瞬间跳回来"):
+    ///   这条"当帧收敛"的路原来只给**窗口缩放**走, 滚动条出现的 18px 被当成了缩放 ⇒ 首屏
+    ///   第一批卡片进场时墙变窄, 卡片却按旧槽宽折行, 整墙每行少一张, 要等 220ms 后的
+    ///   ResizeSettled 才一次性跳回来。现在判据改成"宿主窗口有没有变宽变窄"
+    ///   (见 <see cref="CardWall.WindowResized"/>): 窗口没变 ⇒ 走这条路, 当帧收敛。
+    ///   ★ 缩放进行中(拖边 / 最大化还原的系统动画)仍然**只登记, 不重排**: 那时逐帧收敛 +
+    ///     渐进泵 + 锚点补偿叠在一起, 用户看到的就是"卡片抽搐乱动"。这正是当初把
+    ///     "滚动条出现消失"也算进缩放的原因 —— 现在它自己走当帧收敛, 不再需要这道闸。
+    ///
     /// ★ 视野上方/下方的卡片仍交给渐进泵(看不见, 分帧付), 它们引起的可见位移由 Reanchor 抵掉。
     /// </summary>
-    private void OnWallResized()
+    /// <param name="widthChanged">
+    /// 这次 SizeChanged 里墙的**宽度**变了吗(高度变化不算 —— 滚动加载/收敛都会让内容变高)。
+    /// 折行只与宽度有关, 高度变化不用走"折行还成不成立"那一套。
+    /// </param>
+    /// <param name="windowResized">
+    /// 这次宽度变化是不是**宿主窗口**改大小引起的(由 SizeChanged 里的
+    /// <see cref="CardWall.WindowResized"/> 判定)。false = 页面内部版式变化(滚动条等)。
+    /// </param>
+    private void OnWallResized(bool widthChanged, bool windowResized)
     {
-        // ★★ 缩放进行中(拖边 / 最大化还原的系统动画 / 滚动条出现消失): **只登记, 不重排**。
-        //   旧写法每帧都在这里 RefreshNow + ConvergeBand, 而 CardWallPanel 的渐进泵与
-        //   Reanchor 也在同时跑 —— 一次拖动里可见带被重测几十次、偏移被补来补去,
-        //   用户看到的就是"卡片抽搐乱动"。现在统一等 CardWall.ResizeSettled, 由
-        //   ConvergeForResize 一次性收敛(见 OnResizeSettled)。
         if (CardWall.IsResizing)
         {
             _resizePending = true;
+            return;
+        }
+
+        // ★★ 护栏: 页面内部版式变化与"卡片变宽 ⇒ 封面变高 ⇒ 内容变高 ⇒ 滚动条又被顶出来"
+        //   可以互相追成死循环(内容高度正好卡在视口高度上时)。真踩上时每一轮都会改一次墙宽,
+        //   如果每轮都当帧收敛, WPF 的布局循环会在同一帧里跑到上限, 表现为卡死。
+        //   ⇒ 同一轮 dispatcher 里只允许为内部变化当帧收敛一次, 后续退回 220ms 的 settle 路径
+        //     (那条路每拍只收敛一次, 不会把布局循环顶爆; 而且页面自动加载一页就离开那个高度)。
+        //   ★ 只看**宽度变化**: 高度变化(上面那个"收敛完行数变了 ⇒ 内容变高")与折行无关,
+        //     不能因为它再退回 settle —— 那会让每次收敛都白等 220ms。
+        if (widthChanged && !windowResized && _internalConvergeInTurn)
+        {
+            _resizePending = true;
+            CardWall.NotifyLayoutResize();
             return;
         }
 
@@ -191,7 +223,19 @@ public class CardWallPanel : Panel
         CardWall.RefreshNow(this);
         // 目标值一个都没变(拖动幅度小到取整后还是同一个卡宽): 整屏重测可以省掉
         if (Math.Abs(TargetWidth - beforeW) < 0.01 && Math.Abs(TargetCover - beforeCover) < 0.01) return;
-        ConvergeBand();
+        if (ConvergeBand() > 0 && widthChanged && !windowResized) MarkInternalConverge();
+    }
+
+    /// <summary>
+    /// 这一轮 dispatcher 里已经为"内部版式变化"做过一次当帧收敛(见 <see cref="OnWallResized"/> 的护栏)。
+    /// Background 优先级复位 = 本次渲染之后。
+    /// </summary>
+    private bool _internalConvergeInTurn;
+
+    private void MarkInternalConverge()
+    {
+        _internalConvergeInTurn = true;
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, () => _internalConvergeInTurn = false);
     }
 
     /// <summary>尺寸稳定后由 <see cref="CardWall.ResizeSettled"/> 调用: 一次性收敛整墙。</summary>
@@ -582,6 +626,20 @@ public class CardWallPanel : Panel
     ///     剩下的交给 150ms 防抖/1.5s 心跳的下一轮 —— 反正它们还没进视野。
     /// </summary>
     private const int PrefetchBurst = 8;
+
+    /// <summary>
+    /// 本轮扫描收集到的"视口外、需要补图"的卡片(按 Y 排, 再限量发起)。
+    ///
+    /// ★ 复用同一个列表(2026-11-21): 扫描是滚动期间每 150ms 一次的常驻开销, 而它原本每轮都
+    ///   `new List&lt;(double, FrameworkElement)&gt;` + `Sort` —— 探针实测一轮扫描的分配从 15.4KB
+    ///   降到 8.4KB(剩下的来自按需发起的补图), 持续滚动时约省下 3MB/分钟 的纯垃圾。
+    ///   重入由 <see cref="UpdateCoverWindow"/> 挡掉, 所以复用安全。
+    /// </summary>
+    private readonly List<(double Top, FrameworkElement Card)> _prefetch = new();
+
+    /// <summary>"该放掉谁"的候选缓冲(见 <see cref="ReleaseStalestCovers"/>), 同样复用。</summary>
+    private readonly List<(UIElement Child, long Tick)> _staleCandidates = new();
+
     private ScrollViewer? _coverScroll;
     private DispatcherTimer? _coverWindowTimer;
     private bool _coverWindowQueued;
@@ -791,6 +849,24 @@ public class CardWallPanel : Panel
     }
 
     /// <summary>
+    /// 扫描入口: **同一时刻只允许一轮**(2026-11-21)。
+    ///
+    /// ★ 为什么需要: 扫描本身会调 <see cref="Cover.Restore"/> —— 命中内存缓存时它是**同步贴图**,
+    ///   沿途可能触发 SizeChanged/ScrollChanged(卡片内容变了)。若那些事件又绕回这里, 内层扫描会把
+    ///   外层正在用的候选缓冲区清空, 外层后面的循环就对着半份数据干活。
+    ///   挡掉内层是安全的: 外层这一轮马上会把它该干的事干完, 150ms 防抖 / 1.5s 心跳也还会再来。
+    /// </summary>
+    private void UpdateCoverWindow()
+    {
+        if (_covering) return;
+        _covering = true;
+        try { UpdateCoverWindowCore(); }
+        finally { _covering = false; }
+    }
+
+    private bool _covering;
+
+    /// <summary>
     /// 按当前滚动位置补图, 并把**常驻封面张数**压在上限之内。
     ///
     /// ★★★ 2026-11-07 第五次重做(用户报"首页一直往下滑刷新, 内存不断涨, 不回落"):
@@ -808,8 +884,12 @@ public class CardWallPanel : Panel
     ///     再加上"回到屏幕是无条件补图(force)", 即使判错也只是多解码一次, 不会永久灰。
     ///
     ///   这也正好落实用户明确表达的优先级:"单页内存不能超过某个值"优先于"绝不出现灰块"。
+    ///
+    /// ★ 2026-11-21 性能: 原来分两趟把全部孩子扫了两遍(视口内 / 视口外余量带), 每趟还要为
+    ///   "有没有缺图"再遍历一次封面 Border。现在合并成**一趟**: 视口内随扫随补, 余量带只收集
+    ///   候选(存进复用字段, 不再每轮 new 一个 List)。
     /// </summary>
-    private void UpdateCoverWindow()
+    private void UpdateCoverWindowCore()
     {
         if (!CoverWindow.Enabled) return;
 
@@ -872,85 +952,70 @@ public class CardWallPanel : Panel
         //   一起发起恢复 —— 探针实测 InFlight 峰值 212 个任务抢 4 个解码槽,
         //   用户正看着的那 24 张排在 200 多个任务后面, 要等近 2 秒。
         //
-        //   ⇒ 分两趟:
-        //     第 1 趟只补**严格视口内**(用户真正看得见的), 立刻发起;
-        //     第 2 趟补视口外的余量带, 而且**限量**(见 PrefetchBurst),
-        //        避免一次把解码队列塞满。
+        //   ⇒ 分两趟(2026-11-21 起是"一趟里的两个档次"):
+        //     视口内(用户真正看得见的)**立刻**发起恢复;
+        //     视口外的余量带只收集候选, 循环结束后按"离视口近"排序 + **限量**发起
+        //     (见 PrefetchBurst), 避免一次把解码队列塞满。
         //   这样"看得见的先出图"成为结构性保证, 而不是靠运气。
-        var prefetchPending = new List<(double Top, FrameworkElement Card)>();
-
-        for (var pass = 0; pass < 2; pass++)
+        _prefetch.Clear();
+        for (var i = 0; i < InternalChildren.Count; i++)
         {
-            for (var i = 0; i < InternalChildren.Count; i++)
+            var child = InternalChildren[i];
+            if (child is not FrameworkElement fe) continue;
+
+            // ★ 隐藏项(历史页搜索未命中的卡片)不参与补图: 它排在同一个 Y、尺寸为 0,
+            //   不挡掉的话会被当成"在视口里", 给几百张看不见的卡片一起解码封面。
+            //   顺手把"上次在视口内"的标记清掉, 免得它继续占用常驻名额。
+            if (child.Visibility == Visibility.Collapsed)
             {
-                var child = InternalChildren[i];
-                if (child is not FrameworkElement fe) continue;
+                child.SetValue(WasInViewportProperty, false);
+                continue;
+            }
 
-                // ★ 隐藏项(历史页搜索未命中的卡片)不参与补图: 它排在同一个 Y、尺寸为 0,
-                //   不挡掉的话会被当成"在视口里", 给几百张看不见的卡片一起解码封面。
-                //   顺手把"上次在视口内"的标记清掉, 免得它继续占用常驻名额。
-                if (child.Visibility == Visibility.Collapsed)
-                {
-                    child.SetValue(WasInViewportProperty, false);
-                    continue;
-                }
+            // 优先用 ArrangeOverride 记下的坐标(见上面 panelTop 的说明)。
+            // ★ 本轮布局还没结算(分帧填充/追加的中间帧)时, 尾部的新孩子还没有可靠坐标 ——
+            //   直接跳过, 等 ArrangeOverride 结束后的那一轮扫描再处理。
+            //   旧的写法在这里做一次全墙 UpdateLayout 来"逼"出坐标, 每帧 180~250ms,
+            //   正是追加新卡片时整界面冻结的来源(见上面 2026-11-14 的说明)。
+            double top;
+            if (i < _arrangeY.Count) top = panelTop + _arrangeY[i];
+            else continue;
+            var bottom = i < _arrangeBottom.Count ? panelTop + _arrangeBottom[i] : top + fe.ActualHeight;
+            if (double.IsNaN(top) || double.IsNaN(bottom)) continue;
 
-                // 优先用 ArrangeOverride 记下的坐标(见上面 panelTop 的说明)。
-                // ★ 本轮布局还没结算(分帧填充/追加的中间帧)时, 尾部的新孩子还没有可靠坐标 ——
-                //   直接跳过, 等 ArrangeOverride 结束后的那一轮扫描再处理。
-                //   旧的写法在这里做一次全墙 UpdateLayout 来"逼"出坐标, 每帧 180~250ms,
-                //   正是追加新卡片时整界面冻结的来源(见上面 2026-11-14 的说明)。
-                double top;
-                if (i < _arrangeY.Count) top = panelTop + _arrangeY[i];
-                else continue;
-                var bottom = i < _arrangeBottom.Count ? panelTop + _arrangeBottom[i] : top + fe.ActualHeight;
-                if (double.IsNaN(top) || double.IsNaN(bottom)) continue;
+            var inViewport = CoverWindow.InViewport(top, bottom, viewport);
+            // ★ 记下来给"离开屏幕时只放视口外"用(见 WasInViewportProperty)。
+            child.SetValue(WasInViewportProperty, inViewport);
+            if (inViewport) visibleCount++;
 
-                var inViewport = CoverWindow.InViewport(top, bottom, viewport);
-                if (pass == 0)
-                {
-                    if (inViewport) visibleCount++;
-                    // ★ 记下来给"离开屏幕时只放视口外"用(见 WasInViewportProperty)。
-                    child.SetValue(WasInViewportProperty, inViewport);
-                }
+            if (!CoverWindow.ShouldRestore(top, bottom, b)) continue;
 
-                if (!CoverWindow.ShouldRestore(top, bottom, b)) continue;
+            // ★★★ 打"最后被看到"的时间戳 —— 这是新的释放判据(见方法头)。
+            //   补图区间内的卡片每一轮都会刷新它, 所以越早滚过去的时间戳越旧。
+            child.SetValue(LastSeenTickProperty, tick);
 
-                // ★★★ 打"最后被看到"的时间戳 —— 这是新的释放判据(见方法头)。
-                //   补图区间内的卡片每一轮都会刷新它, 所以越早滚过去的时间戳越旧。
-                child.SetValue(LastSeenTickProperty, tick);
+            if (!inViewport)
+            {
+                // 余量带: 只收集, 等循环结束统一按"离视口近"排序 + 限量发起。
+                if (HasMissingCover(child)) _prefetch.Add((top, fe));
+                continue;
+            }
 
-                // 第 1 趟只要视口内的; 第 2 趟收视口外的余量带。
-                if (pass == 0 && !inViewport) continue;
-                if (pass == 1 && inViewport) continue;   // 第 1 趟已经处理过
-
-                var borders = CacheCoverBorders(fe);
-                var needsAny = false;
-                foreach (var border in borders)
-                    if (!Cover.HasImage(border)) { needsAny = true; break; }
-                if (!needsAny) continue;
-
-                if (pass == 1)
-                {
-                    prefetchPending.Add((top, fe));
-                    continue;
-                }
-
-                foreach (var border in borders)
-                {
-                    if (Cover.HasImage(border)) continue;
-                    missingInViewport++;
-                    // ★ force: 用户看得到的地方必须立刻有图, 忽略失败冷却。
-                    Cover.Restore(border, force: true);
-                }
+            // 视口内: 用户看得见, 缺一张补一张、不等不限量。
+            foreach (var border in CacheCoverBorders(fe))
+            {
+                if (Cover.HasImage(border)) continue;
+                missingInViewport++;
+                // ★ force: 用户看得到的地方必须立刻有图, 忽略失败冷却。
+                Cover.Restore(border, force: true);
             }
         }
 
         // ★ 视口外的余量带: 按"离视口近"优先, 且**每轮限量**发起 ——
         //   见上面那段说明(一次铺几百个任务会把解码队列堵死, 用户正看着的反而最后出图)。
-        prefetchPending.Sort((x, y) => x.Top.CompareTo(y.Top));
+        _prefetch.Sort(static (x, y) => x.Top.CompareTo(y.Top));
         var budget = PrefetchBurst;
-        foreach (var (_, fe) in prefetchPending)
+        foreach (var (_, fe) in _prefetch)
         {
             if (budget <= 0) break;
             foreach (var border in CacheCoverBorders(fe))
@@ -1005,7 +1070,9 @@ public class CardWallPanel : Panel
 
         // 收集"当前有图且**不在视口内**"的卡片 + 它们的时间戳。
         // 没有图的卡片不需要放, 也不占常驻名额。
-        var candidates = new List<(UIElement Child, long Tick)>(InternalChildren.Count);
+        // ★ 复用字段(2026-11-21): 每轮扫描都调用, 原本每次都 new 一个几百元素的 List。
+        var candidates = _staleCandidates;
+        candidates.Clear();
         var visibleCards = 0;
         for (var i = 0; i < InternalChildren.Count; i++)
         {
@@ -1061,7 +1128,7 @@ public class CardWallPanel : Panel
         var margin = Math.Max(1, cap / 4);
         var target = Math.Min(candidates.Count, need + margin);
 
-        candidates.Sort((a, c) => a.Tick.CompareTo(c.Tick));
+        candidates.Sort(static (a, c) => a.Tick.CompareTo(c.Tick));
 
         var released = 0;
         for (var i = 0; i < candidates.Count && released < target; i++)
@@ -1099,6 +1166,14 @@ public class CardWallPanel : Panel
     }
 
     private bool _coverShortQueued;
+
+    /// <summary>这张卡还有没有任何一格没图(封面 Border 缓存为空 = 不是封面卡, 直接认为不缺)。</summary>
+    private static bool HasMissingCover(UIElement child)
+    {
+        foreach (var border in CacheCoverBorders(child))
+            if (!Cover.HasImage(border)) return true;
+        return false;
+    }
 
     /// <summary>
     /// 找到并记住这个孩子的封面 Border 列表(找不到返回空数组, 下次再试)。
@@ -1276,6 +1351,14 @@ public class CardWallPanel : Panel
     protected override Size MeasureOverride(Size availableSize)
     {
         double constraintW = availableSize.Width;
+
+        // ★★★ 2026-11-21(用户报"第一次进入卡片页每行少一张"): 首次测量时墙还没有
+        //   ActualWidth(SizeChanged 要等整轮布局走完才发), 下面 EnsureLocalOverride 会把孩子的
+        //   本地覆盖值钉成继承来的**设计宽 236** —— 它比"按墙宽算出的槽宽"大, 于是这一帧按
+        //   236 折行, 每行少一张。先用**测量约束宽度**把目标算出来, 首帧就是对的列数。
+        //   ★ 只在"这面墙还没算过目标值"时做(Columns == 0), 之后一律交给 SizeChanged /
+        //     拖动节流那条路, 不会绕过拖动期间的合流。
+        if (CardWall.GetColumns(this) == 0) CardWall.ApplyForConstraint(this, constraintW);
 
         foreach (UIElement child in InternalChildren)
         {

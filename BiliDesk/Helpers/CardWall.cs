@@ -182,12 +182,16 @@ public static class CardWall
     {
         if (sender is not FrameworkElement el) return;
 
-        // ★★ 宽度变化 = "窗口在缩放"的可靠信号(高度变化不算 —— 滚动加载会让内容一变高,
-        //   那是正常的列表增长, 不是 resize)。所有墙共用一个"缩放进行中"状态,
-        //   供卡片墙面板暂缓收敛、供各页面的自动加载闸门暂缓补页 —— 见 IsResizing 的说明。
-        //   ★ 0 → 实际宽度是**首次布局**, 不是用户缩放: 不能置位, 否则首屏卡片会在
-        //     236 的设计宽度上停 220ms 再"啪"地跳到目标宽度。
-        if (e.WidthChanged && e.PreviousSize.Width > 0.5) NotifyLayoutResize();
+        // ★★ 只有**窗口**的宽度变了才算"用户在缩放"(高度变化不算 —— 滚动加载会让内容一变高,
+        //   那是正常的列表增长, 不是 resize)。墙自己的宽度变化还有一大类来源是**页面内部版式**:
+        //   竖向滚动条出现/消失(约 18px, 见 ScrollBarAutoHide)、导航栏 Compact 档 72→60 的动画、
+        //   页面内边距按档位切换 —— 这些必须当帧收敛, 不能进"缩放中"状态, 见 WindowResized。
+        //   所有墙共用一个"缩放进行中"状态, 供卡片墙面板暂缓收敛、供各页面的自动加载闸门暂缓补页。
+        //   ★ 0 → 实际宽度是**首次布局**, 不是用户缩放: 不能置位, 否则 `IsResizing` 会白挂
+        //     220ms(这期间面板不收敛、页面不自动补页)。
+        //   ★ 这一句同时负责**播种**窗口宽度(每次都读一次), 所以不受上面两个条件限制。
+        var windowResized = WindowResized(el);
+        if (e.WidthChanged && e.PreviousSize.Width > 0.5 && windowResized) NotifyLayoutResize();
 
         Update(el);
     }
@@ -210,6 +214,12 @@ public static class CardWall
     ///
     /// ★ 只认**宽度**变化: 卡片墙的高度会随滚动加载不断长, 把高度也当 resize 的话,
     ///   用户在正常翻页时会一直被当成"正在缩放", 收敛和自动加载都被冻结。
+    ///
+    /// ★★★ 而且只认**宿主窗口**的宽度变化(2026-11-21 修用户报"第一次进入卡片页只排 3 列,
+    ///   一秒后瞬间跳回 4 列"): 墙自己的宽度还会因为**页面内部版式**变化 —— 竖向滚动条出现
+    ///   占了约 18px、导航栏收窄、页面内边距切档。把它们也当缩放, 首屏卡片就会按**旧槽宽**
+    ///   折行(每行少一张), 一直停在错误的列数上, 直到 220ms 后 settle 才一次性跳回来。
+    ///   判据见 <see cref="WindowResized"/> / <see cref="ResizeSignal"/>。
     /// </summary>
     public static bool IsResizing { get; private set; }
 
@@ -242,7 +252,42 @@ public static class CardWall
         => Interlocked.Exchange(ref _lastProgrammaticScrollTick, Environment.TickCount64);
 
     /// <summary>
-    /// 墙的宽度变了(窗口缩放 / 系统最大化动画 / 滚动条出现消失)。
+    /// 墙的宽度变了 —— 这次变化是不是**宿主窗口**改大小引起的？
+    ///
+    /// ★★★ 2026-11-21(用户报"第一次进入有视频卡片的页面, 卡片墙少一列, 一秒后瞬间跳回来"):
+    ///   首屏数据是分帧填进来的(DeferredFill 24 张/帧)。第一帧内容不足一屏 ⇒ 竖向滚动条不出现;
+    ///   第一批卡进场后内容超一屏 ⇒ 滚动条出现, 它**占布局宽度**(约 18px, 见 ScrollBarAutoHide)
+    ///   ⇒ 墙被压窄。旧写法把这一下当成"用户在缩放窗口" ⇒ 进 IsResizing ⇒ 面板只登记
+    ///   `_resizePending` 不收敛, 卡片继续按旧槽宽折行 ⇒ **每行少一张**, 直到 220ms 后 settle
+    ///   才一次性收敛(用户看到的就是"先 3 列, 过一秒啪地变回 4 列")。
+    ///   判据换成"窗口宽度有没有变"之后, 滚动条这类内部变化走的是 `OnWallResized` 的当帧收敛,
+    ///   中间态一帧都不会被渲染 —— 首屏第一眼就是对的列数。
+    ///
+    /// ★ 每次 SizeChanged 都调一次(不只是窗口变了的时候): 顺手把当前窗口宽度播种/更新到墙上,
+    ///   下次比较才有基准。写的是非继承的附加属性, 不会引起布局失效。
+    /// ★ 拿不到窗口(离屏探针/测试宿主): 返回 true, 保持旧行为 —— 宁可多等一次 settle,
+    ///   也不要在没有判据的情况下当帧重排整墙。
+    /// </summary>
+    internal static bool WindowResized(FrameworkElement wall)
+    {
+        var window = Window.GetWindow(wall);
+        if (window == null) return true;
+
+        var width = window.ActualWidth;
+        if (double.IsNaN(width) || width <= 0) return false;
+
+        var last = (double)wall.GetValue(LastWindowWidthProperty);
+        wall.SetValue(LastWindowWidthProperty, width);
+        return ResizeSignal.IsWindowWidthChange(last, width);
+    }
+
+    /// <summary>上一次看到的宿主窗口宽度(只记账, 见 <see cref="WindowResized"/>)。0 = 还没播种。</summary>
+    private static readonly DependencyProperty LastWindowWidthProperty =
+        DependencyProperty.RegisterAttached("LastWindowWidth", typeof(double), typeof(CardWall),
+            new PropertyMetadata(0.0));
+
+    /// <summary>
+    /// 墙的宽度变了(窗口缩放 / 系统最大化动画 / 拖动窗口边缘)。
     /// 由 <see cref="OnWallSizeChanged"/> 与 <see cref="CardWallPanel"/> 的 SizeChanged 调用。
     /// </summary>
     internal static void NotifyLayoutResize()
@@ -340,6 +385,21 @@ public static class CardWall
     ///   更新里把可见带的孩子切过去, 中间态一帧都不会被渲染。
     /// </summary>
     public static void RefreshNow(FrameworkElement wall) => ApplyNow(wall);
+
+    /// <summary>
+    /// 按**布局约束宽度**算一次目标尺寸, 不看节流、也不用等 SizeChanged。
+    ///
+    /// ★★★ 用于**首次测量**(见 <see cref="CardWallPanel.MeasureOverride"/>): 那一刻墙还没有
+    ///   `ActualWidth`(SizeChanged 要等整轮布局走完才发), 孩子的本地覆盖值会被钉成继承来的
+    ///   **设计值 236** —— 它比"按墙宽算出的槽宽"大, 于是首帧每行少一张, 随后才由渐进泵纠正。
+    ///   用测量时拿到的约束宽度先把目标算出来, 首帧就是对的列数。
+    /// ★ 只由冷启动那条路调用(调用方保证这面墙还没算过目标值), 所以不会绕过拖动期间的节流。
+    /// </summary>
+    internal static void ApplyForConstraint(FrameworkElement wall, double availableWidth)
+    {
+        if (double.IsNaN(availableWidth) || double.IsInfinity(availableWidth) || availableWidth <= 0) return;
+        ApplyTo(wall, availableWidth);
+    }
 
     /// <summary>按当前实际宽度算一次并写下去, 不看 <see cref="NotifyModalResize"/> 的节流开关。</summary>
     private static void ApplyNow(FrameworkElement wall)
