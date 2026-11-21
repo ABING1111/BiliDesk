@@ -47,6 +47,71 @@ public static class VlcCore
         Path.Combine(LibVlcDirectory, "plugins");
 
     /// <summary>
+    /// 强制使用的音频重采样模块。为什么必须是 speex、不能交给 libvlc 的 "any"，
+    /// 见 <see cref="BuildCoreArguments"/> 里那段说明(附实测数据)。
+    /// </summary>
+    public const string AudioResamplerModule = "speex";
+
+    /// <summary>
+    /// 构造共享 LibVLC 的基础参数(纯函数, 便于单测)。
+    /// 只放会改变播放行为的选项; 诊断日志开关由 <paramref name="nativeDebugLog"/> 控制。
+    /// </summary>
+    public static List<string> BuildCoreArguments(int networkCachingMs, VideoOutputMode videoOutput,
+        bool nativeDebugLog = false)
+    {
+        var args = new List<string>
+        {
+            "--intf=dummy",
+            "--no-osd",
+            "--network-caching=" + networkCachingMs,
+
+            // ★★★ 2026-11-21 修「播放视频音质不佳、存在电流音」: 强制 speex 重采样。
+            //
+            //   VLC 3 的 --audio-resampler 默认是 "any", 而它实际**选中 ugly(线性插值)**,
+            //   不是包里同样存在的 speex。B 站音轨绝大多数是 44.1kHz, 而 Windows 声卡的
+            //   混音格式几乎都是 48kHz ⇒ 每条视频都在经过 44.1→48 的重采样:
+            //     · 实测(探针 bd-probe-audiodump 的 mem 模式: 44.1k/1kHz 正弦 → 48k 后
+            //       把 PCM 抓回托管侧做正弦拟合):
+            //         ugly  THD+N = -27.7dB, 带内杂散 2.9k/4.9k = -42dBFS(信号 -8.7dBFS)
+            //         speex THD+N = -85.5dB, 同一对杂散 = -116dB
+            //       2.9k/4.9k 正是 44.1±1kHz 的镜像被 48k 采样折叠到的位置 ——
+            //       听感就是持续的高频"电流声/数码味", 人声齿音和镲片最明显。
+            //     · 该选项对 mmdevice/WASAPI 以及 afile/amem 所有 aout 都生效, 也覆盖
+            //       直播/重连/聆听态, 所以放在全局实例, 而不是各 Media 上。
+            //     · speex_resampler 插件随 VideoLAN.LibVLC.Windows 发布, 发布裁剪清单
+            //       (BiliDesk.csproj 的 TrimLibVLCPlugins)没有删它; 万一将来被删,
+            //       libvlc 找不到指定模块会回落 "any"(实测传一个不存在的模块名仍能播,
+            //       只是退回 ugly), 不会导致没声音。
+            "--audio-resampler=" + AudioResamplerModule,
+        };
+
+        var vout = VoutModuleFor(videoOutput);
+        if (vout != null) args.Add("--vout=" + vout);
+
+        // ★★★ 2026-11-21: 原生日志**只能**用 --verbose=2 打开详细级别。
+        //   别再加 `--file-logging` / `--logfile=...`: 3.0.24 的 Windows 发布包
+        //   plugins/logger/ 里只有 console logger, 没有 file logger 模块, 这两个选项
+        //   在这个构建里不存在, 传了会让 `new LibVLC` 直接抛异常(详见 Get 里的说明)。
+        //   落盘改由 Get 在实例创建后调用 SetLogFile() 完成。
+        if (nativeDebugLog) args.Add("--verbose=2");
+
+        return args;
+    }
+
+    /// <summary>
+    /// 视频输出模块(2026-11-20, issue #98): 默认自动 = null, 让 libvlc 自己挑。
+    /// ★ 非自动时把插件名写死在这里, 不让用户直接填字符串: 填错会得到"打不开任何视频"
+    ///   且没有任何提示。可用插件已核对过(libdirect3d9_plugin / libglwin32_plugin)。
+    /// </summary>
+    public static string? VoutModuleFor(VideoOutputMode mode) => mode switch
+    {
+        VideoOutputMode.Direct3D11 => "direct3d11",
+        VideoOutputMode.Direct3D9 => "direct3d9",
+        VideoOutputMode.OpenGL => "glwin32",
+        _ => null
+    };
+
+    /// <summary>
     /// 取得共享 LibVLC 实例; 首次调用时初始化原生库。
     /// 线程安全: 多个窗口/预热线程同时进入只会真正初始化一次。
     /// </summary>
@@ -88,24 +153,10 @@ public static class VlcCore
             var caching = BufferPolicy.Resolve(BufferMediaKind.VodSingle, null, shortVideo: false,
                 SettingsStore.Instance.NetworkCachingMs, SettingsStore.Instance.AutoBufferPolicy);
 
-            var args = new List<string>
-            {
-                "--intf=dummy",
-                "--no-osd",
-                "--network-caching=" + caching
-            };
-
-            // 视频输出模块(2026-11-20, issue #98): 默认自动 = 不传, 让 libvlc 自己挑。
-            // ★ 非自动时把插件名写死在这里, 不让用户直接填字符串: 填错会得到"打不开任何视频"
-            //   且没有任何提示。可用插件已核对过(libdirect3d9_plugin / libglwin32_plugin)。
-            var vout = SettingsStore.Instance.VideoOutputMode switch
-            {
-                VideoOutputMode.Direct3D11 => "direct3d11",
-                VideoOutputMode.Direct3D9 => "direct3d9",
-                VideoOutputMode.OpenGL => "glwin32",
-                _ => null
-            };
-            if (vout != null) args.Add("--vout=" + vout);
+            var mode = SettingsStore.Instance.VideoOutputMode;
+            var vout = VoutModuleFor(mode);
+            var debug = Environment.GetEnvironmentVariable("BILIDESK_VLC_DEBUG") == "1";
+            var args = BuildCoreArguments(caching, mode, debug);
 
             // ★ 2026-11-14(issue #81): 原生日志开关。
             //   排查"播放几小时后卡死/断流"时必须看 libvlc 自己怎么说 ——
@@ -113,21 +164,19 @@ public static class VlcCore
             //   HTTP 403 这些只存在于原生日志里, 上层代码完全看不到。
             //   ⇒ 设 BILIDESK_VLC_DEBUG=1 就把原生日志落到 %LocalAppData%\BiliDesk\vlc-native.log。
             //   ★ 默认**不开**: debug 级别的日志很啰嗦, 挂一晚上能写几十 MB。
-            if (Environment.GetEnvironmentVariable("BILIDESK_VLC_DEBUG") == "1")
+            //
+            //   ★★★ 2026-11-21 修这个开关本身: 以前是往 args 里塞
+            //     `--file-logging` + `--logfile=...`, 但 VideoLAN.LibVLC.Windows 3.0.24 的
+            //     plugins/logger/ 里**只有 libconsole_logger_plugin.dll, 没有 file logger 模块**
+            //     (libvlccore.dll 里连 "file-logging" 字符串都没有)。于是这两个选项在
+            //     这个构建里是"未知选项", `new LibVLC(args)` 会直接抛
+            //       "vlc: unknown option or missing mandatory argument `--file-logging'"
+            //     —— 用户一设开关, 播放器反而打不开任何视频。
+            //     现在改用 libvlc_log_set_file(LibVLCSharp 的 SetLogFile): 它直接传一个
+            //     FILE*, 不经过 logger 插件, 因此不受裁剪影响。--verbose=2 仍要传,
+            //     否则 libvlc 默认只上报 error 级(由 BuildCoreArguments 负责)。
+            if (debug)
             {
-                try
-                {
-                    args.Add("--file-logging");
-                    args.Add("--logfile=" + Path.Combine(AppPaths.DataDir, "vlc-native.log"));
-                    args.Add("--verbose=2");
-                }
-                catch
-                {
-                    // 数据目录不可写: 宁可不记日志, 也不能让播放器起不来
-                    args.Remove("--file-logging");
-                    args.Remove("--verbose=2");
-                }
-
                 // 2026-11-20(issue #98): 排查"NVIDIA 叠加层把本应用当成游戏"时,
                 // 先确认叠加层模块(nvspcap64.dll)到底有没有注入到本进程 —— 没有注入的话,
                 // 换 vout 也是白换, 应该去 NVIDIA App 侧关叠加层。只在 debug 开关下记一条。
@@ -150,6 +199,20 @@ public static class VlcCore
             }
 
             _instance = new LibVLC(args.ToArray());
+
+            if (debug)
+            {
+                try
+                {
+                    // 注意: 每次启动会覆盖旧内容(与原来的 --logfile 行为一致)
+                    _instance.SetLogFile(Path.Combine(AppPaths.DataDir, "vlc-native.log"));
+                }
+                catch (Exception ex)
+                {
+                    // 数据目录不可写 / FILE* 拿不到: 宁可不记日志, 也不能让播放器起不来
+                    App.ReportError(ex);
+                }
+            }
 
             return _instance;
         }
@@ -203,6 +266,8 @@ public static class VlcCore
         {
             if (_instance == null) return;
             if (Volatile.Read(ref _livePlayers) > 0) return;
+            // 日志文件是原生 FILE*: 必须在 Dispose 之前关掉, 否则句柄和缓冲都要靠 CRT 退出时兜底
+            try { _instance.CloseLogFile(); } catch { /* 退出阶段忽略 */ }
             try { _instance.Dispose(); } catch { /* 退出阶段忽略 */ }
             _instance = null;
         }
