@@ -37,6 +37,19 @@ public partial class MainWindow : FluentWindow
     /// </summary>
     private readonly Dictionary<PageKey, FrameworkElement> _pages = new();
 
+    /// <summary>
+    /// 内嵌页的返回栈(2026-11-21)。
+    ///
+    /// ★ 原来内嵌层只有**一层**: UP 主页 → 合集详情 是直接替换 Content,
+    ///   点返回就一路退到导航页 —— 用户的心智却是"回到刚才的 UP 主页"。
+    ///   ⇒ 打开新内嵌页时把当前页压栈, 返回时先弹栈;
+    ///   栈空了才真正收起内嵌层(露出导航页)。
+    /// </summary>
+    private readonly List<(FrameworkElement Page, string Title)> _embeddedHistory = new();
+
+    /// <summary>返回栈上限: 防止"主页→详情→主页→…"无限点下去把页面对象全留在内存里。</summary>
+    private const int MaxEmbeddedHistory = 10;
+
     private DispatcherTimer? _toastTimer;
 
     public MainWindow()
@@ -241,7 +254,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>
     /// 鼠标侧键(XButton1/XButton2) = 返回上一层。
     ///
-    /// 主窗口的"上一层"只有一个: **内嵌页**(UP 主主页那种盖在内容区上的页面)。
+    /// 主窗口的"上一层"是**内嵌页**(UP 主主页那种盖在内容区上的页面, 可能已经叠了多层历史)。
     /// 没有内嵌页时什么都不做 —— 不擅自把用户弹回首页: 在设置页/历史页按一下侧键
     /// 就被踢走, 那是"误触"而不是"返回"。
     ///
@@ -260,7 +273,7 @@ public partial class MainWindow : FluentWindow
         }
         if (EmbeddedHost.Visibility != Visibility.Visible) return;
         e.Handled = true;
-        HideEmbedded();
+        GoBackEmbedded();
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -335,11 +348,51 @@ public partial class MainWindow : FluentWindow
     /// </summary>
     public void ShowEmbeddedPage(FrameworkElement page, string title)
     {
+        if (page == null) return;
+
+        // ★ 先把当前内嵌页压栈(2026-11-21): 从 UP 主页点进合集详情后, 返回要回到 UP 主页,
+        //   而不是一路退到导航页。只有"从导航页第一次打开"时才清空历史。
+        if (EmbeddedHost.Visibility == Visibility.Visible &&
+            EmbeddedContent.Content is FrameworkElement current)
+        {
+            _embeddedHistory.Add((current, EmbeddedTitle.Text));
+            if (_embeddedHistory.Count > MaxEmbeddedHistory)
+                _embeddedHistory.RemoveAt(0);   // 丢最旧的一层, 防止页面对象无限累积
+        }
+        else if (EmbeddedHost.Visibility != Visibility.Visible)
+        {
+            _embeddedHistory.Clear();
+        }
+
+        DisplayEmbeddedPage(page, title, animate: true);
+    }
+
+    /// <summary>
+    /// 内嵌页的「返回」: 有历史就弹回上一层, 没有才收起内嵌层露出导航页。
+    /// 返回按钮与鼠标侧键都走这里(见 OnEmbeddedBackClick / OnPreviewMouseDown)。
+    /// </summary>
+    public void GoBackEmbedded()
+    {
+        if (_embeddedHistory.Count == 0)
+        {
+            HideEmbedded();
+            return;
+        }
+
+        var last = _embeddedHistory[^1];
+        _embeddedHistory.RemoveAt(_embeddedHistory.Count - 1);
+        // 返回时不播入场动画: 上一页本来就"还在那里", 再淡入会显得像重新打开了一遍。
+        DisplayEmbeddedPage(last.Page, last.Title, animate: false);
+    }
+
+    /// <summary>把指定页面放进内嵌层(不碰返回栈, 栈的入/出由调用方管理)。</summary>
+    private void DisplayEmbeddedPage(FrameworkElement page, string title, bool animate)
+    {
         // 切页过渡还在跑时先把状态落定: 内嵌页会把整个 PageLayer 藏起来,
         // 若此时有页面停在"内容半透明"的中途, 回来时会看到它没完全显示。
         if (NavTransition.InFlight) NavTransition.FinishNow();
 
-        // 先放掉上一个内嵌页: 同一时刻只留一个, 免得旧的 UP 资料被接着显示
+        // 先放掉当前内嵌页: 同一时刻只留一个
         EmbeddedContent.Content = null;
 
         EmbeddedTitle.Text = title;
@@ -348,14 +401,23 @@ public partial class MainWindow : FluentWindow
         PageLayer.Visibility = Visibility.Collapsed;
         EmbeddedHost.Visibility = Visibility.Visible;
 
-        // 淡入 + 轻微上浮, 和切换导航页的入场观感保持一致
-        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-        EmbeddedHost.BeginAnimation(OpacityProperty,
-            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200)) { EasingFunction = ease });
-        page.RenderTransform = new TranslateTransform(0, 12);
-        ((TranslateTransform)page.RenderTransform).BeginAnimation(
-            TranslateTransform.YProperty,
-            new DoubleAnimation(12, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = ease });
+        if (animate)
+        {
+            // 淡入 + 轻微上浮, 和切换导航页的入场观感保持一致
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            EmbeddedHost.BeginAnimation(OpacityProperty,
+                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200)) { EasingFunction = ease });
+            page.RenderTransform = new TranslateTransform(0, 12);
+            ((TranslateTransform)page.RenderTransform).BeginAnimation(
+                TranslateTransform.YProperty,
+                new DoubleAnimation(12, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = ease });
+        }
+        else
+        {
+            EmbeddedHost.BeginAnimation(OpacityProperty, null);
+            EmbeddedHost.Opacity = 1;
+            page.RenderTransform = null;
+        }
 
         // 触发源可能在别的窗口上(例如在播放器里点了 UP 主头像)。
         // 那样页面虽然已经内嵌到主窗口, 用户却看不到 —— 所以这里主动把主窗口提到前面。
@@ -367,9 +429,11 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    /// <summary>关掉内嵌页, 露出之前的导航页</summary>
+    /// <summary>关掉内嵌层, 露出之前的导航页。导航切换走这里, 返回走 <see cref="GoBackEmbedded"/>。</summary>
     public void HideEmbedded()
     {
+        // 收起内嵌层 = 整段内嵌浏览结束, 历史一并清掉(下个入口重新开始)
+        _embeddedHistory.Clear();
         if (EmbeddedHost.Visibility != Visibility.Visible) return;
         // 先清掉淡入动画: 不然下次显示时 Opacity 的动画值还挂着, 会跳过入场动画直接跳满
         EmbeddedHost.BeginAnimation(OpacityProperty, null);
@@ -382,7 +446,7 @@ public partial class MainWindow : FluentWindow
         FilterService.Instance.RefreshPendingVisible();
     }
 
-    private void OnEmbeddedBackClick(object sender, RoutedEventArgs e) => HideEmbedded();
+    private void OnEmbeddedBackClick(object sender, RoutedEventArgs e) => GoBackEmbedded();
 
     /// <summary>
     /// 切到「搜索」页并立刻用给定关键词搜一次(首页右上角搜索卡用)。

@@ -277,4 +277,142 @@ public partial class ApiClient
         catch (Exception ex) { return (false, ex.Message, null); }
     }
 
+    // ---------------------------------------------------------------- 合集和系列
+
+    /// <summary>
+    /// UP 主空间「合集和系列」列表。
+    ///
+    /// 接口把两类分开下发(<c>seasons_list</c> / <c>series_list</c>), 但页面是**混排**的,
+    /// 所以这里合并成一个列表; 顺序由调用方按 <see cref="SpaceCollectionItem.UpdatedAt"/> 排。
+    ///
+    /// ★ <c>page.total</c> 是**两类合并后的总数** —— 分页时不能拿它和单个数组的长度比。
+    /// ★ 两个数组各自按 page_num 翻页, 所以同一页里两边的条目数可能不一样多;
+    ///   调用方按"已取条数 &lt; total"决定要不要继续翻页即可。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<SpaceCollectionItem>? items, int total)>
+        GetSpaceCollectionsAsync(long mid, int pageNum = 1, int pageSize = 20)
+    {
+        try
+        {
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/polymer/web-space/seasons_series_list",
+                new Dictionary<string, string>
+                {
+                    ["mid"] = mid.ToString(),
+                    ["page_num"] = pageNum.ToString(),
+                    // 实测 20 是接口的默认页大小, 更大的值不保证生效
+                    ["page_size"] = Math.Clamp(pageSize, 1, 20).ToString(),
+                    ["web_location"] = "333.1387"
+                },
+                referer: $"https://space.bilibili.com/{mid}/");
+            if (code != 0 || data == null)
+                return (false, msg ?? $"请求失败 (code {code})", null, 0);
+
+            var items = new List<SpaceCollectionItem>();
+            var total = 0;
+            if (data.Value.TryGetProperty("items_lists", out var lists) &&
+                lists.ValueKind == JsonValueKind.Object)
+            {
+                if (lists.TryGetProperty("page", out var page) && page.ValueKind == JsonValueKind.Object)
+                    total = GetInt(page, "total");
+
+                AppendCollections(lists, "seasons_list", SpaceCollectionKind.Season, mid, items);
+                AppendCollections(lists, "series_list", SpaceCollectionKind.Series, mid, items);
+            }
+            return (true, null, items, total);
+        }
+        catch (Exception ex) { return (false, ex.Message, null, 0); }
+    }
+
+    private static void AppendCollections(JsonElement lists, string prop, SpaceCollectionKind kind,
+                                          long mid, List<SpaceCollectionItem> into)
+    {
+        if (!lists.TryGetProperty(prop, out var arr) || arr.ValueKind != JsonValueKind.Array) return;
+        foreach (var e in arr.EnumerateArray())
+        {
+            if (e.ValueKind != JsonValueKind.Object) continue;
+            if (!e.TryGetProperty("meta", out var meta) || meta.ValueKind != JsonValueKind.Object) continue;
+
+            into.Add(new SpaceCollectionItem
+            {
+                Kind = kind,
+                SeasonId = kind == SpaceCollectionKind.Season ? GetLong(meta, "season_id") : 0,
+                SeriesId = kind == SpaceCollectionKind.Series ? GetLong(meta, "series_id") : 0,
+                Mid = mid,
+                Title = GetStr(meta, "name"),
+                Cover = UrlUtil.Normalize(GetStr(meta, "cover")),
+                Intro = GetStr(meta, "description"),
+                Count = GetInt(meta, "total"),
+                // 合集用 ptime, 系列用 last_update_ts; 两个字段名不统一
+                UpdatedAt = kind == SpaceCollectionKind.Season
+                    ? GetLong(meta, "ptime")
+                    : GetLong(meta, "last_update_ts")
+            });
+        }
+    }
+
+    /// <summary>
+    /// 合集/系列详情里的视频列表(合集详情页用)。
+    ///
+    /// 两条接口形状不同, 但返回的 archives 都能直接喂现有的 <see cref="ParseVideoItem"/>:
+    ///   · 合集: <c>polymer/web-space/seasons_archives_list</c>(page_num/page_size)
+    ///   · 系列: <c>series/archives</c>(pn/ps)
+    /// ★ 系列接口的条目只有 upMid、没有 UP 名, 解析后 <see cref="VideoItem.Author"/> 为空;
+    ///   详情页会用传入的 UP 名补齐, 不在这里猜。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<VideoItem>? items, int total)>
+        GetCollectionVideosAsync(long mid, SpaceCollectionKind kind, long id, int pn = 1, int ps = 30)
+    {
+        if (id <= 0) return (false, "缺少合集/系列 id", null, 0);
+        try
+        {
+            await EnsureBuvidAsync();
+            var isSeason = kind == SpaceCollectionKind.Season;
+            var url = isSeason
+                ? "https://api.bilibili.com/x/polymer/web-space/seasons_archives_list"
+                : "https://api.bilibili.com/x/series/archives";
+            var ps2 = isSeason
+                ? new Dictionary<string, string>
+                {
+                    ["mid"] = mid.ToString(),
+                    ["season_id"] = id.ToString(),
+                    // false = 与官方网页播放器一致的顺序(见 GetSeasonAsync 的说明)
+                    ["sort_reverse"] = "false",
+                    ["page_num"] = pn.ToString(),
+                    ["page_size"] = Math.Clamp(ps, 1, 50).ToString()
+                }
+                : new Dictionary<string, string>
+                {
+                    ["mid"] = mid.ToString(),
+                    ["series_id"] = id.ToString(),
+                    ["only_unum"] = "1",
+                    ["pn"] = pn.ToString(),
+                    ["ps"] = Math.Clamp(ps, 1, 50).ToString()
+                };
+
+            var (code, msg, data) = await GetJsonAsync(url, ps2,
+                referer: $"https://space.bilibili.com/{mid}/");
+            if (code != 0 || data == null)
+                return (false, msg ?? $"请求失败 (code {code})", null, 0);
+
+            var total = 0;
+            if (data.Value.TryGetProperty("page", out var page) && page.ValueKind == JsonValueKind.Object)
+                total = GetInt(page, "total");
+
+            var items = new List<VideoItem>();
+            if (data.Value.TryGetProperty("archives", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in arr.EnumerateArray())
+                {
+                    var item = ParseVideoItem(e);
+                    if (item == null) continue;
+                    if (item.OwnerMid <= 0) item.OwnerMid = mid;
+                    items.Add(item);
+                }
+            }
+            return (true, null, items, total);
+        }
+        catch (Exception ex) { return (false, ex.Message, null, 0); }
+    }
+
 }

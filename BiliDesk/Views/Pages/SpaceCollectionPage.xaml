@@ -1,0 +1,97 @@
+<UserControl x:Class="BiliDesk.Views.Pages.SpaceCollectionPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
+             xmlns:helpers="clr-namespace:BiliDesk.Helpers"
+             Background="{DynamicResource AppBackgroundBrush}">
+    <!--
+        合集 / 系列详情页(从 UP 主页「合集和系列」Tab 点卡片进来)。
+
+        版式: 顶部一条"封面 + 标题/内容数/简介", 下面是视频卡片墙 + 页码栏 ——
+        与 UP 主页投稿 Tab 用的是同一套卡片与页码控件, 翻页行为也一致。
+        这一页由 NavigationDispatcher 内嵌在主窗口内容区(与 UP 主页同款), 自己不画返回按钮。
+    -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- ===== 顶部信息 =====
+             2026-11-21 用户要求: 合集名/封面太占视野, 下滑时自动隐藏, 回顶再展开 ——
+             与 UP 主主页同一套逻辑(Helpers/HeaderAutoHide), 所以这里叫 HeaderHost。 -->
+        <Border x:Name="HeaderHost" Grid.Row="0" ClipToBounds="True"
+                Background="{DynamicResource PanelBackgroundBrush}"
+                BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1">
+            <Grid Margin="36,24,36,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Width="260" Height="146" CornerRadius="10"
+                        ClipToBounds="True" Background="{DynamicResource PlaceholderBrush}">
+                    <Border CornerRadius="10" helpers:Cover.Source="{Binding Cover}" />
+                </Border>
+
+                <StackPanel Grid.Column="1" Margin="22,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold"
+                               TextWrapping="Wrap" MaxHeight="60"
+                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                    <TextBlock Text="{Binding MetaLine}" FontSize="13" Margin="0,8,0,0"
+                               Foreground="{DynamicResource AccentTextBrush}" />
+                    <TextBlock Text="{Binding Summary}" Style="{StaticResource MetaTextStyle}"
+                               Margin="0,6,0,0" />
+                    <TextBlock Text="{Binding Intro}" FontSize="12" Margin="0,10,0,0"
+                               TextWrapping="Wrap" MaxHeight="60" TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Visibility="{Binding HasIntro, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ===== 视频列表 ===== -->
+        <Grid Grid.Row="1">
+            <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto"
+                          ScrollChanged="OnListScrollChanged">
+                <StackPanel Margin="36,16,36,24">
+                    <ItemsControl ItemsSource="{Binding Videos}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <helpers:CardWallPanel helpers:CardWall.Enable="True" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <controls:VideoCard />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <controls:PagerBar Margin="0,20,0,6" />
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- 首次加载的居中大菊花 -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding Loading, Converter={StaticResource BoolToVis}}">
+                <controls:LoadingRing Width="30" Height="30" HorizontalAlignment="Center" />
+                <TextBlock Text="加载中…" Style="{StaticResource MetaTextStyle}"
+                           Margin="0,12,0,0" HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- 错误 / 空态(列表为空时才盖住整块) -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding ShowErrorOverlay, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="{Binding Error}" FontSize="13" TextWrapping="Wrap"
+                           MaxWidth="420" HorizontalAlignment="Center"
+                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                        HorizontalAlignment="Center" Margin="0,14,0,0" Padding="22,7"
+                        Command="{Binding RefreshCommand}" />
+            </StackPanel>
+
+            <!-- 翻页在途: 页码栏里已有小转圈, 这里不重复 -->
+        </Grid>
+    </Grid>
+</UserControl>

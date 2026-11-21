@@ -10,6 +10,14 @@ using BiliDesk.Services;
 
 namespace BiliDesk.ViewModels;
 
+/// <summary>UP 主页顶部的三个 Tab。用枚举而不是三个布尔量, 避免互相打架(同时为 true)。</summary>
+public enum SpaceTab
+{
+    Videos,
+    Images,
+    Collections
+}
+
 /// <summary>
 /// UP 主空间 ViewModel。
 /// 接口链路有降级策略(acc/info → card → 旧接口), 即使单个接口被风控也能展示。
@@ -50,8 +58,10 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
     /// <summary>UP 主页「图文」Tab: 该 UP 发的图文/纯文字动态(视频动态不混进来)。</summary>
     public ObservableCollection<DynamicItem> ImageDynamics { get; } = new();
 
+    // ---------------- Tab 切换 ----------------
+    private SpaceTab _tab = SpaceTab.Videos;
+
     // ---------------- 图文 Tab 状态 ----------------
-    private bool _isVideosTab = true;
     private bool _imagesLoaded;
     private bool _imagesLoading;
     private bool _imagesLoadingMore;
@@ -59,6 +69,13 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
     private string _imagesError = "";
     private string? _imagesOffset;
     private int _imagesGen;
+
+    // ---------------- 合集和系列 Tab 状态 ----------------
+    private bool _collectionsLoaded;
+    private bool _collectionsLoading;
+    private string _collectionsError = "";
+    private int _collectionsTotal;
+    private int _collectionsGen;
 
     /// <summary>底部页码栏的条目(数字页或省略号)</summary>
     public ObservableCollection<PageItem> PageItems { get; } = new();
@@ -126,18 +143,23 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         ? $"投稿 · 共 {VideoItem.FormatCount(TotalVideos)} 个视频"
         : "投稿";
 
-    // ---------------- 图文 Tab ----------------
-    public bool IsVideosTab
-    {
-        get => _isVideosTab;
-        private set
-        {
-            if (!SetProperty(ref _isVideosTab, value)) return;
-            OnPropertyChanged(nameof(IsImagesTab));
-        }
-    }
+    // ---------------- Tab 切换 ----------------
+    public SpaceTab CurrentTab => _tab;
 
-    public bool IsImagesTab => !IsVideosTab;
+    public bool IsVideosTab => _tab == SpaceTab.Videos;
+    public bool IsImagesTab => _tab == SpaceTab.Images;
+    public bool IsCollectionsTab => _tab == SpaceTab.Collections;
+
+    /// <summary>切 Tab: 三个派生布尔量一起通知, 界面不会出现"两个 Tab 同时亮"的中间态。</summary>
+    private void SetTab(SpaceTab tab)
+    {
+        if (_tab == tab) return;
+        _tab = tab;
+        OnPropertyChanged(nameof(CurrentTab));
+        OnPropertyChanged(nameof(IsVideosTab));
+        OnPropertyChanged(nameof(IsImagesTab));
+        OnPropertyChanged(nameof(IsCollectionsTab));
+    }
 
     public bool ImagesLoading
     {
@@ -173,6 +195,39 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
     public string ImageSummary => ImageDynamics.Count > 0
         ? $"图文 · 已加载 {ImageDynamics.Count} 条"
         : "图文";
+
+    // ---------------- 合集和系列 Tab ----------------
+    public ObservableCollection<SpaceCollectionItem> Collections { get; } = new();
+
+    public bool CollectionsLoading
+    {
+        get => _collectionsLoading;
+        private set => SetProperty(ref _collectionsLoading, value);
+    }
+
+    public string CollectionsError
+    {
+        get => _collectionsError;
+        private set
+        {
+            if (!SetProperty(ref _collectionsError, value)) return;
+            OnPropertyChanged(nameof(ShowCollectionsErrorOverlay));
+        }
+    }
+
+    /// <summary>只有列表为空时才用整块错误/空态提示盖住列表, 刷新失败不影响已经显示的内容。</summary>
+    public bool ShowCollectionsErrorOverlay => CollectionsError.Length > 0 && Collections.Count == 0;
+
+    public string CollectionsSummary
+    {
+        get
+        {
+            var total = _collectionsTotal > 0 ? _collectionsTotal : Collections.Count;
+            return total > 0
+                ? $"合集和系列 · 共 {VideoItem.FormatCount(total)} 个"
+                : "合集和系列";
+        }
+    }
 
     // ---------------- 简介展开 ----------------
     private bool _signExpanded;
@@ -310,6 +365,7 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
     public ICommand ToggleSignCommand { get; }
     public ICommand ShowVideosTabCommand { get; }
     public ICommand ShowImagesTabCommand { get; }
+    public ICommand ShowCollectionsTabCommand { get; }
     public ICommand LoadMoreImagesCommand { get; }
 
     public UserSpaceViewModel()
@@ -331,20 +387,31 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         ToggleSignCommand = new RelayCommand(() => IsSignExpanded = !IsSignExpanded);
         ShowVideosTabCommand = new RelayCommand(ShowVideosTab);
         ShowImagesTabCommand = new AsyncRelayCommand(ShowImagesTabAsync);
+        ShowCollectionsTabCommand = new AsyncRelayCommand(ShowCollectionsTabAsync);
         LoadMoreImagesCommand = new AsyncRelayCommand(LoadMoreImagesAsync);
     }
 
     /// <summary>切到「投稿」Tab(视频列表已有, 不重新加载)</summary>
-    public void ShowVideosTab() => IsVideosTab = true;
+    public void ShowVideosTab() => SetTab(SpaceTab.Videos);
 
     /// <summary>切到「图文」Tab: 首次进入才拉数据</summary>
     public async Task ShowImagesTabAsync()
     {
-        IsVideosTab = false;
+        SetTab(SpaceTab.Images);
         if (_imagesLoaded) return;
         _imagesLoaded = true;
         await LoadImagesPageAsync(reset: true);
         if (ImageDynamics.Count == 0 && ImagesError.Length > 0) _imagesLoaded = false;
+    }
+
+    /// <summary>切到「合集和系列」Tab: 首次进入才拉数据</summary>
+    public async Task ShowCollectionsTabAsync()
+    {
+        SetTab(SpaceTab.Collections);
+        if (_collectionsLoaded) return;
+        _collectionsLoaded = true;
+        await LoadCollectionsAsync();
+        if (Collections.Count == 0 && CollectionsError.Length > 0) _collectionsLoaded = false;
     }
 
     public Task LoadMoreImagesAsync() => LoadImagesPageAsync(reset: false);
@@ -437,6 +504,81 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         }
     }
 
+    /// <summary>
+    /// 拉取「合集和系列」列表。
+    ///
+    /// ★ 接口把合集与系列**分成两个数组**, 但 page.total 是两类合并后的总数,
+    ///   所以这里按"已取条数 &lt; total"连续翻页, 直到取满或某页没有新增。
+    ///   上限 10 页 / 约 400 条: 合集通常远小于这个量级, 不值得再给这个 Tab 做一套页码栏。
+    /// ★ 合并后按更新时间倒序 —— 接口自己分两个数组下发, 不保证合并顺序。
+    /// </summary>
+    private const int CollectionsPageSize = 20;
+    private const int CollectionsMaxPages = 10;
+
+    private async Task LoadCollectionsAsync()
+    {
+        if (_mid <= 0) return;
+        var gen = ++_collectionsGen;
+        CollectionsError = "";
+        _collectionsTotal = 0;
+        CollectionsLoading = true;
+        Collections.Clear();
+        OnPropertyChanged(nameof(CollectionsSummary));
+        OnPropertyChanged(nameof(ShowCollectionsErrorOverlay));
+        try
+        {
+            var all = new List<SpaceCollectionItem>();
+            var seen = new HashSet<(SpaceCollectionKind Kind, long Id)>();
+            for (var page = 1; page <= CollectionsMaxPages; page++)
+            {
+                var (ok, err, items, total) = await Svc.Api.GetSpaceCollectionsAsync(_mid, page, CollectionsPageSize);
+                if (gen != _collectionsGen) return;
+                if (!ok)
+                {
+                    if (all.Count == 0) CollectionsError = err ?? "合集和系列加载失败";
+                    break;
+                }
+                if (total > 0) _collectionsTotal = total;
+
+                var added = 0;
+                if (items != null)
+                {
+                    foreach (var it in items)
+                    {
+                        if (it.Id <= 0) continue;
+                        if (!seen.Add((it.Kind, it.Id))) continue;
+                        all.Add(it);
+                        added++;
+                    }
+                }
+
+                // 这一页没有新增: 到底了(或服务端在重复给同一批)
+                if (added == 0) break;
+                if (_collectionsTotal > 0 && all.Count >= _collectionsTotal) break;
+            }
+
+            all.Sort((a, b) => b.UpdatedAt.CompareTo(a.UpdatedAt));
+            Collections.Clear();
+            foreach (var it in all) Collections.Add(it);
+
+            if (Collections.Count == 0 && CollectionsError.Length == 0)
+                CollectionsError = "该 UP 主暂时没有合集或系列";
+        }
+        catch (Exception ex)
+        {
+            if (gen == _collectionsGen) CollectionsError = ex.Message;
+        }
+        finally
+        {
+            if (gen == _collectionsGen)
+            {
+                CollectionsLoading = false;
+                OnPropertyChanged(nameof(CollectionsSummary));
+                OnPropertyChanged(nameof(ShowCollectionsErrorOverlay));
+            }
+        }
+    }
+
     public async Task InitAsync(long mid)
     {
         Mid = mid;
@@ -517,7 +659,8 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
             Loading = false;
         }
 
-        // 在「图文」Tab 上按 F5: 图文列表也要跟着刷新, 否则刷新后看到的还是旧内容
+        // 在「图文」/「合集和系列」Tab 上按 F5: 对应列表也要跟着刷新,
+        // 否则刷新后看到的还是旧内容
         if (IsImagesTab)
         {
             _imagesLoaded = true;
@@ -526,6 +669,16 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         else
         {
             _imagesLoaded = false;
+        }
+
+        if (IsCollectionsTab)
+        {
+            _collectionsLoaded = true;
+            await LoadCollectionsAsync();
+        }
+        else
+        {
+            _collectionsLoaded = false;
         }
     }
 

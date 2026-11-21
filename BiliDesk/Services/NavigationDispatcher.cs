@@ -105,6 +105,40 @@ public class NavigationDispatcher
         });
     }
 
+    /// <summary>
+    /// 打开合集 / 系列详情页。
+    ///
+    /// 与 <see cref="OpenUserSpace"/> 同款: 在主窗口内容区里内嵌打开(盖一层带返回按钮的页面),
+    /// 主窗口不可用时才退回独立窗口。
+    /// ★ 合集和系列共用 <see cref="SpaceCollectionPage"/>, 具体走哪条接口由 item.Kind 决定。
+    /// </summary>
+    public void OpenSpaceCollection(BiliDesk.Models.SpaceCollectionItem item, string upName = "")
+    {
+        if (item == null || item.Id <= 0) return;
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            var page = new SpaceCollectionPage(item, upName);
+
+            var main = SvcWindow.Main;
+            if (main != null && main.IsLoaded)
+            {
+                main.ShowEmbeddedPage(page, item.DisplayTitle);
+                return;
+            }
+
+            var host = new Window
+            {
+                Title = item.DisplayTitle,
+                Width = 1100,
+                Height = 720,
+                Background = ThemeBackground(),
+                Content = page
+            };
+            host.Owner = _owner;
+            host.Show();
+        });
+    }
+
     /// <summary>打开搜索结果(原生 WPF Window 承载)</summary>
     public void OpenSearch(string? keyword)
     {

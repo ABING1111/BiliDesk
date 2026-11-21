@@ -234,13 +234,15 @@
             </Grid>
         </Border>
 
-        <!-- ======== Tab: 投稿 / 图文 ======== -->
+        <!-- ======== Tab: 投稿 / 图文 / 合集和系列 ======== -->
         <Grid Margin="36,6,36,0">
             <StackPanel Orientation="Horizontal">
                 <Button x:Name="TabVideos" Content="投稿" Style="{StaticResource SpaceTabStyle}"
                         Click="OnVideosTabClick" />
                 <Button x:Name="TabImages" Content="图文" Style="{StaticResource SpaceTabStyle}"
                         Margin="18,0,0,0" Click="OnImagesTabClick" />
+                <Button x:Name="TabCollections" Content="合集和系列" Style="{StaticResource SpaceTabStyle}"
+                        Margin="18,0,0,0" Click="OnCollectionsTabClick" />
             </StackPanel>
         </Grid>
             </StackPanel>
@@ -346,6 +348,49 @@
                                       VerticalAlignment="Bottom" Margin="0,0,0,14"
                                       Visibility="{Binding ImagesLoadingMore, Converter={StaticResource BoolToVis}}" />
             </Grid>
+        </Grid>
+
+        <!-- ======== 合集和系列 Tab: 该 UP 的合集 / 系列 ========
+             一次拉全(见 UserSpaceViewModel.LoadCollectionsAsync), 所以这里没有页码栏,
+             也不做无限滚动 —— 内容比一屏多时用 ScrollViewer 正常滚动即可。 -->
+        <Grid Grid.Row="1" Visibility="{Binding IsCollectionsTab, Converter={StaticResource BoolToVis}}">
+            <ScrollViewer x:Name="CollectionScroll" VerticalScrollBarVisibility="Auto"
+                          ScrollChanged="OnCollectionsScrollChanged">
+                <StackPanel Margin="36,16,36,24">
+                    <TextBlock Text="{Binding CollectionsSummary}" FontSize="15" FontWeight="SemiBold"
+                               Margin="8,0,0,2" />
+
+                    <ItemsControl ItemsSource="{Binding Collections}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <helpers:CardWallPanel helpers:CardWall.Enable="True" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <controls:SpaceCollectionCard OpenRequested="OnCollectionCardOpenRequested" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
+
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding CollectionsLoading, Converter={StaticResource BoolToVis}}">
+                <controls:LoadingRing Width="28" Height="28" HorizontalAlignment="Center" />
+                <TextBlock Text="加载合集和系列…" Style="{StaticResource MetaTextStyle}"
+                           Margin="0,10,0,0" HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding ShowCollectionsErrorOverlay, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="{Binding CollectionsError}" FontSize="13" TextWrapping="Wrap"
+                           MaxWidth="420" HorizontalAlignment="Center"
+                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                        HorizontalAlignment="Center" Margin="0,14,0,0" Padding="22,7"
+                        Click="OnCollectionsRetryClick" />
+            </StackPanel>
         </Grid>
     </Grid>
 </UserControl>
