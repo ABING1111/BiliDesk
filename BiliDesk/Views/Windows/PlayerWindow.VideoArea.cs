@@ -443,7 +443,7 @@ public partial class PlayerWindow : FluentWindow
             {
                 _activationLongPress = true;
                 StartFastForward();
-                ShowSpeedHint(FormatRate(_fastForwardTarget) + " 快进中", hold: true);
+                ShowSpeedHint("倍速播放中", hold: true);
             }
             return;
         }
@@ -452,7 +452,7 @@ public partial class PlayerWindow : FluentWindow
         if (_activationLongPress)
         {
             StopFastForward();
-            ShowSpeedHint("已结束快进", hold: false);
+            ShowSpeedHint(RestoredSpeedText(), hold: false);
         }
         else if (held < 500)
         {

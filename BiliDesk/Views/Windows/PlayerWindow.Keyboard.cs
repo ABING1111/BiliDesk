@@ -61,8 +61,15 @@ public partial class PlayerWindow : FluentWindow
                 return;
             // 音量: ↑↓ 走统一入口(顺带弹音量提示), M 在静音与 80 之间切换
             // 基数用 _volumeCache: aout 未就绪时 _mp.Volume 原生读回是 -1/旧值(见 _volumeCache 的说明)
-            case Key.Up: SetVolume(_volumeCache + VolumeStep); e.Handled = true; return;
-            case Key.Down: SetVolume(_volumeCache - VolumeStep); e.Handled = true; return;
+            // ★★★ 2026-11-21: 长按倍速期间 ↑↓ 改为"切换 1.5x / 2x / 3x", 不再调音量 ——
+            //   这是用户明确要求处理的快捷键争用。判据是 _isFastForwarding(手势态),
+            //   不是"OSD 可见": 淡出动画期间 OSD 还亮着, 那时按 ↑↓ 必须已经回到音量。
+            case Key.Up:
+                if (TryStepFastForwardSpeed(+1)) { e.Handled = true; return; }
+                SetVolume(_volumeCache + VolumeStep); e.Handled = true; return;
+            case Key.Down:
+                if (TryStepFastForwardSpeed(-1)) { e.Handled = true; return; }
+                SetVolume(_volumeCache - VolumeStep); e.Handled = true; return;
             case Key.M: SetVolume(_volumeCache == 0 ? 80 : 0); e.Handled = true; return;
             case Key.F: ToggleFullscreen(); e.Handled = true; return;
             case Key.L: OnLikeClick(this, new RoutedEventArgs()); e.Handled = true; return;
@@ -136,13 +143,17 @@ public partial class PlayerWindow : FluentWindow
         HandleBackRequest();
     }
 
-    // ------------------------------------------------------------ 方向键 → 长按 = 3 倍速播放
+    // ------------------------------------------------------------ 方向键 → 长按 = 倍速播放
 
     /// <summary>长按 → 的判定阈值(ms): 超过就进入 3 倍速播放, 而不是连续快进。</summary>
     private const int RightKeyLongPressMs = 250;
 
-    /// <summary>方向键长按进入的倍速(与 B 站一致)。</summary>
-    private const float RightKeyFastRate = 3.0f;
+    /// <summary>
+    /// 长按 → 进入倍速播放时的默认倍速(2026-11-21 由 3x 改为 2x, 用户指定)。
+    /// ★ 长按期间 ↑/↓ 在 1.5x / 2x / 3x 之间切换(见 FastForwardSpeedPolicy),
+    ///   默认值同时也是 OSD 里高亮的那一档。
+    /// </summary>
+    private const float RightKeyFastRate = FastForwardSpeedPolicy.Default;
 
     private DispatcherTimer? _rightKeyTimer;
 
@@ -152,7 +163,8 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// → 键按下(非自动重复):
     ///   短按(不到 <see cref="RightKeyLongPressMs"/> 毫秒) = 松开时跳 5 秒(Shift 30 秒), 保持原来的即时手感;
-    ///   继续按住超过阈值 = 切到 3 倍速播放(与 B 站一致), 松开恢复按下前的倍速。
+    ///   继续按住超过阈值 = 进入倍速播放(默认 2x), 松开恢复按下前的倍速。
+    ///   长按期间 ↑/↓ 在 1.5x / 2x / 3x 之间切换(<see cref="TryStepFastForwardSpeed"/>)。
     /// </summary>
     private void OnRightKeyPressed()
     {
@@ -167,7 +179,7 @@ public partial class PlayerWindow : FluentWindow
         _rightKeyTimer.Start();
     }
 
-    /// <summary>按住 → 超过阈值: 切到 3 倍速播放(复用鼠标长按那条 StartFastForward, 只是倍速不同)。</summary>
+    /// <summary>按住 → 超过阈值: 进入倍速播放(复用鼠标长按那条 StartFastForward, 只是入口不同)。</summary>
     private void OnRightKeyLongPressTick(object? sender, EventArgs e)
     {
         _rightKeyTimer?.Stop();
@@ -176,7 +188,7 @@ public partial class PlayerWindow : FluentWindow
 
         _rightKeyFast = true;
         StartFastForward(RightKeyFastRate);
-        ShowSpeedHint(FormatRate(_fastForwardTarget) + " 快进中", hold: true);
+        ShowSpeedHint("倍速播放中", hold: true);
     }
 
     /// <summary>→ 键松开: 若是键盘长按触发的 3x, 恢复按下前的速率。</summary>
@@ -194,7 +206,7 @@ public partial class PlayerWindow : FluentWindow
             // 长按结束: 恢复按下前的速率
             _rightKeyFast = false;
             StopFastForward();
-            ShowSpeedHint("已结束快进", hold: false);
+            ShowSpeedHint(RestoredSpeedText(), hold: false);
             e.Handled = true;
             return;
         }

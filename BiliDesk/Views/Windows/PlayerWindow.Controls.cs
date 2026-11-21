@@ -542,20 +542,28 @@ public partial class PlayerWindow : FluentWindow
     /// 否则每滚一格都闪一下。
     /// </summary>
     /// <summary>
-    /// 浮出倍速提示(长按快进开始 / 恢复 1x 时调用)。
+    /// 浮出倍速提示(长按快进开始 / 恢复时调用)。
     ///
     /// ★ 与音量提示的差别(所以没有复用 ShowVolumeHint):
     ///   音量是"调一下、闪一下、自己淡出"; 倍速提示必须在**整个长按期间一直挂着** ——
-    ///   用户按住的那几秒里要始终知道"现在是 2 倍速, 松手会回去"。
+    ///   用户按住的那几秒里要始终知道"现在是几倍速、松手会回去"。
     ///   松手时再调一次本方法(<c>hold=false</c>), 文案换成"已恢复 1.0x"并淡出。
+    ///
+    /// ★ 2026-11-21: <paramref name="hold"/> 同时决定「倍速选择」那一块显不显示 ——
+    ///   长按期间显示(↑/↓ 可切档), 松手后收起, 提示缩回一个小胶囊。
+    ///   文案由调用方给(开始 = 「倍速播放中」, 结束 = 「已恢复 x」), 档位高亮由
+    ///   <see cref="SyncSpeedOsdChips"/> 按 `_fastForwardTarget` 现算。
     /// </summary>
-    /// <param name="text">提示文案, 如 "2.0x 快进中" / "已恢复 1.0x"</param>
-    /// <param name="hold">true = 常显不自动淡出(长按期间); false = 显示一下自己淡出</param>
+    /// <param name="text">提示文案, 如 "倍速播放中" / "已恢复 1.0x"</param>
+    /// <param name="hold">true = 常显不自动淡出(长按期间, 并显示倍速选择); false = 显示一下自己淡出</param>
     private void ShowSpeedHint(string text, bool hold)
     {
         if (_closing || SpeedOsd == null) return;
 
-        SpeedOsdText.Text = text;
+        if (SpeedOsdLabel != null) SpeedOsdLabel.Text = text;
+        if (SpeedOsdSelector != null)
+            SpeedOsdSelector.Visibility = hold ? Visibility.Visible : Visibility.Collapsed;
+        if (hold) SyncSpeedOsdChips();
         _speedOsdTimer?.Stop();
         _speedOsdTimer = null;
 
@@ -602,9 +610,66 @@ public partial class PlayerWindow : FluentWindow
         _speedOsdTimer.Start();
     }
 
-    private void ShowVolumeHint(int volume)
+    // ------------------------------------------------------------ 长按倍速: ↑/↓ 切档(2026-11-21)
+
+    /// <summary>
+    /// 长按倍速期间按 ↑/↓ 切档。返回 true 表示"这次按键归倍速管, 不要再落到音量"。
+    ///
+    /// ★ 只在 <see cref="_isFastForwarding"/> 为真时接管: 其余时候 ↑/↓ 必须保持
+    ///   "调音量"的原语义(见 OnPreviewKeyDown 里的注释) —— 这正是用户特别指出要处理的争用。
+    /// ★ 切档后只改"当前加速倍速"(_fastForwardTarget), **不动** _rateBeforeFastForward:
+    ///   松手要恢复的仍是按住之前那个正常倍速。
+    /// </summary>
+    private bool TryStepFastForwardSpeed(int direction)
     {
-        if (_closing || VolumeOsd == null) return;
+        if (_closing || _mp == null || !_isFastForwarding) return false;
+
+        var next = Helpers.FastForwardSpeedPolicy.Step(_fastForwardTarget, direction);
+        if (Math.Abs(next - _fastForwardTarget) > 0.001f)
+        {
+            _fastForwardTarget = next;
+            // 与 StartFastForward 同序: 先让弹幕时钟按新倍速落定, 再真正 SetRate
+            SyncDanmakuClockRate(next);
+            try { _mp.SetRate(next); } catch { /* 播放器可能刚好失效 */ }
+            SyncSpeedOsdChips();
+        }
+        // 无论有没有真的换档(端点处按了没反应), 这一下都算"倍速键", 不能再落到音量
+        return true;
+    }
+
+    /// <summary>把 OSD 里三个档位按当前加速倍速点亮(当前档 = 白字 + 半透明底)。</summary>
+    private void SyncSpeedOsdChips()
+    {
+        ApplySpeedOsdChip(SpeedOsdChip15, SpeedOsdChip15Text, 1.5f);
+        ApplySpeedOsdChip(SpeedOsdChip20, SpeedOsdChip20Text, 2.0f);
+        ApplySpeedOsdChip(SpeedOsdChip30, SpeedOsdChip30Text, 3.0f);
+    }
+
+    private void ApplySpeedOsdChip(Border? chip, TextBlock? text, float rate)
+    {
+        if (chip == null || text == null) return;
+        var active = Math.Abs(_fastForwardTarget - rate) <= 0.001f;
+
+        var fg = new SolidColorBrush(active
+            ? Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)
+            : Color.FromArgb(0x80, 0xFF, 0xFF, 0xFF));
+        fg.Freeze();
+        text.Foreground = fg;
+        text.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
+
+        var bg = new SolidColorBrush(active
+            ? Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF)
+            : Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF));
+        bg.Freeze();
+        chip.Background = bg;
+    }
+
+    /// <summary>长按收场文案: 恢复到**按下前**那个倍速(长按期间 ↑/↓ 只改加速目标, 不改正片倍速)。</summary>
+    private string RestoredSpeedText()
+        => "已恢复 " + FormatRate(_rateBeforeFastForward > 0 ? _rateBeforeFastForward : 1.0f);
+
+    private void ShowVolumeHint(int volume)
+    {        if (_closing || VolumeOsd == null) return;
 
         VolumeOsdText.Text = volume + "%";
         // 0 用静音图标, 其余用喇叭: 一眼就能看出"是没声还是声音小"

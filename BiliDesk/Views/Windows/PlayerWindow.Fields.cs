@@ -666,6 +666,9 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 长按快进开始: 切到 <see cref="_fastForwardTarget"/>(至少 <see cref="FastForwardRate"/>)。
     ///
+    /// ★ 2026-11-21: 长按期间 ↑/↓ 可以在 1.5x / 2x / 3x 间改这个目标
+    ///   (见 TryStepFastForwardSpeed), 但**不影响**松手恢复值。
+    ///
     /// ★ 松手时要恢复到的速率由 <c>_rateBeforeFastForward</c> 记住 —— 不能写死 1.0f:
     ///   用户可能先用倍速按钮设了 1.5x, 写死会让松手后悄悄变成 1x。
     ///   (旧版就有这个 bug, 2026-10-16 一并对齐。)

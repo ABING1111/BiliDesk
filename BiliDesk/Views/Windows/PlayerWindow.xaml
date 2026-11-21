@@ -1548,24 +1548,61 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- 倍速提示(长按快进时浮出, 2026-10-13 新增)。
+                            <!-- 倍速提示(长按快进时浮出, 2026-10-13 新增; 2026-11-21 加「倍速选择」)。
                                  用户要求"位于播放器偏上位置" —— VerticalAlignment=Top + Margin 顶部
                                  留 90px, 与音量提示的居中错开, 两者同时出现也不会重叠。
-                                 ★ 为什么必须有: 长按 2x 是**无入口的手势**, 松手前用户只看到画面变快,
-                                   不知道发生了什么、也不知道马上会恢复。给一个"2.0x 快进中"的提示,
-                                   松手换成"已恢复 1.0x"再淡出, 手势就有了明确的开始与结束。
+                                 ★ 为什么必须有: 长按倍速是**无入口的手势**, 松手前用户只看到画面变快,
+                                   不知道发生了什么、也不知道马上会恢复。
+                                 ★ 2026-11-21: 长按期间 ↑/↓ 可以切 1.5x / 2x / 3x(默认 2x),
+                                   所以这里要同时表达"正在倍速""当前档位""可选档位"三件事:
+                                   左边图标 + 「倍速播放中」, 右边一条分隔线 + 「倍速选择：」+ 三个档位
+                                   (当前档高亮, 由 SyncSpeedOsdChips 设置)。松手时选择区收起,
+                                   文案换成「已恢复 x」再淡出。
                                  ★ IsHitTestVisible=False: 不能吃掉视频区的手势与滚轮(同音量提示)。
                                  ★ ZIndex=98 与音量提示同级: 位置不重叠, 不必分高下。 -->
                             <Border x:Name="SpeedOsd" HorizontalAlignment="Center" VerticalAlignment="Top"
-                                    Margin="0,90,0,0" Padding="14,10" CornerRadius="12"
+                                    Margin="0,90,0,0" Padding="14,9" CornerRadius="12"
                                     Background="#CC0A0B0F" BorderBrush="#24FFFFFF" BorderThickness="1"
                                     IsHitTestVisible="False"
                                     Visibility="Collapsed" Opacity="0" Panel.ZIndex="98">
-                                <StackPanel Orientation="Horizontal">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <TextBlock Text="&#xE7C1;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                FontSize="16" Foreground="White" VerticalAlignment="Center" />
-                                    <TextBlock x:Name="SpeedOsdText" Text="2.0x" Margin="9,0,0,0"
+                                    <TextBlock x:Name="SpeedOsdLabel" Text="倍速播放中" Margin="9,0,0,0"
                                                FontSize="14" Foreground="White" VerticalAlignment="Center" />
+                                    <!-- 倍速选择区: 只在"按住"期间显示(hold=true)。松手收起,
+                                         提示缩回成一个"已恢复 x"的小胶囊。 -->
+                                    <StackPanel x:Name="SpeedOsdSelector" Orientation="Horizontal"
+                                                Margin="14,0,0,0" VerticalAlignment="Center"
+                                                Visibility="Collapsed">
+                                        <Border Width="1" Height="16" Background="#33FFFFFF"
+                                                Margin="0,0,12,0" VerticalAlignment="Center" />
+                                        <TextBlock Text="倍速选择：" FontSize="12" Foreground="#B3FFFFFF"
+                                                   VerticalAlignment="Center" />
+                                        <!-- 三个档位: 底色/字色由代码按当前倍速点亮。
+                                             ★ 文字写死 1.5x/2x/3x(不是 FormatRate 的 2.0x):
+                                               档位是固定选项, 与"控制栏那个当前倍速"不是同一套文案。 -->
+                                        <Border x:Name="SpeedOsdChip15" Margin="10,0,0,0"
+                                                Padding="8,3" CornerRadius="7" Background="Transparent"
+                                                VerticalAlignment="Center">
+                                            <TextBlock x:Name="SpeedOsdChip15Text" Text="1.5x"
+                                                       FontSize="12.5" Foreground="#80FFFFFF" />
+                                        </Border>
+                                        <Border x:Name="SpeedOsdChip20" Margin="2,0,0,0"
+                                                Padding="8,3" CornerRadius="7" Background="Transparent"
+                                                VerticalAlignment="Center">
+                                            <TextBlock x:Name="SpeedOsdChip20Text" Text="2x"
+                                                       FontSize="12.5" Foreground="#80FFFFFF" />
+                                        </Border>
+                                        <Border x:Name="SpeedOsdChip30" Margin="2,0,0,0"
+                                                Padding="8,3" CornerRadius="7" Background="Transparent"
+                                                VerticalAlignment="Center">
+                                            <TextBlock x:Name="SpeedOsdChip30Text" Text="3x"
+                                                       FontSize="12.5" Foreground="#80FFFFFF" />
+                                        </Border>
+                                        <TextBlock Text="↑↓ 切换" FontSize="11" Foreground="#80FFFFFF"
+                                                   Margin="12,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
                                 </StackPanel>
                             </Border>
 
