@@ -266,6 +266,17 @@ public class SettingsStore
     /// </summary>
     public bool CloseToTray { get; set; } = true;
 
+    /// <summary>
+    /// 点击正文里的链接时用系统默认浏览器打开。
+    ///
+    /// 默认 **false**(用应用内置浏览器): 内置 WebView2 共用登录态, 打开 B 站页面不用再登录。
+    /// 但有些用户更想要系统浏览器(插件 / 下载 / 密码管理都在那边), 所以给一个开关。
+    /// 只影响 <see cref="LinkLauncher.OpenInBrowser"/> 的入口; 内置浏览器里的
+    /// "在浏览器中打开"按钮始终走系统浏览器, 不受它影响。
+    /// ★ 与 <see cref="Models.AppSettings.OpenLinksInExternalBrowser"/> 是读写契约。
+    /// </summary>
+    public bool OpenLinksInExternalBrowser { get; set; }
+
     /// <summary>启动后自动检查更新(默认开; 关掉后仍可在设置页手动检查)</summary>
     public bool AutoCheckUpdate { get; set; } = true;
 
@@ -845,8 +856,9 @@ public class SettingsStore
         SponsorBlockEnabled = s.SponsorBlockEnabled;
         SponsorBlockCategories = SponsorCategories.Sanitize(s.SponsorBlockCategories);
 
-        // 以下几项老配置都缺字段, 靠属性初始化值兜底(true / 空串), 不需要版本号兼容。
+        // 以下几项老配置都缺字段, 靠属性初始化值兜底(true / false / 空串), 不需要版本号兼容。
         CloseToTray = s.CloseToTray;
+        OpenLinksInExternalBrowser = s.OpenLinksInExternalBrowser;
         AutoCheckUpdate = s.AutoCheckUpdate;
         SkippedVersion = s.SkippedVersion ?? "";
         NoLogin1080P = s.NoLogin1080P;
@@ -1118,6 +1130,7 @@ public class SettingsStore
         SponsorBlockEnabled = SponsorBlockEnabled,
         SponsorBlockCategories = SponsorBlockCategories,
         CloseToTray = CloseToTray,
+        OpenLinksInExternalBrowser = OpenLinksInExternalBrowser,
         AutoCheckUpdate = AutoCheckUpdate,
         SkippedVersion = SkippedVersion,
         NoLogin1080P = NoLogin1080P,

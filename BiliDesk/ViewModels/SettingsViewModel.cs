@@ -823,6 +823,30 @@ public class SettingsViewModel : ObservableObject
     /// <summary>立即把主界面收进托盘(等价于点关闭键的效果, 方便先试一下手感)</summary>
     public ICommand MinimizeToTrayCommand { get; }
 
+    // ----------------- 链接打开方式(issue #111) -----------------
+
+    /// <summary>
+    /// 点击正文里的链接时用系统默认浏览器打开(默认关 = 用内置浏览器)。
+    /// ★ 只影响链接点击入口(<see cref="LinkLauncher.OpenInBrowser"/>); 内置浏览器里的
+    ///   "在浏览器中打开"按钮始终走系统浏览器, 不受这个开关影响。
+    /// </summary>
+    public bool OpenLinksInExternalBrowser
+    {
+        get => Svc.Settings.OpenLinksInExternalBrowser;
+        set
+        {
+            if (value == Svc.Settings.OpenLinksInExternalBrowser) return;
+            Svc.Settings.OpenLinksInExternalBrowser = value;
+            Svc.Settings.Save();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(OpenLinksInExternalBrowserHint));
+        }
+    }
+
+    public string OpenLinksInExternalBrowserHint => Svc.Settings.OpenLinksInExternalBrowser
+        ? "链接交给系统默认浏览器打开; 内置浏览器里的「在浏览器中打开」也照旧可用"
+        : "链接在应用内置浏览器中打开, 共用 B 站登录态; 需要插件或下载时可改用系统浏览器";
+
     // ----------------- 免登录 1080P -----------------
 
     /// <summary>

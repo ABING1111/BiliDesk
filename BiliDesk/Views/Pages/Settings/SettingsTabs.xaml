@@ -360,6 +360,25 @@
                                 IsSnapToTickEnabled="True" TickFrequency="5"
                                 Value="{Binding UiScalePercent, Mode=TwoWay}" />
                     </Grid>
+
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 链接打开方式(issue #111): 默认关 = 内置浏览器(共用 B 站登录态);
+                         打开后交给系统默认浏览器(插件 / 下载 / 密码管理都在那边)。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="在系统浏览器中打开链接" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding OpenLinksInExternalBrowserHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding OpenLinksInExternalBrowser, Mode=TwoWay}" />
+                    </Grid>
                 </StackPanel>
             </Border>
 
