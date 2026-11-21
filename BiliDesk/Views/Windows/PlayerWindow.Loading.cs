@@ -872,10 +872,17 @@ public partial class PlayerWindow : FluentWindow
         //     浮层的「已恢复」收场不会来, 只 StopFastForward 会把它留在新片上。
         CancelFastForward();
         _longPressFired = false;
+        // ★★★ 2026-11-21: 换片时这一次"按住手势"整体作废 —— 松手事件属于**上一条视频**,
+        //   落到新片上就是误操作:
+        //     · → 还按着: 松手会走 KeyUp 的"短按"分支, 在新片里莫名前进 5 秒(用户复现);
+        //     · 鼠标还按着: Up 会被当成配对成功的单击, 把新片切换成暂停/播放。
+        //   两个标记都设成"丢弃配对的松手"; 下一次按下(KeyDown / MouseDown)会自动复位。
+        _videoGestureActive = false;
+        _suppressSingleClick = false;
         // 键盘长按 → 的 3x 与计时器同属"这一次手势": 换片必须停掉并复位
         _rightKeyTimer?.Stop();
         _rightKeyFast = false;
-        _rightKeyDiscardUp = false;
+        _rightKeyDiscardUp = true;
         // 长按点赞三连的"抑制窗口"与在途闸属于上一片: 不清的话换片后 1.5 秒内的第一次
         // 点赞会被 OnLikeClick 当成"长按三连松手那次 Click"吞掉(见 OnLikeClick)。
         _tripleComboAt = 0;
