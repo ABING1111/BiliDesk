@@ -1348,7 +1348,7 @@ public class SettingsViewModel : ObservableObject
     }
 
     public string AutoCheckUpdateHint => Svc.Settings.AutoCheckUpdate
-        ? "启动后在后台静默检查一次, 有新版本才弹窗提醒"
+        ? "启动后在后台检查一次, 有新版本或网络异常时弹窗提醒(网络异常每天最多提示一次)"
         : "已关闭, 仍可随时点「检查更新」手动检查";
 
     /// <summary>最近一次检查的结果(手动检查的反馈就落在这里, 让用户确认按钮点下去有反应)</summary>
@@ -1392,6 +1392,14 @@ public class SettingsViewModel : ObservableObject
             };
             win.AllowSkip = false;
             win.ShowDialog();
+        }
+        catch (UpdateCheckException ex)
+        {
+            // 失败原因已经分好类了(VPN/超时/限流…), 直接给用户看具体的那一句,
+            // 不再笼统地说"检查更新失败"。
+            UpdateStatusText = ex.UserMessage;
+            App.ReportError(ex);
+            Svc.Toast.Show(ex.UserMessage);
         }
         catch (Exception ex)
         {

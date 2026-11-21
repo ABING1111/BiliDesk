@@ -438,6 +438,13 @@ public class AppSettings
     public string SkippedVersion { get; set; } = "";
 
     /// <summary>
+    /// 上一次「自动检查更新失败」提示窗弹出的时间(UTC)。空 = 从未提示过。
+    /// 仅用于节流(24 小时内不再重复弹, 见 Helpers.UpdateFailurePolicy);
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是读写契约, 两处必须一致。
+    /// </summary>
+    public DateTimeOffset? LastUpdateFailureNoticeUtc { get; set; }
+
+    /// <summary>
     /// 免登录 1080P(默认 true)。
     ///
     /// 未登录时在取流请求里补上 try_look + 四个 dm_img_* 设备指纹参数, 把匿名可见的

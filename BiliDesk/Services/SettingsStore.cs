@@ -284,6 +284,13 @@ public class SettingsStore
     public string SkippedVersion { get; set; } = "";
 
     /// <summary>
+    /// 上一次「自动检查更新失败」提示窗弹出的时间(UTC); 空 = 从未提示过。
+    /// 只用于失败提示的 24 小时节流(见 Helpers.UpdateFailurePolicy), 不影响其它逻辑。
+    /// ★ 与 Models/AppSettings 的同名属性是读写契约。
+    /// </summary>
+    public DateTimeOffset? LastUpdateFailureNoticeUtc { get; set; }
+
+    /// <summary>
     /// 免登录 1080P(默认开)。未登录时给取流请求补 try_look + dm_img_* 四件套,
     /// 把匿名可见清晰度从 360P/480P 提到 720P/1080P —— 依据见 ApiClient.ApplyTryLook。
     /// </summary>
@@ -861,6 +868,12 @@ public class SettingsStore
         OpenLinksInExternalBrowser = s.OpenLinksInExternalBrowser;
         AutoCheckUpdate = s.AutoCheckUpdate;
         SkippedVersion = s.SkippedVersion ?? "";
+        // 失败提示的节流时间: 未来时间只可能来自改系统时钟/手改配置 ——
+        // 留着会让失败提示永久不再出现, 一律归 null(与 UpdateFailurePolicy 的兜底一致)。
+        LastUpdateFailureNoticeUtc = s.LastUpdateFailureNoticeUtc is { } noticed
+                                     && noticed <= DateTimeOffset.UtcNow.AddMinutes(1)
+            ? noticed
+            : null;
         NoLogin1080P = s.NoLogin1080P;
 
         // ★ CdnManualId 要校验: 老配置里的 Id 可能已从候选表下线,
@@ -1133,6 +1146,7 @@ public class SettingsStore
         OpenLinksInExternalBrowser = OpenLinksInExternalBrowser,
         AutoCheckUpdate = AutoCheckUpdate,
         SkippedVersion = SkippedVersion,
+        LastUpdateFailureNoticeUtc = LastUpdateFailureNoticeUtc,
         NoLogin1080P = NoLogin1080P,
         CdnMode = CdnMode,
         CdnManualId = CdnManualId,
@@ -1195,8 +1209,8 @@ public class SettingsStore
 
     /// <summary>
     /// 同步落盘。给"写完就应该立刻生效、且不在意这点耗时"的场景用 ——
-    /// 目前只有"同意免责声明": 那是启动流程里的一道门, 用户点完可能马上就去点关闭键,
-    /// 走异步队列万一赶上异常退出就要再被问一遍。
+    /// 目前是"同意免责声明"(启动流程里的一道门, 用户点完可能马上就去点关闭键)
+    /// 与"记录失败提示的节流时间"(弹窗后进程可能随即被关掉, 见 SetLastUpdateFailureNotice)。
     /// </summary>
     public void SaveNow()
     {
@@ -1451,6 +1465,18 @@ public class SettingsStore
         if (string.Equals(SkippedVersion, next, StringComparison.Ordinal)) return;
         SkippedVersion = next;
         Save();
+    }
+
+    /// <summary>
+    /// 记下"失败提示窗已弹出"的时间并落盘(节流用, 见 UpdateChecker.NotifyFailureAsync)。
+    /// ★ 用 SaveNow 而不是异步 Save: 弹出提示窗之后进程随时可能被用户关掉/强杀,
+    ///   节流时间必须已经躺在磁盘上, 否则下次启动会马上再被同一个失败打扰一次。
+    ///   这条路径一天最多走一次, 一次同步写盘(约 1ms)不值得为它做异步。
+    /// </summary>
+    public void SetLastUpdateFailureNotice(DateTimeOffset whenUtc)
+    {
+        LastUpdateFailureNoticeUtc = whenUtc.ToUniversalTime();
+        SaveNow();
     }
 
     /// <summary>

@@ -1,0 +1,88 @@
+<views:FluentWindow x:Class="BiliDesk.Views.Windows.UpdateCheckFailedWindow"
+                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:views="clr-namespace:BiliDesk.Views"
+                    Title="检查更新失败"
+                    Width="520" SizeToContent="Height"
+                    ResizeMode="NoResize"
+                    WindowStartupLocation="CenterOwner"
+                    ShowInTaskbar="False">
+    <!--
+        「检查更新失败」弹窗(只由自动检查的失败路径打开, 见 UpdateChecker.NotifyFailureAsync)。
+
+        它存在的原因: 旧实现把所有失败都吞进一个空 catch —— 用户开着 VPN/代理、
+        GitHub 被干扰或出口 IP 被限流时, 自动更新永远"没反应", 看起来像功能坏了。
+        这里把原因、能做什么(重试 / 去发布页 / 关掉自动检查)一次讲清楚。
+
+        ★ 文案按 UpdateCheckFailureKind 切换(见代码后置), 窗口本身只负责布局。
+    -->
+    <Grid Background="{DynamicResource AppBackgroundBrush}">
+        <StackPanel Margin="24,20,24,20">
+
+            <!-- ==================== Hero ==================== -->
+            <Border CornerRadius="14" Padding="18,16"
+                    Background="{DynamicResource AccentSoftFillBrush}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Width="46" Height="46" CornerRadius="12" VerticalAlignment="Center">
+                        <Border.Background>
+                            <!-- ★ 资源 URI 必须带程序集名, 否则探针宿主会按入口程序集解析 -->
+                            <ImageBrush ImageSource="pack://application:,,,/BiliDesk;component/Assets/app.png"
+                                       Stretch="UniformToFill" />
+                        </Border.Background>
+                    </Border>
+
+                    <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="自动检查更新" FontSize="12" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <TextBlock x:Name="HeadlineText" Margin="0,3,0,0"
+                                   FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- ==================== 原因说明 ==================== -->
+            <TextBlock x:Name="MessageText" Margin="2,16,2,0"
+                       FontSize="13" LineHeight="22" TextWrapping="Wrap"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+
+            <TextBlock x:Name="DetailText" Margin="2,8,2,0"
+                       FontSize="11.5" TextWrapping="Wrap" Visibility="Collapsed"
+                       Foreground="{DynamicResource TextTertiaryBrush}" />
+
+            <TextBlock x:Name="RetryStatus" Margin="2,10,2,0"
+                       FontSize="12" TextWrapping="Wrap" Visibility="Collapsed"
+                       Foreground="{DynamicResource TextTertiaryBrush}" />
+
+            <!-- ==================== 操作栏 ==================== -->
+            <Grid Margin="0,20,0,0">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left"
+                            VerticalAlignment="Center">
+                    <!-- FluentCheckBoxStyle 只有方块本身(没有 ContentPresenter), 文字放在旁边 -->
+                    <CheckBox x:Name="DisableAutoCheck" VerticalAlignment="Center"
+                              Style="{StaticResource FluentCheckBoxStyle}" />
+                    <TextBlock Text="以后不再自动检查更新" Margin="8,0,0,0"
+                               FontSize="12" VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="BtnRetry" Content="重试" IsDefault="True"
+                            Style="{StaticResource AccentButtonStyle}"
+                            Padding="18,8" Click="OnRetryClick" />
+                    <Button Content="前往 GitHub 查看"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            Margin="10,0,0,0" Padding="14,8" Click="OnOpenGithubClick" />
+                    <Button Content="关闭" IsCancel="True"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            Margin="10,0,0,0" Padding="14,8" Click="OnCloseClick" />
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </Grid>
+</views:FluentWindow>

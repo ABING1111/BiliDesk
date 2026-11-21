@@ -229,7 +229,8 @@ public partial class App : Application
             }));
 
         // 自动检查更新: 主界面起来后等 6 秒再查(避开启动高峰, 也别让"检查"和首屏加载抢网络)。
-        // 查询本身是匿名请求、失败静默, 细节见 UpdateChecker.AutoCheckAsync。
+        // 查询本身是匿名请求; 失败会按原因弹出节流提示(24h 最多一次, 完全断网静默),
+        // 细节见 UpdateChecker.AutoCheckAsync / NotifyFailureAsync。
         _ = System.Threading.Tasks.Task.Run(async () =>
         {
             await System.Threading.Tasks.Task.Delay(6000);
