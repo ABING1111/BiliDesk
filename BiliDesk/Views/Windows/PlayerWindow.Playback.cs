@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -1273,6 +1273,9 @@ public partial class PlayerWindow : FluentWindow
             if (e.Length <= 0) return;
             _totalMs = e.Length;
             UpdateTotalDurationText();
+            // 总时长变了 ⇒ 章节刻度的比例要重算(2026-11-21)。真实流长常与接口给的
+            // timelength 差几毫秒到几秒, 刻度必须按**同一个** total 画才不会与气泡/进度条错位。
+            RenderChapterMarks();
         }));
     }
 

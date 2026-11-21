@@ -16,7 +16,7 @@ namespace BiliDesk.Services;
 /// </summary>
 public partial class ApiClient
 {
-    // ---------------------------------------------------------------- 字幕(2026-11-15)
+    // ------------------------------------- 播放器信息: 字幕 + 章节(2026-11-15 / 2026-11-21)
 
     /// <summary>字幕本体的两个已知 host: subtitle.bilibili.com(部分视频下发, DNS 常解析不到)
     /// 与 aisubtitle.hdslb.com(常规 AI 字幕 CDN, 实测可解析)。下载失败时在这两个域间兜底。</summary>
@@ -24,18 +24,22 @@ public partial class ApiClient
     internal const string SubtitleBrokenHost = "subtitle.bilibili.com";
 
     /// <summary>
-    /// 取视频的字幕轨列表(CC 人工 + AI)。
+    /// 取一次播放器信息: **字幕轨列表 + 视频章节**(两者在同一个响应里, 一次请求两份数据)。
     ///
-    /// 接口: <c>GET /x/player/wbi/v2?bvid=&amp;cid=</c>(需 WBI 签名 + 登录态)。
+    /// 接口: <c>GET /x/player/wbi/v2?bvid=&amp;cid=</c>(WBI 签名; 字幕要登录态, 章节不需要)。
     /// ★ 实测(2026-11, 多来源交叉印证):
     ///   · 未登录时 **subtitles 是空数组**, 而 need_login_subtitle=true 表示"有字幕但看不到"
     ///     —— 调用方用这个字段区分"真没有"与"要登录", 提示语才说得准;
+    ///   · 章节在 <c>data.view_points[]</c>, 与登录态无关; 没有章节的视频给空数组。
+    ///     它同样**只认这个响应** —— 理由见下面那条;
     ///   · **绝不能**对"code=0 但字幕为空"降级到旧接口 /x/player/v2: 旧接口有 CDN 缓存串扰,
     ///     实测会返回**别的视频**的字幕(yt-dlp PR#11708 已确认)。只在 WBI 明确失败(-403/-400)时
     ///     才降级一次 —— 那种失败是"签名坏了", 不是"没有字幕"。
+    ///     ★ 降级那一路**不给章节**(空列表): 既然响应可能是别的视频的, 章节同样不可信。
     /// </summary>
-    public async Task<(bool ok, string? err, List<SubtitleTrack> tracks, bool needLogin)>
-        GetSubtitleTracksAsync(string bvid, long cid, CancellationToken ct = default)
+    public async Task<(bool ok, string? err, List<SubtitleTrack> tracks, bool needLogin,
+        List<VideoChapter> chapters)>
+        GetPlayerInfoAsync(string bvid, long cid, CancellationToken ct = default)
     {
         try
         {
@@ -53,22 +57,26 @@ public partial class ApiClient
             if (code != 0 && (code == -403 || code == -400))
             {
                 var legacy = await GetLegacySubtitleTracksAsync(bvid, cid);
-                if (legacy != null) return (true, null, legacy, false);
+                if (legacy != null)
+                    return (true, null, legacy, false, new List<VideoChapter>());
             }
             if (code != 0 || data == null)
-                return (false, msg ?? "获取字幕列表失败", new List<SubtitleTrack>(), false);
+                return (false, msg ?? "获取字幕列表失败", new List<SubtitleTrack>(), false,
+                    new List<VideoChapter>());
 
             var tracks = SubtitleParser.ParseTracks(data.Value, out var needLogin);
-            return (true, null, tracks, needLogin);
+            var chapters = ChapterParser.Parse(data.Value);
+            return (true, null, tracks, needLogin, chapters);
         }
         catch (Exception ex)
         {
             App.ReportError(ex);
-            return (false, ex.Message, new List<SubtitleTrack>(), false);
+            return (false, ex.Message, new List<SubtitleTrack>(), false, new List<VideoChapter>());
         }
     }
 
-    /// <summary>旧接口兜底(仅在 WBI 明确失败时调用, 见 GetSubtitleTracksAsync 的说明)。</summary>
+    /// <summary>旧接口兜底(仅在 WBI 明确失败时调用, 见 GetPlayerInfoAsync 的说明)。
+    /// ★ 只返回字幕轨, **章节一律不从这里取**(串扰数据的章节同样不可信)。</summary>
     private async Task<List<SubtitleTrack>?> GetLegacySubtitleTracksAsync(string bvid, long cid)
     {
         try

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -178,6 +178,15 @@ public partial class PlayerWindow : FluentWindow
         targetMs = Math.Clamp(targetMs, 0, _mp.Length);
 
         ProgressHintText.Text = FormatClock(TimeSpan.FromMilliseconds(targetMs));
+        // 章节名(2026-11-21): 气泡第二行, 指针落在某一章里才显示。
+        // ★ 用同一个 targetMs 查: 气泡说的章与实际会跳到的地方永远一致(与时间行的理由相同)。
+        if (ProgressHintChapter != null)
+        {
+            var chapter = ChapterAt(targetMs);
+            ProgressHintChapter.Text = chapter;
+            ProgressHintChapter.Visibility =
+                chapter.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
 
         // 量一次气泡的尺寸才能把它摆准(居中于滑块、且不超出轨道两端)。
         ProgressHint.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
@@ -986,7 +995,10 @@ public partial class PlayerWindow : FluentWindow
         => (QualityPopup != null && QualityPopup.IsOpen)
         || (DanmakuAreaPopup != null && DanmakuAreaPopup.IsOpen)
         || (SpeedPopup != null && SpeedPopup.IsOpen)
-        || (SubtitlePopup != null && SubtitlePopup.IsOpen);
+        || (SubtitlePopup != null && SubtitlePopup.IsOpen)
+        // 章节弹层(2026-11-21)同样算"浮层开着": 否则点弹层里的条目会被视频区当成
+        // 一次单击 → 顺手把视频暂停(见上面那段手势判定的实测记录)。
+        || (ChapterPopup != null && ChapterPopup.IsOpen);
 
     /// <summary>
     /// 视频区手势是否已经由一次 **Down** 正式起步。

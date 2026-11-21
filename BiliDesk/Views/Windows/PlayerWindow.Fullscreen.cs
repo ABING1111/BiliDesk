@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -769,6 +769,10 @@ public partial class PlayerWindow : FluentWindow
         }
         // 字幕的字号/最大宽跟着视频区尺寸走(全屏/铺满/窄窗都要重算)(2026-11-15)
         ApplySubtitleStyle();
+        // 章节胶囊(2026-11-21): 窄窗收成图标按钮。
+        // ★ 阈值(700)比这里收弹幕区域/音量滑杆的 520 高 —— 章节胶囊是最"软"的一项,
+        //   该在它们之前先让位; 但它**只换形态不收入口**(600px 的窗口里照样要能跳章)。
+        SetChapterCompact(e.NewSize.Width > 0 && e.NewSize.Width < ChapterCompactWidth);
     }
 
     /// <summary>

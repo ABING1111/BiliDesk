@@ -84,11 +84,13 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 拉取字幕轨列表(换片后由 LoadVideoAsync 并行调起, **不 await** —— 绝不阻塞起播)。
-    /// ★ gen 用调用方的加载代次而不是自己的: 字幕必须跟着"这次换片"走,
-    ///   用户连点两个视频时, 慢的那个字幕响应不能盖到新视频上。
+    /// 拉取播放器信息(**字幕轨 + 章节**; 换片后由 LoadVideoAsync 并行调起, **不 await** —— 绝不阻塞起播)。
+    /// ★ 章节与字幕在同一个 player/wbi/v2 响应里(2026-11-21), 所以这里一次请求拿两份数据;
+    ///   章节不依赖字幕开关 —— 用户关着字幕, 章节照样要能用。
+    /// ★ gen 用调用方的加载代次而不是自己的: 两者都必须跟着"这次换片"走,
+    ///   用户连点两个视频时, 慢的那个响应不能盖到新视频上。
     /// </summary>
-    private async Task LoadSubtitleTracksAsync(int gen)
+    private async Task LoadPlayerInfoAsync(int gen)
     {
         CancelSubtitleFetch();
         _subtitleTracks.Clear();
@@ -103,12 +105,15 @@ public partial class PlayerWindow : FluentWindow
 
         try
         {
-            var (_, _, tracks, needLogin) = await Svc.Api.GetSubtitleTracksAsync(
+            var (_, _, tracks, needLogin, chapters) = await Svc.Api.GetPlayerInfoAsync(
                 _currentBvid, _currentCid, _subtitleCts?.Token ?? CancellationToken.None);
             if (_closing || gen != _loadGen) return;
             _subtitleLoadingTracks = false;
             _subtitleNeedsLogin = needLogin;
             _subtitleTracks.AddRange(tracks);
+            // ★ 章节先落地(在"有没有字幕轨"的判断之前): 它们是两件独立的事,
+            //   没字幕的视频照样可能有章节(课程/纪录片都是这种)。
+            ApplyChapters(chapters);
 
             if (_subtitleTracks.Count == 0)
             {
@@ -212,7 +217,7 @@ public partial class PlayerWindow : FluentWindow
         {
             // 没轨道时给一句说得清的提示(直播/本地/未加载/真没有), 别让按键像坏了一样
             if (!_isLive && !_isLocalPlayback && _currentCid > 0 && !_subtitleLoadingTracks)
-                _ = LoadSubtitleTracksAsync(_loadGen);
+                _ = LoadPlayerInfoAsync(_loadGen);
             Svc.Toast.Show(_subtitleLoadingTracks ? "正在获取字幕轨…"
                 : _subtitleNeedsLogin ? "该视频有 AI 字幕, 登录后可查看"
                 : _isLive || _isLocalPlayback ? "直播与本地文件没有字幕" : "该视频暂无字幕");
