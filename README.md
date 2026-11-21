@@ -102,6 +102,10 @@ dotnet build BiliDesk/BiliDesk.csproj -c Release
 LibVLC 原生库由 NuGet 包（`VideoLAN.LibVLC.Windows`）自动部署，无需手动安装。
 完整发布（便携版 zip + Inno 安装器载荷）运行仓库根目录的 `发布.ps1`。
 
+## 🙏 贡献者
+
+- [@YuiYuK1](https://github.com/YuiYuK1)：视频章节（[#109](https://github.com/ABING1111/BiliDesk/pull/109)）、字幕时间源与弹幕开关解耦（[#108](https://github.com/ABING1111/BiliDesk/pull/108)）
+
 ## ⚖️ 许可
 
 本项目基于 [GPL-3.0](LICENSE) 协议开源。
