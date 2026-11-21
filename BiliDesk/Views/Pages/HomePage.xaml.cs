@@ -69,7 +69,15 @@ public partial class HomePage : UserControl, IRefreshable
         Loaded += OnPageFirstLoaded;
         IsVisibleChanged += (_, e) =>
         {
-            if (!(bool)e.NewValue) return;
+            if (!(bool)e.NewValue)
+            {
+                // 离开首页(切页 / 被内嵌页盖住): 停掉消息未读轮询, 不在后台空转
+                Vm?.StopMessageUnreadPolling();
+                return;
+            }
+
+            // 回到首页: 消息未读可能已经变了(刚看完消息), 立刻拉一次并接着轮询
+            Vm?.StartMessageUnreadPolling();
             Vm?.RefreshGreeting();
             RefreshThemeIcon();
             RefreshFilterButton();

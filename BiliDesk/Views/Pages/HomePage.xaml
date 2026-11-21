@@ -384,14 +384,35 @@
 
             <!-- 离线缓存入口已删(2026-09-26): 收进「我的」页, 这里只剩主题切换和消息 -->
 
-            <!-- B 站消息(私信): 官方 SVG 信封图标 -->
-            <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
-                    Click="OnMessagesClick" ToolTip="B 站消息(私信)">
-                <Path Data="{StaticResource MessageIconGeometry}"
-                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                      StrokeThickness="1.6" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                      Width="18" Height="18" Stretch="Uniform" />
-            </Button>
+            <!-- B 站消息(私信): 官方 SVG 信封图标 + 未读数字气泡(2026-11-21)。
+                 ★ 气泡压住按钮右上角(负外边距), 并用 IsHitTestVisible=False 保证它
+                   不吃点击; 没有未读时由 CountToVis 整体隐藏。
+                 ★ 外面这层 44×44 的 Grid 是为了"按按钮右上角定位": FloatingIconButtonStyle
+                   是固定 44×44(见 Styles.xaml), 直接拿 StackPanel 的整行宽度当参照,
+                   气泡会跑到工具列右缘而不是按钮角上。 -->
+            <Grid Width="44" Height="44" Margin="0,6,0,0">
+                <Button x:Name="BtnMessages" Style="{StaticResource FloatingIconButtonStyle}"
+                        Click="OnMessagesClick" ToolTip="B 站消息(私信)">
+                    <Path Data="{StaticResource MessageIconGeometry}"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.6" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Width="18" Height="18" Stretch="Uniform" />
+                </Button>
+
+                <!-- 未读数字气泡: 红底白字。红色用 UnreadDotBrush 这个语义色,
+                     不跟主题强调色走(用户把主题改成绿/蓝, "有新消息"仍应是红的)。 -->
+                <Border x:Name="MessageUnreadBadge"
+                        HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Margin="0,-5,-5,0" MinWidth="16" Height="16" CornerRadius="8"
+                        Padding="4,0" Background="{DynamicResource UnreadDotBrush}"
+                        IsHitTestVisible="False"
+                        Visibility="{Binding MessageUnreadTotal, Converter={StaticResource CountToVis}}">
+                    <TextBlock Text="{Binding MessageUnreadText}" FontSize="9"
+                               Foreground="{DynamicResource TextOnAccentBrush}"
+                               TextOptions.TextFormattingMode="Ideal"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+            </Grid>
 
             <!-- 屏蔽: 点开左上方的小面板输入要屏蔽的标题 / UP 关键词 -->
             <Button x:Name="BtnFilter" Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"

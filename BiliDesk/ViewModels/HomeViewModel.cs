@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading.Tasks;
 using System.Windows.Input;
+using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
@@ -164,6 +165,10 @@ public class HomeViewModel : ObservableObject
 
     private void OnSessionChanged()
     {
+        // 登录状态变了, 消息未读也要立刻换一份: 退出登录清零, 登录后重新拉。
+        // ★ 放在最前面: 下面的未登录分支会提前 return, 放后面就永远走不到。
+        _ = RefreshMessageUnreadAsync();
+
         MyBangumi.Clear();
         // 关注主播看板属于账号数据: 退出登录后不能还挂着上一个账号的主播
         FollowingLive.Clear();
@@ -193,6 +198,105 @@ public class HomeViewModel : ObservableObject
         _lastRecommendLoggedIn = loggedIn;
 
         ResetRecommendAndReload();
+    }
+
+    // ---------------- 消息未读数(首页消息入口的数字气泡) ----------------
+
+    /// <summary>
+    /// 首页可见期间多久刷一次未读数。
+    /// ★ 2 分钟: 气泡只是"有新消息"的提示, 不需要秒级; 而 GetMsgUnreadAsync 一次要打
+    ///   两个接口(msgfeed/unread + single_unread), 比动态页那套 60 秒轮询更该省一点。
+    /// </summary>
+    private static readonly TimeSpan MessageUnreadPollInterval = TimeSpan.FromMinutes(2);
+
+    private DispatcherTimer? _messageUnreadTimer;
+    private bool _messageUnreadLoading;
+    private int _messageUnreadTotal;
+
+    /// <summary>私信 + 回复我的 + @我的 + 收到的赞 的未读总数</summary>
+    public int MessageUnreadTotal => _messageUnreadTotal;
+
+    /// <summary>气泡文字(超过 99 显示 "99+"; 没有未读为空串, 界面据此隐藏)</summary>
+    public string MessageUnreadText => UnreadBadge.Format(_messageUnreadTotal);
+
+    /// <summary>
+    /// 首页变为可见: 开始轮询并立刻刷新一次。
+    ///
+    /// ★ 轮询只在首页可见时跑(HomePage.IsVisibleChanged 启停): 气泡只挂在首页,
+    ///   人不在首页时保持后台打接口没有意义。
+    /// </summary>
+    public void StartMessageUnreadPolling()
+    {
+        _messageUnreadTimer ??= CreateMessageUnreadTimer();
+        _messageUnreadTimer.Start();
+        _ = RefreshMessageUnreadAsync();
+    }
+
+    /// <summary>首页不可见(切走 / 被内嵌页盖住): 停表。</summary>
+    public void StopMessageUnreadPolling() => _messageUnreadTimer?.Stop();
+
+    private DispatcherTimer CreateMessageUnreadTimer()
+    {
+        var timer = new DispatcherTimer { Interval = MessageUnreadPollInterval };
+        timer.Tick += (_, _) => _ = RefreshMessageUnreadAsync();
+        return timer;
+    }
+
+    /// <summary>
+    /// 拉一次未读数并同步到气泡。
+    /// ★ 失败静默并保留上一轮数字: 气泡是后台提示, 网络抖动/风控不该在首页弹错误;
+    ///   下一拍(或用户切回首页)会再试。
+    /// ★ _messageUnreadLoading 挡住并发: 启动时 InitAsync 与页面可见事件会几乎同时触发。
+    /// </summary>
+    public async Task RefreshMessageUnreadAsync()
+    {
+        if (_messageUnreadLoading) return;
+        _messageUnreadLoading = true;
+        try
+        {
+            if (!Svc.Session.HasLogin)
+            {
+                PostMessageUnread(0);
+                return;
+            }
+
+            var unread = await Svc.Api.GetMsgUnreadAsync();
+            PostMessageUnread(UnreadBadge.Total(unread));
+        }
+        catch
+        {
+            // 拿不到就保留上一次的数字
+        }
+        finally
+        {
+            _messageUnreadLoading = false;
+        }
+    }
+
+    /// <summary>把未读数送到 UI 线程。Session.Changed 等事件可能不在 UI 线程触发。</summary>
+    private void PostMessageUnread(int total)
+    {
+        var app = System.Windows.Application.Current;
+        if (app == null)
+        {
+            SetMessageUnread(total);
+            return;
+        }
+        if (app.Dispatcher.CheckAccess())
+        {
+            SetMessageUnread(total);
+            return;
+        }
+        app.Dispatcher.BeginInvoke(new Action(() => SetMessageUnread(total)));
+    }
+
+    private void SetMessageUnread(int total)
+    {
+        if (total < 0) total = 0;
+        if (_messageUnreadTotal == total) return;
+        _messageUnreadTotal = total;
+        OnPropertyChanged(nameof(MessageUnreadTotal));
+        OnPropertyChanged(nameof(MessageUnreadText));
     }
 
     /// <summary>
@@ -286,6 +390,8 @@ public class HomeViewModel : ObservableObject
     /// <summary>进入首页时自动加载一次(默认加载推荐 tab)</summary>
     public async Task InitAsync()
     {
+        // 消息未读数与推荐流互不依赖, 一起发出去, 别让首屏等它
+        _ = RefreshMessageUnreadAsync();
         // 默认 tab 已设为推荐, 加载推荐
         if (RecommendItems.Count == 0) await LoadRecommendAsync(reset: true);
     }
