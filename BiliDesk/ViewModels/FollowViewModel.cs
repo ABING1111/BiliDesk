@@ -20,7 +20,15 @@ namespace BiliDesk.ViewModels;
 ///     (有未读时头像左侧显示红点、头像右下角显示条数角标);
 ///   · 右栏 = 当前选中对象的内容, 两档排版由 <see cref="UseCardWall"/> 切:
 ///       - 全部动态: 关注的所有 UP 近期的**综合动态**(视频/图文/文字/专栏/转发, feed/all 游标分页);
-///       - 具体某 UP: 该 UP 的投稿视频(空间投稿接口, 页码分页)。
+///       - 具体某 UP: 同样是 TA 的**综合动态**(视频/图文/文字/专栏/直播/转发, feed/space 游标分页)。
+///
+/// ★★★ 2026-11-21 修「左栏时间与动态卡上发布时间不符」(用户截图):
+///   右栏原来走 arc/search(该 UP 的**投稿视频**列表), 而左栏的"最近更新"时间来自
+///   动态流(feed/nav / feed/all, **任何类型**的动态)。一个 UP 只要最近发的是直播/
+///   图文/转发而不是投稿视频, 两边就必然对不上 —— 实测笨尼尼子(mid=1767542):
+///   左栏显示"44分钟前"(一条直播动态), 右栏卡片却是 11-14(最新一条投稿视频), 差 7 天。
+///   现在右栏改用 feed/space(该 UP 自己的动态流), 与左栏同一口径:
+///   列表最上面一条就是 TA 最新的一条动态, 发布时间自然与左栏一致。
 ///
 /// ★ 2026-11-06 关注 2790+ UP 的性能重做:
 ///   · 左栏不再一次创建全部行 —— 页面用虚拟化 ListBox, 只生成可见行;
@@ -128,7 +136,7 @@ public class FollowViewModel : ObservableObject
     public bool IsAllSelected => SelectedUp == null;
 
     /// <summary>右栏标题: 说明当前在看谁的内容</summary>
-    public string SelectionTitle => SelectedUp == null ? "全部动态" : SelectedUp.Name + " 的视频";
+    public string SelectionTitle => SelectedUp == null ? "全部动态" : SelectedUp.Name + " 的动态";
 
     /// <summary>整页加载状态。★ 变化时必须连带通知 ShowFullLoading —— 它是计算属性
     /// (Loading && FeedItems.Count==0), 不手动 raise 绑定就不会刷新。以前只在
@@ -394,7 +402,7 @@ public class FollowViewModel : ObservableObject
     // 分页游标(两种来源各自一套)。
     // "快速连点导致结果串台"用 LoadSelectionAsync 里的 forUp 快照 + SelectedUp 比对兜住。
     private string? _feedOffset;         // 全部动态: 游标
-    private int _upVideoPage = 1;        // 单 UP: 页码
+    private string? _upSpaceOffset;      // 单 UP: 该 UP 动态流的游标(feed/space)
 
     /// <summary>
     /// 动态流里同一视频会出现多次(转发 + 原投稿 + 多人合作视频各自的动态),
@@ -705,6 +713,7 @@ public class FollowViewModel : ObservableObject
             _seenBvid.Clear();
             _seenDynamicId.Clear();
             _feedOffset = null;
+            _upSpaceOffset = null;
             _emptyFeedPages = 0;
             LoadMoreError = false;
             Error = "";
@@ -742,36 +751,36 @@ public class FollowViewModel : ObservableObject
             }
             else
             {
-                if (reset) _upVideoPage = 1;
-                var r = await Svc.Api.GetSpaceVideosAsync(forUp.Mid, _upVideoPage, 30);
-                ok = r.Item1; err = r.Item2;
-                var videoItems = r.Item3;
-                // ★★ 2026-11-06: "到底"改用接口给的**总条数**判断, 不再用"本页 &lt; 30"。
-                //   旧判据不成立(实测): 降级接口 recArchivesByKeywords 自己按 17/22 这种
-                //   零头分页, 952 投稿的 UP 在第 31 页只给 17 条 —— 于是第 31 页就被
-                //   误判成到底, 用户滚了半天还没看完就冒出「已经到底啦」。
-                //   total 是权威的总投稿数(来自 arc/search 的 page.count);
-                //   ★ 降级路径(被风控时)拿不到 total ⇒ 改用"空页才到底": 本页非空就继续翻,
-                //     翻到接口真的返回 0 条才是底 —— 这比"条数不足 30"准得多。
-                var loaded = FeedItems.Count + (videoItems?.Count ?? 0);
-                hasMore = ok && videoItems != null && videoItems.Count > 0 &&
-                          (r.Item4 > 0 ? loaded < r.Item4 : true);
-                if (ok) _upVideoPage++;
+                // ★★★ 2026-11-21: 单 UP 视图改用 feed/space(该 UP 自己的动态流),
+                //   不再用 arc/search(只含投稿视频)。理由见类头注释。
+                var (sOk, sErr, sItems, sNext, sHasMore) =
+                    await Svc.Api.GetSpaceDynamicsAsync(forUp.Mid, reset ? null : _upSpaceOffset);
+                ok = sOk; err = sErr;
+                // ★ 按 pub_ts 倒序排: feed/space 会把该 UP **置顶的那条**放在最前面
+                //   (实测笨尼尼子的第一条是 3月28日的置顶图文, 真正最新的是 5 小时前的
+                //    直播动态)。不排的话最上面一张卡的时间又和左栏对不上了。
+                //   ★★ 只排"这一页"不够 —— 置顶那条会被排到本页末尾, 而下一页的条目
+                //     比它新, 于是它插在了中间。所以真正落地时还要按时间**插入**到
+                //     FeedItems 的正确位置(见下面的 InsertByPubdateDescending)。
+                items = sItems != null
+                    ? sItems.OrderByDescending(x => x.Pubdate).ToList()
+                    : null;
 
-                // ★ 单 UP 视图的**头像与名字要在这里盖章**(2026-10-15 用户截图: 卡片上一个头像
-                //   都没有、名字也是空的, 只剩"· 10-14 18:45"):
-                //   空间投稿的两个接口**都不下发头像**; 风控降级接口连 UP 名都没有(只有 upMid)。
-                //   但这两样我们本来就知道 —— 左侧那一条 UP 上就摆着 —— 抄过去即可,
-                //   不必为此再发请求, 更不该让卡片空着。
-                if (videoItems != null)
+                // 与「全部动态」同一套判据: has_more + 游标必须真的前进,
+                // 否则重复页会让底部永远转圈。
+                hasMore = ok && sHasMore && !string.IsNullOrEmpty(sNext) && sNext != _upSpaceOffset;
+                if (ok) _upSpaceOffset = sNext;
+
+                // ★ 头像/名字兜底(2026-10-15 用户截图: 卡片上一个头像都没有、名字也空):
+                //   feed/space 正常会带 module_author.name/face, 但接口偶有缺字段,
+                //   缺了就用左栏这一行上现成的 —— 不必为此再发请求, 更不该让卡片空着。
+                if (items != null)
                 {
-                    foreach (var it in videoItems)
+                    foreach (var it in items)
                     {
-                        if (string.IsNullOrEmpty(it.Author)) it.Author = forUp.Name;
+                        if (string.IsNullOrEmpty(it.AuthorName)) it.AuthorName = forUp.Name;
                         if (string.IsNullOrEmpty(it.AuthorFace)) it.AuthorFace = forUp.Face;
                     }
-                    // 单 UP 视图只有视频, 包成 DynamicItem 以复用同一张综合动态卡
-                    items = videoItems.Select(DynamicItem.FromVideo).ToList();
                 }
             }
 
@@ -791,6 +800,12 @@ public class FollowViewModel : ObservableObject
                 }
 
                 var added = 0;
+                // ★ 单 UP 视图(2026-11-21): feed/space 的第一条可能是**置顶**的老动态,
+                //   只在"页内排序"会把它排到本页末尾, 而下一页的条目其实比它新 ——
+                //   所以这里按 pub_ts 插入到正确位置, 保证整条列表始终是时间倒序,
+                //   最上面那张卡的时间才和左栏一致。
+                //   全部动态(feed/all)本身就是倒序, 走原来的追加即可。
+                var insertSorted = forUp != null;
                 foreach (var it in items)
                 {
                     // 先按动态 id 去重(图文/文字/转发没有 bvid, 只能靠它)
@@ -805,7 +820,8 @@ public class FollowViewModel : ObservableObject
                             continue;
                     }
 
-                    FeedItems.Add(it);
+                    if (insertSorted) InsertByPubdateDescending(it);
+                    else FeedItems.Add(it);
                     added++;
                 }
 
@@ -822,6 +838,21 @@ public class FollowViewModel : ObservableObject
                 Error = "";
                 // (ShowFullLoading 的通知已由 Loading 的 setter 连带发出, 不再手动 raise)
                 OnPropertyChanged(nameof(FollowingsSummary));
+
+                // ★★★ 2026-11-21: 单 UP 视图把「TA 最新一条动态的时间」回写给左栏。
+                //   左栏的"最近更新"只由 feed/nav(每 60 秒)与 feed/all 维护, 而那两条流
+                //   都**不是全量**: 实测松哥讲化学刚开播时, 直播动态既不在 feed/nav
+                //   也不在 feed/all 前几页, 左栏就还停在 3 小时前的投稿上, 右栏却已经是
+                //   1 小时前的直播 —— 又变成"两侧不符"。
+                //   右栏这次拿到的就是该 UP 自己的动态流(feed/space), 是权威的;
+                //   用它把左栏时间抬上去, 两个数字必然一致。
+                //   ★ 只增不减: 与 ApplyNotifyState / ReorderUsersByActivity 的"取更大值"同一口径,
+                //     免得翻页翻到更早的条目把左栏时间改小。
+                if (forUp != null)
+                {
+                    var newest = FeedItems.Select(x => x.Pubdate).DefaultIfEmpty(0).Max();
+                    if (newest > forUp.LatestPubdate) forUp.LatestPubdate = newest;
+                }
                 if (UseCardWall)
                 {
                     var wallPending = SyncWallItems();
@@ -837,7 +868,7 @@ public class FollowViewModel : ObservableObject
                 OnPropertyChanged(nameof(ShowWallLimitHint));
 
                 if (FeedItems.Count == 0)
-                    Error = forUp == null ? "关注的 UP 最近没有动态" : "该 UP 暂时没有投稿视频";
+                    Error = forUp == null ? "关注的 UP 最近没有动态" : "该 UP 暂时没有动态";
 
                 // ★ 内容装得下一屏时列表根本没有滚动条, 滚动事件不会触发 ⇒ "是否在底部"没人更新,
                 //   「已经到底啦」也就永远不出现。这里主动按"装得下"置为在底部。
@@ -1380,6 +1411,30 @@ public class FollowViewModel : ObservableObject
         UserSearchError = "";
         UserSearching = false;
         OnPropertyChanged(nameof(ShowUserSearchEmpty));
+    }
+
+    /// <summary>
+    /// 按发布时间倒序把一条动态插进 <see cref="FeedItems"/>。
+    ///
+    /// ★ 2026-11-21 单 UP 视图专用: feed/space 会把该 UP 的**置顶动态**排在第一条,
+    ///   而它是很早以前发的。页内排序只能把它挪到本页末尾, 下一页的条目却比它新 ——
+    ///   只有按 pub_ts 插入才对得上"列表从上到下 = 时间从新到旧"。
+    ///   常见情形(翻页拿到的都是更早的)退化成 Append, 代价是 O(1)。
+    /// </summary>
+    private void InsertByPubdateDescending(DynamicItem item)
+    {
+        if (FeedItems.Count == 0 || FeedItems[^1].Pubdate >= item.Pubdate)
+        {
+            FeedItems.Add(item);
+            return;
+        }
+        for (var i = FeedItems.Count - 1; i >= 0; i--)
+        {
+            if (FeedItems[i].Pubdate < item.Pubdate) continue;
+            FeedItems.Insert(i + 1, item);
+            return;
+        }
+        FeedItems.Insert(0, item);
     }
 
     // ------------------------------------------------------------ 右栏加载更多

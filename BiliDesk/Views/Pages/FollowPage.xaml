@@ -65,7 +65,7 @@
                      而且红点紧贴底衬左缘, 一眼就能看到"这一行有更新"。 -->
             <Border CornerRadius="10" Padding="0" Margin="0,0,0,4" Cursor="Hand"
                     MouseLeftButtonUp="OnSelectUp"
-                    ToolTip="只看 TA 的投稿视频">
+                    ToolTip="只看 TA 的动态">
                 <!-- 右键菜单挂在**整行**上(2026-11-07 用户要求): 原来只挂在头像上,
                      必须精准右键头像才弹; 现在头像/昵称/时间/行尾空白处右键都能打开。 -->
                 <Border.ContextMenu>

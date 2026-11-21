@@ -57,7 +57,9 @@ public sealed class DynamicRepostItem
 /// ★ 与 VideoItem 的关系:
 ///   · 动态卡绑这个模型 —— 它有正文、图片、转发原文、动态统计(转发/评论/点赞);
 ///   · 卡片墙仍然只要视频, 通过 <see cref="AsVideoItem"/> 转成现有 VideoItem 复用 VideoCard;
-///   · 单 UP 视图来自空间投稿接口, 只有视频, 用 <see cref="FromVideo"/> 包一层即可。
+///   · 空间投稿列表(VideoItem)需要套成动态卡时用 <see cref="FromVideo"/>。
+///     ★ 2026-11-21 起动态页的单 UP 视图不再用它 —— 那条路已改成 feed/space
+///       (该 UP 的全部动态类型), 见 FollowViewModel 类头注释。
 /// </summary>
 public class DynamicItem : INotifyPropertyChanged
 {
@@ -314,7 +316,7 @@ public class DynamicItem : INotifyPropertyChanged
         return _videoItem;
     }
 
-    /// <summary>单 UP 视图(空间投稿接口)只有视频, 包成 DynamicItem 以复用同一张动态卡。</summary>
+    /// <summary>空间投稿列表(只有 VideoItem)套成动态卡。★ 动态页单 UP 视图已改走 feed/space, 不再用它。</summary>
     public static DynamicItem FromVideo(VideoItem v)
     {
         return new DynamicItem

@@ -297,7 +297,7 @@ public partial class FollowPage : UserControl, IRefreshable
         return true;
     }
 
-    /// <summary>点「全部动态」: 右栏显示关注 UP 近期的视频投稿</summary>
+    /// <summary>点「全部动态」: 右栏显示关注 UP 近期的综合动态</summary>
     private void OnSelectAll(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
@@ -305,7 +305,7 @@ public partial class FollowPage : UserControl, IRefreshable
         if (DataContext is FollowViewModel vm) _ = AfterSelectionChangedAsync(vm.SelectAllAsync());
     }
 
-    /// <summary>点某个 UP: 右栏只显示 TA 的投稿视频</summary>
+    /// <summary>点某个 UP: 右栏显示 TA 的动态(与左栏时间同一口径)</summary>
     private void OnSelectUp(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
