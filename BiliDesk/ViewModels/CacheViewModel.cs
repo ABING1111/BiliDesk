@@ -49,7 +49,9 @@ public class CacheViewModel : ObservableObject
     private void RaiseEmpty() => OnPropertyChanged(nameof(ShowEmpty));
 
     /// <summary>缓存目录的实际路径(直接显示出来, 用户点"打开文件夹"之前就知道文件在哪)。
-    /// 名字不能叫 Directory —— 会和 System.IO.Directory 撞名, 同文件里调用静态方法就会报 CS0120。</summary>
+    /// 名字不能叫 Directory —— 会和 System.IO.Directory 撞名, 同文件里调用静态方法就会报 CS0120。
+    /// ★ 只读计算属性不会自己通知: 页面实例是长期缓存的, 绑定求值一次就把旧路径记死了,
+    ///   所以设置里改下载位置后必须由 <see cref="OnDownloadDirChanged"/> 显式抛 PropertyChanged。</summary>
     public string CacheDirectory => AppPaths.DownloadDir;
 
     public ICommand RefreshCommand { get; }
@@ -69,6 +71,16 @@ public class CacheViewModel : ObservableObject
         RevealCommand = new RelayCommand(p => { if (p is CacheEntry e) RevealInExplorer(e.FilePath); });
         DeleteCommand = new RelayCommand(p => { if (p is CacheEntry e) Delete(e); });
         OpenFolderCommand = new RelayCommand(OpenFolder);
+
+        // 下载位置在设置页改掉时, 这一页也要跟着换路径 + 重扫目录。
+        // 本 VM 随主窗口一直活着(页面实例被 MainWindow 缓存), 订阅不用退订。
+        Svc.Settings.DownloadDirChanged += OnDownloadDirChanged;
+    }
+
+    private void OnDownloadDirChanged()
+    {
+        OnPropertyChanged(nameof(CacheDirectory));
+        _ = LoadAsync();
     }
 
     public async Task LoadAsync()
@@ -77,6 +89,9 @@ public class CacheViewModel : ObservableObject
         if (Loading) return;
         Loading = true;
         Error = "";
+        // 顺手同步一次路径文本: 刷新(F5)/重新进入页面都会走到这里,
+        // 万一事件漏了(将来多了别的写路径的入口), 这里也能把旧路径纠回来。
+        OnPropertyChanged(nameof(CacheDirectory));
         try
         {
             // 扫目录是同步 IO, 目录里可能躺着几百个文件 —— 放后台线程, 否则切页时会卡一下
