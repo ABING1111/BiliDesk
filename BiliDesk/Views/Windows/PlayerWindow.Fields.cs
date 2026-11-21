@@ -656,7 +656,9 @@ public partial class PlayerWindow : FluentWindow
     //     · 松手不改 rate 只补一次 seek(norestore) → 停顿 1.50s
     //   即: 什么都不做(base, 停顿 0.25~0.5s)就是最优解。
     //
-    // ★ 长按期间不改 SpeedText: 它是控制栏那个**播放速率**指示。长按的反馈交给 ShowSpeedHint 浮层。
+    // ★ 2026-11-21 修"长按倍速时控制栏倍速与实际不同步": 长按期间控制栏的倍速文字
+    //   **跟着临时倍速走**(StartFastForward / TryStepFastForwardSpeed 会改它), 松手再由
+    //   StopFastForward 改回原值。旧版故意不碰 SpeedText, 结果长按 3x 时控制栏还写着 1.0x。
     /// <summary>长按快进的倍速</summary>
     private const float FastForwardRate = 2.0f;
 
@@ -664,7 +666,10 @@ public partial class PlayerWindow : FluentWindow
     private bool _isFastForwarding;
 
     /// <summary>
-    /// 长按快进开始: 切到 <see cref="_fastForwardTarget"/>(至少 <see cref="FastForwardRate"/>)。
+    /// 长按快进开始: 切到 <see cref="_fastForwardTarget"/>(默认 <see cref="FastForwardRate"/>, 即 2x)。
+    ///
+    /// ★ 2026-11-21: 长按期间 ↑/↓ 可以在 1.5x / 2x / 3x 间改这个目标
+    ///   (见 TryStepFastForwardSpeed), 但**不影响**松手恢复值。
     ///
     /// ★ 松手时要恢复到的速率由 <c>_rateBeforeFastForward</c> 记住 —— 不能写死 1.0f:
     ///   用户可能先用倍速按钮设了 1.5x, 写死会让松手后悄悄变成 1x。
@@ -673,15 +678,19 @@ public partial class PlayerWindow : FluentWindow
     private float _rateBeforeFastForward = 1.0f;
 
     /// <summary>
-    /// 本次长按实际要切到的倍速 = max(2.0x, 按下前的倍速)。
-    /// ★ 不能写死 2.0x: 自定义倍速允许到 4.0x, 用户已经 3x 时再长按**不应该反而变慢**。
-    /// ★ 浮层提示也读这个值, 保证"看到的倍速 = 实际切到的倍速"。
+    /// 本次长按实际要切到的倍速。
+    ///
+    /// ★ 2026-11-21(用户指定): **固定从 2x 起步, 且不记忆上次选择** ——
+    ///   每次长按都重置成 2x, 与"正片当前倍速"无关, 与上一次长按里按过 ↑/↓ 也无关。
+    ///   (旧实现取 max(2.0, 当前倍速), 长按开始时的档位会随正片倍速漂移, 与"固定三档"矛盾。)
+    /// ★ 浮层与控制栏都读这个值, 保证"看到的倍速 = 实际切到的倍速"。
     /// </summary>
     private float _fastForwardTarget = FastForwardRate;
 
     /// <summary>
     /// 开始长按快进(改倍速)。见上方那段说明为什么用 SetRate 而不是 seek。
-    /// <paramref name="rate"/> 默认 2x(鼠标长按快进); 键盘长按 → 传 3x(见 PlayerWindow.Keyboard)。
+    /// <paramref name="rate"/> 固定为 2x(<see cref="FastForwardRate"/>): 鼠标长按与键盘长按
+    /// 共用同一个默认档, 不再按"当前倍速"抬高。
     /// </summary>
     private void StartFastForward(float rate = FastForwardRate)
     {
@@ -693,15 +702,20 @@ public partial class PlayerWindow : FluentWindow
         catch { _rateBeforeFastForward = 1.0f; }
         if (_rateBeforeFastForward <= 0) _rateBeforeFastForward = 1.0f;
 
-        // ★ 2026-11-03: 不再把"当前已经是 2.0x"强行记成 1.0x。
-        //   自定义倍速下 2.0x/3x 都是常态, 那样会在松手时把用户的倍速偷偷改回 1x。
-        //   目标取 max(2x, 当前): 当前更快就保持更快, 绝不因为"快进"而减速。
-        _fastForwardTarget = Math.Max(rate, _rateBeforeFastForward);
+        // ★ 2026-11-21(用户指定): 固定 2x 起步, 不记忆上一次长按里选过的档位。
+        //   注意这意味着正片本身已经 >2x 时, 长按会先"降"到 2x(松手恢复原速) ——
+        //   用户明确要的是"固定三档 + 默认 2x", 而不是旧版的 max(2.0, 当前)。
+        _fastForwardTarget = rate;
 
         _isFastForwarding = true;
         // ★ 顺序: 先让弹幕时钟按新倍速落定当前值, 再真正 SetRate(同 OnSpeedClick 那条说明)
         SyncDanmakuClockRate(_fastForwardTarget);
-        try { _mp.SetRate(_fastForwardTarget); } catch { StopFastForward(); }
+        try { _mp.SetRate(_fastForwardTarget); }
+        catch { StopFastForward(); return; }
+        // ★★★ 2026-11-21 修"长按倍速时控制栏倍速与实际不同步": 控制栏那颗倍速按钮显示的
+        //   是**当前实际播放速率**, 长按把它切成临时倍速之后必须一起改; 松手由 StopFastForward
+        //   改回原值。旧版故意不碰它, 于是长按 3x 时控制栏还写着 1.0x, 看起来像"倍速没生效"。
+        UpdateSpeedText(_fastForwardTarget);
     }
 
     /// <summary>停止长按快进: 恢复按下前的速率。</summary>
@@ -717,9 +731,31 @@ public partial class PlayerWindow : FluentWindow
         // 同 StartFastForward: 先落定弹幕时钟, 再改速率
         SyncDanmakuClockRate(back);
         try { _mp.SetRate(back); } catch { /* 播放器已失效 */ }
+        // "不记忆"的另一半: 收尾把档位复位成默认 2x, 下次长按一定从 2x 起步
+        _fastForwardTarget = FastForwardRate;
+        // 控制栏倍速指示跟着回到原值(与 StartFastForward 的临时提速对称)。
+        // ★ 不传参数: 读播放器**实际**速率, 万一上面 SetRate 失败(片源切换中)也不会显示成
+        //   "已经恢复了"而实际还在临时倍速上。
+        UpdateSpeedText();
         // ★ 2026-10-31: 变速收尾也是音轨偶发掉线的暴露点(同 seek 后没声的机理)。
         //   挂一次带宽限期的自愈检查, 命中才动手(见 HealAudioIfDead)。
         HealAudioIfDead("fastforward-end");
+    }
+
+    /// <summary>
+    /// 外部打断(窗口失焦 / 鼠标移出视频区 / 换片)时结束长按倍速: 恢复速率, 并**立刻收掉浮层**。
+    ///
+    /// ★ 只调 <see cref="StopFastForward"/> 不够: 这些路径拿不到配对的 KeyUp / MouseUp,
+    ///   也就走不到正常的「已恢复 x」收场 —— 而 hold:true 显示的浮层**没有**自动淡出计时器,
+    ///   于是速率恢复了、浮层却一直挂在屏幕上。用户复现(2026-11-21): 长按倍速时 Alt+Tab,
+    ///   切回来还写着「倍速播放中 + 三档选择器」, 实际已经是原速。
+    /// ★ 这里用"立刻收"而不是"亮一下已恢复": 打断发生时用户已经不在看这个窗口,
+    ///   补收场提示只会在切回来时变成残影(鼠标移出那条路是用户还看着屏幕, 所以仍用提示)。
+    /// </summary>
+    private void CancelFastForward()
+    {
+        if (_isFastForwarding) StopFastForward();
+        HideSpeedOsd();
     }
 
     // --- SponsorBlock(跳过社区标注的赞助 / 片头片尾片段) ---

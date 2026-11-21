@@ -52,8 +52,9 @@ public partial class PlayerWindow : FluentWindow
             //   所有 seek 防护(看门狗/静音/进度钉制)自动继承。
             case Key.Left: SeekRelative(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? -30 : -5); e.Handled = true; return;
             case Key.Right:
-                // ★ 2026-11-12 用户要求: 长按 → 应该是 3 倍速播放(与 B 站一致), 不是连续快进。
-                //   短按仍然立即跳 5 秒(Shift 30 秒); 继续按住由计时器切到 3x, 松开恢复。
+                // ★ 2026-11-12 用户要求: 长按 → 应该是倍速播放(与 B 站一致), 不是连续快进。
+                //   短按仍然立即跳 5 秒(Shift 30 秒); 继续按住由计时器进入倍速播放
+                //   (2026-11-21 起默认 2x, 期间 ↑/↓ 切 1.5x / 2x / 3x), 松开恢复。
                 //   系统的自动重复 KeyDown(e.IsRepeat)一律忽略 —— 否则又会变成连续快进。
                 if (e.IsRepeat) { e.Handled = true; return; }
                 OnRightKeyPressed();
@@ -61,8 +62,15 @@ public partial class PlayerWindow : FluentWindow
                 return;
             // 音量: ↑↓ 走统一入口(顺带弹音量提示), M 在静音与 80 之间切换
             // 基数用 _volumeCache: aout 未就绪时 _mp.Volume 原生读回是 -1/旧值(见 _volumeCache 的说明)
-            case Key.Up: SetVolume(_volumeCache + VolumeStep); e.Handled = true; return;
-            case Key.Down: SetVolume(_volumeCache - VolumeStep); e.Handled = true; return;
+            // ★★★ 2026-11-21: 长按倍速期间 ↑↓ 改为"切换 1.5x / 2x / 3x", 不再调音量 ——
+            //   这是用户明确要求处理的快捷键争用。判据是 _isFastForwarding(手势态),
+            //   不是"OSD 可见": 淡出动画期间 OSD 还亮着, 那时按 ↑↓ 必须已经回到音量。
+            case Key.Up:
+                if (TryStepFastForwardSpeed(+1)) { e.Handled = true; return; }
+                SetVolume(_volumeCache + VolumeStep); e.Handled = true; return;
+            case Key.Down:
+                if (TryStepFastForwardSpeed(-1)) { e.Handled = true; return; }
+                SetVolume(_volumeCache - VolumeStep); e.Handled = true; return;
             case Key.M: SetVolume(_volumeCache == 0 ? 80 : 0); e.Handled = true; return;
             case Key.F: ToggleFullscreen(); e.Handled = true; return;
             case Key.L: OnLikeClick(this, new RoutedEventArgs()); e.Handled = true; return;
@@ -136,13 +144,17 @@ public partial class PlayerWindow : FluentWindow
         HandleBackRequest();
     }
 
-    // ------------------------------------------------------------ 方向键 → 长按 = 3 倍速播放
+    // ------------------------------------------------------------ 方向键 → 长按 = 倍速播放
 
-    /// <summary>长按 → 的判定阈值(ms): 超过就进入 3 倍速播放, 而不是连续快进。</summary>
+    /// <summary>长按 → 的判定阈值(ms): 超过就进入倍速播放, 而不是连续快进。</summary>
     private const int RightKeyLongPressMs = 250;
 
-    /// <summary>方向键长按进入的倍速(与 B 站一致)。</summary>
-    private const float RightKeyFastRate = 3.0f;
+    /// <summary>
+    /// 长按 → 进入倍速播放时的默认倍速(2026-11-21 由 3x 改为 2x, 用户指定)。
+    /// ★ 长按期间 ↑/↓ 在 1.5x / 2x / 3x 之间切换(见 FastForwardSpeedPolicy),
+    ///   默认值同时也是 OSD 里高亮的那一档。
+    /// </summary>
+    private const float RightKeyFastRate = FastForwardSpeedPolicy.Default;
 
     private DispatcherTimer? _rightKeyTimer;
 
@@ -150,15 +162,25 @@ public partial class PlayerWindow : FluentWindow
     private bool _rightKeyFast;
 
     /// <summary>
+    /// 这一次 → 的 KeyUp 要丢掉(2026-11-21)。
+    /// 失焦时按压被当作作废(见 <see cref="OnPlayerDeactivated"/>), 但按键本身可能还按着:
+    /// 切回来才松手的话, 那个 KeyUp 会被当成"短按"再跳 5 秒 —— 用这个标记把配对的那次
+    /// 松手吞掉。下一次 KeyDown 会清掉它, 所以不会误伤后面的短按。
+    /// </summary>
+    private bool _rightKeyDiscardUp;
+
+    /// <summary>
     /// → 键按下(非自动重复):
     ///   短按(不到 <see cref="RightKeyLongPressMs"/> 毫秒) = 松开时跳 5 秒(Shift 30 秒), 保持原来的即时手感;
-    ///   继续按住超过阈值 = 切到 3 倍速播放(与 B 站一致), 松开恢复按下前的倍速。
+    ///   继续按住超过阈值 = 进入倍速播放(默认 2x), 松开恢复按下前的倍速。
+    ///   长按期间 ↑/↓ 在 1.5x / 2x / 3x 之间切换(<see cref="TryStepFastForwardSpeed"/>)。
     /// </summary>
     private void OnRightKeyPressed()
     {
         // ★ 按下时**不跳**: 用户实测"长按会先触发一次快进" —— 长按应当只加速、不改变播放位置。
         //   短按的跳放在 KeyUp 里(没到长按阈值就松开 = 短按), 按下与松开之间的延迟只有按住的那一小段。
         _rightKeyTimer?.Stop();
+        _rightKeyDiscardUp = false;   // 新的一次按下: 上一次失焦留下的"吞掉松手"作废
         if (_closing || _isLive || _ended) return;
 
         _rightKeyTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(RightKeyLongPressMs) };
@@ -167,7 +189,7 @@ public partial class PlayerWindow : FluentWindow
         _rightKeyTimer.Start();
     }
 
-    /// <summary>按住 → 超过阈值: 切到 3 倍速播放(复用鼠标长按那条 StartFastForward, 只是倍速不同)。</summary>
+    /// <summary>按住 → 超过阈值: 进入倍速播放(复用鼠标长按那条 StartFastForward, 只是入口不同)。</summary>
     private void OnRightKeyLongPressTick(object? sender, EventArgs e)
     {
         _rightKeyTimer?.Stop();
@@ -176,7 +198,7 @@ public partial class PlayerWindow : FluentWindow
 
         _rightKeyFast = true;
         StartFastForward(RightKeyFastRate);
-        ShowSpeedHint(FormatRate(_fastForwardTarget) + " 快进中", hold: true);
+        ShowSpeedHint("倍速播放中", hold: true);
     }
 
     /// <summary>→ 键松开: 若是键盘长按触发的 3x, 恢复按下前的速率。</summary>
@@ -189,12 +211,21 @@ public partial class PlayerWindow : FluentWindow
         if (e.Key != Key.Right) return;
         _rightKeyTimer?.Stop();
 
+        // 这一次按下已经被"失焦作废"处理过了(见 _rightKeyDiscardUp): 松开只清标记,
+        // 不再按短处理跳 5 秒 —— 否则切回来一松手画面就莫名前进。
+        if (_rightKeyDiscardUp)
+        {
+            _rightKeyDiscardUp = false;
+            e.Handled = true;
+            return;
+        }
+
         if (_rightKeyFast)
         {
             // 长按结束: 恢复按下前的速率
             _rightKeyFast = false;
             StopFastForward();
-            ShowSpeedHint("已结束快进", hold: false);
+            ShowSpeedHint(RestoredSpeedText(), hold: false);
             e.Handled = true;
             return;
         }
@@ -212,6 +243,9 @@ public partial class PlayerWindow : FluentWindow
     ///   (见 HookOverlayKeyboard), 本窗口同样会收到 Deactivated —— 若在这里同步收尾,
     ///   用户刚按下起步的长按快进、长按三连进度环会被立刻掐掉。
     ///   延迟后检查"是否还在播放器体系内"(本窗口或覆盖层窗口处于激活), 都不在才算真离开。
+    /// ★ 2026-11-21: 收尾必须走 <see cref="CancelFastForward"/> 而不是 StopFastForward ——
+    ///   只恢复速率的话, hold:true 显示的倍速浮层(没有自动淡出计时器)会一直挂着,
+    ///   切回来看到「倍速播放中 + 三档选择器」而实际已是原速(用户复现的失焦 case)。
     /// </summary>
     private void OnPlayerDeactivated(object? sender, EventArgs e)
     {
@@ -220,9 +254,19 @@ public partial class PlayerWindow : FluentWindow
             if (_closing) return;
             if (IsActive) return;                                  // 又切回来了
             if (_overlayKeyboardWindow?.IsActive == true) return;  // 焦点在视频区覆盖层上, 没离开播放器
+            // 这一次"按住手势"整体作废: 计时器停掉、标记清掉。
+            // ★ 不清的话, 切回来时那个 Up 会被当成"配对成功的松手" —— 不但弹一次过期的
+            //   「已恢复」, 若 500ms 计时器还没到点, 它还会在后台起来切一次倍速并重新亮浮层。
+            _longPressTimer?.Stop();
+            _longPressFired = false;
+            _videoGestureActive = false;
+            // 激活点击补偿的轮询也要停: 它同样会在失焦期间把长按倍速点起来(见 OnOverlayActivated)
+            StopActivationClickCompensation();
             _rightKeyTimer?.Stop();
             _rightKeyFast = false;
-            StopFastForward();
+            // 按键可能还按着: 让下一次松手被吞掉, 不要退化成"短按 → 跳 5 秒"
+            _rightKeyDiscardUp = true;
+            CancelFastForward();
         }), DispatcherPriority.Input);
     }
 

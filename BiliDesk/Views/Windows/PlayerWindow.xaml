@@ -1584,24 +1584,69 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- 倍速提示(长按快进时浮出, 2026-10-13 新增)。
+                            <!-- 倍速提示(长按快进时浮出, 2026-10-13 新增; 2026-11-21 改为竖排选择器)。
                                  用户要求"位于播放器偏上位置" —— VerticalAlignment=Top + Margin 顶部
                                  留 90px, 与音量提示的居中错开, 两者同时出现也不会重叠。
-                                 ★ 为什么必须有: 长按 2x 是**无入口的手势**, 松手前用户只看到画面变快,
-                                   不知道发生了什么、也不知道马上会恢复。给一个"2.0x 快进中"的提示,
-                                   松手换成"已恢复 1.0x"再淡出, 手势就有了明确的开始与结束。
+                                 ★ 为什么必须有: 长按倍速是**无入口的手势**, 松手前用户只看到画面变快,
+                                   不知道发生了什么、也不知道马上会恢复。
+                                 ★ 2026-11-21: 长按期间 ↑/↓ 循环切换 1.5x / 2x / 3x(默认 2x),
+                                   所以这里要同时表达"正在倍速""当前档位""可选档位"三件事:
+                                   左边图标 + 「倍速播放中」, 右边一条分隔线 + **竖排**三个档位
+                                   (当前档高亮, 由 SyncSpeedOsdChips 设置)。松手时选择区收起,
+                                   文案换成「已恢复 x」再淡出。
+                                 ★ 用户明确要求不写"用 ↑↓ 切换"的提示, 也不写「倍速选择：」标题 ——
+                                   长按手势本身已经够直觉, 这两行字只会让浮层更吵。
                                  ★ IsHitTestVisible=False: 不能吃掉视频区的手势与滚轮(同音量提示)。
                                  ★ ZIndex=98 与音量提示同级: 位置不重叠, 不必分高下。 -->
                             <Border x:Name="SpeedOsd" HorizontalAlignment="Center" VerticalAlignment="Top"
-                                    Margin="0,90,0,0" Padding="14,10" CornerRadius="12"
+                                    Margin="0,90,0,0" Padding="12,6" CornerRadius="12"
                                     Background="#CC0A0B0F" BorderBrush="#24FFFFFF" BorderThickness="1"
                                     IsHitTestVisible="False"
                                     Visibility="Collapsed" Opacity="0" Panel.ZIndex="98">
-                                <StackPanel Orientation="Horizontal">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <TextBlock Text="&#xE7C1;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                FontSize="16" Foreground="White" VerticalAlignment="Center" />
-                                    <TextBlock x:Name="SpeedOsdText" Text="2.0x" Margin="9,0,0,0"
+                                    <TextBlock x:Name="SpeedOsdLabel" Text="倍速播放中" Margin="9,0,0,0"
                                                FontSize="14" Foreground="White" VerticalAlignment="Center" />
+                                    <!-- 竖排倍速选择器(2026-11-21 用户指定): 只在"按住"期间显示,
+                                         松手收起、提示缩回成"已恢复 x"的小胶囊。
+                                         ★ 不写"用 ↑↓ 切换"的提示, 也不写「倍速选择」标题:
+                                           手势本身已经够直觉, 文字只会让浮层更吵(用户明确要求去掉)。
+                                         ★ 档位顺序固定 1.5x → 2x → 3x; 切换是**循环**的
+                                           (3x 再往上回到 1.5x), 见 FastForwardSpeedPolicy。
+                                         ★ 2026-11-21 第二次调整(用户: "高度太高 / 未选中的倍速要有
+                                           淡入淡出"): 去掉胶囊底与固定宽 52 的外框, 改成三行纯文本 ——
+                                           当前档 14px 粗体全亮, 上下两档 10px、透明度 0.35, 并且
+                                           切档时对透明度做 140ms 动画(见 ApplySpeedOsdRow)。
+                                           这一版高度从 ~90px 收到 ~50px, 视觉上也更接近参考图那种
+                                           "中间亮、上下淡"的轮盘感。 -->
+                                    <StackPanel x:Name="SpeedOsdSelector" Orientation="Horizontal"
+                                                Margin="12,0,0,0" VerticalAlignment="Center"
+                                                Visibility="Collapsed">
+                                        <Border Width="1" Height="34" Background="#33FFFFFF"
+                                                Margin="0,0,10,0" VerticalAlignment="Center" />
+                                        <StackPanel Orientation="Vertical" VerticalAlignment="Center">
+                                            <!-- ★ 文字写死 1.5x/2x/3x(不是 FormatRate 的 2.0x):
+                                                档位是固定选项, 与"控制栏那个当前倍速"不是同一套文案。
+                                                ★ 字号/行高/透明度由代码按当前档位设置(带过渡动画),
+                                                 XAML 这里只是初值(默认 2x)。 -->
+                                            <TextBlock x:Name="SpeedOsdChip15Text" Text="1.5x"
+                                                       FontSize="10" LineHeight="12"
+                                                       LineStackingStrategy="BlockLineHeight"
+                                                       Foreground="#FFFFFF" Opacity="0.35"
+                                                       HorizontalAlignment="Center" />
+                                            <TextBlock x:Name="SpeedOsdChip20Text" Text="2x"
+                                                       FontSize="14" FontWeight="Bold" LineHeight="17"
+                                                       LineStackingStrategy="BlockLineHeight"
+                                                       Foreground="#FFFFFF" Opacity="1"
+                                                       HorizontalAlignment="Center" />
+                                            <TextBlock x:Name="SpeedOsdChip30Text" Text="3x"
+                                                       FontSize="10" LineHeight="12"
+                                                       LineStackingStrategy="BlockLineHeight"
+                                                       Foreground="#FFFFFF" Opacity="0.35"
+                                                       HorizontalAlignment="Center" />
+                                        </StackPanel>
+                                    </StackPanel>
                                 </StackPanel>
                             </Border>
 

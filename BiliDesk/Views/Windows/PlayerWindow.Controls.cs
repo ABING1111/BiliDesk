@@ -542,20 +542,28 @@ public partial class PlayerWindow : FluentWindow
     /// 否则每滚一格都闪一下。
     /// </summary>
     /// <summary>
-    /// 浮出倍速提示(长按快进开始 / 恢复 1x 时调用)。
+    /// 浮出倍速提示(长按快进开始 / 恢复时调用)。
     ///
     /// ★ 与音量提示的差别(所以没有复用 ShowVolumeHint):
     ///   音量是"调一下、闪一下、自己淡出"; 倍速提示必须在**整个长按期间一直挂着** ——
-    ///   用户按住的那几秒里要始终知道"现在是 2 倍速, 松手会回去"。
+    ///   用户按住的那几秒里要始终知道"现在是几倍速、松手会回去"。
     ///   松手时再调一次本方法(<c>hold=false</c>), 文案换成"已恢复 1.0x"并淡出。
+    ///
+    /// ★ 2026-11-21: <paramref name="hold"/> 同时决定「倍速选择」那一块显不显示 ——
+    ///   长按期间显示(↑/↓ 可切档), 松手后收起, 提示缩回一个小胶囊。
+    ///   文案由调用方给(开始 = 「倍速播放中」, 结束 = 「已恢复 x」), 档位高亮由
+    ///   <see cref="SyncSpeedOsdChips"/> 按 `_fastForwardTarget` 现算。
     /// </summary>
-    /// <param name="text">提示文案, 如 "2.0x 快进中" / "已恢复 1.0x"</param>
-    /// <param name="hold">true = 常显不自动淡出(长按期间); false = 显示一下自己淡出</param>
+    /// <param name="text">提示文案, 如 "倍速播放中" / "已恢复 1.0x"</param>
+    /// <param name="hold">true = 常显不自动淡出(长按期间, 并显示倍速选择); false = 显示一下自己淡出</param>
     private void ShowSpeedHint(string text, bool hold)
     {
         if (_closing || SpeedOsd == null) return;
 
-        SpeedOsdText.Text = text;
+        if (SpeedOsdLabel != null) SpeedOsdLabel.Text = text;
+        if (SpeedOsdSelector != null)
+            SpeedOsdSelector.Visibility = hold ? Visibility.Visible : Visibility.Collapsed;
+        if (hold) SyncSpeedOsdChips(animate: false);
         _speedOsdTimer?.Stop();
         _speedOsdTimer = null;
 
@@ -601,6 +609,76 @@ public partial class PlayerWindow : FluentWindow
         };
         _speedOsdTimer.Start();
     }
+
+    // ------------------------------------------------------------ 长按倍速: ↑/↓ 切档(2026-11-21)
+
+    /// <summary>
+    /// 长按倍速期间按 ↑/↓ 切档。返回 true 表示"这次按键归倍速管, 不要再落到音量"。
+    ///
+    /// ★ 只在 <see cref="_isFastForwarding"/> 为真时接管: 其余时候 ↑/↓ 必须保持
+    ///   "调音量"的原语义(见 OnPreviewKeyDown 里的注释) —— 这正是用户特别指出要处理的争用。
+    /// ★ 切档后只改"当前加速倍速"(_fastForwardTarget), **不动** _rateBeforeFastForward:
+    ///   松手要恢复的仍是按住之前那个正常倍速。
+    /// </summary>
+    private bool TryStepFastForwardSpeed(int direction)
+    {
+        if (_closing || _mp == null || !_isFastForwarding) return false;
+
+        var next = Helpers.FastForwardSpeedPolicy.Step(_fastForwardTarget, direction);
+        if (Math.Abs(next - _fastForwardTarget) > 0.001f)
+        {
+            _fastForwardTarget = next;
+            // 与 StartFastForward 同序: 先让弹幕时钟按新倍速落定, 再真正 SetRate
+            SyncDanmakuClockRate(next);
+            try { _mp.SetRate(next); } catch { /* 播放器可能刚好失效 */ }
+            // 控制栏倍速指示跟着临时档位走(见 StartFastForward 里那条修复)
+            UpdateSpeedText();
+            SyncSpeedOsdChips();
+        }
+        // 方向为 0 / 脏值时 next 可能等于 current; 这一下仍然算"倍速键", 不能再落到音量
+        return true;
+    }
+
+    /// <summary>
+    /// 按当前加速倍速刷新 OSD 的三行档位(2026-11-21 第二版)。
+    ///
+    /// 视觉: 当前档 14px 粗体全亮; 上下两档 10px、透明度 0.35 —— 参考图那种
+    ///   "中间亮、上下淡"的轮盘感, 同时把浮层高度从 ~90px 收到 ~50px(用户反馈太高)。
+    /// 动效: <paramref name="animate"/>=true 时对透明度做 140ms 过渡, 切档像"淡入淡出";
+    ///   首次显示(hold=true)要 animate=false 直接落位, 否则会把上一次的残留透明度播一遍。
+    /// </summary>
+    private void SyncSpeedOsdChips(bool animate = true)
+    {
+        ApplySpeedOsdRow(SpeedOsdChip15Text, 1.5f, animate);
+        ApplySpeedOsdRow(SpeedOsdChip20Text, 2.0f, animate);
+        ApplySpeedOsdRow(SpeedOsdChip30Text, 3.0f, animate);
+    }
+
+    private void ApplySpeedOsdRow(TextBlock? text, float rate, bool animate)
+    {
+        if (text == null) return;
+        var active = Math.Abs(_fastForwardTarget - rate) <= 0.001f;
+
+        text.FontSize = active ? 14 : 10;
+        text.FontWeight = active ? FontWeights.Bold : FontWeights.Normal;
+        text.LineHeight = active ? 17 : 12;
+
+        var target = active ? 1.0 : 0.35;
+        if (!animate)
+        {
+            // 首次显示: 摘掉旧动画直接落位(避免从上次的 0.35/1.0 过渡出"闪一下")
+            text.BeginAnimation(UIElement.OpacityProperty, null);
+            text.Opacity = target;
+            return;
+        }
+        // 从**当前所见**过渡到目标: 连续按 ↑/↓ 时不会每次都从基准值跳一下
+        text.BeginAnimation(UIElement.OpacityProperty,
+            new DoubleAnimation(target, TimeSpan.FromMilliseconds(140)));
+    }
+
+    /// <summary>长按收场文案: 恢复到**按下前**那个倍速(长按期间 ↑/↓ 只改加速目标, 不改正片倍速)。</summary>
+    private string RestoredSpeedText()
+        => "已恢复 " + FormatRate(_rateBeforeFastForward > 0 ? _rateBeforeFastForward : 1.0f);
 
     private void ShowVolumeHint(int volume)
     {
@@ -657,6 +735,26 @@ public partial class PlayerWindow : FluentWindow
     {
         _speedOsdTimer?.Stop();
         _speedOsdTimer = null;
+    }
+
+    /// <summary>
+    /// 立刻收掉倍速浮层(手势被外部打断时用: 失焦 / 鼠标移出 / 换片)。
+    ///
+    /// ★ 与 <see cref="ShowSpeedHint"/>(hold: false) 的区别: 不亮「已恢复」, 直接收起 ——
+    ///   打断发生时用户多半已经不在看这个窗口, 再补一次收场提示只会在切回来时变成残影。
+    /// ★ 必须"摘动画 + 归位": XAML 里 SpeedOsd 的基准 Opacity 是 0(见 ShowSpeedHint 里
+    ///   那段 FillBehavior 的说明), 只 Collapsed 会让下一次淡入整块透明。
+    /// </summary>
+    private void HideSpeedOsd()
+    {
+        _speedOsdTimer?.Stop();
+        _speedOsdTimer = null;
+        if (SpeedOsd == null) return;
+        SpeedOsd.BeginAnimation(OpacityProperty, null);
+        SpeedOsd.Opacity = 1;
+        SpeedOsd.Visibility = Visibility.Collapsed;
+        // 选择区归位: 下一次 ShowSpeedHint(hold:false) 的收场胶囊不应该还带着三档列表
+        if (SpeedOsdSelector != null) SpeedOsdSelector.Visibility = Visibility.Collapsed;
     }
 
     // ------------------------------------------------------------ 倍速(预设 + 自定义, 2026-11-03)

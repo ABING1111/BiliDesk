@@ -333,7 +333,7 @@ public partial class PlayerWindow : FluentWindow
         _longPressFired = false;
         _longPressTimer?.Stop();
         // ★ 直播没有"快进"这回事(StartFastForward 内部也有 _isLive 闸门) —— 不要起这个计时器。
-        //   否则按住 500ms 会弹一句"2.0x 快进中", 而直播画面纹丝不动, 纯误导
+        //   否则按住 500ms 会弹一句"倍速播放中", 而直播画面纹丝不动, 纯误导
         //   (2026-11-20, issue #98: 直播间里只允许控制栏按钮暂停, 手势一律不对直播起作用)。
         if (!_isLive)
         {
@@ -348,7 +348,7 @@ public partial class PlayerWindow : FluentWindow
                 // ★ 浮出提示(2026-10-13 用户要求): 长按快进是**无入口手势**,
                 //   不提示的话用户只看到画面变快, 不知道发生了什么、也不知道松手会恢复。
                 //   hold=true: 整个长按期间一直挂着, 松手时由 Up 那边换成"已恢复"并淡出。
-                ShowSpeedHint(FormatRate(_fastForwardTarget) + " 快进中", hold: true);
+                ShowSpeedHint("倍速播放中", hold: true);
                 // 长按触发了, 不再触发单击
                 _singleClickTimer?.Stop();
             };
@@ -397,11 +397,11 @@ public partial class PlayerWindow : FluentWindow
             _longPressFired = false;
             // 恢复速率。★ 恢复到**按下前那个速率**(见 _rateBeforeFastForward), 不是写死 1x ——
             //   用户可能先用倍速按钮设了 1.5x。
-            //   也**不要**去写 SpeedText —— 那个指示归控制栏的倍速按钮管, 与长按无关。
+            //   控制栏那颗倍速指示由 StopFastForward 一并改回原值(2026-11-21), 这里不要重复写。
             StopFastForward();
             // ★ 提示收场: 亮一下再淡出 —— 手势有始有终,
             //   用户才知道刚才那阵快进是自己按出来的、现在结束了。
-            ShowSpeedHint("已结束快进", hold: false);
+            ShowSpeedHint(RestoredSpeedText(), hold: false);
             e.Handled = true;
             return;
         }
@@ -497,10 +497,12 @@ public partial class PlayerWindow : FluentWindow
             StopFastForward();
             // ★ 兜底路径也要收掉提示: 鼠标移出时 Up 不会再来了,
             //   不在这里收的话提示会一直挂在屏幕上(用户报过同类"提示不消失")。
-            ShowSpeedHint("已结束快进", hold: false);
+            ShowSpeedHint(RestoredSpeedText(), hold: false);
         }
-        // 兜底: 万一手势态已经乱了(比如 _longPressFired 被别处清掉), 快进态也不能留着
-        StopFastForward();
+        // 兜底: 万一手势态已经乱了(比如 _longPressFired 被别处清掉), 快进态也不能留着。
+        // ★ 用 CancelFastForward 时先判 _isFastForwarding: 上面那条分支刚播过「已恢复」,
+        //   无条件收浮层会把那条收场提示立刻掐掉。
+        if (_isFastForwarding) CancelFastForward();
         // 离开视频区: 播放中直接藏(倒计时都不用等), 暂停时保持常显
         if (ShouldHideControls()) HideControls();
     }
