@@ -631,6 +631,8 @@ public partial class PlayerWindow : FluentWindow
             // 与 StartFastForward 同序: 先让弹幕时钟按新倍速落定, 再真正 SetRate
             SyncDanmakuClockRate(next);
             try { _mp.SetRate(next); } catch { /* 播放器可能刚好失效 */ }
+            // 控制栏倍速指示跟着临时档位走(见 StartFastForward 里那条修复)
+            UpdateSpeedText();
             SyncSpeedOsdChips();
         }
         // 方向为 0 / 脏值时 next 可能等于 current; 这一下仍然算"倍速键", 不能再落到音量

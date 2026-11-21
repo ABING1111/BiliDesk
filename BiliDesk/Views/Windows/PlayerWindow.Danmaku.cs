@@ -397,7 +397,7 @@ public partial class PlayerWindow : FluentWindow
             _longPressFired = false;
             // 恢复速率。★ 恢复到**按下前那个速率**(见 _rateBeforeFastForward), 不是写死 1x ——
             //   用户可能先用倍速按钮设了 1.5x。
-            //   也**不要**去写 SpeedText —— 那个指示归控制栏的倍速按钮管, 与长按无关。
+            //   控制栏那颗倍速指示由 StopFastForward 一并改回原值(2026-11-21), 这里不要重复写。
             StopFastForward();
             // ★ 提示收场: 亮一下再淡出 —— 手势有始有终,
             //   用户才知道刚才那阵快进是自己按出来的、现在结束了。

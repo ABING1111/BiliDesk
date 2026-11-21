@@ -656,7 +656,9 @@ public partial class PlayerWindow : FluentWindow
     //     · 松手不改 rate 只补一次 seek(norestore) → 停顿 1.50s
     //   即: 什么都不做(base, 停顿 0.25~0.5s)就是最优解。
     //
-    // ★ 长按期间不改 SpeedText: 它是控制栏那个**播放速率**指示。长按的反馈交给 ShowSpeedHint 浮层。
+    // ★ 2026-11-21 修"长按倍速时控制栏倍速与实际不同步": 长按期间控制栏的倍速文字
+    //   **跟着临时倍速走**(StartFastForward / TryStepFastForwardSpeed 会改它), 松手再由
+    //   StopFastForward 改回原值。旧版故意不碰 SpeedText, 结果长按 3x 时控制栏还写着 1.0x。
     /// <summary>长按快进的倍速</summary>
     private const float FastForwardRate = 2.0f;
 
@@ -704,7 +706,12 @@ public partial class PlayerWindow : FluentWindow
         _isFastForwarding = true;
         // ★ 顺序: 先让弹幕时钟按新倍速落定当前值, 再真正 SetRate(同 OnSpeedClick 那条说明)
         SyncDanmakuClockRate(_fastForwardTarget);
-        try { _mp.SetRate(_fastForwardTarget); } catch { StopFastForward(); }
+        try { _mp.SetRate(_fastForwardTarget); }
+        catch { StopFastForward(); return; }
+        // ★★★ 2026-11-21 修"长按倍速时控制栏倍速与实际不同步": 控制栏那颗倍速按钮显示的
+        //   是**当前实际播放速率**, 长按把它切成临时倍速之后必须一起改; 松手由 StopFastForward
+        //   改回原值。旧版故意不碰它, 于是长按 3x 时控制栏还写着 1.0x, 看起来像"倍速没生效"。
+        UpdateSpeedText(_fastForwardTarget);
     }
 
     /// <summary>停止长按快进: 恢复按下前的速率。</summary>
@@ -720,6 +727,10 @@ public partial class PlayerWindow : FluentWindow
         // 同 StartFastForward: 先落定弹幕时钟, 再改速率
         SyncDanmakuClockRate(back);
         try { _mp.SetRate(back); } catch { /* 播放器已失效 */ }
+        // 控制栏倍速指示跟着回到原值(与 StartFastForward 的临时提速对称)。
+        // ★ 不传参数: 读播放器**实际**速率, 万一上面 SetRate 失败(片源切换中)也不会显示成
+        //   "已经恢复了"而实际还在临时倍速上。
+        UpdateSpeedText();
         // ★ 2026-10-31: 变速收尾也是音轨偶发掉线的暴露点(同 seek 后没声的机理)。
         //   挂一次带宽限期的自愈检查, 命中才动手(见 HealAudioIfDead)。
         HealAudioIfDead("fastforward-end");
