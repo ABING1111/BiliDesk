@@ -140,7 +140,7 @@ public class SettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>关于页外链(仓库 / Issues)统一走内置浏览器。
+    /// <summary>关于页外链(仓库 / Issues)走设置里的打开方式(默认内置浏览器, 也可改成系统浏览器)。
     /// LinkLauncher 已做同地址去重, 这里只需要把"没开起来"的情况反馈给用户。</summary>
     private static void OpenAboutLink(string url)
     {

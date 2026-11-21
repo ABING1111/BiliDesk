@@ -39,10 +39,6 @@ public static class LinkLauncher
         if (string.IsNullOrWhiteSpace(url)) return;
         if (!IsWebUrl(url)) return;
 
-        // 设置里选了系统浏览器: 直接交出去; 系统浏览器起不来(没默认浏览器/被策略拦截)
-        // 就回落到内置浏览器, 保证点击至少能打开。
-        if (Svc.Settings.OpenLinksInExternalBrowser && OpenInSystemBrowser(url)) return;
-
         Application.Current.Dispatcher.Invoke(() =>
         {
             // ★ 两道去重(见类注释):
@@ -51,6 +47,13 @@ public static class LinkLauncher
             //      而且连环弹窗的每一步都会撞上它, 无论触发频率多低都挡得住。
             //   ② 时间窗去重: 覆盖"窗口还没进 Application.Windows 就被连点两次"的瞬间。
             if (HasOpenWindowFor(url) || IsDuplicate(url)) return;
+
+            // ★★ 2026-11-21(issue #111): 设置里选了系统浏览器就交给它 —— 但**必须放在去重之后**。
+            //   放在去重前面(初版)会让开启开关的路径完全绕开这两道闸: 同一次点击被触发多次
+            //   (2026-11-14 真出现过"连环弹窗")就会开出多个浏览器标签页。
+            //   系统浏览器起不来(没默认浏览器/被策略拦截)时继续往下走, 回落到内置浏览器,
+            //   保证点击至少能打开。
+            if (Svc.Settings.OpenLinksInExternalBrowser && OpenInSystemBrowser(url)) return;
 
             var host = owner ?? SvcWindow.Main;
             var win = new BrowserWindow(url, url);
