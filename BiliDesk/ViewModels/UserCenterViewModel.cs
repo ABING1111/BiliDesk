@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using BiliDesk.Helpers;
@@ -78,6 +79,7 @@ public class UserCenterViewModel : ObservableObject
     private long _mid;
     private string _name = "";
     private string _face = "";
+    private bool _isSelf;
 
     /// <summary>看的是谁的空间。</summary>
     public long Mid { get => _mid; private set => SetProperty(ref _mid, value); }
@@ -88,8 +90,30 @@ public class UserCenterViewModel : ObservableObject
     /// <summary>页面标题: 看自己叫「我的空间」, 看别人叫「XX 的空间」。</summary>
     public string TitleText => Name.Length > 0 ? Name + " 的空间" : "我的空间";
 
-    /// <summary>这个空间是不是"我自己"。</summary>
-    public bool IsSelf { get; private set; }
+    /// <summary>这个空间是不是"我自己"(关注搜索只在看自己时显示)。</summary>
+    public bool IsSelf
+    {
+        get => _isSelf;
+        private set
+        {
+            if (!SetProperty(ref _isSelf, value)) return;
+            // 搜索态本身也依赖 IsSelf: 看别人时不能把普通关注列表顶掉。
+            OnPropertyChanged(nameof(HasFollowingsSearch));
+            OnPropertyChanged(nameof(ShowFollowingsSearchEmpty));
+            OnPropertyChanged(nameof(SummaryText));
+
+            if (!value && !string.IsNullOrWhiteSpace(_followingsSearchText))
+            {
+                // 搜索框在别人的空间是隐藏的; 留着文本会让搜索结果区顶掉普通列表。
+                FollowingsSearchText = "";
+            }
+            else if (value && !string.IsNullOrWhiteSpace(_followingsSearchText))
+            {
+                // VM 复用时把已有搜索重新跑一次, 避免停在上一次留下的空结果上。
+                StartFollowingsSearch();
+            }
+        }
+    }
 
     // ---------------- 动态 Tab ----------------
 
@@ -184,6 +208,65 @@ public class UserCenterViewModel : ObservableObject
 
     public bool ShowFollowingsError => FollowingsError.Length > 0 && Followings.Count == 0;
 
+    // ---------------- 关注搜索 ----------------
+
+    private string _followingsSearchText = "";
+    private bool _followingsSearching;
+    private string _followingsSearchError = "";
+    private CancellationTokenSource? _followingsSearchCts;
+
+    /// <summary>
+    /// 关注列表搜索框文本(issue #110)。
+    /// ★ 服务端搜索: 关注可能有几千人, 本地过滤只能搜到已加载的那几页。
+    /// </summary>
+    public string FollowingsSearchText
+    {
+        get => _followingsSearchText;
+        set
+        {
+            if (!SetProperty(ref _followingsSearchText, value)) return;
+            OnPropertyChanged(nameof(HasFollowingsSearch));
+            OnPropertyChanged(nameof(ShowFollowingsSearchEmpty));
+            OnPropertyChanged(nameof(SummaryText));
+            StartFollowingsSearch();
+        }
+    }
+
+    /// <summary>只有本人的关注列表才有搜索态(搜索框也只在这种情况下显示)。</summary>
+    public bool HasFollowingsSearch => IsSelf && !string.IsNullOrWhiteSpace(FollowingsSearchText);
+
+    public bool FollowingsSearching
+    {
+        get => _followingsSearching;
+        private set
+        {
+            if (!SetProperty(ref _followingsSearching, value)) return;
+            OnPropertyChanged(nameof(ShowFollowingsSearchEmpty));
+            OnPropertyChanged(nameof(SummaryText));
+        }
+    }
+
+    public string FollowingsSearchError
+    {
+        get => _followingsSearchError;
+        private set
+        {
+            if (!SetProperty(ref _followingsSearchError, value)) return;
+            OnPropertyChanged(nameof(HasFollowingsSearchError));
+            OnPropertyChanged(nameof(ShowFollowingsSearchEmpty));
+            OnPropertyChanged(nameof(SummaryText));
+        }
+    }
+
+    public bool HasFollowingsSearchError => FollowingsSearchError.Length > 0;
+
+    public bool ShowFollowingsSearchEmpty =>
+        HasFollowingsSearch && !FollowingsSearching && !HasFollowingsSearchError
+        && FollowingSearchResults.Count == 0;
+
+    /// <summary>关注列表的搜索结果(只含已关注的 UP)。</summary>
+    public ObservableCollection<FollowUser> FollowingSearchResults { get; } = new();
+
     private bool _followersLoading;
     private bool _followersLoadingMore;
     private bool _followersHasMore = true;
@@ -236,6 +319,7 @@ public class UserCenterViewModel : ObservableObject
     /// </summary>
     public string SummaryText => Tab switch
     {
+        UserCenterTab.Followings when HasFollowingsSearch => FollowingsSearchSummary,
         UserCenterTab.Followings => FollowingsSummary,
         UserCenterTab.Followers => FollowersSummary,
         _ => DynamicsSummary,
@@ -250,6 +334,13 @@ public class UserCenterViewModel : ObservableObject
     public string FollowingsSummary => _followingsTotal > 0
         ? $"关注 · 已加载 {Followings.Count} / {_followingsTotal}"
         : $"关注 · 已加载 {Followings.Count}";
+
+    /// <summary>搜索态的概要: 搜索结果是独立的一批, 不能继续显示普通列表的已加载数。</summary>
+    public string FollowingsSearchSummary => FollowingsSearching
+        ? "关注 · 正在搜索…"
+        : HasFollowingsSearchError
+            ? "关注 · 搜索失败"
+            : $"关注 · 搜索到 {FollowingSearchResults.Count} 个";
 
     /// <summary>粉丝列表的"已加载 N / 总数"。</summary>
     public string FollowersSummary => _followersTotal > 0
@@ -332,6 +423,11 @@ public class UserCenterViewModel : ObservableObject
             OnPropertyChanged(nameof(FollowingsSummary));
             OnPropertyChanged(nameof(SummaryText));
             RaiseTabState();
+        };
+        FollowingSearchResults.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(ShowFollowingsSearchEmpty));
+            OnPropertyChanged(nameof(SummaryText));
         };
         Followers.CollectionChanged += (_, _) =>
         {
@@ -425,6 +521,12 @@ public class UserCenterViewModel : ObservableObject
         switch (Tab)
         {
             case UserCenterTab.Followings:
+                // 搜索结果是用户当前看到的内容: 刷新它, 而不是背后那张隐藏的普通列表。
+                if (HasFollowingsSearch)
+                {
+                    StartFollowingsSearch(debounce: false);
+                    return;
+                }
                 _followingsLoaded = true;
                 await LoadFollowingsAsync(reset: true);
                 break;
@@ -445,6 +547,8 @@ public class UserCenterViewModel : ObservableObject
         switch (Tab)
         {
             case UserCenterTab.Followings:
+                // 搜索结果是一整批返回的; 搜索时不要再翻普通关注列表。
+                if (HasFollowingsSearch) return;
                 if (FollowingsLoading || FollowingsLoadingMore || !FollowingsHasMore) return;
                 await LoadFollowingsAsync(reset: false);
                 break;
@@ -601,6 +705,86 @@ public class UserCenterViewModel : ObservableObject
                 FollowingsLoading = false;
                 FollowingsLoadingMore = false;
             }
+        }
+    }
+
+    // ------------------------------------------------------------ 关注搜索
+
+    private void StartFollowingsSearch(bool debounce = true)
+        => RunFollowingsSearchAsync(debounce).Forget();
+
+    /// <summary>
+    /// 300ms 防抖后调「搜索关注明细」接口(与动态页左栏同一套做法)。
+    /// ★ 不做本地过滤: 关注可能有几千人, 本地过滤只能搜到已加载的几十/几百人。
+    /// </summary>
+    private async Task RunFollowingsSearchAsync(bool debounce = true)
+    {
+        _followingsSearchCts?.Cancel();
+        _followingsSearchCts?.Dispose();
+        _followingsSearchCts = null;
+
+        FollowingSearchResults.Clear();
+        FollowingsSearchError = "";
+
+        // 属性是 public, 绑定之外也可能被代码写 null; 这里兜一下。
+        var keyword = (FollowingsSearchText ?? "").Trim();
+        if (keyword.Length == 0)
+        {
+            FollowingsSearching = false;
+            return;
+        }
+        // 只在自己的关注列表提供搜索: 别人的关注列表可能被隐私设置挡住。
+        if (!IsSelf)
+        {
+            FollowingsSearching = false;
+            return;
+        }
+        if (Mid <= 0)
+        {
+            FollowingsSearching = false;
+            FollowingsSearchError = "账号信息还没准备好, 请稍后再试";
+            return;
+        }
+
+        FollowingsSearching = true;
+        var cts = new CancellationTokenSource();
+        _followingsSearchCts = cts;
+        try
+        {
+            // 手动刷新/错误重试不需要再等防抖, 否则用户会觉得按钮没反应。
+            if (debounce) await Task.Delay(300, cts.Token);
+            if (cts.IsCancellationRequested) return;
+
+            var (ok, err, list, _) = await Svc.Api.SearchFollowingsAsync(Mid, keyword, 1, 50);
+            if (cts.IsCancellationRequested) return;
+
+            if (!ok || list == null)
+            {
+                FollowingsSearchError = err ?? "搜索失败, 请重试";
+                return;
+            }
+
+            var seen = new HashSet<long>();
+            foreach (var u in list)
+                if (u.Mid > 0 && seen.Add(u.Mid)) FollowingSearchResults.Add(u);
+        }
+        catch (OperationCanceledException)
+        {
+            // 输入还在继续, 这一次作废。
+        }
+        catch (Exception ex)
+        {
+            // 旧请求被取消后抛出的异常不能覆盖当前这次搜索的状态。
+            if (!cts.IsCancellationRequested) FollowingsSearchError = ex.Message;
+        }
+        finally
+        {
+            if (ReferenceEquals(_followingsSearchCts, cts))
+            {
+                _followingsSearchCts = null;
+                FollowingsSearching = false;
+            }
+            cts.Dispose();
         }
     }
 

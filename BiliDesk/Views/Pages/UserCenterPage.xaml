@@ -154,42 +154,95 @@
 
             <!-- ========== 关注 Tab ========== -->
             <Grid Visibility="{Binding IsFollowingsTab, Converter={StaticResource BoolToVis}}">
-                <ListBox x:Name="FollowingsList" Style="{StaticResource CenterUserListStyle}"
-                         Margin="4,0,8,0"
-                         ItemsSource="{Binding Followings}"
-                         ScrollViewer.ScrollChanged="OnFollowingsScrollChanged">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <controls:FollowUserCard />
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
 
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
-                            Visibility="{Binding FollowingsLoading, Converter={StaticResource BoolToVis}}">
-                    <controls:LoadingRing Width="30" Height="30" HorizontalAlignment="Center" />
-                    <TextBlock Text="加载中…" Style="{StaticResource MetaTextStyle}"
-                               Margin="0,12,0,0" HorizontalAlignment="Center" />
-                </StackPanel>
+                <!-- 搜索已关注的 UP(issue #110): 只在自己的关注列表显示。
+                     服务端搜索, 不必先把几千人全部加载下来; 搜索时用结果列表替换普通列表。 -->
+                <controls:SearchBox Grid.Row="0" Margin="8,0,12,8"
+                                    PlaceholderText="搜索已关注的 UP"
+                                    Text="{Binding FollowingsSearchText, Mode=TwoWay}"
+                                    Visibility="{Binding IsSelf, Converter={StaticResource BoolToVis}}" />
 
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
-                            Visibility="{Binding ShowFollowingsError, Converter={StaticResource BoolToVis}}">
-                    <TextBlock Text="{Binding FollowingsError}" FontSize="13" TextWrapping="Wrap"
-                               MaxWidth="420" HorizontalAlignment="Center"
-                               Foreground="{DynamicResource TextSecondaryBrush}" />
-                    <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
-                            HorizontalAlignment="Center" Margin="0,14,0,0" Padding="22,7"
-                            Command="{Binding RetryCommand}" />
-                </StackPanel>
+                <Grid Grid.Row="1">
+                    <!-- 非搜索态: 原来的关注列表与加载/错误/空态 -->
+                    <Grid Visibility="{Binding HasFollowingsSearch, Converter={StaticResource InvBoolToVis}}">
+                        <ListBox x:Name="FollowingsList" Style="{StaticResource CenterUserListStyle}"
+                                 Margin="4,0,8,0"
+                                 ItemsSource="{Binding Followings}"
+                                 ScrollViewer.ScrollChanged="OnFollowingsScrollChanged">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <controls:FollowUserCard />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
 
-                <TextBlock x:Name="FollowingsEmptyText" Text="还没有关注任何人" FontSize="13" HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
-                           Foreground="{DynamicResource TextTertiaryBrush}"
-                           Visibility="{Binding FollowingsEmpty, Converter={StaticResource BoolToVis}}" />
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Visibility="{Binding FollowingsLoading, Converter={StaticResource BoolToVis}}">
+                            <controls:LoadingRing Width="30" Height="30" HorizontalAlignment="Center" />
+                            <TextBlock Text="加载中…" Style="{StaticResource MetaTextStyle}"
+                                       Margin="0,12,0,0" HorizontalAlignment="Center" />
+                        </StackPanel>
 
-                <controls:LoadingRing Width="16" Height="16" HorizontalAlignment="Center"
-                                      VerticalAlignment="Bottom" Margin="0,0,0,14"
-                                      Visibility="{Binding FollowingsLoadingMore, Converter={StaticResource BoolToVis}}" />
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Visibility="{Binding ShowFollowingsError, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding FollowingsError}" FontSize="13" TextWrapping="Wrap"
+                                       MaxWidth="420" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                                    HorizontalAlignment="Center" Margin="0,14,0,0" Padding="22,7"
+                                    Command="{Binding RetryCommand}" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="FollowingsEmptyText" Text="还没有关注任何人" FontSize="13" HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   Visibility="{Binding FollowingsEmpty, Converter={StaticResource BoolToVis}}" />
+
+                        <controls:LoadingRing Width="16" Height="16" HorizontalAlignment="Center"
+                                              VerticalAlignment="Bottom" Margin="0,0,0,14"
+                                              Visibility="{Binding FollowingsLoadingMore, Converter={StaticResource BoolToVis}}" />
+                    </Grid>
+
+                    <!-- 搜索态: 搜索结果与搜索自己的加载/错误/空态 -->
+                    <Grid Visibility="{Binding HasFollowingsSearch, Converter={StaticResource BoolToVis}}">
+                        <ListBox x:Name="FollowingsSearchList" Style="{StaticResource CenterUserListStyle}"
+                                 Margin="4,0,8,0"
+                                 ItemsSource="{Binding FollowingSearchResults}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <controls:FollowUserCard />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Visibility="{Binding FollowingsSearching, Converter={StaticResource BoolToVis}}">
+                            <controls:LoadingRing Width="18" Height="18" HorizontalAlignment="Center" />
+                            <TextBlock Text="搜索中…" FontSize="12" Margin="0,8,0,0"
+                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                       HorizontalAlignment="Center" />
+                        </StackPanel>
+
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Visibility="{Binding HasFollowingsSearchError, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding FollowingsSearchError}" FontSize="13" TextWrapping="Wrap"
+                                       MaxWidth="420" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
+                                    HorizontalAlignment="Center" Margin="0,14,0,0" Padding="22,7"
+                                    Command="{Binding RetryCommand}" />
+                        </StackPanel>
+
+                        <TextBlock Text="没有匹配的已关注 UP" FontSize="13" HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   Visibility="{Binding ShowFollowingsSearchEmpty, Converter={StaticResource BoolToVis}}" />
+                    </Grid>
+                </Grid>
             </Grid>
 
             <!-- ========== 粉丝 Tab ========== -->
