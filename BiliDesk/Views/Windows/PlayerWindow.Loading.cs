@@ -1032,6 +1032,9 @@ public partial class PlayerWindow : FluentWindow
         nameof(_seekRebuildTried), nameof(_seekBounceSeenMs), nameof(_seekBounceAt),
         nameof(_seekIssuedAt), nameof(_lastSeekTargetMs), nameof(_resumeByStartTime),
         nameof(_eofSeekRebuildTried), nameof(_progressDragStartValue),
+        // ":start-time 定位没生效"的补救预算(2026-11-20): 属于"这一次重建"的态,
+        // 换片必须复位, 否则下一条视频会少给一次兜底机会。
+        nameof(_startTimeRebuildRetried), nameof(_rebuiltViaStartTime),
         nameof(_eofFallbackToStartTried),
         nameof(_progressDragMoved),
         nameof(_audioHealCheckAt),

@@ -39,10 +39,16 @@ namespace BiliDesk.Services;
 ///   全部候选都失败时静默回退到服务端原样线路 —— 换 CDN 是锦上添花,
 ///   绝不能因为它让本来能播的视频播不了。
 ///
-/// ★★★ 2026-11-20 追加: 线路还必须**能 seek**。
-///   华为云系线路对 libvlc 的条件 Range(带 If-Match)在 5MB 以上一律 412, 表现是
-///   "点进度条 → cannot seek → 假 EOF → 从头播"。选线路时绕开这一族, 详见
-///   <see cref="IsSeekHostileUrl"/>。这是**优先于测速**的硬约束(没有友好线路时才让步)。
+/// ★★★ 2026-11-20 勘误: **不要**按 host 名给线路打"不能 seek"的黑名单。
+///   曾经(055bd9a)按"华为云系线路对条件 Range 返回 412"的结论, 把
+///   mirrorhw / mirror08c / tf-all-hw 排除在选路之外。当晚用户报"还是时好时坏",
+///   复测(bd-probe-seek412 / bd-probe-vlcseek)发现那个结论**不成立**:
+///     · 同一份签名换到任何 host, 条件 Range(闭区间/开放区间)在 5M~350M 偏移上
+///       全部 206, ETag 连续 4 次连接也完全一致 —— 复现不出 412;
+///     · 被排除的 mirrorhw 实测 :start-time 成功率 5/5, 反而是白名单里的
+///       mirroraliov 是 0/5 —— 黑名单把好线路排掉、把坏线路留下。
+///   真正的缺陷在**重建定位**上(见 PlayerWindow 的 :start-time 兜底), 与线路无关,
+///   所以本类不再参与"能不能 seek"的判断。
 /// </summary>
 public sealed class CdnService
 {
@@ -173,7 +179,7 @@ public sealed class CdnService
         if (pool.Count == 0) pool = new List<string> { url };
 
         if (settings.CdnMode == CdnSelectMode.ServerDefault)
-            return Task.FromResult(PickSeekFriendlyUrl(pool, pool[0]) ?? pool[0]);
+            return Task.FromResult(pool[0]);
 
         // 手动: 想要的那一家能验证通过就用它, 否则退回自动。
         // ★ 2026-11-01: 手动模式的可用性探测(ProbeAsync ≤3s)也挪到了**后台** ——
@@ -185,20 +191,6 @@ public sealed class CdnService
             var manualUrl = target == null ? null : TryBuildSwapped(pool, target.Host);
             if (manualUrl != null)
             {
-                // ★ 2026-11-20: 用户指定的线路若"不能 seek"(见 IsSeekHostileUrl),
-                //   不能因为一个线路偏好就让进度条整个失效 —— 换成能 seek 的线路并说明。
-                if (IsSeekHostileUrl(manualUrl))
-                {
-                    var friendly = PickSeekFriendlyUrl(pool, null);
-                    if (friendly != null)
-                    {
-                        lock (_gate)
-                            _lastReport = $"{DateTime.Now:HH:mm:ss} 指定的 {target!.Name} " +
-                                          "不支持拖动进度条(条件 Range 会被拒), 已改用 " +
-                                          CdnName(friendly);
-                        return Task.FromResult(friendly);
-                    }
-                }
                 _ = Task.Run(async () =>
                 {
                     var (ok, _, _) = await ProbeAsync(manualUrl!).ConfigureAwait(false);
@@ -213,10 +205,7 @@ public sealed class CdnService
             }
         }
 
-        var autoPicked = AutoPick(pool);
-        if (!IsSeekHostileUrl(autoPicked))
-            return Task.FromResult(autoPicked);
-        return Task.FromResult(PickSeekFriendlyUrl(pool, null) ?? autoPicked);
+        return Task.FromResult(AutoPick(pool));
     }
 
     /// <summary>
@@ -224,8 +213,8 @@ public sealed class CdnService
     ///
     /// 为什么音轨不单独测速: 它只有 0.1~0.2Mbps, 单独跑一轮纯属浪费; 而且它与视频
     /// 属于同一个 input(DASH 靠 input-slave 挂进来), 用同一家 CDN 反而更稳。
-    /// ★ 2026-11-20: 音轨同样要绕开"不能 seek"的线路 —— input-slave 的音轨也会被
-    ///   libvlc 一起 seek, 它落空同样会拖垮整条 input(见 IsSeekHostileUrl)。
+    /// ★ 2026-11-20 勘误: 音轨**不需要**绕开任何线路。实测"只换音轨 host"时
+    ///   :start-time 成功率 12/12 —— 拖垮定位的是视频那条流的 host 替换, 不是音轨。
     /// </summary>
     public string SelectSecondaryUrl(string url, IReadOnlyList<string> allCandidates)
     {
@@ -255,9 +244,7 @@ public sealed class CdnService
             picked = (cached != null ? TryBuildSwapped(pool, cached.Host) : null) ?? pool[0];
         }
 
-        if (!IsSeekHostileUrl(picked))
-            return picked;
-        return PickSeekFriendlyUrl(pool, null) ?? picked;
+        return picked;
     }
 
     /// <summary>
@@ -281,9 +268,7 @@ public sealed class CdnService
                 // ★ 缓存里只有 host: 必须用**当前视频**的 URL 模板重建,
                 //   绝不能把上一条视频的完整 URL 直接返回(签名会过期且 session 不对)。
                 var swapped = TryBuildSwapped(pool, _cachedBestHost);
-                // ★ 2026-11-20: 旧版本缓存下来的赢家可能正好是问题线路(见 IsSeekHostileUrl),
-                //   命中也不能用 —— 那会让进度条在这 10 分钟里持续失效。
-                if (swapped != null && !IsSeekHostileUrl(swapped)) return swapped;
+                if (swapped != null) return swapped;
             }
         }
 
@@ -399,18 +384,12 @@ public sealed class CdnService
         {
             if (ranked.Count > 0)
             {
-                // ★ 2026-11-20: 测速冠军若落在"不能 seek"的线路上(见 IsSeekHostileUrl),
-                //   不能把它写进缓存 —— 否则接下来 10 分钟每条视频都会被它拖成"拖进度条就重播"。
-                //   优先取排名里第一条友好的; 一条都没有才照旧用最快那条(好歹能播)。
-                var best = ranked.FirstOrDefault(r => !IsSeekHostileUrl(r.Url));
-                if (best.Url == null) best = ranked[0];
-
+                var best = ranked[0];
                 _cachedBestHost = SafeHost(best.Url);
                 _cachedAt = DateTime.UtcNow;
                 _lastMeasuredBytesPerSecond = best.BytesPerSecond;
 
-                var others = ranked.Where(r => !string.Equals(r.Url, best.Url, StringComparison.Ordinal))
-                    .Take(3)
+                var others = ranked.Skip(1).Take(3)
                     .Select(r => $"{CdnOption.All.FirstOrDefault(o =>
                         string.Equals(o.Host, SafeHost(r.Url), StringComparison.OrdinalIgnoreCase))?.Name
                         ?? SafeHost(r.Url)} {r.BytesPerSecond / 1024}KB/s");
@@ -451,16 +430,11 @@ public sealed class CdnService
             if (seen.Add(u)) result.Add(u);
 
         // 2) 派生(只有找到可换模板才做)
-        // ★ 2026-11-20: 华为云系线路(见 IsSeekHostileUrl)**不作为测速赢家** ——
-        //   它们可能最快, 但会令拖动进度条失效。只有连一条友好的候选都没有时,
-        //   才把它们加回来(宁可 seek 退化, 也不能没得播)。
         var template = pool.FirstOrDefault(IsSwappableTemplate);
         if (template != null)
         {
-            var friendly = result.Any(u => !IsSeekHostileUrl(u));
             foreach (var opt in CdnOption.All)
             {
-                if (friendly && IsSeekHostileHost(opt.Host)) continue;
                 var swapped = ReplaceHost(template, opt.Host);
                 if (seen.Add(swapped)) result.Add(swapped);
             }
@@ -496,73 +470,25 @@ public sealed class CdnService
         try { return new Uri(url).Host; } catch { return ""; }
     }
 
-    // -------------------------------------------------------- seek 兼容性(2026-11-20)
+    // -------------------------------------------------------- seek 兼容性(2026-11-20, 已勘误)
     //
-    // ★★★ 用户报「BV12f4361Erw 点进度条就从头播」的根因, 探针 bd-probe-bv12 实测:
+    // ★★★ 结论: **线路(host)不参与"能不能 seek"的判断**。这里曾经有一整套
+    //   IsSeekHostileUrl / PickSeekFriendlyUrl, 按 host 名把华为云系线路排掉,
+    //   依据是"它们对条件 Range 返回 412"。当晚复测推翻了这个依据:
     //
-    //   libvlc 的 HTTP seek 不是新开一条连接, 而是拿**首个响应的 ETag** 做条件 Range:
-    //       Range: bytes=<目标字节>-
-    //       If-Match: "<首响应的 ETag>"
-    //   (见 VLC 源码 modules/access/http/file.c → vlc_http_file_req)。
-    //   华为云系线路(hw / hwb / hwo1 / 08c / tf-all-hw)对**超过约 5MB 的条件 Range**
-    //   一律返回 **412 Precondition Failed**, 于是:
-    //       prefetch stream error: cannot seek (to offset 20743062)
-    //       → avformat 把"seek 失败"当成 EOF → EndReached → 重建(仍带 If-Match)再失败
-    //       → PlaybackEndPolicy 兜底 → 从头起播(用户看到的那句"已从头开始")。
-    //
-    //   实测矩阵(2026-11-20, 同一份 554MB 的 1080P HEVC 流, Range 起点 5M/50M/300M):
-    //     · upos-sz-mirrorhwo1 / mirrorhw / mirror08c / tf-all-hw → 全部 412
-    //     · upos-sz-mirrorali / aliov / cos → 全部 206
-    //     · cn-hnzz-cm-01-02(移动) → 不返回 ETag ⇒ libvlc 改用 If-Unmodified-Since → 206
-    //   换 host 不改变 path/query 签名(见类注释), 所以"避开这一族线路"是可行且零成本的。
-    //
-    //   ★ 判据按 host 名称族而不是"探测 ETag": 这一族线路的缺陷与具体视频无关
-    //     (小文件同样在大 offset 上 412), 而探测需要先取 ETag 再发条件请求(两次 RTT)。
-    //     ★ 以后若发现新的问题线路, 先按上表同一套 Range 起点复测, 确认后再加进来。
-
-    /// <summary>
-    /// 这条线路是否**不能可靠地 seek**(条件 Range 会被拒)。
-    /// 命中时只能换一条线路, 否则用户每次拖动进度条都会落回"从头播"。
-    /// </summary>
-    public static bool IsSeekHostileUrl(string? url)
-    {
-        if (string.IsNullOrEmpty(url)) return false;
-        try { return IsSeekHostileHost(new Uri(url).Host); }
-        catch { return false; }
-    }
-
-    private static bool IsSeekHostileHost(string host)
-        => host.Contains("mirrorhw", StringComparison.OrdinalIgnoreCase)   // mirrorhw / mirrorhwb / mirrorhwo1
-        || host.Contains("mirror08c", StringComparison.OrdinalIgnoreCase)
-        || host.Contains("tf-all-hw", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// 从候选里挑一条"能 seek"的线路。
-    ///
-    /// 优先级:
-    ///   ① <paramref name="preferred"/>(通常是服务端首选)本身就友好 → 原样用它, 不改任何行为;
-    ///   ② 候选池里其它服务端给的线路(签名一定有效) → 优先;
-    ///   ③ 从可换模板派生的标准 CDN(实测 72/72 可用, 见类注释) → 最后手段。
-    /// 都没有(例如全是华为云且模板是 mcdn)返回 null, 调用方继续用原线路 ——
-    /// 播放本身仍然正常, 只是拖动进度条会退化。
-    /// </summary>
-    private static string? PickSeekFriendlyUrl(IReadOnlyList<string> pool, string? preferred)
-    {
-        if (!string.IsNullOrEmpty(preferred) && !IsSeekHostileUrl(preferred)) return preferred;
-
-        foreach (var u in pool)
-            if (!IsSeekHostileUrl(u)) return u;
-
-        var template = pool.FirstOrDefault(IsSwappableTemplate);
-        if (template == null) return null;
-        foreach (var opt in CdnOption.All)
-        {
-            if (IsSeekHostileHost(opt.Host)) continue;
-            var swapped = ReplaceHost(template, opt.Host);
-            if (!string.Equals(swapped, template, StringComparison.Ordinal)) return swapped;
-        }
-        return null;
-    }
+    //   · 条件 Range(带 If-Match, 闭区间与 libvlc 实际用的开放区间都测过)
+    //     在 mirrorhw / mirrorhwb / mirror08c / tf-all-hw / mirrorali / mirrorcos
+    //     上, 5M~350M 偏移**全部 206**; 同一 URL 连续 4 次连接的 ETag 完全一致。
+    //     412 复现不出来(见 .probes/bd-probe-seek412)。
+    //   · 真实症状("拖进度条回到开头")的触发点不在线路, 而在**重建定位**:
+    //     用 Media 的 `:start-time` 追 seek 目标时, 换过 host 的 fMP4 流有相当比例
+    //     会"起播但位置恒为 0"(libvlc 原生日志: `stream 0 ... partial file`),
+    //     随后立刻 EOF —— 应用据此判"没落地", 预算用尽就从头起播。
+    //     实测同一份签名只换视频 host: mirrorali/mirrorhw/mirrorbd 5/5 成功,
+    //     mirroraliov / estgoss 0/5(见 .probes/bd-probe-vlcseek)。
+    //   ⇒ 修法落在播放器的重建路径(先起播再设 Time 兜底), 不再靠选路规避。
+    //     ★ 别把黑名单加回来: 它排掉的 mirrorhw 实测 5/5 正常, 留下的 aliov 是 0/5,
+    //       方向正好相反, 只会让问题更难定位。
 
     /// <summary>
     /// 测一条线路: 限 byte 数 + 限时, 返回 (是否可用, 耗时ms, 读到的字节数)。

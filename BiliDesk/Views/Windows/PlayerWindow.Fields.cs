@@ -212,11 +212,38 @@ public partial class PlayerWindow : FluentWindow
     private long _lastSeekTargetMs = -1;
 
     /// <summary>
+    /// 重建时"<c>:start-time</c> 没定位成功"的补救预算(每次重建只给一次)。
+    ///
+    /// ★★★ 2026-11-20(用户报"长视频拖进度条回到开头, 时好时坏"):
+    ///   重建路径把目标交给 Media 的 `:start-time`, 让解复用器在 open 阶段定位。
+    ///   但**换过 host 的 fMP4 流**上有相当比例会"起播了却定位不到", 实测现象是
+    ///   位置恒为 0、libvlc 原生日志 `stream 0 ... partial file`, 随后立刻 EOF。
+    ///   同一份签名只换视频 host 的成功率(mirrorali/mirrorhw/mirrorbd 5/5,
+    ///   mirroraliov / estgoss 0/5, 见 .probes/bd-probe-vlcseek)解释了"时好时坏":
+    ///   当次选到哪条线路, 决定了这次拖进度条灵不灵。
+    ///
+    ///   所以起播后要**验证**定位是否真的生效; 没生效就换成"正常起播 + 设 Time"
+    ///   再试一次(实测该路径在 :start-time 失败的线路上能成功)。
+    ///   预算只给一次, 防"重建 → 失败 → 再重建"死循环。
+    /// </summary>
+    private bool _startTimeRebuildRetried;
+
+    /// <summary>
+    /// 当前这条 input 是不是"用 <c>:start-time</c> 定位重建出来的"。
+    /// ★ 用来判断下一次 EOF 该怎么救: 这种 input 若"起播了却停在 0", 说明定位没生效,
+    ///   再拿 :start-time 重建一次只会同样失败 —— 必须换成"正常起播 + 设 Time"。
+    /// </summary>
+    private bool _rebuiltViaStartTime;
+
+    /// <summary>
     /// 本次恢复进度是否由 Media 的 <c>:start-time</c> 完成(重建路径用)。
     ///
     /// ★ 为什么要单独记: 起播后 Playing 事件里如果**再**设一次 <see cref="MediaPlayer.Time"/>,
     ///   等于在解复用器刚打开、还没稳定的窗口里打断它 —— 实测这正是"重建后补跳又落回开头"
     ///   的来源。走 start-time 时只 MarkSeekIssued 钉 UI / 启动看门狗, 不再二次设 Time。
+    /// ★ 2026-11-20: 它现在**不再恒为 true**。`:start-time` 在某些线路上会静默失效
+    ///   (见 <see cref="_rebuiltViaStartTime"/>), 那时重建会改走"正常起播 + 设 Time",
+    ///   本字段随之为 false —— 正是那条"二次设 Time"的路。
     /// </summary>
     private bool _resumeByStartTime;
 

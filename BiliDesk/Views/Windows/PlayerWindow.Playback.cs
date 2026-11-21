@@ -1085,8 +1085,14 @@ public partial class PlayerWindow : FluentWindow
     /// 这次重建是不是"播放中途卡顿自愈"发起的。失败时的收尾不同:
     /// 卡顿自愈要引导用户点「重试」, 而不是退回"已播完/重播"态(那会误导成片子看完了)。
     /// </param>
+    /// <param name="startTimeLocate">
+    /// 是否用 Media 的 <c>:start-time</c> 在 open 阶段定位(默认)。
+    /// ★ 2026-11-20: 传 false 表示"正常起播, 起播后再设 Time" —— 这是
+    ///   <c>:start-time</c> 在某些线路上定位失效时的兜底(见 HandleEndReached 里那段)。
+    /// </param>
     private void RebuildMediaAndSeek(long targetMs, bool stallRecovery = false,
-        string loadingText = "正在跳转…", bool retryOnFailure = false)
+        string loadingText = "正在跳转…", bool retryOnFailure = false,
+        bool startTimeLocate = true)
     {
         if (_closing) return;
 
@@ -1117,6 +1123,7 @@ public partial class PlayerWindow : FluentWindow
             ShowLoading(loadingText);
             _resumeAfterSwitchMs = targetMs;
             _resumeByStartTime = false;   // 本地文件走原来的"起播后设 Time"
+            _rebuiltViaStartTime = false;
             try { _mp.Stop(); } catch { }   // 同上: 不 Stop 则 play() 被忽略
             if (!PlayMedia(new Media(_libVLC, path, FromType.FromPath)))
             {
@@ -1157,7 +1164,10 @@ public partial class PlayerWindow : FluentWindow
         // 起播后由 Playing 事件读到这个值并**只打看门狗、不再二次设 Time**
         // (原因见 _resumeByStartTime 的说明)。
         _resumeAfterSwitchMs = targetMs;
-        _resumeByStartTime = true;
+        _resumeByStartTime = startTimeLocate;
+        // ★ 2026-11-20: 记下"这条 input 是靠 :start-time 定位的"。它没生效时
+        //   (见 _startTimeRebuildRetried) 下一次自救必须换策略, 不能再走同一条路。
+        _rebuiltViaStartTime = startTimeLocate;
         // ★★ 必须先 Stop: LibVLC 3 里已有 input 在播时 play() 会被**直接忽略**
         //    —— 漏掉这一步就是"黑屏 + 恢复进度丢失"(见方法说明)。
         // ★ 2026-11-05: 播完之后那条 input 已经停在 ENDED(EOF 时刻意不 Stop),
@@ -1169,7 +1179,11 @@ public partial class PlayerWindow : FluentWindow
         //   阶段直接定位, 而不是"从 0 起播后再设一次 Time"。实测(探针 bd-probe-seekmode):
         //   起播即落在目标附近(偏差 ~1.8s)且位置持续推进, 比"Playing 里的二次 seek"稳,
         //   后者在 input 尚未稳定的窗口里设 Time 会再次落回开头 —— 正是用户报的"回到 8 秒"。
-        if (!PlayMedia(BuildMedia(urlForRebuild, audioForRebuild, targetMs)))
+        // ★ 2026-11-20: startTimeLocate=false 时**不传** :start-time, 让 input 正常起播,
+        //   起播后由 Playing 事件里的 `_mp.Time = resumeTarget` 完成定位(见 Fields 里
+        //   _startTimeRebuildRetried 的说明)。
+        if (!PlayMedia(BuildMedia(urlForRebuild, audioForRebuild,
+                startTimeLocate ? targetMs : 0)))
         {
             _resumeAfterSwitchMs = 0;
             _resumeByStartTime = false;
@@ -1387,6 +1401,38 @@ public partial class PlayerWindow : FluentWindow
         // 已经在「已播完」态: 重复的 EOF 事件(同一条 input 可能补发)不再处理,
         // 否则会在重播页上又触发一次重建/续播。
         if (_ended) return;
+
+        // ★★★ 2026-11-20: `:start-time` 重建"起播了却没定位"的兜底。
+        //
+        //   现象(用户报"长视频拖进度条回到开头, 时好时坏"): 重建后画面起来了,
+        //   但位置**始终停在 0 附近**, 紧接着 EOF。libvlc 原生日志是
+        //   `stream 0 ... partial file` —— 解复用器没能在 open 阶段定位到目标。
+        //   实测(见 .probes/bd-probe-vlcseek): 换过 host 的 fMP4 流上,
+        //   mirroraliov / estgoss 的成功率是 **0/5**, 而 mirrorali / mirrorhw /
+        //   mirrorbd 是 5/5。当次选到哪条线路, 决定了这次拖进度条灵不灵 ——
+        //   这正是"时好时坏"的来源。
+        //
+        //   救法: 同一条路再走一次只会同样失败, 所以换成"**正常起播 + 设 Time**"
+        //   (实测该路径在上述失败线路上能成功)。预算只给一次, 防死循环。
+        if (StartTimeLocatePolicy.ShouldRetryWithoutStartTime(
+                rebuiltViaStartTime: _rebuiltViaStartTime,
+                alreadyRetried: _startTimeRebuildRetried,
+                lastSeekTargetMs: _lastSeekTargetMs,
+                lastKnownMs: _lastKnownMs,
+                isLive: _isLive,
+                isLocal: _isLocalPlayback,
+                hasSource: !string.IsNullOrEmpty(_lastPlayUrl)))
+        {
+            _startTimeRebuildRetried = true;
+            WriteLibVLCDebug(
+                $"[EndReached] :start-time 定位没生效(pos={_lastKnownMs}ms " +
+                $"target={_lastSeekTargetMs}ms) → 改用「正常起播 + 设 Time」重试\n");
+            _ended = false;
+            ShowLoading("正在跳转…");
+            ClearSeekWatchdog(hideBuffering: false);
+            RebuildMediaAndSeek(_lastSeekTargetMs, startTimeLocate: false);
+            return;
+        }
 
         // ---- 提前结束(假 EOF)的处置 ----
         // 远端流可能在离结尾还很远时 EOF(网络截断 / 服务端只给到某一段 / seek 甩到流尾),
