@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -18,15 +19,19 @@ public sealed class UpdateInfo
     /// <summary>Release 标题(没有就回落到 tag 名)</summary>
     public string Title { get; init; } = "";
 
-    /// <summary>Release 说明(即发布说明正文, 弹窗里展示给用户的那段)</summary>
+    /// <summary>Release 说明(即发布说明正文, 弹窗里渲染给用户的那段 Markdown)</summary>
     public string Notes { get; init; } = "";
 
     /// <summary>该 Release 的网页地址(交给系统浏览器打开, 程序内不做大文件下载)</summary>
     public string ReleaseUrl { get; init; } = "";
+
+    /// <summary>发布时间(Release 的 published_at; 拿不到时为 null)</summary>
+    public DateTimeOffset? PublishedAt { get; init; }
 }
 
 /// <summary>
 /// 自动检查更新: 数据源 = GitHub Releases(公开仓库的 releases/latest 接口, 匿名可访问)。
+/// </summary>
 ///
 /// 为什么只"检查 + 跳浏览器", 不做程序内下载安装:
 ///   GitHub Release 页上同时挂着便携版与安装器, 下哪个、怎么装是用户自己的选择 ——
@@ -95,27 +100,33 @@ public static class UpdateChecker
 
         await using var stream = await resp.Content.ReadAsStreamAsync();
         using var doc = await JsonDocument.ParseAsync(stream);
-        var root = doc.RootElement;
 
-        var latest = ParseVersion(root.TryGetProperty("tag_name", out var tagEl) ? tagEl.GetString() : null);
+        var root = doc.RootElement;
+        var latest = ParseVersion(GetString(root, "tag_name"));
         if (latest == null || latest <= Version.Parse(App.AppVersion)) return null;
 
         return new UpdateInfo
         {
             Version = latest,
-            Title = root.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String
-                ? nameEl.GetString() ?? ""
-                : "",
-            // body 是 Markdown 源文本; 弹窗里按纯文本展示, markdown 标记(# * -)读起来也不碍事,
-            // 没必要为它引一个渲染库
-            Notes = root.TryGetProperty("body", out var bodyEl) && bodyEl.ValueKind == JsonValueKind.String
-                ? bodyEl.GetString() ?? ""
-                : "",
-            ReleaseUrl = root.TryGetProperty("html_url", out var urlEl) && urlEl.ValueKind == JsonValueKind.String
-                ? urlEl.GetString() ?? ReleasePageUrl
-                : ReleasePageUrl
+            Title = GetString(root, "name") ?? "",
+            // body 是 Markdown 源文本, 弹窗里由 MarkdownView 渲染(先过 ReleaseNotes.Clean)
+            Notes = GetString(root, "body") ?? "",
+            ReleaseUrl = GetString(root, "html_url") ?? ReleasePageUrl,
+            PublishedAt = ParseDate(GetString(root, "published_at"))
         };
     }
+
+    private static string? GetString(JsonElement el, string name)
+        => el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString()
+            : null;
+
+    /// <summary>GitHub 的时间都是 ISO 8601(带 Z); 解析不出就当没有, 不抛。</summary>
+    private static DateTimeOffset? ParseDate(string? text)
+        => DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture,
+               DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var value)
+            ? value
+            : null;
 
     /// <summary>tag → 版本号。容忍 "v"/"V" 前缀与 "-beta" 这类后缀(取 '-' 前的部分); 解析不出返回 null。</summary>
     public static Version? ParseVersion(string? tag)
