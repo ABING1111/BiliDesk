@@ -633,7 +633,7 @@ public partial class PlayerWindow : FluentWindow
             try { _mp.SetRate(next); } catch { /* 播放器可能刚好失效 */ }
             SyncSpeedOsdChips();
         }
-        // 无论有没有真的换档(端点处按了没反应), 这一下都算"倍速键", 不能再落到音量
+        // 方向为 0 / 脏值时 next 可能等于 current; 这一下仍然算"倍速键", 不能再落到音量
         return true;
     }
 

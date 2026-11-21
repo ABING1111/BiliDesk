@@ -9,14 +9,18 @@ namespace BiliDesk.Helpers;
 ///   低于 1.5 没有快进意义, 高于 3 在长按这种短时手势里画面已经跟不上。
 ///   默认 2x(见 PlayerWindow.RightKeyFastRate / FastForwardRate)。
 ///
+/// ★ 列表是**循环**的(用户指定): 3x 再按 ↑ 回到 1.5x, 1.5x 再按 ↓ 回到 3x。
+///   长按手势里没人愿意"按到头没反应", 循环也省掉"是不是到头了"的判断。
+///
 /// ★ 为什么抽成纯函数: 鼠标长按的目标是 <c>max(2.0, 当前倍速)</c>, 当前倍速是用户
 ///   在倍速弹层里设的任意值(1.25/2.5/4.0…), 于是"当前不在档位上"是常态。
 ///   这种边界必须钉死, 否则很容易变成"从 2.5x 按 ↓ 反而跳到 1.5x"这种反直觉行为。
-///   规则: ↑ 取"比当前大的最小档", ↓ 取"比当前小的最大档"; 已在端点则原地不动。
+///   规则: ↑ 取"比当前大的最小档"(没有则回到第一档), ↓ 取"比当前小的最大档"
+///   (没有则回到最后一档)。
 /// </summary>
 public static class FastForwardSpeedPolicy
 {
-    /// <summary>可选的加速档位(升序)。OSD 的「倍速选择」按这个顺序排。</summary>
+    /// <summary>可选的加速档位(升序)。OSD 的竖排「倍速选择」按这个顺序从上到下排。</summary>
     public static readonly float[] Steps = { 1.5f, 2.0f, 3.0f };
 
     /// <summary>长按进入时的默认倍速。</summary>
@@ -26,8 +30,7 @@ public static class FastForwardSpeedPolicy
     private const float Epsilon = 0.001f;
 
     /// <summary>
-    /// 沿 <paramref name="direction"/>(+1 加速 / -1 减速)迈一档。
-    /// 已经在档位两端时返回**原值**(不会为了"动一下"反而把 3x 降到 1.5x)。
+    /// 沿 <paramref name="direction"/>(+1 加速 / -1 减速)迈一档, **到端点后循环**。
     /// </summary>
     public static float Step(float current, int direction)
     {
@@ -35,14 +38,14 @@ public static class FastForwardSpeedPolicy
         {
             foreach (var s in Steps)
                 if (s > current + Epsilon) return s;
-            return current;
+            return Steps[0];          // 已在最高档 → 回到最低档
         }
 
         if (direction < 0)
         {
             for (var i = Steps.Length - 1; i >= 0; i--)
                 if (Steps[i] < current - Epsilon) return Steps[i];
-            return current;
+            return Steps[^1];         // 已在最低档 → 回到最高档
         }
 
         return current;
