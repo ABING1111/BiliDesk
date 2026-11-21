@@ -563,7 +563,7 @@ public partial class PlayerWindow : FluentWindow
         if (SpeedOsdLabel != null) SpeedOsdLabel.Text = text;
         if (SpeedOsdSelector != null)
             SpeedOsdSelector.Visibility = hold ? Visibility.Visible : Visibility.Collapsed;
-        if (hold) SyncSpeedOsdChips();
+        if (hold) SyncSpeedOsdChips(animate: false);
         _speedOsdTimer?.Stop();
         _speedOsdTimer = null;
 
@@ -639,31 +639,41 @@ public partial class PlayerWindow : FluentWindow
         return true;
     }
 
-    /// <summary>把 OSD 里三个档位按当前加速倍速点亮(当前档 = 白字 + 半透明底)。</summary>
-    private void SyncSpeedOsdChips()
+    /// <summary>
+    /// 按当前加速倍速刷新 OSD 的三行档位(2026-11-21 第二版)。
+    ///
+    /// 视觉: 当前档 14px 粗体全亮; 上下两档 10px、透明度 0.35 —— 参考图那种
+    ///   "中间亮、上下淡"的轮盘感, 同时把浮层高度从 ~90px 收到 ~50px(用户反馈太高)。
+    /// 动效: <paramref name="animate"/>=true 时对透明度做 140ms 过渡, 切档像"淡入淡出";
+    ///   首次显示(hold=true)要 animate=false 直接落位, 否则会把上一次的残留透明度播一遍。
+    /// </summary>
+    private void SyncSpeedOsdChips(bool animate = true)
     {
-        ApplySpeedOsdChip(SpeedOsdChip15, SpeedOsdChip15Text, 1.5f);
-        ApplySpeedOsdChip(SpeedOsdChip20, SpeedOsdChip20Text, 2.0f);
-        ApplySpeedOsdChip(SpeedOsdChip30, SpeedOsdChip30Text, 3.0f);
+        ApplySpeedOsdRow(SpeedOsdChip15Text, 1.5f, animate);
+        ApplySpeedOsdRow(SpeedOsdChip20Text, 2.0f, animate);
+        ApplySpeedOsdRow(SpeedOsdChip30Text, 3.0f, animate);
     }
 
-    private void ApplySpeedOsdChip(Border? chip, TextBlock? text, float rate)
+    private void ApplySpeedOsdRow(TextBlock? text, float rate, bool animate)
     {
-        if (chip == null || text == null) return;
+        if (text == null) return;
         var active = Math.Abs(_fastForwardTarget - rate) <= 0.001f;
 
-        var fg = new SolidColorBrush(active
-            ? Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)
-            : Color.FromArgb(0x80, 0xFF, 0xFF, 0xFF));
-        fg.Freeze();
-        text.Foreground = fg;
-        text.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
+        text.FontSize = active ? 14 : 10;
+        text.FontWeight = active ? FontWeights.Bold : FontWeights.Normal;
+        text.LineHeight = active ? 17 : 12;
 
-        var bg = new SolidColorBrush(active
-            ? Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF)
-            : Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF));
-        bg.Freeze();
-        chip.Background = bg;
+        var target = active ? 1.0 : 0.35;
+        if (!animate)
+        {
+            // 首次显示: 摘掉旧动画直接落位(避免从上次的 0.35/1.0 过渡出"闪一下")
+            text.BeginAnimation(UIElement.OpacityProperty, null);
+            text.Opacity = target;
+            return;
+        }
+        // 从**当前所见**过渡到目标: 连续按 ↑/↓ 时不会每次都从基准值跳一下
+        text.BeginAnimation(UIElement.OpacityProperty,
+            new DoubleAnimation(target, TimeSpan.FromMilliseconds(140)));
     }
 
     /// <summary>长按收场文案: 恢复到**按下前**那个倍速(长按期间 ↑/↓ 只改加速目标, 不改正片倍速)。</summary>
@@ -671,7 +681,8 @@ public partial class PlayerWindow : FluentWindow
         => "已恢复 " + FormatRate(_rateBeforeFastForward > 0 ? _rateBeforeFastForward : 1.0f);
 
     private void ShowVolumeHint(int volume)
-    {        if (_closing || VolumeOsd == null) return;
+    {
+        if (_closing || VolumeOsd == null) return;
 
         VolumeOsdText.Text = volume + "%";
         // 0 用静音图标, 其余用喇叭: 一眼就能看出"是没声还是声音小"

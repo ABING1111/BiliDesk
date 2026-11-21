@@ -678,15 +678,19 @@ public partial class PlayerWindow : FluentWindow
     private float _rateBeforeFastForward = 1.0f;
 
     /// <summary>
-    /// 本次长按实际要切到的倍速 = max(2.0x, 按下前的倍速)。
-    /// ★ 不能写死 2.0x: 自定义倍速允许到 4.0x, 用户已经 3x 时再长按**不应该反而变慢**。
-    /// ★ 浮层提示也读这个值, 保证"看到的倍速 = 实际切到的倍速"。
+    /// 本次长按实际要切到的倍速。
+    ///
+    /// ★ 2026-11-21(用户指定): **固定从 2x 起步, 且不记忆上次选择** ——
+    ///   每次长按都重置成 2x, 与"正片当前倍速"无关, 与上一次长按里按过 ↑/↓ 也无关。
+    ///   (旧实现取 max(2.0, 当前倍速), 长按开始时的档位会随正片倍速漂移, 与"固定三档"矛盾。)
+    /// ★ 浮层与控制栏都读这个值, 保证"看到的倍速 = 实际切到的倍速"。
     /// </summary>
     private float _fastForwardTarget = FastForwardRate;
 
     /// <summary>
     /// 开始长按快进(改倍速)。见上方那段说明为什么用 SetRate 而不是 seek。
-    /// <paramref name="rate"/> 默认 2x(鼠标长按快进); 键盘长按 → 传 3x(见 PlayerWindow.Keyboard)。
+    /// <paramref name="rate"/> 固定为 2x(<see cref="FastForwardRate"/>): 鼠标长按与键盘长按
+    /// 共用同一个默认档, 不再按"当前倍速"抬高。
     /// </summary>
     private void StartFastForward(float rate = FastForwardRate)
     {
@@ -698,10 +702,10 @@ public partial class PlayerWindow : FluentWindow
         catch { _rateBeforeFastForward = 1.0f; }
         if (_rateBeforeFastForward <= 0) _rateBeforeFastForward = 1.0f;
 
-        // ★ 2026-11-03: 不再把"当前已经是 2.0x"强行记成 1.0x。
-        //   自定义倍速下 2.0x/3x 都是常态, 那样会在松手时把用户的倍速偷偷改回 1x。
-        //   目标取 max(2x, 当前): 当前更快就保持更快, 绝不因为"快进"而减速。
-        _fastForwardTarget = Math.Max(rate, _rateBeforeFastForward);
+        // ★ 2026-11-21(用户指定): 固定 2x 起步, 不记忆上一次长按里选过的档位。
+        //   注意这意味着正片本身已经 >2x 时, 长按会先"降"到 2x(松手恢复原速) ——
+        //   用户明确要的是"固定三档 + 默认 2x", 而不是旧版的 max(2.0, 当前)。
+        _fastForwardTarget = rate;
 
         _isFastForwarding = true;
         // ★ 顺序: 先让弹幕时钟按新倍速落定当前值, 再真正 SetRate(同 OnSpeedClick 那条说明)
@@ -727,6 +731,8 @@ public partial class PlayerWindow : FluentWindow
         // 同 StartFastForward: 先落定弹幕时钟, 再改速率
         SyncDanmakuClockRate(back);
         try { _mp.SetRate(back); } catch { /* 播放器已失效 */ }
+        // "不记忆"的另一半: 收尾把档位复位成默认 2x, 下次长按一定从 2x 起步
+        _fastForwardTarget = FastForwardRate;
         // 控制栏倍速指示跟着回到原值(与 StartFastForward 的临时提速对称)。
         // ★ 不传参数: 读播放器**实际**速率, 万一上面 SetRate 失败(片源切换中)也不会显示成
         //   "已经恢复了"而实际还在临时倍速上。
