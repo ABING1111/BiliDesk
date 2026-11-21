@@ -737,6 +737,26 @@ public partial class PlayerWindow : FluentWindow
         _speedOsdTimer = null;
     }
 
+    /// <summary>
+    /// 立刻收掉倍速浮层(手势被外部打断时用: 失焦 / 鼠标移出 / 换片)。
+    ///
+    /// ★ 与 <see cref="ShowSpeedHint"/>(hold: false) 的区别: 不亮「已恢复」, 直接收起 ——
+    ///   打断发生时用户多半已经不在看这个窗口, 再补一次收场提示只会在切回来时变成残影。
+    /// ★ 必须"摘动画 + 归位": XAML 里 SpeedOsd 的基准 Opacity 是 0(见 ShowSpeedHint 里
+    ///   那段 FillBehavior 的说明), 只 Collapsed 会让下一次淡入整块透明。
+    /// </summary>
+    private void HideSpeedOsd()
+    {
+        _speedOsdTimer?.Stop();
+        _speedOsdTimer = null;
+        if (SpeedOsd == null) return;
+        SpeedOsd.BeginAnimation(OpacityProperty, null);
+        SpeedOsd.Opacity = 1;
+        SpeedOsd.Visibility = Visibility.Collapsed;
+        // 选择区归位: 下一次 ShowSpeedHint(hold:false) 的收场胶囊不应该还带着三档列表
+        if (SpeedOsdSelector != null) SpeedOsdSelector.Visibility = Visibility.Collapsed;
+    }
+
     // ------------------------------------------------------------ 倍速(预设 + 自定义, 2026-11-03)
 
     /// <summary>允许的最低/最高倍速。范围写在这里一处, 输入夹取与预设列表都引用它。</summary>

@@ -499,8 +499,10 @@ public partial class PlayerWindow : FluentWindow
             //   不在这里收的话提示会一直挂在屏幕上(用户报过同类"提示不消失")。
             ShowSpeedHint(RestoredSpeedText(), hold: false);
         }
-        // 兜底: 万一手势态已经乱了(比如 _longPressFired 被别处清掉), 快进态也不能留着
-        StopFastForward();
+        // 兜底: 万一手势态已经乱了(比如 _longPressFired 被别处清掉), 快进态也不能留着。
+        // ★ 用 CancelFastForward 时先判 _isFastForwarding: 上面那条分支刚播过「已恢复」,
+        //   无条件收浮层会把那条收场提示立刻掐掉。
+        if (_isFastForwarding) CancelFastForward();
         // 离开视频区: 播放中直接藏(倒计时都不用等), 暂停时保持常显
         if (ShouldHideControls()) HideControls();
     }

@@ -98,6 +98,12 @@ public partial class PlayerWindow : FluentWindow
             //   **第一次点击只会把它激活**, WPF 不会把这次点击报成鼠标事件 ——
             //   表现就是"点一下只是把播放器叫到前面, 再点一下才暂停"。见 OnOverlayActivated。
             fw.Activated += OnOverlayActivated;
+            // ★ 失焦兜底也必须挂上来(2026-11-21): 点过视频区之后焦点就归这层覆盖窗口,
+            //   这时切走整个程序, **主窗口早已是失活状态**, 不会再收到 Deactivated ——
+            //   只挂主窗口的话, 长按倍速的临时速率与浮层都不会被收掉
+            //   (用户报的"失焦切回来倍速框不消失"就是从这条缺口进来的)。
+            //   处理函数里有"是否还在播放器体系内"的延迟判定, 焦点在两层之间来回切不会误收。
+            fw.Deactivated += OnPlayerDeactivated;
             // 这个窗口不该出现在任务栏里(它是跟随主窗口的装饰层)
             fw.ShowInTaskbar = false;
         }
@@ -451,6 +457,9 @@ public partial class PlayerWindow : FluentWindow
         // 已经松手: 短按补一次播放/暂停, 长按补一次"结束快进"
         if (_activationLongPress)
         {
+            // ★ 先清标记再收尾: 否则下面的 StopActivationClickCompensation 会认为
+            //   "长按还活着", 再走一次 CancelFastForward 把刚亮的「已恢复」浮层掐掉。
+            _activationLongPress = false;
             StopFastForward();
             ShowSpeedHint(RestoredSpeedText(), hold: false);
         }
@@ -461,13 +470,18 @@ public partial class PlayerWindow : FluentWindow
         StopActivationClickCompensation();
     }
 
-    /// <summary>结束激活点击补偿(正常手势接管 / 鼠标离开 / 关窗)。长按态要先恢复速率。</summary>
+    /// <summary>
+    /// 结束激活点击补偿(正常手势接管 / 鼠标离开 / 关窗)。长按态要先恢复速率。
+    /// ★ 2026-11-21: 长按态用 <see cref="CancelFastForward"/> 收尾, 把浮层一起收掉 ——
+    ///   这条补偿路径的松手可能永远不来(指针已离开/窗口已切走), 只恢复速率会留下
+    ///   一个「倍速播放中」的浮层挂在屏幕上。
+    /// </summary>
     private void StopActivationClickCompensation()
     {
         if (_activationLongPress)
         {
             _activationLongPress = false;
-            StopFastForward();
+            CancelFastForward();
         }
         _activationClickPending = false;
         _activationClickTimer?.Stop();

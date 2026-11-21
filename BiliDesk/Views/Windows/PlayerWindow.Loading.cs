@@ -868,11 +868,14 @@ public partial class PlayerWindow : FluentWindow
         // ★ 长按快进也要收: 若停在长按态换片, MediaPlayer 上的速率会**跟着留到新片子**
         //   (速率是 MediaPlayer 的属性, 不随 Media 重置 —— 实测)。所以这里必须先恢复。
         //   顺带把 _longPressFired 清掉 —— 否则新片的第一次 Up 会走进"结束快进"分支。
-        StopFastForward();
+        //   ★ 2026-11-21: 走 CancelFastForward 一并收掉倍速浮层 —— 换片时若正按着,
+        //     浮层的「已恢复」收场不会来, 只 StopFastForward 会把它留在新片上。
+        CancelFastForward();
         _longPressFired = false;
         // 键盘长按 → 的 3x 与计时器同属"这一次手势": 换片必须停掉并复位
         _rightKeyTimer?.Stop();
         _rightKeyFast = false;
+        _rightKeyDiscardUp = false;
         // 长按点赞三连的"抑制窗口"与在途闸属于上一片: 不清的话换片后 1.5 秒内的第一次
         // 点赞会被 OnLikeClick 当成"长按三连松手那次 Click"吞掉(见 OnLikeClick)。
         _tripleComboAt = 0;
@@ -1074,6 +1077,9 @@ public partial class PlayerWindow : FluentWindow
         nameof(_fastForwardTarget),
         // 键盘长按 → 的 3 倍速标记(2026-11-12): 属于"这一次按键", 换片必须复位。
         nameof(_rightKeyFast),
+        // 失焦作废后"吞掉这一次松手"的标记(2026-11-21): 同属这一次按键的瞬时态,
+        //   换片必须清 —— 否则新片的第一次 → 松手会被误吞(短按不跳)。
+        nameof(_rightKeyDiscardUp),
         nameof(_commentTotal),
         // 评论翻页(2026-11-08, issue #55): 游标/是否还有下一页/在途闸/失败标记都属于"这一片"
         nameof(_commentNext), nameof(_commentHasMore),

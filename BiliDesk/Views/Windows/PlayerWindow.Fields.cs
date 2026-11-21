@@ -742,6 +742,22 @@ public partial class PlayerWindow : FluentWindow
         HealAudioIfDead("fastforward-end");
     }
 
+    /// <summary>
+    /// 外部打断(窗口失焦 / 鼠标移出视频区 / 换片)时结束长按倍速: 恢复速率, 并**立刻收掉浮层**。
+    ///
+    /// ★ 只调 <see cref="StopFastForward"/> 不够: 这些路径拿不到配对的 KeyUp / MouseUp,
+    ///   也就走不到正常的「已恢复 x」收场 —— 而 hold:true 显示的浮层**没有**自动淡出计时器,
+    ///   于是速率恢复了、浮层却一直挂在屏幕上。用户复现(2026-11-21): 长按倍速时 Alt+Tab,
+    ///   切回来还写着「倍速播放中 + 三档选择器」, 实际已经是原速。
+    /// ★ 这里用"立刻收"而不是"亮一下已恢复": 打断发生时用户已经不在看这个窗口,
+    ///   补收场提示只会在切回来时变成残影(鼠标移出那条路是用户还看着屏幕, 所以仍用提示)。
+    /// </summary>
+    private void CancelFastForward()
+    {
+        if (_isFastForwarding) StopFastForward();
+        HideSpeedOsd();
+    }
+
     // --- SponsorBlock(跳过社区标注的赞助 / 片头片尾片段) ---
     // 原始数据(未过滤, 含所有类别)与"按当前设置挑出来的"分开存:
     // 用户在设置页改类别时, 用原始数据就能立刻重算, 不必再问一次第三方服务。
