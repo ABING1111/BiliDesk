@@ -42,7 +42,7 @@ public partial class PlayerWindow : FluentWindow
         Closed += OnClosed;
         Loaded += OnLoaded;
         PreviewKeyDown += OnPreviewKeyDown;
-        // 松开 → 时结束"长按 3 倍速"(见 OnPreviewKeyUp)
+        // 松开 → 时结束"长按倍速"(见 OnPreviewKeyUp)
         PreviewKeyUp += OnPreviewKeyUp;
         // 切窗口时兜底结束所有"按住才成立"的加速态(见 OnPlayerDeactivated)
         Deactivated += OnPlayerDeactivated;

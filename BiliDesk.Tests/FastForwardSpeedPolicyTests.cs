@@ -6,8 +6,8 @@ namespace BiliDesk.Tests;
 /// <summary>
 /// 长按倍速的 ↑/↓ 档位切换(2026-11-21)。
 /// ★ 列表是循环的: 3x 再 ↑ 回到 1.5x, 1.5x 再 ↓ 回到 3x。
-/// ★ 还要覆盖"当前倍速不在档位上"的边界: 鼠标长按取 max(2.0, 当前倍速),
-///   用户把倍速设成 2.5x 时按 ↓ 必须回到 2x, 不能跳过它掉到 1.5x。
+/// ★ 还要覆盖"当前倍速不在档位上"的边界: 长按固定从 2x 起步, 但纯函数仍按"最近档"
+///   处理非档位值 —— 例如 2.5x 按 ↓ 必须回到 2x, 不能跳过它掉到 1.5x。
 /// </summary>
 public class FastForwardSpeedPolicyTests
 {
@@ -35,13 +35,13 @@ public class FastForwardSpeedPolicyTests
     [Fact]
     public void 非档位倍速_向上取最近更高档_向下取最近更低档()
     {
-        // 鼠标长按: max(2.0, 2.5) = 2.5 → ↑ 3x, ↓ 2x
+        // 2.5x(非档位值): ↑ 3x, ↓ 2x
         Assert.Equal(3.0f, FastForwardSpeedPolicy.Step(2.5f, +1));
         Assert.Equal(2.0f, FastForwardSpeedPolicy.Step(2.5f, -1));
         // 用户自定义 1.25x: ↑ 1.5x; ↓ 已经低于最低档 → 循环到 3x
         Assert.Equal(1.5f, FastForwardSpeedPolicy.Step(1.25f, +1));
         Assert.Equal(3.0f, FastForwardSpeedPolicy.Step(1.25f, -1));
-        // 4x(长按期间不降速, 目标就是 4x): ↑ 循环到 1.5x; ↓ 3x
+        // 4x(非档位值): ↑ 循环到 1.5x; ↓ 3x
         Assert.Equal(1.5f, FastForwardSpeedPolicy.Step(4.0f, +1));
         Assert.Equal(3.0f, FastForwardSpeedPolicy.Step(4.0f, -1));
     }

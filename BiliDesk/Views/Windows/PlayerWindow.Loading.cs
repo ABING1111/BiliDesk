@@ -1082,7 +1082,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_isFastForwarding), nameof(_rateBeforeFastForward),
         // 长按快进的目标倍速(2026-11-03): 同属"这一次长按"的瞬时态, 换片必须复位。
         nameof(_fastForwardTarget),
-        // 键盘长按 → 的 3 倍速标记(2026-11-12): 属于"这一次按键", 换片必须复位。
+        // 键盘长按 → 的倍速标记(2026-11-12): 属于"这一次按键", 换片必须复位。
         nameof(_rightKeyFast),
         // 失焦作废后"吞掉这一次松手"的标记(2026-11-21): 同属这一次按键的瞬时态,
         //   换片必须清 —— 否则新片的第一次 → 松手会被误吞(短按不跳)。

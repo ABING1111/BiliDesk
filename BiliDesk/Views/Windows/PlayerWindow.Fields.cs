@@ -666,7 +666,7 @@ public partial class PlayerWindow : FluentWindow
     private bool _isFastForwarding;
 
     /// <summary>
-    /// 长按快进开始: 切到 <see cref="_fastForwardTarget"/>(至少 <see cref="FastForwardRate"/>)。
+    /// 长按快进开始: 切到 <see cref="_fastForwardTarget"/>(默认 <see cref="FastForwardRate"/>, 即 2x)。
     ///
     /// ★ 2026-11-21: 长按期间 ↑/↓ 可以在 1.5x / 2x / 3x 间改这个目标
     ///   (见 TryStepFastForwardSpeed), 但**不影响**松手恢复值。

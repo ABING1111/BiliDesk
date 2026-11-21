@@ -52,8 +52,9 @@ public partial class PlayerWindow : FluentWindow
             //   所有 seek 防护(看门狗/静音/进度钉制)自动继承。
             case Key.Left: SeekRelative(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? -30 : -5); e.Handled = true; return;
             case Key.Right:
-                // ★ 2026-11-12 用户要求: 长按 → 应该是 3 倍速播放(与 B 站一致), 不是连续快进。
-                //   短按仍然立即跳 5 秒(Shift 30 秒); 继续按住由计时器切到 3x, 松开恢复。
+                // ★ 2026-11-12 用户要求: 长按 → 应该是倍速播放(与 B 站一致), 不是连续快进。
+                //   短按仍然立即跳 5 秒(Shift 30 秒); 继续按住由计时器进入倍速播放
+                //   (2026-11-21 起默认 2x, 期间 ↑/↓ 切 1.5x / 2x / 3x), 松开恢复。
                 //   系统的自动重复 KeyDown(e.IsRepeat)一律忽略 —— 否则又会变成连续快进。
                 if (e.IsRepeat) { e.Handled = true; return; }
                 OnRightKeyPressed();
@@ -145,7 +146,7 @@ public partial class PlayerWindow : FluentWindow
 
     // ------------------------------------------------------------ 方向键 → 长按 = 倍速播放
 
-    /// <summary>长按 → 的判定阈值(ms): 超过就进入 3 倍速播放, 而不是连续快进。</summary>
+    /// <summary>长按 → 的判定阈值(ms): 超过就进入倍速播放, 而不是连续快进。</summary>
     private const int RightKeyLongPressMs = 250;
 
     /// <summary>
