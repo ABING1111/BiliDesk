@@ -1113,9 +1113,12 @@ public partial class PlayerWindow : FluentWindow
     {
         if (!_danmakuOn || _closing || _mp == null || _mp.Length <= 0) return;
         var currentSeconds = _mp.Time / 1000.0;
-        // ★ 校准弹幕时钟: 逐帧推进只读本地 Stopwatch, 靠这里(约 4Hz)把它拉回真实媒体时间。
-        //   拖进度条/seek 之后, 下一个 TimeChanged 就会纠偏, 弹幕不会继续按旧位置飞。
-        CalibrateDanmakuClock(currentSeconds);
+        // ★★★ 2026-11-21: 这里**不再**校准弹幕时钟(原来在 this 位置调 CalibrateDanmakuClock)。
+        //   本方法是"发弹幕"的入口, 第一句就按 `!_danmakuOn` 早退 —— 关掉弹幕之后时钟
+        //   再也得不到校准, 永远停在 0。字幕曾经借这个时钟取时间, 于是"关弹幕看网课"
+        //   就表现为字幕一直停在第一句。
+        //   校准只跟"媒体时间推进"有关, 与弹幕开关无关, 现在统一在 OnTimeChanged 里做
+        //   (见 PlayerWindow.Playback.cs)。
 
         // 游标与播放位置必须同步, 否则下面的 while 会在一帧里把跨越的整段弹幕全发出来(刷屏)。
         // 往回跳、往前跳、以及"弹幕加载完成时播放已经过去一段时间"这三种失配都在这里收敛,

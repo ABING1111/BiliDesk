@@ -1325,6 +1325,15 @@ public partial class PlayerWindow : FluentWindow
             //   那一瞬的过渡位置; 双时钟会把"两次采样"压到 1ms 内, 过渡值照样骗过它,
             //   后果是 seek 静音提前解除、缓冲提示提前消失(画面没回来声音先到)。
             //   定时器全程在跑(构造里 Start, 等待期 100ms / 平时 500ms), 少这一个调用不丢刷新。
+            // ★★★ 2026-11-21: 弹幕时钟的校准放在这里, 不再放在 DispatchDanmaku 里 ——
+            //   那个方法第一句就是 `if (!_danmakuOn ...) return;`, 关掉弹幕之后时钟永远
+            //   得不到校准、停在 0; 字幕曾经借这个时钟取时间, 于是"关弹幕看网课"就表现为
+            //   字幕一直停在第一句(见 RefreshSubtitleNow 的说明)。
+            //   校准只取决于"媒体时间推进", 与弹幕开关无关, 所以在 TimeChanged 里无条件做。
+            //   ★ 用事件自带的 e.Time 而不是再读一次 _mp.Time: 同一个值, 少一次原生读取。
+            if (e.Time >= 0 && e.Time < 24L * 3600 * 1000)
+                CalibrateDanmakuClock(e.Time / 1000.0);
+
             DispatchDanmaku();
             // 字幕同样要在这对齐一次(2026-11-15): 心跳是 100ms 粒度, seek 后靠 TimeChanged
             // 立即把字幕切到新位置 —— 否则拖完进度条字幕还会挂在旧画面上最多 100ms。
