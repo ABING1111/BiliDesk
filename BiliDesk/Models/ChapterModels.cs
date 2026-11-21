@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 
 namespace BiliDesk.Models;
@@ -53,7 +54,8 @@ public static class ChapterParser
     ///   · from 为负 → 夹到 0;
     ///   · to &lt;= from(时长为零/倒挂) → 丢弃, 留着会让进度条刻度重叠、跳转到原地;
     ///   · content 为空 → 退化成「第 N 章」(N 按**最终时间顺序**, 与弹层里看到的位置一致);
-    ///   · 同一 from 重复出现 → 只留第一条(服务端偶发重复, 会在刻度上叠成一条线);
+    ///   · 元素不是对象(服务端偶发 null) → 丢弃, 不让整批(以及同响应里的字幕轨)解析失败;
+    ///   · 同一 from 重复出现 → 只留第一条(稳定排序, 即服务端返回里的第一条);
     ///   · 结果按 FromMs 升序 —— 找当前章靠有序性, 与字幕时间轴同理。
     /// </summary>
     public static List<VideoChapter> Parse(JsonElement data)
@@ -64,6 +66,10 @@ public static class ChapterParser
 
         foreach (var e in arr.EnumerateArray())
         {
+            // 坏元素(服务端偶发 null / 非对象)丢一条就够, 绝不能让整批解析失败 ——
+            // 章节与字幕在同一个响应里, 抛出去会把字幕轨一起带走。
+            if (e.ValueKind != JsonValueKind.Object) continue;
+
             var fromMs = (long)Math.Round(Math.Max(0, GetDouble(e, "from")) * 1000);
             var toMs = (long)Math.Round(GetDouble(e, "to") * 1000);
             if (toMs <= fromMs) continue;
@@ -77,11 +83,13 @@ public static class ChapterParser
             });
         }
 
-        list.Sort((a, b) => a.FromMs.CompareTo(b.FromMs));
+        // 稳定排序(OrderBy 保序): 同一个 from 重复出现时要能确定地"保留服务端返回的第一条"
+        // —— List.Sort 不保证稳定, 去重结果会变成实现细节。
+        var ordered = list.OrderBy(c => c.FromMs).ToList();
 
         // 去重(按起点): 排序后才能一趟扫完
-        var deduped = new List<VideoChapter>(list.Count);
-        foreach (var c in list)
+        var deduped = new List<VideoChapter>(ordered.Count);
+        foreach (var c in ordered)
         {
             if (deduped.Count > 0 && deduped[^1].FromMs == c.FromMs) continue;
             deduped.Add(c);
@@ -104,6 +112,9 @@ public static class ChapterParser
 
     /// <summary>
     /// 找 timeMs 落在哪一章(返回下标; 找不到返回 -1)。
+    ///
+    /// ★ 前置条件: <paramref name="chapters"/> 必须按 FromMs 升序(ChapterParser.Parse 的
+    ///   输出满足) —— 下面按下标二分, 乱序会静默返回错误章节。
     ///
     /// 语义刻意宽于"严格落在 [from, to) 内":
     ///   · 章节之间有空隙(服务端数据不严丝合缝)时, 算**前一个**章 —— 用户看到的章节名

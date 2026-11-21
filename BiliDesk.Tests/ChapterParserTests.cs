@@ -115,6 +115,29 @@ public class ChapterParserTests
         Assert.Empty(ChapterParser.Parse(Data("""{ "view_points": [] }""")));
     }
 
+    [Fact]
+    public void 解析章节_非对象元素跳过_其余照常()
+    {
+        // 服务端偶发 null / 非对象元素: 只能丢这一条, 不能让整批(以及同一响应里的字幕)失败。
+        const string json = """
+            {
+              "view_points": [
+                null,
+                42,
+                "坏元素",
+                { "from": 0, "to": 60, "content": "开头" },
+                { "from": 60, "to": 120, "content": "正常" }
+              ]
+            }
+            """;
+
+        var chapters = ChapterParser.Parse(Data(json));
+
+        Assert.Equal(2, chapters.Count);
+        Assert.Equal("开头", chapters[0].Content);
+        Assert.Equal("正常", chapters[1].Content);
+    }
+
     // ------------------------------------------------------------ IsUsable
 
     [Fact]
