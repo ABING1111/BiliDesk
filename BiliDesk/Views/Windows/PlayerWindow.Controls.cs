@@ -442,7 +442,11 @@ public partial class PlayerWindow : FluentWindow
     private DispatcherTimer? _speedOsdTimer;
 
     /// <summary>
-    /// 滚轮调音量: 上滑 +5, 下滑 -5。
+    /// 滚轮调音量: 上滑 +5, 下滑 -5; **长按倍速期间改为切档**(上滑加速 / 下滑减速), 与 ↑/↓ 同语义。
+    ///
+    /// ★ 2026-11-21: 长按倍速期间滚轮不再调音量 —— 手势里注意力都在"现在几倍速",
+    ///   滚轮顺手切档比挪到方向键自然。判据同样用 _isFastForwarding(手势态)而不是
+    ///   "浮层是否可见": 松手后的「已恢复 x」淡出期间浮层还亮着, 那时滚轮必须已经回到音量。
     ///
     /// 为什么用 PreviewMouseWheel 而不是 MouseWheel:
     /// 滚轮是**隧道**事件, Preview 那条从根往叶走, 挂了就能在底部控制栏的 Slider、
@@ -483,8 +487,18 @@ public partial class PlayerWindow : FluentWindow
         if (notches != 0)
         {
             _wheelAccum -= notches * 120;
-            // 基数用 _volumeCache 而不是 _mp.Volume: 见 _volumeCache 的说明(aout 未就绪时原生读回是 -1/旧值)
-            SetVolume(_volumeCache + notches * VolumeStep);
+            if (_isFastForwarding)
+            {
+                // ★ 2026-11-21: 长按倍速期间滚轮切档, 与 ↑/↓ 共用 TryStepFastForwardSpeed ——
+                //   弹幕时钟、控制栏倍速指示、浮层高亮由它一并同步。
+                //   攒了几格也只走**一档**: 三档是循环的, 一次滚两档会让人分不清方向。
+                TryStepFastForwardSpeed(Math.Sign(notches));
+            }
+            else
+            {
+                // 基数用 _volumeCache 而不是 _mp.Volume: 见 _volumeCache 的说明(aout 未就绪时原生读回是 -1/旧值)
+                SetVolume(_volumeCache + notches * VolumeStep);
+            }
         }
         // 不够一格也要吃掉: 否则事件继续冒泡给别的可滚动控件(视频区里其实没有, 但别留隐患)
         e.Handled = true;
@@ -610,13 +624,14 @@ public partial class PlayerWindow : FluentWindow
         _speedOsdTimer.Start();
     }
 
-    // ------------------------------------------------------------ 长按倍速: ↑/↓ 切档(2026-11-21)
+    // ------------------------------------------------------------ 长按倍速: ↑/↓ 与滚轮切档(2026-11-21)
 
     /// <summary>
-    /// 长按倍速期间按 ↑/↓ 切档。返回 true 表示"这次按键归倍速管, 不要再落到音量"。
+    /// 长按倍速期间按 ↑/↓ 或滚轮切档。返回 true 表示"这次输入归倍速管, 不要再落到音量"。
     ///
-    /// ★ 只在 <see cref="_isFastForwarding"/> 为真时接管: 其余时候 ↑/↓ 必须保持
-    ///   "调音量"的原语义(见 OnPreviewKeyDown 里的注释) —— 这正是用户特别指出要处理的争用。
+    /// ★ 只在 <see cref="_isFastForwarding"/> 为真时接管: 其余时候 ↑/↓ 与滚轮必须保持
+    ///   "调音量"的原语义(见 OnPreviewKeyDown / OnVideoAreaMouseWheel 里的注释)
+    ///   —— 这正是用户特别指出要处理的争用。
     /// ★ 切档后只改"当前加速倍速"(_fastForwardTarget), **不动** _rateBeforeFastForward:
     ///   松手要恢复的仍是按住之前那个正常倍速。
     /// </summary>

@@ -707,6 +707,10 @@ public partial class PlayerWindow : FluentWindow
         //   用户明确要的是"固定三档 + 默认 2x", 而不是旧版的 max(2.0, 当前)。
         _fastForwardTarget = rate;
 
+        // ★ 2026-11-21: 清掉滚轮累计余量 —— 长按期间滚轮改为切档(见 OnVideoAreaMouseWheel),
+        //   把上一次调音量攒下的零头带进来, 会让"刚滚一下"立刻跳一档, 手感像误触。
+        _wheelAccum = 0;
+
         _isFastForwarding = true;
         // ★ 顺序: 先让弹幕时钟按新倍速落定当前值, 再真正 SetRate(同 OnSpeedClick 那条说明)
         SyncDanmakuClockRate(_fastForwardTarget);
