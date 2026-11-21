@@ -132,6 +132,10 @@ public class CommentText : RichTextBox
             ColumnWidth = double.PositiveInfinity
         };
 
+        // ★ 只读富文本框不该自己滚(滚动条是 Disabled), 折叠被 MaxHeight 压住时
+        //   内部滚动区会抢走滚轮 —— 统一交给外层页面, 见 RichTextWheel。
+        RichTextWheel.ForwardToParent(this);
+
         // 右键: 选了片段就复制片段, 没选就复制整条
         var menu = new ContextMenu();
         var copy = new MenuItem { Header = "复制" };

@@ -199,8 +199,9 @@ public static class WheelScroll
         //   旧写法要求"最近的那个 ScrollViewer == sender": 鼠标压在一个内容不满一屏的
         //   嵌套小列表上时, 里层因为 ScrollableHeight<=0 直接 return, 外层又因为最近祖先
         //   不是自己被拒绝 —— 滚轮整个失效。现在跳过滚不动的里层, 与原生冒泡一致。
+        // ★ 2026-11-22: "能滚"还必须包含**纵向没有禁用** —— 见 <see cref="IsWheelScrollable"/>。
         var sv = VisualTreeUtil.FindAncestor<ScrollViewer>(
-            e.OriginalSource as DependencyObject, static v => v.ScrollableHeight > 0);
+            e.OriginalSource as DependencyObject, static v => IsWheelScrollable(v));
         if (sv == null) return;
 
         // 条目滚动的虚拟化列表保持原生 —— 见类头说明。
@@ -245,6 +246,22 @@ public static class WheelScroll
 
         e.Handled = true;
     }
+
+    /// <summary>
+    /// 这个滚动区能不能被滚轮驱动: 有可滚距离, 且纵向滚动**没有被禁用**。
+    ///
+    /// ★★ 2026-11-22 与"鼠标压在简介上滚轮完全不动"同批加的限制。
+    ///   简介是 RichTextBox(LinkText), 折叠时外层 MaxHeight(108) 把控件压住,
+    ///   它内部模板里的 ScrollViewer 于是报出 ScrollableHeight>0(实测 extent 304.8 /
+    ///   viewport 108), 但那个滚动条是 <see cref="ScrollBarVisibility.Disabled"/> ——
+    ///   按设计它不该滚(高度由内容撑开, 折叠交给外部的 MaxHeight)。
+    ///   事件本身由 <see cref="RichTextWheel"/> 在预览阶段改交给外层, 这里再收紧判据:
+    ///   万一有别的路径把未处理的滚轮送到我们手上, 也绝不能选中一个"滚不动"的里层,
+    ///   否则它会把事件吃掉、页面却一动不动。
+    ///   同款结构还有评论区 CommentText / 私信正文 MessageText, 一并受益。
+    /// </summary>
+    private static bool IsWheelScrollable(ScrollViewer sv) =>
+        sv.ScrollableHeight > 0 && sv.VerticalScrollBarVisibility != ScrollBarVisibility.Disabled;
 
     /// <summary>
     /// 把偏移写到 ScrollViewer 上, 同时更新"我们自己推动到哪儿"的记账。

@@ -86,6 +86,9 @@ public class MessageText : RichTextBox
             ColumnWidth = double.PositiveInfinity
         };
 
+        // ★ 只读富文本框不该自己滚(滚动条是 Disabled), 见 RichTextWheel。
+        RichTextWheel.ForwardToParent(this);
+
         // ★★ 钉住 PagePadding = 0: 构造函数里赋的值撑不过第一次排版(评论区实测),
         //   排版阶段会被改回 5, 表现为正文比昵称右缩 5px。挂监听拨回来。
         DependencyPropertyDescriptor.FromProperty(FlowDocument.PagePaddingProperty, typeof(FlowDocument))

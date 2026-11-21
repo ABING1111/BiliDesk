@@ -47,6 +47,8 @@ public class LinkText : RichTextBox
         Cursor = Cursors.IBeam;
         IsTabStop = false;
         FocusVisualStyle = null;
+        // ★ 折叠时外层 MaxHeight 会把内部滚动区压成"可滚", 滚轮必须交给外层页面。
+        RichTextWheel.ForwardToParent(this);
         Document = new FlowDocument
         {
             PagePadding = new Thickness(0),
