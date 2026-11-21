@@ -172,6 +172,14 @@ public partial class PlayerWindow : FluentWindow
             _subtitleLan = track.Lan;
             _subtitleOn = true;
             _subtitleLastText = "\0";   // 强制下一跳写一次文本(隐藏态刚被展示)
+            // 诊断(2026-11-21): "字幕一直停在第一句"这类问题光看界面判断不了是
+            //   "时间不走"还是"时间轴本身只有一句/首句超长"。这里写一行摘要(每片一次,
+            //   不刷屏): 轨、条数、首末条时间、以及本片时长 —— 首条 to 接近时长就是脏数据,
+            //   首末条分布正常那就是取时间的那一侧有问题。
+            WriteLibVLCDebug(
+                $"[Subtitle] track={track.Lan} cues={cues.Count} " +
+                $"first={cues[0].FromMs}~{cues[0].ToMs}ms " +
+                $"last={cues[^1].FromMs}~{cues[^1].ToMs}ms total={_totalMs}ms\n");
             StartSubtitleTimer();
             RefreshSubtitleNow();
             UpdateSubtitleHint();
@@ -443,10 +451,19 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 按当前媒体时间刷新字幕文本。
-    /// ★ 时间来源是**弹幕时钟** DanmakuClock(): 它由 TimeChanged 校准、按倍速外推、
-    ///   暂停时冻结 —— 字幕与弹幕、画面天然同源, 倍速/暂停/seek 都不需要单独处理。
-    /// ★ 媒体时钟在换片后从 0 重来, 而时间轴属于"这一片", 二者由 _subtitleOn 与
-    ///   RefreshForNewMedia 的一致性保证: 换片必然清时间轴 + 隐藏层。
+    ///
+    /// ★★★ 2026-11-21 修「带字幕的视频字幕一直停在第一句」:
+    ///   原来这里的时间取的是**弹幕时钟** DanmakuClock(), 而那个时钟的唯一校准点是
+    ///   <see cref="DispatchDanmaku"/> —— 它第一句就是 `if (!_danmakuOn ...) return;`。
+    ///   于是**关掉弹幕**之后:
+    ///     · CalibrateDanmakuClock 再也跑不到 ⇒ `_dmClockRunning` 恒为 false、
+    ///       `_dmClockMedia` 恒为 0;
+    ///     · DanmakuClock() 只会返回 0 ⇒ 字幕每一跳都按 0ms 去查表 ⇒ 永远显示第一句。
+    ///   弹幕开关是观看偏好, 与字幕是两件事, 不该有这种耦合。
+    ///
+    /// ★ 现在直接读媒体时间(10Hz 心跳, 不是逐帧路径, 一次原生读取可忽略):
+    ///   暂停时它不动、倍速时它按媒体时间走、seek 后它就是落点 ——
+    ///   与弹幕判游标用的是同一个源, 但不再经过"墙钟外推 + 校准"那层间接。
     /// </summary>
     private void RefreshSubtitleNow()
     {
@@ -464,12 +481,34 @@ public partial class PlayerWindow : FluentWindow
             HideSubtitleLayer();
             return;
         }
-        var ms = (long)(DanmakuClock() * 1000) + _subtitleDelayMs;
+        var ms = SubtitleMediaMs() + _subtitleDelayMs;
         var text = SubtitleParser.VisibleText(_subtitleCues, ms);
         // 文本没变就不碰控件: 100ms 心跳 × 每次都赋值 = 每 100ms 一次重排, 纯浪费
         if (text == _subtitleLastText) return;
         _subtitleLastText = text;
         ShowSubtitleText(text);
+    }
+
+    /// <summary>
+    /// 字幕当前对应的媒体时间(毫秒)。
+    /// ★ 读不到(原生对象正在重建/释放, 或过渡期返回 -1/溢出值)时退回最后已知位置 ——
+    ///   宁可字幕停在上一句几百毫秒, 也不要因为 0 而跳回第一句。
+    /// </summary>
+    private long SubtitleMediaMs()
+    {
+        try
+        {
+            if (_mp != null)
+            {
+                var t = _mp.Time;
+                if (t >= 0 && t < 24L * 3600 * 1000) return t;
+            }
+        }
+        catch
+        {
+            // 原生对象可能刚好失效(换片/切清晰度/关窗)
+        }
+        return _lastKnownMs > 0 ? _lastKnownMs : 0;
     }
 
     /// <summary>换片时清掉字幕的全部"这一片"状态(由 ResetForNewMedia 调用)。</summary>
