@@ -45,12 +45,16 @@ public partial class PlayerWindow : FluentWindow
         UpdateCommentBackToTop(null);
         // 工具列的"滚动自动收起"状态也复位: 下次进评论区先让它可见
         SetCommentFabBarHidden(false, animate: false);
+        // 底部横条滑到「简介」下面
+        QueueContentTabIndicatorUpdate(animate: true);
     }
 
     private async void TabComments_Checked(object sender, RoutedEventArgs e)
     {
         IntroPanel.Visibility = Visibility.Collapsed;
         CommentsPanel.Visibility = Visibility.Visible;
+        // 底部横条滑到「评论」下面
+        QueueContentTabIndicatorUpdate(animate: true);
         // 切到评论页时顺手校准一次输入框状态(FAB 显隐跟着 tab 走):
         // 用户可能是先登录/换号再回来发的
         UpdateCommentComposer();
@@ -65,6 +69,81 @@ public partial class PlayerWindow : FluentWindow
         RestoreVisibleCommentCardsNow(forceLayout: true);
         QueueCommentContentWindow();
         ScheduleCommentAutoLoad();
+    }
+
+    // ------------------------------------------------------------ Tab 底部滑动横条(2026-11-21)
+
+    /// <summary>
+    /// 把「简介 / 评论」下面那条共享的强调色横条挪到当前选中的 tab 正下方。
+    ///
+    /// ★ 横条**只有一条**(XAML 里的 ContentTabIndicator), 不再是每个 tab 模板里各带一条:
+    ///   自带下划线是 IsChecked 驱动、瞬间换位的, 点过去的同一帧目的地就亮了,
+    ///   再叠一条正滑过去的横条会同时看到两条。所以这两个 tab 用 PlayerContentTabStyle
+    ///   (观感完全一致, 只是不带下划线), 下划线统一交给这条横条画。
+    /// ★ 起点取横条**当前**的 X/宽度而不是"旧 tab"的几何: 动画没跑完就连点另一下时,
+    ///   从半路接着滑, 不会先跳回旧位置。
+    /// ★ 宽度也跟着动: 「评论」进详情后会变成「评论详情」(以及选中态 SemiBold 的
+    ///   字宽变化), 只挪 X 不变宽的话横条会和文字左右对不齐。
+    /// </summary>
+    private void UpdateContentTabIndicator(bool animate)
+    {
+        if (ContentTabRow == null || ContentTabIndicator == null || ContentTabIndicatorShift == null) return;
+
+        var target = TabComments?.IsChecked == true ? TabComments : TabIntro;
+        if (target == null || target.ActualWidth <= 0) return;
+
+        var to = target.TranslatePoint(new Point(0, 0), ContentTabRow).X;
+        var width = target.ActualWidth;
+
+        if (!animate)
+        {
+            // 先清动画再写基础值: 留着 HoldEnd 的动画时直接赋 Width/X 是不生效的
+            ContentTabIndicatorShift.BeginAnimation(TranslateTransform.XProperty, null);
+            ContentTabIndicator.BeginAnimation(WidthProperty, null);
+            ContentTabIndicatorShift.X = to;
+            ContentTabIndicator.Width = width;
+            return;
+        }
+
+        // 220ms / EaseOut: 手感取值 —— 再快就像瞬移, 再慢用户会盯着它滑完才敢点第二次。
+        // (连点时新动画直接从横条当前值起滑, 不会因为这里有固定时长而卡住。)
+        var duration = new Duration(TimeSpan.FromMilliseconds(220));
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        ContentTabIndicatorShift.BeginAnimation(TranslateTransform.XProperty,
+            new DoubleAnimation(ContentTabIndicatorShift.X, to, duration) { EasingFunction = ease });
+        ContentTabIndicator.BeginAnimation(WidthProperty,
+            new DoubleAnimation(ContentTabIndicator.ActualWidth, width, duration) { EasingFunction = ease });
+    }
+
+    /// <summary>
+    /// 把横条的更新推迟到这一轮布局/渲染**之后**。
+    ///
+    /// ★ 不能当场读 ActualWidth: 切 tab 会改 FontWeight(SemiBold)、进评论详情会改
+    ///   Content("评论" → "评论详情"), 事件触发时布局还没按新状态跑过, 量到的仍是旧宽度。
+    ///   DispatcherPriority.Loaded 排在 Render 之后, 那时 ActualWidth 才是最终的。
+    /// ★ 连点时会有多条排队, 后一条自己会从横条**当前**位置起滑, 结果总是收敛到最后选中的 tab。
+    /// </summary>
+    private void QueueContentTabIndicatorUpdate(bool animate)
+    {
+        if (ContentTabRow == null) return;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded,
+            new Action(() => UpdateContentTabIndicator(animate)));
+    }
+
+    /// <summary>tab 行首次布局完成: 无动画地把横条摆到初始选中项下面(窗口复用时不会重入)。</summary>
+    private void OnContentTabRowLoaded(object sender, RoutedEventArgs e)
+        => QueueContentTabIndicatorUpdate(animate: false);
+
+    /// <summary>
+    /// 信息栏从隐藏(全屏 / 铺满窗口, 见 ApplyInfoPanelState)恢复时补摆一次。
+    ///
+    /// ★ 那种状态下 tab 行的 ActualWidth 是 0, 首次布局时 UpdateContentTabIndicator 会
+    ///   直接返回; 不补这一下, 退出全屏后横条会停在"宽 0"上, 看起来就是下划线消失了,
+    ///   直到用户点一次 tab 才回来。
+    /// </summary>
+    private void OnContentTabRowIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true) QueueContentTabIndicatorUpdate(animate: false);
     }
 
     // ------------------------------------------------------------ 回到顶部(2026-11-09)
@@ -1396,6 +1475,8 @@ public partial class PlayerWindow : FluentWindow
         // 「返回评论列表」在**右下角悬浮工具列**(2026-11-05 从 tab 行搬走:
         // 它压在「热门 / 时间」排序按钮上, 排序点不到), 这里把它亮出来。
         TabComments.Content = "评论详情";
+        // tab 变长了: 底部横条跟着变宽(见 UpdateContentTabIndicator)
+        QueueContentTabIndicatorUpdate(animate: true);
         BtnBackToComments.Visibility = Visibility.Visible;
         // 评论区只有一个输入框(悬浮面板), 进详情页它自动切成"回复 @这层楼"
         // (用户规则: 在详情页评论 = 给这层楼评论); 点提示条上的"取消"才改回发新楼层。
@@ -1498,6 +1579,8 @@ public partial class PlayerWindow : FluentWindow
         ClearReplyTarget();
         // tab 文案与右下角悬浮工具列里的返回按钮一起还原
         TabComments.Content = "评论";
+        // 文案缩回「评论」: 横条同步收窄
+        QueueContentTabIndicatorUpdate(animate: true);
         BtnBackToComments.Visibility = Visibility.Collapsed;
         CommentList.Visibility = Visibility.Visible;
         // 进详情页时根评论列表的内容被整块释放了(见 ShowCommentDetail), 现在按当前视口补回来。

@@ -962,6 +962,42 @@
         </Style>
 
         <!--
+            ============ 播放器的「简介 / 评论」tab(2026-11-21 加底部横条滑动动画) ============
+
+            与全局 ContentTabStyle 唯一的差别: **不带 tab 自带的下划线**。
+            播放器这两条 tab 的下划线改由 tab 行里一条共享的 Border(ContentTabIndicator) 画,
+            切 tab 时让它从旧位置滑到新位置(见 PlayerWindow.UpdateContentTabIndicator)。
+            ★ 为什么不能留着自带下划线: 它是 IsChecked 驱动、**瞬间**换位的 ——
+              点「评论」的同一帧目的地就已经亮了一条, 再叠一条正从「简介」滑过去的横条,
+              会同时看到两条, 观感像闪了一下。
+            ★ 其余视觉参数(字号 15 / Padding 4,6 / Margin 24 / 悬停变主文字色)全部由
+              BasedOn 继承, 这里只重写 Template 去掉 Underline 那一层。
+        -->
+        <Style x:Key="PlayerContentTabStyle" TargetType="RadioButton"
+               BasedOn="{StaticResource ContentTabStyle}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <ContentPresenter x:Name="Cp"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                          Margin="{TemplateBinding Padding}"
+                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--
             ============ 播放页操作栏(六个按钮) ============
             2026-10-06 按设计稿「播放页_v4」重做。要点(每条都对应设计稿里的一节):
 
@@ -2496,7 +2532,8 @@
                             <!-- Tab 简介/评论 -->
                             <Border Margin="0,18,0,0" BorderBrush="{DynamicResource DividerBrush}"
                                     BorderThickness="0,1,0,0" Padding="0,10,0,0">
-                                <Grid>
+                                <Grid x:Name="ContentTabRow" Loaded="OnContentTabRowLoaded"
+                                      IsVisibleChanged="OnContentTabRowIsVisibleChanged">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
@@ -2516,10 +2553,10 @@
                                              动作/tab 入口, 全部靠左排, 不再有一个"撑满剩余宽度"的空列。 -->
                                     </Grid.ColumnDefinitions>
                                     <RadioButton x:Name="TabIntro" Grid.Column="0" GroupName="ContentTab"
-                                                 Style="{StaticResource ContentTabStyle}" Content="简介"
+                                                 Style="{StaticResource PlayerContentTabStyle}" Content="简介"
                                                  Checked="TabIntro_Checked" />
                                     <RadioButton x:Name="TabComments" Grid.Column="1" GroupName="ContentTab"
-                                                 Style="{StaticResource ContentTabStyle}" Content="评论"
+                                                 Style="{StaticResource PlayerContentTabStyle}" Content="评论"
                                                  Checked="TabComments_Checked" />
                                     <!-- 视频合集入口(2026-10-02 新增; 2026-10-03 改成与 简介/评论 统一风格):
                                          无合集的视频整个按钮**隐藏**(不是禁用) —— 右侧信息栏只有 400px,
@@ -2565,6 +2602,25 @@
                                          做成 38×38 的返回箭头图标按钮 —— 既不遮排序, 也和首页/分区页
                                          的右下角工具列是同一套观感。
                                          ★ 事件处理器 OnCommentDetailBack 没变, 只是位置换了。 -->
+
+                                    <!-- ============ 共享滑动横条(2026-11-21) ============
+                                         简介/评论的下划线**只有这一条**, 由代码(UpdateContentTabIndicator)
+                                         把它挪到当前选中的 tab 正下方, 切 tab 时做 220ms 缓动滑动。
+                                         ★ 叠在两个 tab 之上(z 序在最后), 高度 2 / 底边 -1 与原来各自
+                                           template 里的下划线完全同款, 静止时看不出区别。
+                                         ★ 宽度与 X 都由代码按 tab 的**实测宽度/坐标**写:
+                                           文字从「评论」变成「评论详情」时横条也要跟着变长。
+                                         ★ IsHitTestVisible=False: 它只是指示器, 不能挡 tab 的点击。 -->
+                                    <Border x:Name="ContentTabIndicator"
+                                            Grid.Column="0" Grid.ColumnSpan="2"
+                                            Height="2" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                            Margin="0,0,0,-1"
+                                            Background="{DynamicResource AccentBrush}"
+                                            IsHitTestVisible="False">
+                                        <Border.RenderTransform>
+                                            <TranslateTransform x:Name="ContentTabIndicatorShift" />
+                                        </Border.RenderTransform>
+                                    </Border>
                                 </Grid>
                             </Border>
 

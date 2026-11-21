@@ -1248,6 +1248,12 @@
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
         <Setter Property="FontSize" Value="15" />
         <Setter Property="Padding" Value="4,6" />
+        <!-- ★ 2026-11-21 用户报"分P 和合集的间隔与简介/评论的间隔不一致":
+             旁边两个 tab 的右边距是 24(见 ContentTabStyle), 这里原来没有 Margin,
+             并排时只剩两侧各 4px 的内边距 —— 中间空 8px, 明显比 简介/评论 的
+             4+24+4=32px 挤。补上同款右边距后, 这一行四个入口的间距完全一致。
+             最后一颗(分P)的右边距落在信息栏的空白里, 不占任何东西的位置。 -->
+        <Setter Property="Margin" Value="0,0,24,0" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
