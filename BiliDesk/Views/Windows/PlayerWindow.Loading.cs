@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -262,7 +263,8 @@ public partial class PlayerWindow : FluentWindow
     ///   接口一次就返 40 条且翻页无效(实测 ps/pn 都不影响, 见 GetRelatedAsync 的说明),
     ///   所以这里把**全量 40 条**存在 <see cref="_relatedAll"/>, 界面只挂前
     ///   <see cref="RelatedPageSize"/> 条; 滚到附近时由 <see cref="ShowMoreRelated"/>
-    ///   再补一批。列表用 ObservableCollection, 追加即刷新, 不重排已有卡片。
+    ///   再补一批。列表用 <see cref="_relatedItems"/> 这个 ObservableCollection, 追加即刷新,
+    ///   不重排已有卡片(详见该字段的说明)。
     /// </summary>
     private async Task LoadRelatedAsync(string bvid)
     {
@@ -289,9 +291,11 @@ public partial class PlayerWindow : FluentWindow
         // 先清空再转圈: 不清的话上一次的卡片会一直挂在界面上, 而那批推荐与当前视频无关。
         _relatedAll = new List<VideoItem>();
         _relatedShown = 0;
+        ClearRelatedItems();
         if (showPanel)
         {
-            RelatedList.ItemsSource = null;
+            if (!ReferenceEquals(RelatedList.ItemsSource, _relatedItems))
+                RelatedList.ItemsSource = _relatedItems;
             RelatedPanel.Visibility = Visibility.Visible;
             RelatedLoadingRing.Visibility = Visibility.Visible;
             RelatedHint.Text = "正在加载…";
@@ -329,7 +333,7 @@ public partial class PlayerWindow : FluentWindow
         {
             // 先挂第一批(与旧行为一致: 打开播放器先看到 8 条, 不一下铺满 40 条)
             _relatedShown = Math.Min(RelatedPageSize, items.Count);
-            RelatedList.ItemsSource = items.GetRange(0, _relatedShown);
+            AppendRelatedRange(0, _relatedShown);
 
             // 相关接口(archive/related)与热门同构, 字段表里没有 is_followed:
             // 卡片先出来, 再异步补「已关注」标签(与搜索页同一套做法)。
@@ -462,29 +466,121 @@ public partial class PlayerWindow : FluentWindow
             ShowMoreRelated();
     }
 
-    /// <summary>相关视频每批展示几条(滚动到附近时按这个量追加)</summary>
+    /// <summary>相关视频每批抬高多少目标条数(滚到附近时按这个量往后推)</summary>
     private const int RelatedPageSize = 8;
 
-    /// <summary>当前视频的相关视频**全量**(接口一次给 40 条; 界面只挂前 <see cref="_relatedShown"/> 条)</summary>
+    /// <summary>当前视频的相关视频**全量**(接口一次给 40 条; 界面最终挂到 <see cref="_relatedShown"/> 条)</summary>
     private List<VideoItem> _relatedAll = new();
 
-    /// <summary>当前已经挂到界面上的条数; 换片时归零</summary>
+    /// <summary>
+    /// 界面**目标**展示条数(不是"已挂上的条数", 已挂上的是 <see cref="_relatedItems"/>.Count)。
+    /// 换片时归零。
+    ///
+    /// ★★ 2026-11-21: 为什么要有"目标"这一层 —— 见 <see cref="_relatedItems"/> 的 ②。
+    /// </summary>
     private int _relatedShown;
 
+    /// <summary>已经排过一次"逐条补上"的调度; 滚动时避免排几十个回调(与评论的 RevealScheduled 同款)</summary>
+    private bool _relatedRevealScheduled;
+
     /// <summary>
-    /// 再展示一批相关视频(信息栏滚到相关视频附近时调)。
+    /// 已经挂到界面上的相关视频(绑定到 <see cref="RelatedList"/> 的唯一一份 ItemsSource)。
     ///
-    /// ★ 幂等 + 到顶即停: 已经全展示完时什么都不做, 不会重复 append。
+    /// ★★★ 2026-11-21 修"相关视频往下滑卡顿、加载完后就不再卡"(两件事, 缺一不可):
+    ///
+    ///   ① **不能重挂 ItemsSource**。旧实现每补一批都
+    ///      `RelatedList.ItemsSource = _relatedAll.GetRange(...)` —— 换 ItemsSource
+    ///      等于把已生成的卡片全部丢弃重建(容器、DataTemplate、绑定、封面的 Cover.Source
+    ///      附加属性全部重跑)。探针实测(Debug, 真 PlayerWindow): 五批 8/16/24/32/40 条
+    ///      分别 **89 / 117 / 173 / 253 / 272ms**, 每次都把首条容器换掉; 改成只追加后
+    ///      已有容器一个都不重建。
+    ///   ② **一次只建一张卡**(见 <see cref="_relatedRevealScheduled"/>)。只做 ① 仍然一批
+    ///      40~57ms 卡一下 —— 探针实测单张相关视频卡(建树 + 测量)4~9ms, 8 张一起建就是
+    ///      44ms, 远超一帧预算。改成一帧一张后实测每帧 4.1~8.5ms(平均 5.6ms), 落在
+    ///      16.7ms 的帧预算内。
+    ///
+    /// ★ 为什么补页会自己连起来(与"加载完全后就不卡"直接相关): 补页让列表变高, 高度变化
+    ///   本身就会发一次 ScrollChanged, 于是 `MaybeShowMoreRelated` 又被判为"快到底了"。
+    ///   探针里**不用任何用户滚动**, 8 条挂上后立刻变 16 条 —— 一次手势内直接补到 40 条。
+    ///   这正是旧写法"一次滑动里连续重建三四遍整表"的来源。
+    ///
+    /// ★ 这里**不做去重**: 接口一次返的 40 条本身不重复, 追加的又是同一份 <see cref="_relatedAll"/>
+    ///   的切片, 不存在"同一条进两次"的可能。
+    /// </summary>
+    private readonly ObservableCollection<VideoItem> _relatedItems = new();
+
+    /// <summary>
+    /// 把 <see cref="_relatedAll"/> 的 [from, to) 段**一次性**追加到界面集合。
+    ///
+    /// ★ 只给首屏用(打开播放器时先看到 8 条, 与旧行为一致): 那一下发生在起播链里,
+    ///   用户本来就在等, 40ms 不刺眼。**后续补页走 <see cref="ScheduleRelatedReveal"/>
+    ///   逐条加**, 别在这里一次塞一批(理由见 <see cref="_relatedItems"/> 的 ②)。
+    /// </summary>
+    private void AppendRelatedRange(int from, int to)
+    {
+        for (var i = Math.Max(0, from); i < to && i < _relatedAll.Count; i++)
+            _relatedItems.Add(_relatedAll[i]);
+    }
+
+    /// <summary>
+    /// 清空界面上的相关视频, 但**保留** ItemsSource 绑定。
+    ///
+    /// ★ 保留绑定是为了下一次 LoadRelatedAsync 不必再换一次 ItemsSource: 集合清空时
+    ///   ItemsControl 收到 Reset, 容器照样全部拆掉(换片本来也该拆)。
+    /// </summary>
+    private void ClearRelatedItems()
+    {
+        if (_relatedItems.Count > 0) _relatedItems.Clear();
+    }
+
+    /// <summary>
+    /// 把界面展示目标往后推一批(信息栏滚到相关视频附近时调)。
+    ///
+    /// ★ 幂等 + 到顶即停: 已经全展示完时什么都不做。
     /// ★ 换片后 <see cref="_relatedAll"/> 是空的, 这里直接返回 —— 不会把上一片的
     ///   推荐补进新片的列表(那是"点下去跳到不相干视频"的老 bug)。
+    /// ★★★ 这里**只改目标, 不建卡片**: 真正的挂载交给 <see cref="ScheduleRelatedReveal"/>
+    ///   逐帧做。探针实测每张卡建树+测量 4~9ms(Debug), 一批 8 张一起建就是 40~70ms 的冻结,
+    ///   而滚轮/拖动滚动条时的卡顿就是这么来的 —— 补页本身不该占满一整帧。
     /// </summary>
     private void ShowMoreRelated()
     {
         if (_closing || _relatedShown >= _relatedAll.Count) return;
-        var next = Math.Min(_relatedShown + RelatedPageSize, _relatedAll.Count);
-        var shown = _relatedAll.GetRange(0, next);
-        _relatedShown = next;
-        RelatedList.ItemsSource = shown;
+        _relatedShown = Math.Min(_relatedShown + RelatedPageSize, _relatedAll.Count);
+        ScheduleRelatedReveal();
+    }
+
+    /// <summary>
+    /// 排一次"逐条补上"(一次回调只加一条, 加到目标为止)。
+    ///
+    /// ★ 用 Background 优先级: 输入、布局、渲染都排在它前面, 所以它只在**帧间空隙**里跑。
+    ///   这正是要的效果 —— 滑动时每帧只多花一张卡的钱, 而不是一口气 44ms。
+    /// ★ 防重入: 连续滚动会不停抬目标, 但回调只该有一条在队里(与评论的
+    ///   <c>_commentRevealScheduled</c> 同样做法)。
+    /// </summary>
+    private void ScheduleRelatedReveal()
+    {
+        if (_closing || _relatedRevealScheduled) return;
+        _relatedRevealScheduled = true;
+        Dispatcher.BeginInvoke(new Action(RevealRelatedOne), DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// 逐条补上的单步: 加一条, 没到目标就再排一次。
+    ///
+    /// ★ 索引直接用 `_relatedItems.Count`: 挂上的永远是从 <see cref="_relatedAll"/> 开头起
+    ///   连续的一段, 所以"已挂条数"就是下一条的下标, 不需要额外游标。
+    /// ★ 换片后两个集合都清空(`_relatedShown` 也归零), 这里的第一道闸门直接把这次回调
+    ///   变成空转 —— 不会把新片的条目按旧下标记进去。
+    /// </summary>
+    private void RevealRelatedOne()
+    {
+        _relatedRevealScheduled = false;
+        if (_closing) return;
+        if (_relatedItems.Count >= _relatedShown) return;
+        if (_relatedItems.Count >= _relatedAll.Count) return;
+        _relatedItems.Add(_relatedAll[_relatedItems.Count]);
+        if (_relatedItems.Count < _relatedShown) ScheduleRelatedReveal();
     }
 
     /// <summary>相关视频卡片的点击: 切到那个 bvid</summary>
@@ -647,7 +743,7 @@ public partial class PlayerWindow : FluentWindow
         // 于是把上一片的推荐补进新片的列表 —— 那是"点下去跳到不相干视频"的老 bug。
         _relatedAll = new List<VideoItem>();
         _relatedShown = 0;
-        if (RelatedList != null) RelatedList.ItemsSource = null;
+        ClearRelatedItems();
         if (RelatedPanel != null) RelatedPanel.Visibility = Visibility.Collapsed;
         if (RelatedLoadingRing != null) RelatedLoadingRing.Visibility = Visibility.Collapsed;
         if (RelatedHint != null) RelatedHint.Text = "";
@@ -1097,6 +1193,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_descExpanded),          // 简介折叠态: UpdateUiFromDetail 每片复位
         nameof(_relatedGen),            // 相关视频加载代次: LoadRelatedAsync 自增
         nameof(_relatedShown),          // 相关视频已展示条数: LoadRelatedAsync/ClearRelatedPanel 复位
+        nameof(_relatedRevealScheduled),// 相关视频"逐条补上"的调度闸(2026-11-21): 换片必须放开
         nameof(_isReliableSeekSource),  // seek 可靠性标志: BuildMedia 按片源设置
         nameof(_dmClockRate),           // 弹幕时钟倍率: 换片后由 CalibrateDanmakuClock 重新校准
         nameof(_commentReturnRpid),     // 评论详情返回锚: 属于"上一条评论详情", 换片必须归零
