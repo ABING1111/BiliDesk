@@ -232,6 +232,8 @@ public partial class UserCenterPage : UserControl, IRefreshable
         if (!IsLoaded) return;
         if (CardWall.IsResizing) return;
         if (Vm == null) return;
+        // 搜索结果是固定的一批, 不参与普通关注列表的"内容不足一屏自动补页"。
+        if (Vm.IsFollowingsTab && Vm.HasFollowingsSearch) return;
         if (_shortContentFills >= MaxShortContentFills) return;
 
         var sv = GetVisibleScroll();
@@ -249,10 +251,10 @@ public partial class UserCenterPage : UserControl, IRefreshable
     {
         var vm = Vm;
         if (vm == null) return null;
-        var list = vm.IsDynamicsTab ? (DependencyObject?)DynamicsList
-                 : vm.IsFollowingsTab ? FollowingsList
-                 : FollowersList;
-        return list == null ? null : FindChild<ScrollViewer>(list);
+        if (vm.IsDynamicsTab) return FindChild<ScrollViewer>(DynamicsList);
+        if (vm.IsFollowingsTab)
+            return FindChild<ScrollViewer>(vm.HasFollowingsSearch ? FollowingsSearchList : FollowingsList);
+        return FindChild<ScrollViewer>(FollowersList);
     }
 
     private static T? FindChild<T>(DependencyObject root) where T : DependencyObject

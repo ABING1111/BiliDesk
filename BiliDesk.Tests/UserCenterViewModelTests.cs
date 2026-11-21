@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Reflection;
+using BiliDesk.Models;
 using BiliDesk.ViewModels;
 using Xunit;
 
@@ -87,6 +88,89 @@ public class UserCenterViewModelTests
         Assert.Contains(nameof(UserCenterViewModel.FollowingsEmpty), changed);
         Assert.Contains(nameof(UserCenterViewModel.FollowingsSummary), changed);
         Assert.Contains(nameof(UserCenterViewModel.SummaryText), changed);
+    }
+
+    [Fact]
+    public void 关注搜索文本变化_搜索状态要通知()
+    {
+        var vm = new UserCenterViewModel();
+        // 概要行只在关注 Tab 才有搜索态分支(默认是动态 Tab, 不切过去这条断言就没意义)。
+        vm.SetInitialTab(UserCenterTab.Followings);
+        SetProp(vm, nameof(UserCenterViewModel.IsSelf), true);
+        var changed = new List<string>();
+        vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName ?? "");
+
+        vm.FollowingsSearchText = "abc";
+
+        Assert.True(vm.HasFollowingsSearch);
+        // 页面靠这两个属性切换"普通列表 / 搜索结果"和搜索结果空态
+        Assert.Contains(nameof(UserCenterViewModel.HasFollowingsSearch), changed);
+        Assert.Contains(nameof(UserCenterViewModel.ShowFollowingsSearchEmpty), changed);
+        // 概要行也不能再显示普通关注列表的"已加载 N / 总数"
+        Assert.Contains(nameof(UserCenterViewModel.SummaryText), changed);
+        Assert.StartsWith("关注 · ", vm.SummaryText);
+        Assert.DoesNotContain("已加载", vm.SummaryText);
+    }
+
+    [Fact]
+    public void 搜索结果数量变化_概要行要跟着变()
+    {
+        var vm = new UserCenterViewModel();
+        vm.SetInitialTab(UserCenterTab.Followings);
+        SetProp(vm, nameof(UserCenterViewModel.IsSelf), true);
+        vm.FollowingsSearchText = "abc";
+
+        // Mid 还是 0, 这一次搜索会同步落到"账号信息还没准备好"; 先清掉错误模拟搜索成功。
+        SetProp(vm, nameof(UserCenterViewModel.FollowingsSearchError), "");
+        vm.FollowingSearchResults.Add(new FollowUser { Mid = 1 });
+
+        Assert.Equal("关注 · 搜索到 1 个", vm.SummaryText);
+    }
+
+    [Fact]
+    public void 非本人空间_不进入搜索态_并清空已有搜索()
+    {
+        var vm = new UserCenterViewModel();
+        SetProp(vm, nameof(UserCenterViewModel.IsSelf), true);
+        vm.FollowingsSearchText = "abc";
+        Assert.True(vm.HasFollowingsSearch);
+
+        SetProp(vm, nameof(UserCenterViewModel.IsSelf), false);
+
+        // 看别人时搜索框是隐藏的, 不能留下一个没人能清掉的搜索态。
+        Assert.False(vm.HasFollowingsSearch);
+        Assert.False(vm.ShowFollowingsSearchEmpty);
+        Assert.Empty(vm.FollowingSearchResults);
+        Assert.Equal("", vm.FollowingsSearchText);
+    }
+
+    [Fact]
+    public void 清空搜索文本_搜索态要复位()
+    {
+        var vm = new UserCenterViewModel();
+        SetProp(vm, nameof(UserCenterViewModel.IsSelf), true);
+        vm.FollowingsSearchText = "abc";
+        Assert.True(vm.HasFollowingsSearch);
+
+        vm.FollowingsSearchText = "";
+
+        Assert.False(vm.HasFollowingsSearch);
+        Assert.False(vm.ShowFollowingsSearchEmpty);
+        Assert.Empty(vm.FollowingSearchResults);
+    }
+
+    [Fact]
+    public void 设置IsSelf_要通知()
+    {
+        var vm = new UserCenterViewModel();
+        var changed = new List<string>();
+        vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName ?? "");
+
+        SetProp(vm, nameof(UserCenterViewModel.IsSelf), true);
+
+        // 关注搜索框的可见性绑的是 IsSelf: 不通知就永远不会显示。
+        Assert.True(vm.IsSelf);
+        Assert.Contains(nameof(UserCenterViewModel.IsSelf), changed);
     }
 
     [Fact]
