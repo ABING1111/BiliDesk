@@ -104,24 +104,6 @@ public partial class PlayerWindow : FluentWindow
 
     // ------------------------------------------------------------ 状态刷新
 
-    /// <summary>当前播放位置(毫秒)。原生对象可能刚好失效 —— 所有读取都包在 try 里。</summary>
-    private long CurrentPlaybackMs()
-    {
-        try
-        {
-            if (_mp != null)
-            {
-                var t = _mp.Time;
-                if (t > 0) return t;
-            }
-        }
-        catch
-        {
-            // 播放器正在重建/释放: 退回最后一次已知位置
-        }
-        return _lastKnownMs > 0 ? _lastKnownMs : 0;
-    }
-
     /// <summary>
     /// 刷新"当前章节"相关的 UI: 胶囊文案 + 显隐 + 窄窗形态。
     /// 由 500ms 进度心跳驱动(与进度条/时间标签同一条心跳, 不另开定时器)。

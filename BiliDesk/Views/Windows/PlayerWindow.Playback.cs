@@ -229,17 +229,43 @@ public partial class PlayerWindow : FluentWindow
         };
     }
 
+    /// <summary>
+    /// 当前播放位置(毫秒): 字幕、章节等"跟随播放位置"的纯显示共用这一处。
+    ///
+    /// ★ 只认合法的正数(0 与 libvlc 过渡期报的溢出值都不采信): 0 既可能是"真的在片头",
+    ///   也可能是换清晰度/重建那一瞬的过渡值, 直接采信会让字幕/章节回跳到开头。
+    ///   读不到时退回 <see cref="_lastKnownMs"/> —— 它由 TimeChanged 维护(只收合法值),
+    ///   EOF 之后 `_mp.Time` 归零时也靠它停在结尾(见该字段的说明)。
+    /// ★ 原生读取可能刚好失效(重建/释放), 所有访问都包在 try 里。
+    /// </summary>
+    private long CurrentPlaybackMs()
+    {
+        try
+        {
+            if (_mp != null)
+            {
+                var t = _mp.Time;
+                if (t > 0 && t < 24L * 3600 * 1000) return t;
+            }
+        }
+        catch
+        {
+            // 播放器正在重建/释放: 退回最后一次已知位置
+        }
+        return _lastKnownMs > 0 ? _lastKnownMs : 0;
+    }
+
     private void UpdateProgressUi()
     {
         if (_closing || _mp == null) return;
 
         // ★ 直播弹幕时钟(2026-11-13, 2026-11-17 改为纯墙钟):
-        //   直播没有 Length, DispatchDanmaku 第一句就 return, 点播那条
-        //   "TimeChanged → DispatchDanmaku → CalibrateDanmakuClock" 的校准链根本不会跑。
-        //   ★★ 这里**不再用 _mp.Time 校准** —— 直播的时间轴按块上报、带抖动、缓冲后会前跳,
-        //      每 500ms 拿它硬拽一次基准, 表现就是弹幕"匀速走一小段再突然跳一截"(卡顿)。
-        //      直播弹幕是"到达即显示", 没有时间轴语义, 只要一个单调平滑的墙钟就够。
-        //   ★ 暂停时冻结在"此刻所见"(见 SetDanmakuClockRunning 的说明), 恢复后从冻结处续跑。
+        //   直播的时间轴按块上报、带抖动、缓冲后会前跳, 每 500ms 拿它硬拽一次基准,
+        //   表现就是弹幕"匀速走一小段再突然跳一截"(卡顿)。所以直播的标定路由
+        //   CalibrateDanmakuClock 内的 `_dmClockLive` 直接短路 —— 不靠"DispatchDanmaku
+        //   早退"来挡(2026-11-21 校准已从那里挪到 OnTimeChanged, 与弹幕开关无关)。
+        //   直播弹幕是"到达即显示", 没有时间轴语义, 只要一个单调平滑的墙钟就够。
+        //   ★ 这里只负责暂停/恢复的冻结(见 SetDanmakuClockRunning 的说明), 恢复后从冻结处续跑。
         if (_isLive)
         {
             try { SetDanmakuClockRunning(_mp.IsPlaying); }

@@ -1309,7 +1309,7 @@ public partial class PlayerWindow : FluentWindow
         // 屏幕弹幕上限, 防止高弹幕量视频把内存和渲染拖垮
         if (DanmakuCanvas.Children.Count >= MaxOnScreenDanmaku) return;
 
-        // ★ 用弹幕时钟(已被 DispatchDanmaku 校准过), 不再读 `_mp.Time`:
+        // ★ 用弹幕时钟(已被 TimeChanged 校准过, 2026-11-21 起校准不再挂在 DispatchDanmaku 上), 不再读 `_mp.Time`:
         //   这里虽是低频路径, 但它与逐帧推进必须是**同一个时间源**, 否则新弹幕的出生点
         //   和在飞弹幕算 elapsed 的基准会差一次 Stopwatch 走时, 表现为"新弹幕进场位置偏一点"。
         var currentSeconds = spawnClock ?? DanmakuClock();
