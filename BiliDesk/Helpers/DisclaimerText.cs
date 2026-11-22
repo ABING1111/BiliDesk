@@ -76,7 +76,7 @@ BiliDesk（以下简称“本项目”）是第三方开发者个人发起的实
 
 ## 9. 第三方组件
 
-本项目使用 libmpv（LGPL-2.1+）、Microsoft.Web.WebView2 等第三方组件，其版权与许可证归各自权利人所有，使用须遵守相应许可证。
+本项目使用 mpv/libmpv（GPLv2+，内含 FFmpeg）、Microsoft.Web.WebView2 等第三方组件，其版权与许可证归各自权利人所有，使用须遵守相应许可证；mpv 与 FFmpeg 的源码可从各自上游项目获取。
 
 ## 10. 侵权通知与配合
 
