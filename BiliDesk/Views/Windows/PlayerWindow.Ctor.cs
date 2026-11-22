@@ -230,6 +230,14 @@ public partial class PlayerWindow : FluentWindow
                 PlayerLog.Write($"[Resume] 时长未知, 跳过续播 pos={resumeTarget}ms\n");
                 resumeTarget = 0;
             }
+            else if (resumeTarget > 0 && resumeTarget < ResumePolicy.MinResumeMs)
+            {
+                // ★ 2026-11-22(mpv): 位置太靠前(刚起播/小跳转/重建落在开头附近)时,
+                //   IsResumable 返回 false 是"不值得续播", **不是"看完了"** —— 绝不能
+                //   走下面的 MarkCompleted, 否则一次靠前的自愈就把用户进度清掉。
+                PlayerLog.Write($"[Resume] 位置过小, 不续播 pos={resumeTarget}ms\n");
+                resumeTarget = 0;
+            }
             else if (resumeTarget > 0 && !ResumePolicy.IsResumable(resumeTarget, effectiveLength))
             {
                 // 已经到片尾/越界: 当作看完, 从头播。绝不 seek 进尾部 —— 那正是假 EOF 的来源。
@@ -261,7 +269,8 @@ public partial class PlayerWindow : FluentWindow
             RestoreVideoAreaBackground();
             PlayerLog.Write(
                 $"\n[Playing] eofBlack={_eofBlackActive} ended={_ended} " +
-                $"bg={DescribeVideoAreaBg()} time={SafeReadTime()} state={_mp.State}\n");
+                $"bg={DescribeVideoAreaBg()} time={SafeReadTime()} state={_mp.State} " +
+                $"resume={resumeTarget} byStart={resumeByStartTime}\n");
             // ★ 视频没填满时的白色边带(2026-10-17): 起播后要把那块原生窗口底色刷成近黑。
             //   ★★ 不能只调一次就完事: 实测 `Playing` 触发时 libvlc 的 `Static` 子窗口
             //      **还没建出来**(那一刻拿到的句柄是 0, 修复静默跳过), vout 建好之后才有。
@@ -356,6 +365,21 @@ public partial class PlayerWindow : FluentWindow
             MaybeRefreshPlayUrl();
         };
         _progressTimer.Start();
+
+#if DEBUG
+        // 验证用(仅 Debug): BILIDESK_DEV_STALL_AT=<秒> 到点强制走一次"画面冻住自愈"
+        var stallAtText = Environment.GetEnvironmentVariable("BILIDESK_DEV_STALL_AT");
+        if (int.TryParse(stallAtText, out var stallAtSec) && stallAtSec > 0)
+        {
+            var stallTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(stallAtSec) };
+            stallTimer.Tick += (_, _) =>
+            {
+                stallTimer.Stop();
+                if (!_closing) HandleVideoStalled();
+            };
+            stallTimer.Start();
+        }
+#endif
 
         // 音量: 从设置里读"上一次调到的音量"(2026-11-12 音量继承)。
         // ★ 这里必须是**读设置**, 不能写死 80 —— 写死的表现是"每个视频都要重调一遍音量",

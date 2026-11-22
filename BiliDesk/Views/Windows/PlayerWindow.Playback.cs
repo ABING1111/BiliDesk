@@ -1145,6 +1145,11 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing) return;
 
+        // 2026-11-22(mpv): 不再用 start 选项让解复用器定位 —— 实测个别片源 start 不生效,
+        // 会从 0 起播(用户报的"自愈后回到开头")。mpv 的 seek 可靠, 统一走
+        // "正常起播 + Playing 里设 Time"(下面 startTimeLocate 参数保留, 但恒为 false)。
+        startTimeLocate = false;
+
         // ★ 2026-11-05: 这条重建可能是因为"在已结束的 input 上点了进度条"
         //   (见 SeekTo 里 _ended 的分支)。那种情况下必须先收掉"已播完"这套状态:
         //   否则 EndOverlay(重播页)还挂着, 用户看到的是"遮罩上盖着遮罩"。
@@ -1205,7 +1210,7 @@ public partial class PlayerWindow : FluentWindow
         PlayerLog.Write(
             $"[Seek] 重建 Media url={(urlForRebuild == url ? "video" : "listen-audio")} " +
             $"audio={(!string.IsNullOrEmpty(audioForRebuild) ? "slave" : "none")} " +
-            $"stall={stallRecovery} start-time={targetMs}ms\n");
+            $"stall={stallRecovery} locate={startTimeLocate} target={targetMs}ms\n");
         ShowLoading(loadingText);
         // ★ 重建前把"最后已知位置"清掉: 它记的是**旧 input** 的位置(比如 72 万 ms),
         //   留着的话补跳会拿它当"当前位置"算出荒谬的下一段(2026-10-17 实测踩到)。

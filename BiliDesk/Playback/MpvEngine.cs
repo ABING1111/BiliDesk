@@ -21,16 +21,21 @@ public sealed class MpvEngine : IPlayerEngine
 {
     private readonly MpvPlayer _player;
     private readonly TimeChangeThrottle _timeThrottle = new();
+    private readonly Action<string>? _log;
     private long _frameNumber = -1;
     private long _stallWindowAt = -1;
     private long _stallWindowTimeMs = -1;
     private long _stallWindowFrame = -1;
+    private int _stallStreak;
+    private long _startMs;
+    private int _loadGeneration;
     private PlayerState _state = PlayerState.Idle;
     private bool _disposed;
 
     public MpvEngine(PlayerEngineOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        _log = options.Log;
         _player = new MpvPlayer(
             new MpvGlobalOptions
             {
@@ -132,10 +137,13 @@ public sealed class MpvEngine : IPlayerEngine
         };
 
         _state = PlayerState.Opening;
+        _startMs = media.StartMs;
+        _loadGeneration++;
         _frameNumber = -1;
         _stallWindowAt = -1;
         _stallWindowTimeMs = -1;
         _stallWindowFrame = -1;
+        _stallStreak = 0;
         _timeThrottle.Reset();
         return _player.Load(request) >= 0;
     }
@@ -197,13 +205,24 @@ public sealed class MpvEngine : IPlayerEngine
     /// <summary>
     /// 视频卡死检测: 每 ~2 秒看一次"时间推进了多少 / 帧号动没动"。
     /// ★ 只把"时间在走 + 帧号不动"当卡死 —— 暂停/缓冲时两者都不动, 不能误判。
+    /// ★★ 帧号**直接读属性**而不是用观察到的值: 观察事件在部分片源上收不到/恒为 0,
+    ///    会把它误判成"画面停住"(实测: 起播 2 秒就触发一次假自愈)。
+    /// ★★ 连续两个窗口都不动才判定, 且起播 5 秒内不判 —— 起播缓冲阶段帧号本来就可能滞后。
     /// </summary>
     private void CheckVideoStall(long timeMs)
     {
-        // 纯音频(听视频/直播占位)没有视频轨: 帧号恒为 0, 不能当成"画面卡死"
-        if (_frameNumber < 0 || string.IsNullOrEmpty(_player.GetString("video-codec")))
+        if (string.IsNullOrEmpty(_player.GetString("video-codec")))
         {
             _stallWindowAt = -1;
+            _stallStreak = 0;
+            return;
+        }
+
+        var frames = ReadFrameNumber();
+        if (frames <= 0 || timeMs < 5000)
+        {
+            _stallWindowAt = -1;
+            _stallStreak = 0;
             return;
         }
 
@@ -212,20 +231,35 @@ public sealed class MpvEngine : IPlayerEngine
         {
             _stallWindowAt = now;
             _stallWindowTimeMs = timeMs;
-            _stallWindowFrame = _frameNumber;
+            _stallWindowFrame = frames;
             return;
         }
 
         if (now - _stallWindowAt < 2000) return;
 
         var advanced = timeMs - _stallWindowTimeMs;
-        var framesMoved = _frameNumber != _stallWindowFrame;
-        if (advanced > 1500 && !framesMoved && _stallWindowFrame >= 0 && _frameNumber >= 0)
-            VideoStalled?.Invoke(this, EventArgs.Empty);
+        var framesMoved = frames != _stallWindowFrame;
+        if (advanced > 1500 && !framesMoved)
+        {
+            _stallStreak++;
+            if (_stallStreak >= 2) VideoStalled?.Invoke(this, EventArgs.Empty);
+        }
+        else
+        {
+            _stallStreak = 0;
+        }
 
         _stallWindowAt = now;
         _stallWindowTimeMs = timeMs;
-        _stallWindowFrame = _frameNumber;
+        _stallWindowFrame = frames;
+    }
+
+    private long ReadFrameNumber()
+    {
+        var text = _player.GetString("estimated-frame-number");
+        var value = long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : -1;
+        _frameNumber = value;
+        return value;
     }
 
     private void OnFileLoaded(object? sender, EventArgs e)
@@ -233,6 +267,28 @@ public sealed class MpvEngine : IPlayerEngine
         if (_disposed) return;
         _state = PlayerState.Playing;
         Playing?.Invoke(this, EventArgs.Empty);
+
+        // ★ 2026-11-22: mpv 的 `start` 选项在个别片源/线路上不生效, 会从 0 起播;
+        //   App 侧以为解复用器已定位(不再二次 seek), 表现就是"重建后回到开头"。
+        //   这里兜底核对一次, 明显没到目标就补一次精确 seek。
+        if (_startMs > 1000) ArmStartFallback(_loadGeneration, _startMs);
+    }
+
+    private void ArmStartFallback(int generation, long startMs)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(1200).ConfigureAwait(false);
+                if (_disposed || generation != _loadGeneration) return;
+                var now = TimeMs;
+                if (now + 2500 >= startMs) return;
+                _log?.Invoke($"[mpv] start 未生效(now={now}ms want={startMs}ms) → 补 seek\n");
+                _player.SeekAbsolute(startMs / 1000.0);
+            }
+            catch { }
+        });
     }
 
     private void OnEndFile(object? sender, MpvEndFileEventArgs e)
