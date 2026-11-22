@@ -105,7 +105,8 @@ internal static class Program
             }
 
             Console.WriteLine($"[probe] t={t / 2.0:F1}s pos={player.TimePos:F2} dur={player.Duration:F2} " +
-                              $"speed={player.Speed:0.##} paused={player.IsPaused} eof={player.EofReached}");
+                              $"speed={player.Speed:0.##} paused={player.IsPaused} eof={player.EofReached} " +
+                              $"frames={player.GetString("estimated-frame-number")}");
 
             if (t == 4)
             {

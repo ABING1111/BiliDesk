@@ -1197,6 +1197,8 @@ public partial class PlayerWindow : FluentWindow
         nameof(_commentReturnRpid),     // 评论详情返回锚: 属于"上一条评论详情", 换片必须归零
         nameof(_videoBackdropGuardTicks), // vout 底色守护计数: 3 秒自收尾的瞬态
         nameof(_audioHealCheckAt),      // 音频自愈上次检查时刻: 跨片保持宽限意义, 不必清(见该字段)
+        // 画面冻住自愈的节流(2026-11-22, mpv): 窗口级, 换片不清(否则同一片会反复重建)
+        nameof(_videoStallRecoverAt),
         // 合集: 「这个视频有没有合集」属于"这一片"的属性, 换片必须重算。
         // 不清的话换了普通视频入口还挂着, 点开是个空面板。
         // (_currentSeasonEpisode / _season 是引用类型, 自检只审值类型与 string, 不在清单里;

@@ -54,6 +54,12 @@ public interface IPlayerEngine : IDisposable
 
     event EventHandler<PlayerErrorEventArgs>? EncounteredError;
 
+    /// <summary>
+    /// 时间在走、但画面不再前进(视频流卡死)。
+    /// ★ 与 TimeChanged 停住的"普通卡顿"区分: 这里音频时钟还在推进, 只暂停/重连救不回来。
+    /// </summary>
+    event EventHandler? VideoStalled;
+
     /// <summary>加载并开始播放。返回 false 表示引擎拒绝(未初始化/无可播地址)。</summary>
     bool Play(PlayerMedia media);
 

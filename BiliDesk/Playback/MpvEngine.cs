@@ -19,6 +19,10 @@ public sealed class MpvEngine : IPlayerEngine
 {
     private readonly MpvPlayer _player;
     private readonly TimeChangeThrottle _timeThrottle = new();
+    private long _frameNumber = -1;
+    private long _stallWindowAt = -1;
+    private long _stallWindowTimeMs = -1;
+    private long _stallWindowFrame = -1;
     private PlayerState _state = PlayerState.Idle;
     private bool _disposed;
 
@@ -31,6 +35,7 @@ public sealed class MpvEngine : IPlayerEngine
                 WindowId = options.WindowHandle,
                 Headless = options.Headless,
                 AudioOutput = options.AudioOutput,
+                VerboseLog = options.VerboseLog,
             },
             options.Log);
 
@@ -78,6 +83,9 @@ public sealed class MpvEngine : IPlayerEngine
     public event EventHandler? EndReached;
     public event EventHandler<PlayerErrorEventArgs>? EncounteredError;
 
+    /// <summary>时间在走、但视频帧号不再前进(2026-11-22: mpv 下拖动后视频流重连、画面冻结的兜底信号)。</summary>
+    public event EventHandler? VideoStalled;
+
     public bool Play(PlayerMedia media)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -95,6 +103,10 @@ public sealed class MpvEngine : IPlayerEngine
         };
 
         _state = PlayerState.Opening;
+        _frameNumber = -1;
+        _stallWindowAt = -1;
+        _stallWindowTimeMs = -1;
+        _stallWindowFrame = -1;
         _timeThrottle.Reset();
         return _player.Load(request) >= 0;
     }
@@ -153,6 +165,40 @@ public sealed class MpvEngine : IPlayerEngine
     public static double MapCacheToReadAheadSeconds(int cacheMs) =>
         Math.Clamp(cacheMs / 1000.0, 1.0, 10.0);
 
+    /// <summary>
+    /// 视频卡死检测: 每 ~2 秒看一次"时间推进了多少 / 帧号动没动"。
+    /// ★ 只把"时间在走 + 帧号不动"当卡死 —— 暂停/缓冲时两者都不动, 不能误判。
+    /// </summary>
+    private void CheckVideoStall(long timeMs)
+    {
+        // 纯音频(听视频/直播占位)没有视频轨: 帧号恒为 0, 不能当成"画面卡死"
+        if (_frameNumber < 0 || string.IsNullOrEmpty(_player.GetString("video-codec")))
+        {
+            _stallWindowAt = -1;
+            return;
+        }
+
+        var now = Environment.TickCount64;
+        if (_stallWindowAt < 0)
+        {
+            _stallWindowAt = now;
+            _stallWindowTimeMs = timeMs;
+            _stallWindowFrame = _frameNumber;
+            return;
+        }
+
+        if (now - _stallWindowAt < 2000) return;
+
+        var advanced = timeMs - _stallWindowTimeMs;
+        var framesMoved = _frameNumber != _stallWindowFrame;
+        if (advanced > 1500 && !framesMoved && _stallWindowFrame >= 0 && _frameNumber >= 0)
+            VideoStalled?.Invoke(this, EventArgs.Empty);
+
+        _stallWindowAt = now;
+        _stallWindowTimeMs = timeMs;
+        _stallWindowFrame = _frameNumber;
+    }
+
     private void OnFileLoaded(object? sender, EventArgs e)
     {
         if (_disposed) return;
@@ -191,8 +237,12 @@ public sealed class MpvEngine : IPlayerEngine
                 if (ms < 0) return;
                 if (_timeThrottle.ShouldRaise(Environment.TickCount64))
                     TimeChanged?.Invoke(this, new PlayerTimeChangedEventArgs(ms));
+                CheckVideoStall(ms);
                 break;
             }
+            case "estimated-frame-number":
+                _frameNumber = e.Value is long f ? f : _frameNumber;
+                break;
             case "duration":
             {
                 var ms = (long)Math.Round(e.AsDouble() * 1000.0);

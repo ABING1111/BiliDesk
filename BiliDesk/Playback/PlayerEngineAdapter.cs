@@ -40,6 +40,9 @@ public sealed class PlayerEngineAdapter : IDisposable
     public event EventHandler? EndReached;
     public event EventHandler<PlayerErrorEventArgs>? EncounteredError;
 
+    /// <summary>mpv 侧检测到"时间在走、画面停住"时触发(见 MpvEngine.CheckVideoStall)。</summary>
+    public event EventHandler? VideoStalled;
+
     public PlayerState State => _engine?.State ?? PlayerState.Idle;
 
     public bool IsPlaying => _engine?.IsPlaying ?? false;
@@ -125,9 +128,11 @@ public sealed class PlayerEngineAdapter : IDisposable
             _log?.Invoke("[mpv] 视频宿主句柄还没建好, 视频可能不会嵌入窗口\n");
         }
 
+        var verbose = Environment.GetEnvironmentVariable("BILIDESK_MPV_DEBUG") == "1";
         _engine = PlayerEngineFactory.Create(PlayerEngineKind.Mpv, new PlayerEngineOptions
         {
             WindowHandle = hwnd.ToInt64(),
+            VerboseLog = verbose,
             Log = _log,
         });
 
@@ -137,6 +142,7 @@ public sealed class PlayerEngineAdapter : IDisposable
         _engine.Paused += (_, _) => Paused?.Invoke(this, EventArgs.Empty);
         _engine.EndReached += (_, _) => EndReached?.Invoke(this, EventArgs.Empty);
         _engine.EncounteredError += (_, e) => EncounteredError?.Invoke(this, e);
+        _engine.VideoStalled += (_, _) => VideoStalled?.Invoke(this, EventArgs.Empty);
 
         _engine.SetVolume(_volume);
         _engine.SetRate(_rate);

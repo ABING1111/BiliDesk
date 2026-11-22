@@ -616,6 +616,27 @@ public partial class PlayerWindow : FluentWindow
         catch { /* 播放器已失效就算了 */ }
     }
 
+    // ------------------------------------------------------------ 画面冻住自愈(2026-11-22, mpv)
+    //
+    // ★ 症状(用户实测): 拖动进度条后, 画面停在最后一帧、声音继续 —— mpv 的音频时钟还在走。
+    //   native log 里能看到视频那条连接 TLS reset 后重连, 音频流不受影响。
+    //   VLC 的时间轴会跟着画面一起停, 原来的卡顿检测能兜住; mpv 不会, 所以单独用
+    //   "时间在走 + 帧号不动" 判死(引擎侧 MpvEngine.CheckVideoStall 抛 VideoStalled)。
+    private long _videoStallRecoverAt = -1;
+
+    private void HandleVideoStalled()
+    {
+        if (_closing || _isLive || _isLocalPlayback || _ended) return;
+        if (_isSeeking || _pendingSeekMs >= 0) return;
+        if (string.IsNullOrEmpty(_lastPlayUrl)) return;
+        var now = Environment.TickCount64;
+        if (_videoStallRecoverAt >= 0 && now - _videoStallRecoverAt < 30_000) return;
+        _videoStallRecoverAt = now;
+        var target = _lastKnownMs > 0 ? _lastKnownMs : 0;
+        WriteLibVLCDebug($"[VideoStall] 时间在走但画面停住 → 重建自愈 at={target}ms\n");
+        RebuildMediaAndSeek(target, loadingText: "正在恢复画面…");
+    }
+
     // ------------------------------------------------------------ seek 静音
 
     /// <summary>跳转发出: 静音(记住原音量)。连续拖动时已静音则只更新心跳, 不覆盖原值。</summary>

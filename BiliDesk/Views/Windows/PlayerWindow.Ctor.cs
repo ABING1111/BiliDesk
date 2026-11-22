@@ -189,6 +189,8 @@ public partial class PlayerWindow : FluentWindow
         _mp.TimeChanged += OnTimeChanged;
         _mp.LengthChanged += OnLengthChanged;
         _mp.EndReached += OnEndReached;
+        // 2026-11-22(mpv): 拖动后视频流重连、时间还在走但画面冻结的兜底(见 HandleVideoStalled)
+        _mp.VideoStalled += (_, _) => Dispatcher.BeginInvoke(new Action(HandleVideoStalled));
         // Playing 事件触发时隐藏加载遮罩; 若刚切完清晰度则恢复进度
         // 注意: LibVLC 事件都在其内部线程触发, 必须用 BeginInvoke 异步派发到 UI 线程。
         // 若用同步 Invoke, UI 线程可能正阻塞在 _mp 属性调用等 LibVLC 内部锁, 双方互相等待 => 死锁

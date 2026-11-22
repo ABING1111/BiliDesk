@@ -112,6 +112,9 @@ public static class MpvOptions
         list.Add(Pair("hr-seek", "yes"));
         list.Add(Pair("audio-pitch-correction", "yes"));
 
+        // 视频流被 CDN 掐断时尽快重连(mpv 默认等 3~7 秒, 期间画面冻住、声音还在走)
+        list.Add(Pair("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=2"));
+
         // 缓存用字节/秒表达, 与 VLC 的 network-caching 不是同一个量纲(要按实测调)
         list.Add(Pair("demuxer-max-bytes", r.DemuxerMaxBytesMb.ToString(CultureInfo.InvariantCulture) + "MiB"));
         list.Add(Pair("demuxer-readahead-secs",

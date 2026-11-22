@@ -59,6 +59,9 @@ public sealed record PlayerEngineOptions
     /// <summary>无视频/无音频输出(离线压测、探针)。</summary>
     public bool Headless { get; init; }
 
+    /// <summary>引擎自己的详细诊断日志(对应 mpv 的 msg-level=all=v)。</summary>
+    public bool VerboseLog { get; init; }
+
     /// <summary>音频输出模块; 空 = 引擎自选。</summary>
     public string AudioOutput { get; init; } = "";
 
