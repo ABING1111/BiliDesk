@@ -170,6 +170,8 @@ public class UserCenterViewModel : ObservableObject
     private string _followingsError = "";
     private int _followingsPage = 1;
     private int _followingsTotal;
+    // 一批 Add 期间先压住计算属性的通知, 每页只通知一次(50 人全量通知会卡 UI)。
+    private bool _followingsBatch;
 
     /// <summary>TA 关注的 UP 主。</summary>
     public ObservableCollection<FollowUser> Followings { get; } = new();
@@ -420,6 +422,7 @@ public class UserCenterViewModel : ObservableObject
         };
         Followings.CollectionChanged += (_, _) =>
         {
+            if (_followingsBatch) return;
             OnPropertyChanged(nameof(FollowingsSummary));
             OnPropertyChanged(nameof(SummaryText));
             RaiseTabState();
@@ -675,13 +678,8 @@ public class UserCenterViewModel : ObservableObject
                 return;
             }
 
-            foreach (var u in list)
-            {
-                if (u.Mid <= 0) continue;
-                Followings.Add(u);
-            }
-
-            if (total > 0) _followingsTotal = total;
+            if (total > 0) _followingsTotal = total;   // 摘要行要显示总数, 必须在批量通知之前落定
+            AppendFollowingsPage(list);
             _followingsPage = page + 1;
 
             // ★ 到底判据: 有 total 用 total; 没有 total 时退回"本页是否满页"。
@@ -690,9 +688,6 @@ public class UserCenterViewModel : ObservableObject
                                (_followingsTotal > 0
                                    ? Followings.Count < _followingsTotal
                                    : list.Count >= 50);
-
-            OnPropertyChanged(nameof(FollowingsSummary));
-            OnPropertyChanged(nameof(SummaryText));
         }
         catch (Exception ex)
         {
@@ -706,6 +701,37 @@ public class UserCenterViewModel : ObservableObject
                 FollowingsLoadingMore = false;
             }
         }
+    }
+
+    /// <summary>
+    /// 批量追加一页关注列表。
+    ///
+    /// ★ 一页 50 条, 每条 CollectionChanged 都要重算 FollowingsSummary / SummaryText / 空态与
+    ///   错误遮罩(见构造函数里的订阅) —— 几百次属性通知全压在 UI 线程上, 就是"进关注页卡一下"。
+    ///   这里批量期间压住逐条通知, 结束后统一补一次。
+    /// ★ 调用前必须先把 <c>_followingsTotal</c> 更新好: 摘要行显示的是"已加载 N / 总数"。
+    /// </summary>
+    private void AppendFollowingsPage(IReadOnlyList<FollowUser> page)
+    {
+        _followingsBatch = true;
+        try
+        {
+            foreach (var u in page)
+            {
+                if (u.Mid <= 0) continue;
+                Followings.Add(u);
+            }
+        }
+        finally
+        {
+            _followingsBatch = false;
+        }
+
+        OnPropertyChanged(nameof(FollowingsSummary));
+        OnPropertyChanged(nameof(SummaryText));
+        // 批量期间 CollectionChanged 里的 RaiseTabState 被压掉了, 这里补一次:
+        // 否则"还没有关注任何人"的空态(以及错误遮罩)会一直挂在已有内容的列表上。
+        RaiseTabState();
     }
 
     // ------------------------------------------------------------ 关注搜索

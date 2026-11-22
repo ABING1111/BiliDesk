@@ -475,6 +475,9 @@ public class FollowViewModel : ObservableObject
             FeedItems.Clear();
             CancelWallAppends();
             WallItems.Clear();
+            // 集合清空了, 缓存的"可见视频总数"也得跟着归零, 否则提示会留在空墙上。
+            _wallVisibleVideoCount = 0;
+            RefreshWallLimitHint();
             TotalFollowings = 0;
             HasMoreUsers = false;
             SelectedUp = null;
@@ -865,7 +868,7 @@ public class FollowViewModel : ObservableObject
                         LoadingMore = true;
                     }
                 }
-                OnPropertyChanged(nameof(ShowWallLimitHint));
+                RefreshWallLimitHint();
 
                 if (FeedItems.Count == 0)
                     Error = forUp == null ? "关注的 UP 最近没有动态" : "该 UP 暂时没有动态";
@@ -895,6 +898,11 @@ public class FollowViewModel : ObservableObject
     // ------------------------------------------------------------ 右栏排版
 
     private bool _useCardWall = Svc.Settings.FollowCardWall;
+    private bool _showWallLimitHint;
+
+    /// <summary>FeedItems 里"视频动态且没被屏蔽"的条数 —— 卡片墙的目标总量, 可能超过 300。
+    /// 由 <see cref="SyncWallItems"/> 遍历时数一次, 提示刷新就不用再扫集合。</summary>
+    private int _wallVisibleVideoCount;
 
     /// <summary>
     /// 右栏排版: true = 卡片墙(多列网格), false = 动态卡(单列: 头像 + 发布时间 + 视频)。
@@ -913,15 +921,26 @@ public class FollowViewModel : ObservableObject
             Svc.Settings.FollowCardWall = value;
             Svc.Settings.Save();
             if (value) SyncWallItems();
-            OnPropertyChanged(nameof(ShowWallLimitHint));
+            RefreshWallLimitHint();
         }
     }
 
     /// <summary>卡片墙超过 300 条时的提示(避免用户以为后面没有内容了)。
     /// ★ 卡片墙只收视频, 所以按 FeedItems 里的视频动态数比较, 不是总条数。
-    /// ★ 2026-11-20: 只数**当前没被屏蔽**的 —— 卡片墙自己过滤了, 被屏蔽的不进墙。</summary>
-    public bool ShowWallLimitHint => UseCardWall &&
-        FeedItems.Count(x => x.HasAnyVideo && FilterService.Instance.IsVisible(x)) > WallItems.Count;
+    /// ★ 2026-11-20: 只数**当前没被屏蔽**的 —— 卡片墙自己过滤了, 被屏蔽的不进墙。
+    /// ★ 2026-11-22: 改成缓存值。以前是计算属性, 分帧补卡时每帧都发一次通知、两个绑定各求值
+    ///   一次, 等于每帧全表扫描 FeedItems; 现在可见总数由 <see cref="SyncWallItems"/> 数好存进
+    ///   <c>_wallVisibleVideoCount</c>, 这里只做 O(1) 比较。
+    ///   注意不能换成"墙的目标数 &gt; 已落地数": 目标被 WallItemLimit(300) 截断, 超过 300 的场景
+    ///   那样会丢提示。</summary>
+    public bool ShowWallLimitHint
+    {
+        get => _showWallLimitHint;
+        private set => SetProperty(ref _showWallLimitHint, value);
+    }
+
+    private void RefreshWallLimitHint() => ShowWallLimitHint = UseCardWall &&
+        _wallVisibleVideoCount > WallItems.Count;
 
     /// <summary>
     /// 把 FeedItems 里的**视频动态**(前 300 条)同步到卡片墙集合。
@@ -946,6 +965,7 @@ public class FollowViewModel : ObservableObject
         // DynamicItem.AsVideoItem() 内部缓存, 同一条动态每次返回同一个 VideoItem 引用,
         // 下面的首尾引用比对才稳定。
         var videos = new List<VideoItem>(WallItemLimit);
+        var visible = 0;
         foreach (var it in FeedItems)
         {
             if (!it.HasAnyVideo) continue;
@@ -953,16 +973,19 @@ public class FollowViewModel : ObservableObject
             //   就会把几百张 VideoCard 在同一个回调里销毁重建(用户报的"屏蔽后卡 1 秒")。
             //   这里按同一套全局屏蔽条件自己过滤, 规则变化时只对差异做增删(见 ReconcileWall)。
             if (!FilterService.Instance.IsVisible(it)) continue;
+            // ★ 计数不跟着 300 条截断: 提示要回答的是"还有没有没显示的视频"。
+            visible++;
+            if (videos.Count >= WallItemLimit) continue;
             var v = it.AsVideoItem();
             if (v != null) videos.Add(v);
-            if (videos.Count >= WallItemLimit) break;
         }
+        _wallVisibleVideoCount = visible;
 
         if (videos.Count == 0)
         {
             CancelWallAppends();
             if (WallItems.Count > 0) WallItems.Clear();
-            OnPropertyChanged(nameof(ShowWallLimitHint));
+            RefreshWallLimitHint();
             return false;
         }
 
@@ -989,7 +1012,7 @@ public class FollowViewModel : ObservableObject
         // 剩下的尾部仍走分帧追加(新翻一页 / 首屏)
         _wallAppendTarget = WallItems.Count < videos.Count ? videos : null;
         PumpWallAppends();
-        OnPropertyChanged(nameof(ShowWallLimitHint));
+        RefreshWallLimitHint();
         return _wallAppendTarget != null;
     }
 
@@ -1112,7 +1135,7 @@ public class FollowViewModel : ObservableObject
             added++;
         }
 
-        OnPropertyChanged(nameof(ShowWallLimitHint));
+        RefreshWallLimitHint();
 
         if (WallItems.Count < target.Count)
         {
@@ -1201,11 +1224,19 @@ public class FollowViewModel : ObservableObject
         var snapshot = Svc.DynamicNotify.GetUnreadSnapshot();
         var loadedMids = new HashSet<long>(Users.Where(u => !u.IsPlaceholder).Select(u => u.Mid));
 
+        // ★ 占位行数量可能上百, 原来每扫一行都要再遍历 want / 整个 Users —— O(n²)。
+        //   两个索引把查找压到 O(1), 列表本身的 Move 次数没变(未读数远小于关注总数)。
+        var byMid = new Dictionary<long, FollowUser>();
+        foreach (var u in Users)
+            if (u.Mid > 0 && !byMid.ContainsKey(u.Mid)) byMid.Add(u.Mid, u);
+
         var want = new List<(long Mid, string Name, string Face, int NewCount, long Pub)>();
+        var wantMids = new HashSet<long>();
         foreach (var s in snapshot)
         {
             if (loadedMids.Contains(s.Mid) || s.NewCount <= 0) continue;
             want.Add(s);
+            wantMids.Add(s.Mid);
         }
 
         // 先删掉不再需要的占位行(已读 / 已被真实数据取代)
@@ -1214,19 +1245,18 @@ public class FollowViewModel : ObservableObject
         //   它会在用户切到别的 UP / 下一次轮询时自然消失。
         for (var i = Users.Count - 1; i >= 0; i--)
         {
-            if (!Users[i].IsPlaceholder) continue;
-            if (Users[i] == SelectedUp) continue;
-            var keep = false;
-            foreach (var w in want)
-                if (Users[i].Mid == w.Mid) { keep = true; break; }
-            if (!keep) Users.RemoveAt(i);
+            var u = Users[i];
+            if (!u.IsPlaceholder || u == SelectedUp) continue;
+            if (wantMids.Contains(u.Mid)) continue;
+            Users.RemoveAt(i);
+            if (u.Mid > 0) byMid.Remove(u.Mid);
         }
 
         // 再按快照顺序补/更新(占位行一律在最前面)
         for (var target = 0; target < want.Count; target++)
         {
             var w = want[target];
-            var existing = Users.FirstOrDefault(x => x.Mid == w.Mid);
+            byMid.TryGetValue(w.Mid, out var existing);
             if (existing == null)
             {
                 existing = new FollowUser
@@ -1239,6 +1269,7 @@ public class FollowViewModel : ObservableObject
                     LatestPubdate = w.Pub,
                 };
                 Users.Insert(Math.Min(target, Users.Count), existing);
+                byMid.Add(w.Mid, existing);
             }
             else if (existing.IsPlaceholder)
             {

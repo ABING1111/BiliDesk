@@ -624,7 +624,7 @@ public class HomeViewModel : ObservableObject
                 // ★ 不再按 season_type 分栏(2026-11-12 合并国创): 接口一页返回的
                 //   番剧与国创**全部收进这一栏**, 用户看到的是一个连续的推荐流。
                 //   去重照旧: 翻页时同一季可能重复出现(接口不保证唯一)。
-                foreach (var it in items) AddDistinct(BangumiRecommend, it);
+                AddDistinct(BangumiRecommend, items);
                 _bangumiHasMore = hasNext;
 
                 OnPropertyChanged(nameof(HasMyBangumi));
@@ -708,11 +708,19 @@ public class HomeViewModel : ObservableObject
         }
     }
 
-    private static void AddDistinct(ObservableCollection<BangumiItem> target, BangumiItem item)
+    /// <summary>
+    /// 按季 ID 去重后整批追加。
+    /// ★ 原来逐条扫整个集合, 翻到几百条时是 O(n²); 用 HashSet 后是 O(n)。
+    /// </summary>
+    private static void AddDistinct(ObservableCollection<BangumiItem> target, IReadOnlyList<BangumiItem> items)
     {
-        foreach (var existing in target)
-            if (existing.SeasonId == item.SeasonId) return;
-        target.Add(item);
+        var seen = new HashSet<long>();
+        foreach (var existing in target) seen.Add(existing.SeasonId);
+        foreach (var it in items)
+        {
+            if (!seen.Add(it.SeasonId)) continue;
+            target.Add(it);
+        }
     }
 
     /// <summary>当前登录用户的 uid(取不到就是 0 = 未登录)。追番接口要 vmid。</summary>

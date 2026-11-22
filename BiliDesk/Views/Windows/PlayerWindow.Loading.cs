@@ -859,6 +859,8 @@ public partial class PlayerWindow : FluentWindow
         _liveQn = 0;
         _currentCid = 0;
         _aid = 0;
+        // 收藏夹列表是按 aid 查的: 换片后上一条的缓存必须作废。
+        InvalidateFavFolderCache();
         // 换片源: 上一片的合流任务立刻作废(否则会白下几十兆, 也可能把结果写进新片的键)
         CancelRemuxPrefetch();
         _ownerMid = 0;
@@ -1110,7 +1112,7 @@ public partial class PlayerWindow : FluentWindow
     {
         // 三连 / 关注 / 稍后再看等"上一条视频"的态
         nameof(_isLiked), nameof(_isFollowed), nameof(_isFavorited), nameof(_favBusy),
-        nameof(_isInWatchLater), nameof(_watchLaterBusy), nameof(_isCoined),
+        nameof(_favFoldersAid), nameof(_isInWatchLater), nameof(_watchLaterBusy), nameof(_isCoined),
         nameof(_likeCount), nameof(_coinCount), nameof(_favCount), nameof(_cacheDownloaded),
         // 播放源标识
         nameof(_isLocalPlayback), nameof(_isLive), nameof(_liveRoomId), nameof(_liveQn), nameof(_currentCid),

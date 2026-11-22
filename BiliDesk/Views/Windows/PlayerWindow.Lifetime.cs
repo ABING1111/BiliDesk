@@ -221,6 +221,7 @@ public partial class PlayerWindow : FluentWindow
         }
         Svc.Toast.Shown -= OnToast;
         Svc.Session.Changed -= UpdateButtonState;
+        Svc.Session.Changed -= InvalidateFavFolderCache;
         Svc.Settings.DanmakuSettingsChanged -= OnDanmakuSettingsChanged;
         Helpers.UiFont.Changed -= OnUiFontChanged;
         // 弹层开关的 IsOpen 订阅挂在进程级静态描述符上, 必须摘掉, 否则窗口无法 GC

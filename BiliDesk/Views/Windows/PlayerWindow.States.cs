@@ -35,8 +35,19 @@ public partial class PlayerWindow : FluentWindow
     private async Task RefreshFavStateAsync()
     {
         if (_aid <= 0 || !Svc.Session.HasLogin || _closing) return;
-        var (ok, _, folders) = await Svc.Api.GetVideoFavFoldersAsync(_aid);
-        if (!ok || folders == null || _closing) return;
+        // ★★ 请求回来时 _aid 可能已经换成下一条视频了。缓存按 aid 索引, 写回前必须确认
+        //   这仍是当前这一条 —— 否则会把上一条视频的收藏夹列表挂到新视频的 aid 上,
+        //   之后勾选窗的预勾选与 add/del 差集都会基于错的列表。
+        var aid = _aid;
+        var folders = _favFoldersAid == aid ? _favFolders : null;
+        if (folders == null)
+        {
+            var (ok, _, fetched) = await Svc.Api.GetVideoFavFoldersAsync(aid);
+            if (!ok || fetched == null || _closing || aid != _aid) return;
+            folders = fetched;
+            _favFolders = fetched;
+            _favFoldersAid = aid;
+        }
         // 只要在任意一个收藏夹里, 就算"已收藏"
         var favorited = folders.Any(f => f.HasVideo);
         SetFavorited(favorited);
@@ -121,13 +132,26 @@ public partial class PlayerWindow : FluentWindow
         _favBusy = true;
         try
         {
-            var (ok, err, folders) = await Svc.Api.GetVideoFavFoldersAsync(_aid);
-            if (_closing) return;
-            if (!ok || folders == null)
+            // ★ 下面每个 await 之后都要确认还停在这条视频上(见 RefreshFavStateAsync 的说明):
+            //   这份列表与 aid 一一对应, 换片后拿它去开窗/提交就是改错了视频。
+            var aid = _aid;
+            // 点亮态查询已经拿过一次; 同一条视频点按钮时直接用那份, 不再打一次接口。
+            var folders = _favFoldersAid == aid ? _favFolders : null;
+            if (folders == null)
             {
-                Svc.Toast.Show("收藏状态获取失败: " + (err ?? "未知错误"));
-                return;
+                var (ok, err, fetched) = await Svc.Api.GetVideoFavFoldersAsync(aid);
+                if (_closing) return;
+                if (!ok || fetched == null)
+                {
+                    Svc.Toast.Show("收藏状态获取失败: " + (err ?? "未知错误"));
+                    return;
+                }
+                if (aid != _aid) return;
+                folders = fetched;
+                _favFolders = fetched;
+                _favFoldersAid = aid;
             }
+            if (_closing || aid != _aid) return;
             // ★ 一个收藏夹都没有时**也**打开勾选窗(2026-11-19): 窗口左下角就是「新建收藏夹」,
             //   建完默认勾选、点确定即可收藏。以前这里直接 Toast"请先去 B 站创建一个",
             //   在应用里根本没有出路 —— 新建入口补上之后那句话就可以删了。
@@ -136,17 +160,24 @@ public partial class PlayerWindow : FluentWindow
             if (_closing) return;
             var picker = new FavFolderPickerWindow(folders, _videoTitle) { Owner = this };
             picker.ShowDialog();
-            if (_closing || !picker.Confirmed) return;
+            // ★ 弹窗是模态的, 但播放器/自动连播仍可能在它开着的时候换片 ——
+            //   换过片就把这次勾选丢掉, 别提交到新视频上。
+            if (_closing || aid != _aid || !picker.Confirmed) return;
 
             var addIds = picker.AddedIds;
             var delIds = picker.RemovedIds;
             if (addIds.Count == 0 && delIds.Count == 0) return;   // 勾选没变化, 不发请求
 
-            var (ok2, err2) = await Svc.Api.DealFavoriteAsync(_aid,
+            var (ok2, err2) = await Svc.Api.DealFavoriteAsync(aid,
                 addIds.Count > 0 ? addIds : null,
                 delIds.Count > 0 ? delIds : null);
             if (_closing) return;
             if (!ok2) { Svc.Toast.Show("收藏失败: " + (err2 ?? "未知错误")); return; }
+
+            // 勾选已提交, 缓存的夹列表过期了; 下次查询重新拉。
+            InvalidateFavFolderCache();
+            // 提交期间换了片: 高亮态留给新片自己的查询, 别把 A 的勾选结果刷到 B 上
+            if (aid != _aid) return;
 
             // 高亮与提示跟最终勾选走(至少在一个夹里就算"已收藏")
             var final = picker.FinalCheckedIds;
@@ -160,6 +191,16 @@ public partial class PlayerWindow : FluentWindow
         {
             _favBusy = false;
         }
+    }
+
+    /// <summary>
+    /// 作废「当前视频的收藏夹列表」缓存。
+    /// 三个时机必须调: 换片(按 aid 查的)、勾选提交成功(内容变了)、账号切换(列表是账号维度的)。
+    /// </summary>
+    private void InvalidateFavFolderCache()
+    {
+        _favFolders = null;
+        _favFoldersAid = 0;
     }
 
     /// <summary>查询当前 UP 主关注状态, 用于关注按钮切换显示</summary>

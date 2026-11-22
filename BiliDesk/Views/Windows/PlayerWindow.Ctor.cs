@@ -50,6 +50,8 @@ public partial class PlayerWindow : FluentWindow
         PreviewMouseDown += OnPreviewMouseDown;
         Svc.Toast.Shown += OnToast;
         Svc.Session.Changed += UpdateButtonState;
+        // 收藏夹列表是账号维度的: 换账号后同一 aid 的缓存也不能复用(见 InvalidateFavFolderCache)
+        Svc.Session.Changed += InvalidateFavFolderCache;
 
         // 这里**不再**关掉这个窗口的 DWM 过渡动画。
         // ★★★ 2026-10-02 按用户要求"全屏动画改用 Windows 系统自带的": 以前为了让"秒切"干净,
