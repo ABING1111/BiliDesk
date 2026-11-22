@@ -34,6 +34,9 @@ public sealed class PlayerVideoView : HwndHost
     private const int WsClipChildren = 0x02000000;
 
     private Window? _overlay;
+    private Window? _owner;
+    private HwndSource? _ownerSource;
+    private IntPtr _overlayHwnd;
     private DispatcherTimer? _timer;
     private object? _overlayContent;
     private bool _surfaceReadyRaised;
@@ -105,7 +108,18 @@ public sealed class PlayerVideoView : HwndHost
         };
         _overlay.Show();
 
-        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        // ★ 2026-11-22: 拖动主窗口时覆盖层必须**逐帧**跟随, 100ms 轮询会明显"分离"。
+        //   这里直接挂 owner 的窗口消息(WM_MOVE/WM_SIZE/WM_WINDOWPOSCHANGED),
+        //   并用 GetWindowRect(宿主 HWND) + SetWindowPos 在**物理像素**上同步,
+        //   完全不经过 WPF 的 Left/Top(它有额外的布局延迟)。
+        _owner = owner;
+        _ownerSource = HwndSource.FromHwnd(new WindowInteropHelper(owner).Handle);
+        _ownerSource?.AddHook(OwnerWndProc);
+        owner.LocationChanged += OnOwnerGeometryChanged;
+        owner.SizeChanged += OnOwnerGeometryChanged;
+        owner.StateChanged += OnOwnerGeometryChanged;
+
+        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
         _timer.Tick += (_, _) => SyncOverlayBounds();
         _timer.Start();
         SyncOverlayBounds();
@@ -121,25 +135,68 @@ public sealed class PlayerVideoView : HwndHost
     {
         _timer?.Stop();
         _timer = null;
+
+        if (_owner != null)
+        {
+            try
+            {
+                _owner.LocationChanged -= OnOwnerGeometryChanged;
+                _owner.SizeChanged -= OnOwnerGeometryChanged;
+                _owner.StateChanged -= OnOwnerGeometryChanged;
+            }
+            catch { }
+            _owner = null;
+        }
+
+        if (_ownerSource != null)
+        {
+            try { _ownerSource.RemoveHook(OwnerWndProc); } catch { }
+            _ownerSource = null;
+        }
+
         if (_overlay != null)
         {
             try { _overlay.Content = null; } catch { }
             try { _overlay.Close(); } catch { }
             _overlay = null;
         }
+
+        _overlayHwnd = IntPtr.Zero;
+    }
+
+    private void OnOwnerGeometryChanged(object? sender, EventArgs e) => SyncOverlayBounds();
+
+    /// <summary>
+    /// 主窗口的移动/缩放消息: 在拖动(模态 move loop)期间也会同步到达,
+    /// 用它把覆盖层窗口"钉"在视频区上, 避免出现"控制栏和画面分离"。
+    /// </summary>
+    private IntPtr OwnerWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        switch (msg)
+        {
+            case WmMove:
+            case WmSize:
+            case WmWindowPosChanged:
+            case WmEnterSizeMove:
+            case WmExitSizeMove:
+            case WmDpiChanged:
+                SyncOverlayBounds();
+                break;
+        }
+        return IntPtr.Zero;
     }
 
     /// <summary>
-    /// 覆盖窗口跟着视频区走。100ms 轮询而不是只挂 LocationChanged: 主窗口最大化/还原、
-    /// 全屏切换、铺满窗口都可能只改布局不改窗口位置, 轮询最不容易漏。
+    /// 覆盖窗口跟着视频区走。
+    /// ★ 用宿主 HWND 的屏幕矩形(物理像素)而不是 WPF 的 PointToScreen/Left-Top:
+    ///   后者在拖动时有一拍以上的延迟, 表现就是"控制栏拖在后面"。
     /// </summary>
     private void SyncOverlayBounds()
     {
         if (_overlay == null) return;
-        var owner = Window.GetWindow(this);
-        if (owner == null) return;
 
-        if (owner.WindowState == WindowState.Minimized || !IsVisible || ActualWidth <= 0 || ActualHeight <= 0)
+        if (_owner == null || _owner.WindowState == WindowState.Minimized ||
+            !IsVisible || SurfaceHandle == IntPtr.Zero)
         {
             if (_overlay.IsVisible) _overlay.Hide();
             return;
@@ -147,13 +204,46 @@ public sealed class PlayerVideoView : HwndHost
 
         if (!_overlay.IsVisible) _overlay.Show();
 
-        var dpi = VisualTreeHelper.GetDpi(this);
-        var topLeft = PointToScreen(new Point(0, 0));
-        _overlay.Left = topLeft.X / dpi.DpiScaleX;
-        _overlay.Top = topLeft.Y / dpi.DpiScaleY;
-        _overlay.Width = ActualWidth;
-        _overlay.Height = ActualHeight;
+        if (_overlayHwnd == IntPtr.Zero)
+            _overlayHwnd = new WindowInteropHelper(_overlay).Handle;
+        if (_overlayHwnd == IntPtr.Zero) return;
+
+        if (!GetWindowRect(SurfaceHandle, out var rect)) return;
+        var width = rect.Right - rect.Left;
+        var height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0)
+        {
+            if (_overlay.IsVisible) _overlay.Hide();
+            return;
+        }
+
+        SetWindowPos(_overlayHwnd, IntPtr.Zero, rect.Left, rect.Top, width, height,
+            SwpNoActivate | SwpNoZOrder);
     }
+
+    private const int WmMove = 0x0003;
+    private const int WmSize = 0x0005;
+    private const int WmWindowPosChanged = 0x0047;
+    private const int WmEnterSizeMove = 0x0231;
+    private const int WmExitSizeMove = 0x0232;
+    private const int WmDpiChanged = 0x02E0;
+    private const uint SwpNoActivate = 0x0010;
+    private const uint SwpNoZOrder = 0x0004;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Win32Rect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out Win32Rect rect);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
 
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
