@@ -137,8 +137,18 @@ public partial class ApiClient
     /// ★ business 的取值: 官方文档只写了 reply(评论区) 与 dynamic(动态), 私信没有独立值。
     ///   实测 `reply` 返回的就是**该账号可用的全套表情**(含大会员表情包), 私信发过去也能识别,
     ///   所以这里就用 reply —— 换别的值反而可能拿到空列表。
+    /// ★ 评论区输入框的表情面板走同一个接口, 解析完全一样, 因此共用 <see cref="FetchEmotePanelAsync"/>
+    ///   (见 ApiClient.Comment.cs 的 GetCommentEmotePanelAsync)。
     /// </summary>
-    public async Task<(bool ok, string? err, List<MsgEmotePackage>? packages)> GetMsgEmotePanelAsync()
+    public Task<(bool ok, string? err, List<MsgEmotePackage>? packages)> GetMsgEmotePanelAsync()
+        => FetchEmotePanelAsync("reply", "https://message.bilibili.com/");
+
+    /// <summary>
+    /// 拉一次表情面板并按包解析。私信与评论区共用: 接口、字段、解析规则三者完全一致,
+    /// 各写一遍迟早会有一边漏掉新字段(比如 type=4 的颜文字过滤)。
+    /// </summary>
+    private async Task<(bool ok, string? err, List<MsgEmotePackage>? packages)> FetchEmotePanelAsync(
+        string business, string referer)
     {
         if (!SessionManager.Instance.HasLogin) return (false, "表情需要先登录", null);
 
@@ -146,8 +156,8 @@ public partial class ApiClient
         {
             var (code, msg, data) = await GetJsonAsync(
                 "https://api.bilibili.com/x/emote/user/panel/web",
-                new Dictionary<string, string> { ["business"] = "reply" },
-                referer: "https://message.bilibili.com/");
+                new Dictionary<string, string> { ["business"] = business },
+                referer: referer);
             if (code != 0 || data == null)
                 return (false, msg ?? $"表情加载失败 (code {code})", null);
 

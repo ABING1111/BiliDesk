@@ -29,5 +29,7 @@ public static class Svc
     public static PlaybackProgressService PlaybackProgress => PlaybackProgressService.Instance;
     /// <summary>应用级 UP 主动态新消息检测(导航栏红点 / 动态页排序)</summary>
     public static DynamicNotifyService DynamicNotify => DynamicNotifyService.Instance;
+    /// <summary>评论输入框的表情面板数据(视频评论区与图文动态评论区共用一份缓存)</summary>
+    public static CommentEmoteService CommentEmotes => CommentEmoteService.Instance;
     public static NavigationDispatcher? Navigate { get; set; }
 }

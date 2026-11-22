@@ -25,6 +25,9 @@ public enum MsgTab
 /// 私信的表情**不是**评论那套 `content.emote` 字典, 而是接口在 data.e_infos 里
 /// 一次性给出「整段会话用到过的表情」: text 是短代码(带中括号, 如 `[tv_doge]`),
 /// uri 是图片地址, size 1 = 小 / 2 = 大。
+///
+/// ★ 评论输入框的表情面板也用这一对模型(同一个 `/x/emote/user/panel/web` 接口):
+///   字段与语义完全一致, 另造一套只会让两边解析各自漂移。
 /// </summary>
 public class MsgEmote
 {

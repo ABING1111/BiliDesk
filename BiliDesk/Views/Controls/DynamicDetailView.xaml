@@ -273,6 +273,17 @@
                                        FontSize="11"
                                        Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                         </Button>
+                        <!-- 表情: 点开下方的表情墙, 选中后把短代码插到光标处(2026-11-22)。
+                             ★ 与播放器评论输入面板同一颗按钮、同一个图标(E76E)。 -->
+                        <Button DockPanel.Dock="Right" x:Name="BtnComposerEmote"
+                                Style="{StaticResource SubtleButtonStyle}"
+                                Width="26" Height="26" Padding="0" Margin="0,0,4,0"
+                                Click="OnComposerEmoteClick" ToolTip="表情">
+                            <TextBlock Text="&#xE76E;"
+                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="12"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                        </Button>
                         <TextBlock Text="发表评论" FontSize="12" FontWeight="SemiBold"
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
@@ -315,6 +326,8 @@
                                 Click="OnPostCommentClick"
                                 ToolTip="发表评论 (Enter)" />
                     </Grid>
+                    <!-- 表情墙(2026-11-22): 内嵌在输入框下方, 默认收起。与播放器评论面板同一套位置关系 -->
+                    <controls:CommentEmotePanel x:Name="EmoteWall" Margin="0,6,0,0" />
                     <Grid Margin="0,6,0,0">
                         <TextBlock Text="Enter 发布 · Shift+Enter 换行" FontSize="11"
                                    Foreground="{DynamicResource TextTertiaryBrush}"

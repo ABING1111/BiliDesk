@@ -50,6 +50,8 @@ public partial class PlayerWindow : FluentWindow
         PreviewMouseDown += OnPreviewMouseDown;
         Svc.Toast.Shown += OnToast;
         Svc.Session.Changed += UpdateButtonState;
+        // 评论表情墙: 选中表情 → 插到输入框光标处(见 OnCommentEmotePicked)
+        if (CommentEmoteWall != null) CommentEmoteWall.EmotePicked += OnCommentEmotePicked;
         // 收藏夹列表是账号维度的: 换账号后同一 aid 的缓存也不能复用(见 InvalidateFavFolderCache)
         Svc.Session.Changed += InvalidateFavFolderCache;
 

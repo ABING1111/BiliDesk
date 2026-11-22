@@ -322,5 +322,18 @@ public partial class ApiClient
 
         return item;
     }
+
+    /// <summary>
+    /// 评论区输入框的表情面板(「表情」按钮展开的内容)。
+    ///
+    /// ★ 与私信表情面板是**同一个接口**(`/x/emote/user/panel/web?business=reply`),
+    ///   解析也共用 <see cref="FetchEmotePanelAsync"/>; 差别只在 Referer —— 从评论区发出去的内容
+    ///   挂在视频/动态上, 带站点首页比带私信域名更贴合真实浏览器的请求链。
+    /// ★ 发出去的是**短代码**(如 `[doge]`)而不是图片: 服务端按短代码存,
+    ///   回显时由 `content.emote` 带回图片地址(见 ParseComment), 所以这里不需要上传任何东西。
+    /// </summary>
+    public Task<(bool ok, string? err, List<MsgEmotePackage>? packages)> GetCommentEmotePanelAsync()
+        => FetchEmotePanelAsync("reply", "https://www.bilibili.com/");
+
     // ---------------------------------------------------------------- 直播
 }

@@ -923,6 +923,8 @@ public partial class PlayerWindow : FluentWindow
         // 上一条视频没写完的评论草稿不能带到下一条去(用户点开新视频发现输入框里
         // 还留着给上一个视频写了一半的话, 会以为是自己点错了)
         CommentDraft?.Clear();
+        // 表情墙也是"上一条视频"的状态: 换片后还挂着表情面板会让人以为输入框里已经有内容
+        CommentEmoteWall?.Close();
         _postingComment = false;
         // 进度上报的节流状态也要重置, 让新视频的第一条云端历史能立刻落地
         Svc.HistorySync.Reset();

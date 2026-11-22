@@ -3717,6 +3717,17 @@
                                            FontSize="11"
                                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                             </Button>
+                            <!-- 表情: 点开下方的表情墙, 选中后把短代码插到光标处(2026-11-22)。
+                                 ★ 图标 E76E 与消息页私信输入框的表情按钮同一个字形, 两处观感一致。 -->
+                            <Button DockPanel.Dock="Right" x:Name="BtnComposerEmote"
+                                    Style="{StaticResource SubtleButtonStyle}"
+                                    Width="26" Height="26" Padding="0" Margin="0,0,4,0"
+                                    Click="OnComposerEmoteClick" ToolTip="表情">
+                                <TextBlock Text="&#xE76E;"
+                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="12"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                            </Button>
                             <!-- 头行左侧给一行小标题, 让"这是什么面板"自解释; 空着会显得突兀 -->
                             <TextBlock Text="发表评论" FontSize="12" FontWeight="SemiBold"
                                        VerticalAlignment="Center"
@@ -3757,6 +3768,10 @@
                                     Click="OnPostCommentClick"
                                     ToolTip="发表评论 (Enter)" />
                         </Grid>
+                        <!-- 表情墙(2026-11-22): 内嵌在输入框下方, 默认收起。
+                             ★ 放在输入框与提示行**之间**: 展开时它紧贴输入框, 提示行被推到最下面,
+                               用户点表情时视线不用跨过一大段文字。 -->
+                        <controls:CommentEmotePanel x:Name="CommentEmoteWall" Margin="0,6,0,0" />
                         <TextBlock x:Name="CommentPostHint" Style="{StaticResource MetaTextStyle}"
                                    Margin="0,6,0,0" TextWrapping="Wrap" />
                     </StackPanel>

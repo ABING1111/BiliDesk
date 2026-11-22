@@ -33,6 +33,7 @@ public partial class DynamicDetailView : UserControl
         InitializeComponent();
         SizeChanged += (_, _) => UpdateVideoHeight();
         Comments.ComposerRequested += (_, _) => OpenComposer();
+        EmoteWall.EmotePicked += OnEmotePicked;
         ApplyComposerSize();
     }
 
@@ -154,6 +155,8 @@ public partial class DynamicDetailView : UserControl
     {
         if (!_composerOpen) return;
         _composerOpen = false;
+        // 表情墙属于输入框: 收起时一并收掉, 免得下次展开莫名挂着一整片表情
+        EmoteWall?.Close();
         var gen = ++_composerAnimGen;
         CommentFabIcon.Text = "\uE70F";   // Edit: 笔
         CommentFab.ToolTip = "写评论";
@@ -177,6 +180,8 @@ public partial class DynamicDetailView : UserControl
     {
         ++_composerAnimGen;
         _composerOpen = false;
+        // 换动态(SetItem)时把表情墙也复位: 上一条动态写了一半的输入状态不该带过来
+        EmoteWall?.Close();
         if (CommentComposerPanel == null) return;
         CommentComposerPanel.BeginAnimation(OpacityProperty, null);
         CommentComposerPanel.Opacity = 1;
@@ -193,6 +198,47 @@ public partial class DynamicDetailView : UserControl
         _composerExpanded = !_composerExpanded;
         ApplyComposerSize();
         if (_composerOpen) CommentDraft.Focus();
+    }
+
+    // ------------------------------------------------------------ 表情(2026-11-22)
+
+    /// <summary>头行的「表情」按钮: 展开/收起输入框下方的表情墙。未登录不展开(拉回来是空列表)。</summary>
+    private void OnComposerEmoteClick(object sender, RoutedEventArgs e)
+    {
+        if (EmoteWall == null) return;
+        if (!Svc.Session.HasLogin)
+        {
+            Svc.Toast.Show("登录后才能使用表情");
+            return;
+        }
+        EmoteWall.Toggle();
+    }
+
+    /// <summary>
+    /// 点了一个表情: 把短代码插到输入框的**光标处**。
+    /// ★ CommentDraft 绑的是 UpdateSourceTrigger=PropertyChanged, 赋 Text 会同步
+    ///   CommentSectionViewModel.ComposerText —— 所以"发布"按钮的可用性会自己跟上,
+    ///   不需要额外通知(与消息页私信输入框同一套做法)。
+    /// ★ 光标位置要显式复位: 直接赋 Text 会把 CaretIndex 归 0, 用户接着打字就会打到句首。
+    /// </summary>
+    private void OnEmotePicked(object? sender, MsgEmote emote)
+    {
+        if (CommentDraft == null || emote.Text.Length == 0) return;
+
+        var (text, caret) = EmoteInsert.Insert(
+            CommentDraft.Text, CommentDraft.CaretIndex, emote.Text,
+            CommentDraft.MaxLength > 0 ? CommentDraft.MaxLength : EmoteInsert.DefaultMaxLength);
+
+        // 没变化 = 撞到字数上限(EmoteInsert 超限时原样返回), 给个明确反馈
+        if (text.Length == (CommentDraft.Text?.Length ?? 0))
+        {
+            Svc.Toast.Show($"评论最多 {CommentDraft.MaxLength} 字");
+            return;
+        }
+
+        CommentDraft.Text = text;
+        CommentDraft.CaretIndex = caret;
+        CommentDraft.Focus();
     }
 
     /// <summary>输入框普通 80 / 展开 220, 与播放器评论输入面板同一套交互。</summary>
