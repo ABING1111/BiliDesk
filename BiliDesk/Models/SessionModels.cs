@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -189,12 +189,18 @@ public class AppSettings
     public bool? AutoBufferPolicy { get; set; }
 
     /// <summary>
-    /// LibVLC 视频输出模块(见 <see cref="VideoOutputMode"/>; 0=自动)。
-    /// ★ 老配置没有这个字段 ⇒ 反序列化得到 0 = 自动, 正是期望的默认。
+    /// 硬件解码模式(见 <see cref="HwdecMode"/>; 0=自动安全)。
+    /// ★ 老配置没有这个字段 ⇒ 反序列化得到 0 = AutoSafe, 正是期望的默认。
     /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致;
-    ///   越界值由 SettingsStore 读取时回落 Auto。
+    ///   越界值由 SettingsStore 读取时回落 AutoSafe。
     /// </summary>
-    public VideoOutputMode VideoOutputMode { get; set; } = VideoOutputMode.Auto;
+    public HwdecMode HwdecMode { get; set; } = HwdecMode.AutoSafe;
+
+    /// <summary>
+    /// 暂停时保持音频流(对应 mpv `--audio-stream-silence`)。
+    /// ★ 默认关: 只有部分声卡/蓝牙耳机在暂停恢复时爆音/断连的用户才需要开。
+    /// </summary>
+    public bool AudioStreamSilence { get; set; }
 
     /// <summary>
     /// 上次用的搜索类别(见 <see cref="ContentKind"/>: 0=视频 1=直播间 2=番剧 3=UP主)。

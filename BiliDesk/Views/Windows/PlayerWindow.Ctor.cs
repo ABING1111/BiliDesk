@@ -178,7 +178,11 @@ public partial class PlayerWindow : FluentWindow
         // 时才创建 —— 那时 PlayerVideoView 的宿主 HWND 已建好, mpv 的 wid 才有意义。
         PlayerLog.SessionHeader("mpv", "(libmpv)", BiliDesk.Mpv.MpvNative.LibraryPath);
 
-        _engine = new PlayerEngineAdapter(VideoView, msg => PlayerLog.Write(msg + "\n"));
+        _engine = new PlayerEngineAdapter(VideoView, msg => PlayerLog.Write(msg + "\n"))
+        {
+            Hwdec = Svc.Settings.HwdecMode.ToMpvValue(),
+            AudioStreamSilence = Svc.Settings.AudioStreamSilence,
+        };
         // 覆盖窗口是随 PlayerVideoView.Loaded 异步建出来的: 建好后补挂键盘/滚轮/激活处理
         VideoView.SurfaceReady += (_, _) => Dispatcher.BeginInvoke(new Action(HookOverlayKeyboard));
         _engine.TimeChanged += OnTimeChanged;

@@ -695,6 +695,26 @@
                                   IsChecked="{Binding AutoPlayNext, Mode=TwoWay}" />
                     </Grid>
 
+                    <!-- ★ 组: 音频(2026-11-22, mpv audio-stream-silence 选项)
+                         暂停时保持音频设备输出静音, 避免部分声卡/蓝牙耳机在暂停→恢复时爆音/断连。 -->
+                    <Border Style="{StaticResource SettingsGroupDivider}" />
+                    <ContentControl Content="音频" Style="{StaticResource SettingsGroupHeaderStyle}" />
+
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="暂停时保持音频流" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding AudioStreamSilenceHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding AudioStreamSilence, Mode=TwoWay}" />
+                    </Grid>
+
                     <!-- ★ 组五: 字幕(2026-11-15)
                          B 站的 CC/AI 字幕是"有人要"的增强功能, 默认关 —— 想要的用户
                          在播放器点一次 CC 就会记住语言, 这里给"找回入口"一个总开关。 -->
@@ -844,9 +864,9 @@
                                   IsChecked="{Binding BlockPcdn, Mode=TwoWay}" />
                     </Grid>
 
-                    <!-- ★ 组七: 兼容性(2026-11-20, issue #98)
-                         视频输出模块由 libvlc 插件决定, 出问题时(花屏/黑屏/NVIDIA 叠加层误判)
-                         换一档常能绕开。默认"自动"不改变现有行为。 -->
+                    <!-- ★ 组七: 兼容性(2026-11-22 改为 mpv 硬件解码)
+                         对应 mpv 的 hwdec 选项: 出花屏/绿屏/黑屏或想排查显卡驱动时,
+                         切「关闭(软解)」或换一个后端是最快的手段。默认「自动(安全)」。 -->
                     <Border Style="{StaticResource SettingsGroupDivider}" />
                     <ContentControl Content="兼容性" Style="{StaticResource SettingsGroupHeaderStyle}" />
 
@@ -856,14 +876,14 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                            <TextBlock Text="视频输出" Style="{StaticResource SettingsRowTitleStyle}" />
-                            <TextBlock Text="{Binding VideoOutputHint}"
+                            <TextBlock Text="硬件解码" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding HwdecHint}"
                                        Style="{StaticResource SettingsRowDescStyle}" />
                         </StackPanel>
                         <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
                                   Width="170" VerticalAlignment="Center"
-                                  ItemsSource="{Binding VideoOutputOptions}"
-                                  SelectedItem="{Binding VideoOutputSelected, Mode=TwoWay}" />
+                                  ItemsSource="{Binding HwdecOptions}"
+                                  SelectedItem="{Binding HwdecSelected, Mode=TwoWay}" />
                     </Grid>
                 </StackPanel>
             </Border>

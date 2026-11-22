@@ -47,6 +47,7 @@ public sealed class MpvEngine : IPlayerEngine
                 Headless = options.Headless,
                 AudioOutput = options.AudioOutput,
                 VerboseLog = options.VerboseLog,
+                AudioStreamSilence = options.AudioStreamSilence,
             },
             options.Log);
 
@@ -120,6 +121,7 @@ public sealed class MpvEngine : IPlayerEngine
           .Append(" cache=").Append(_player.GetString("demuxer-cache-duration"))
           .Append(" buffering=").Append(_player.GetString("cache-buffering-state"))
           .Append(" pausedForCache=").Append(_player.GetString("paused-for-cache"))
+          .Append(" hwdec=").Append(_player.GetString("hwdec-current"))
           .Append('\n');
         sb.Append("drop=").Append(_player.GetString("frame-drop-count"))
           .Append(" decDrop=").Append(_player.GetString("decoder-frame-drop-count"))
@@ -309,6 +311,8 @@ public sealed class MpvEngine : IPlayerEngine
     {
         if (_disposed) return;
         _state = PlayerState.Playing;
+        _log?.Invoke($"[mpv] file-loaded hwdec={_player.GetString("hwdec-current")} " +
+                     $"audio-stream-silence={_player.GetString("audio-stream-silence")}\n");
         Playing?.Invoke(this, EventArgs.Empty);
 
         // ★ 2026-11-22: mpv 的 `start` 选项在个别片源/线路上不生效, 会从 0 起播;

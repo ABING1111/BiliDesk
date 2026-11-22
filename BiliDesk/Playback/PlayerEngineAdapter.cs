@@ -27,6 +27,12 @@ public sealed class PlayerEngineAdapter : IDisposable
     private bool _mute;
     private bool _disposed;
 
+    /// <summary>硬件解码模式(mpv --hwdec), 由 PlayerWindow 在构造时从设置里取。</summary>
+    public string Hwdec { get; init; } = "auto-safe";
+
+    /// <summary>暂停时保持音频流(mpv --audio-stream-silence)。</summary>
+    public bool AudioStreamSilence { get; init; }
+
     public PlayerEngineAdapter(PlayerVideoView view, Action<string>? log = null)
     {
         _view = view ?? throw new ArgumentNullException(nameof(view));
@@ -131,6 +137,8 @@ public sealed class PlayerEngineAdapter : IDisposable
         _engine = PlayerEngineFactory.Create(PlayerEngineKind.Mpv, new PlayerEngineOptions
         {
             WindowHandle = hwnd.ToInt64(),
+            Hwdec = Hwdec,
+            AudioStreamSilence = AudioStreamSilence,
             VerboseLog = verbose,
             Log = _log,
         });

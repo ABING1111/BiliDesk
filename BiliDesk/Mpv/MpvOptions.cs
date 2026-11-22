@@ -45,6 +45,9 @@ public sealed record MpvGlobalOptions
     public string AudioOutput { get; init; } = "";
 
     public bool VerboseLog { get; init; }
+
+    /// <summary>暂停时保持音频流(--audio-stream-silence)。</summary>
+    public bool AudioStreamSilence { get; init; }
 }
 
 /// <summary>
@@ -78,6 +81,7 @@ public static class MpvOptions
             // 网络流: 开缓存, 但不要因为缓存停顿而永远停住
             Pair("cache", "yes"),
             Pair("cache-pause", "yes"),
+            Pair("audio-stream-silence", o.AudioStreamSilence ? "yes" : "no"),
             Pair("network-timeout", "15"),
         };
 

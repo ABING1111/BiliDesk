@@ -1,5 +1,6 @@
 using System.Linq;
 using BiliDesk.Mpv;
+using BiliDesk.Models;
 using Xunit;
 
 namespace BiliDesk.Tests;
@@ -123,5 +124,33 @@ public class MpvOptionsTests
         });
         Assert.Contains(opts, kv => kv.Key == "demuxer-max-bytes" && kv.Value == "64MiB");
         Assert.Contains(opts, kv => kv.Key == "demuxer-readahead-secs" && kv.Value == "3.5");
+    }
+
+    [Theory]
+    [InlineData(HwdecMode.AutoSafe, "auto-safe")]
+    [InlineData(HwdecMode.Auto, "auto")]
+    [InlineData(HwdecMode.No, "no")]
+    [InlineData(HwdecMode.D3D11Va, "d3d11va")]
+    [InlineData(HwdecMode.D3D11VaCopy, "d3d11va-copy")]
+    [InlineData(HwdecMode.Dxva2, "dxva2")]
+    [InlineData(HwdecMode.NvdecCopy, "nvdec-copy")]
+    public void 硬解模式映射到mpv的hwdec(HwdecMode mode, string expected)
+    {
+        Assert.Equal(expected, mode.ToMpvValue());
+    }
+
+    [Fact]
+    public void 全局选项带硬件解码与音频流保持开关()
+    {
+        var opts = MpvOptions.BuildGlobal(new MpvGlobalOptions
+        {
+            Hwdec = "d3d11va",
+            AudioStreamSilence = true,
+        });
+        Assert.Contains(opts, kv => kv.Key == "hwdec" && kv.Value == "d3d11va");
+        Assert.Contains(opts, kv => kv.Key == "audio-stream-silence" && kv.Value == "yes");
+
+        var off = MpvOptions.BuildGlobal(new MpvGlobalOptions());
+        Assert.Contains(off, kv => kv.Key == "audio-stream-silence" && kv.Value == "no");
     }
 }

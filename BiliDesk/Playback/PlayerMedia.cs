@@ -59,6 +59,12 @@ public sealed record PlayerEngineOptions
     /// <summary>无视频/无音频输出(离线压测、探针)。</summary>
     public bool Headless { get; init; }
 
+    /// <summary>硬件解码模式(mpv --hwdec), 空 = 引擎默认 auto-safe。</summary>
+    public string Hwdec { get; init; } = "auto-safe";
+
+    /// <summary>暂停时保持音频流(mpv --audio-stream-silence)。</summary>
+    public bool AudioStreamSilence { get; init; }
+
     /// <summary>引擎自己的详细诊断日志(对应 mpv 的 msg-level=all=v)。</summary>
     public bool VerboseLog { get; init; }
 
