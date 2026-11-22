@@ -1307,7 +1307,10 @@
                            (F/双击/控制栏三处都在用), 同一个字形挂两种行为会让人以为是同一个功能。
                          ★ 字形必须写进**显式 TextBlock**: 全局隐式 TextBlock 样式带 Foreground
                            setter, 会吃掉 Button.Foreground(项目里反复踩的那个坑)。 -->
-                    <Button x:Name="BtnFillWindow" Style="{StaticResource IconButtonStyle}"
+                    <!-- ★ 2026-11-22 用户要求去掉常态那层半透明底: 用 BareIconButtonStyle
+                         (与 IconButtonStyle 同一模板, 只是常态不铺 ControlFillDefaultBrush),
+                         悬停/按下反馈仍然保留。 -->
+                    <Button x:Name="BtnFillWindow" Style="{StaticResource BareIconButtonStyle}"
                             Width="34" Height="34"
                             ToolTip="铺满窗口（收起右侧信息栏）" Click="OnFillWindowClick"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
