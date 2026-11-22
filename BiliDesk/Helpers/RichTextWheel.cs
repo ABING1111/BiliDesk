@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 
 namespace BiliDesk.Helpers;
 
@@ -21,10 +22,18 @@ namespace BiliDesk.Helpers;
 ///   共用事件数据的孪生事件(微软文档: 预览里置 Handled, 冒泡那份也是 Handled),
 ///   所以在隧道阶段置 Handled, 内层就会在自己的 OnMouseWheel 开头直接 return。
 ///
-/// ★ 为什么重新发到 Parent, 而不是原控件:
+/// ★ 为什么重新发到父级, 而不是原控件:
 ///   RichTextBox 自己也可能挂着滚轮处理, 在原控件上重发会被再吃一次;
-///   从 Parent 起跳则完全跳过它的内部滚动区, 事件正常冒泡到页面级 ScrollViewer,
+///   从父级起跳则完全跳过它的内部滚动区, 事件正常冒泡到页面级 ScrollViewer,
 ///   由 <see cref="WheelScroll"/> 接着做平滑滚动(距离/手感与其它地方完全一致)。
+///
+/// ★★ 为什么父级要"逻辑 + 可视"两头找(2026-11-22 修"鼠标压在楼中楼上滚轮无法滚动"):
+///   转发起点原来只取 <see cref="FrameworkElement.Parent"/>(逻辑父)。控件**嵌在**某个
+///   StackPanel 里时它有值;但控件本身就是 DataTemplate 的**根**时(楼中楼预览框里每条
+///   回复都是如此, 见 PlayerWindow / CommentSection 的楼中楼模板), 模板树只挂在可视树上,
+///   逻辑父是 null —— 旧代码打完 Handled 就直接 return, 滚轮被吃掉且哪儿都不滚。
+///   所以逻辑父缺失时退回**可视父**(模板根的可视父是承载它的 ContentPresenter),
+///   从那里起跳的冒泡路径同样绕开 RichTextBox 内部滚动区。
 /// </summary>
 public static class RichTextWheel
 {
@@ -39,8 +48,8 @@ public static class RichTextWheel
             if (e.Handled) return;      // 祖先已经决定怎么处理, 别抢
             e.Handled = true;
 
-            // 还没进可视树(或 Parent 不是 UIElement): 没地方可转发, 静默结束。
-            if (control.Parent is not UIElement parent) return;
+            // 还没进树(或上方没有任何 UIElement): 没地方可转发, 静默结束。
+            if (FindForwardTarget(control) is not UIElement parent) return;
 
             parent.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
             {
@@ -48,5 +57,22 @@ public static class RichTextWheel
                 Source = control,
             });
         };
+    }
+
+    /// <summary>
+    /// 转发起点: 逻辑父优先(普通嵌套就是同一层容器), 没有就往可视树上找第一个 UIElement。
+    /// 深度封顶 8: 正常两三层就够, 封顶是防止异常模板把整棵树扫一遍。
+    /// </summary>
+    private static UIElement? FindForwardTarget(FrameworkElement control)
+    {
+        if (control.Parent is UIElement logical) return logical;
+
+        DependencyObject? node = VisualTreeHelper.GetParent(control);
+        for (var depth = 0; node != null && depth < 8; depth++)
+        {
+            if (node is UIElement ui) return ui;
+            node = VisualTreeHelper.GetParent(node);
+        }
+        return null;
     }
 }
