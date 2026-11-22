@@ -31,6 +31,8 @@ internal static class Program
         var speed = 0.0;
         var verbose = false;
         var ui = false;
+        string? ua = null;
+        string? referer = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -43,6 +45,8 @@ internal static class Program
                 case "--speed" when i + 1 < args.Length:
                     double.TryParse(args[++i], NumberStyles.Float, CultureInfo.InvariantCulture, out speed);
                     break;
+                case "--ua" when i + 1 < args.Length: ua = args[++i]; break;
+                case "--referer" when i + 1 < args.Length: referer = args[++i]; break;
                 case "--verbose": verbose = true; break;
                 case "--ui": ui = true; break;
             }
@@ -65,10 +69,10 @@ internal static class Program
             return 0;
         }
 
-        return RunHeadless(url, audio, startMs, seconds, speed, verbose);
+        return RunHeadless(url, audio, startMs, seconds, speed, verbose, ua, referer);
     }
 
-    private static int RunHeadless(string url, string? audio, long startMs, int seconds, double speed, bool verbose)
+    private static int RunHeadless(string url, string? audio, long startMs, int seconds, double speed, bool verbose, string? ua = null, string? referer = null)
     {
         Console.WriteLine($"[probe] load {url}");
         if (!string.IsNullOrEmpty(audio)) Console.WriteLine($"[probe] audio-file {audio}");
@@ -85,7 +89,11 @@ internal static class Program
                 Console.WriteLine($"[probe] prop {e.Name}={e.Value}");
         };
 
-        var rc = player.Load(new MpvMediaRequest { Url = url, AudioUrl = audio, StartMs = startMs });
+        var rc = player.Load(new MpvMediaRequest
+        {
+            Url = url, AudioUrl = audio, StartMs = startMs,
+            UserAgent = ua ?? "", Referer = referer ?? "https://www.bilibili.com/",
+        });
         if (rc < 0) Console.WriteLine($"[probe] loadfile failed: {MpvPlayer.ErrorText(rc)}");
 
         var ticks = seconds * 2;

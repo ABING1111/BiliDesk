@@ -101,10 +101,12 @@ public static class MpvOptions
             list.Add(Pair("start", (r.StartMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture)));
         }
 
-        // 网络头: mpv 的格式是 "Name: value" 逗号分隔, 用 file-local 保证按请求走
+        // 网络头: mpv 的格式是 "Name: value" 逗号分隔, 用 file-local 保证按请求走。
+        // ★★ 值里的逗号必须转义: 浏览器 UA 天生带 "(KHTML, like Gecko)" —— 不转义会被
+        //    mpv 的列表解析器切成两条畸形头, CDN 直接回 HTTP 400(实测 estgcos 必现)。
         var headers = new List<string>();
-        if (!string.IsNullOrWhiteSpace(r.Referer)) headers.Add("Referer: " + r.Referer);
-        if (!string.IsNullOrWhiteSpace(r.UserAgent)) headers.Add("User-Agent: " + r.UserAgent);
+        if (!string.IsNullOrWhiteSpace(r.Referer)) headers.Add("Referer: " + EscapeHeaderValue(r.Referer));
+        if (!string.IsNullOrWhiteSpace(r.UserAgent)) headers.Add("User-Agent: " + EscapeHeaderValue(r.UserAgent));
         if (headers.Count > 0)
             list.Add(Pair("http-header-fields", string.Join(",", headers)));
 
@@ -122,6 +124,10 @@ public static class MpvOptions
 
         return list;
     }
+
+    /// <summary>转义 mpv 列表选项里的分隔符(逗号)与反斜杠, 否则 UA 会被切成两条头。</summary>
+    public static string EscapeHeaderValue(string value) =>
+        value.Replace("\\", "\\\\").Replace(",", "\\,");
 
     private static KeyValuePair<string, string> Pair(string name, string value) => new(name, value);
 

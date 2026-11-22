@@ -17,6 +17,28 @@ public class MpvOptionsTests
     }
 
     [Fact]
+    public void 头部里的逗号要转义_否则CDN返回400()
+    {
+        // 浏览器 UA 天生带 "(KHTML, like Gecko)"; 不转义会被 mpv 的逗号列表切成两条畸形头,
+        // estgcos 等 CDN 直接回 HTTP 400(2026-11-22 实测)。
+        var opts = MpvOptions.BuildFileLocal(new MpvMediaRequest
+        {
+            Url = "https://example.com/video.m4s",
+            Referer = "https://www.bilibili.com/",
+            UserAgent = "Mozilla/5.0 (KHTML, like Gecko) Chrome/131.0.0.0",
+        });
+        var header = opts.Single(kv => kv.Key == "http-header-fields").Value;
+        Assert.Contains("KHTML\\, like Gecko", header);
+        Assert.DoesNotContain("KHTML, like Gecko", header);
+    }
+
+    [Fact]
+    public void 转义同时处理反斜杠()
+    {
+        Assert.Equal("a\\,b\\\\c", MpvOptions.EscapeHeaderValue("a,b\\c"));
+    }
+
+    [Fact]
     public void 文件本地选项里不再写audio_file()
     {
         // 实测 file-local 的 audio-file 不生效, 统一走 audio-add; 这条锁住"别再写回去"
