@@ -95,9 +95,6 @@ public static class MpvOptions
     {
         var list = new List<KeyValuePair<string, string>>();
 
-        if (!string.IsNullOrWhiteSpace(r.AudioUrl))
-            list.Add(Pair("audio-file", r.AudioUrl!));
-
         if (r.StartMs > 0)
         {
             // start 是秒(浮点), 用 InvariantCulture —— 中文区域会写出 "1,5", mpv 直接报错
@@ -124,4 +121,11 @@ public static class MpvOptions
     }
 
     private static KeyValuePair<string, string> Pair(string name, string value) => new(name, value);
+
+    /// <summary>
+    /// DASH 外部音轨的加载命令。
+    /// ★ 实测: file-local 的 `audio-file` 在当前 libmpv 上不生效(轨道表里没有音轨),
+    ///   必须等 FILE_LOADED 之后发 `audio-add` —— 见 MpvPlayer.AttachExternalAudio。
+    /// </summary>
+    public static string[] BuildAudioAddCommand(string audioUrl) => new[] { "audio-add", audioUrl };
 }

@@ -10,21 +10,21 @@ namespace BiliDesk.Tests;
 public class MpvOptionsTests
 {
     [Fact]
-    public void DASH音轨走audio_file()
+    public void DASH音轨用audio_add命令()
     {
-        var req = new MpvMediaRequest
-        {
-            Url = "https://example.com/video.m4s",
-            AudioUrl = "https://example.com/audio.m4s",
-        };
-        var opts = MpvOptions.BuildFileLocal(req);
-        Assert.Contains(opts, kv => kv.Key == "audio-file" && kv.Value == "https://example.com/audio.m4s");
+        var args = MpvOptions.BuildAudioAddCommand("https://example.com/audio.m4s");
+        Assert.Equal(new[] { "audio-add", "https://example.com/audio.m4s" }, args);
     }
 
     [Fact]
-    public void 没有音轨时不写audio_file()
+    public void 文件本地选项里不再写audio_file()
     {
-        var opts = MpvOptions.BuildFileLocal(new MpvMediaRequest { Url = "https://example.com/v.mp4" });
+        // 实测 file-local 的 audio-file 不生效, 统一走 audio-add; 这条锁住"别再写回去"
+        var opts = MpvOptions.BuildFileLocal(new MpvMediaRequest
+        {
+            Url = "https://example.com/video.m4s",
+            AudioUrl = "https://example.com/audio.m4s",
+        });
         Assert.DoesNotContain(opts, kv => kv.Key == "audio-file");
     }
 

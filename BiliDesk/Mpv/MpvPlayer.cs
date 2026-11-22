@@ -63,6 +63,9 @@ public sealed class MpvPlayer : IDisposable
     private readonly Action<string>? _log;
     private volatile bool _disposed;
 
+    /// <summary>下一次 FILE_LOADED 时要挂上去的外部音轨(DASH 双流用 audio-add, 见 AttachExternalAudio)。</summary>
+    private string? _pendingAudioUrl;
+
     public MpvPlayer(MpvGlobalOptions options, Action<string>? log = null)
     {
         _log = log;
@@ -128,6 +131,7 @@ public sealed class MpvPlayer : IDisposable
             if (rc < 0) _log?.Invoke($"[mpv] option {kv.Key}={kv.Value} rejected: {ErrorText(rc)}");
         }
 
+        _pendingAudioUrl = request.AudioUrl;
         return Command("loadfile", request.Url, "replace");
     }
 
@@ -246,6 +250,7 @@ public sealed class MpvPlayer : IDisposable
                 case MpvNative.EventShutdown:
                     return;
                 case MpvNative.EventFileLoaded:
+                    AttachExternalAudio();
                     Raise(FileLoaded);
                     break;
                 case MpvNative.EventPropertyChange when ev.Data != IntPtr.Zero:
@@ -267,6 +272,24 @@ public sealed class MpvPlayer : IDisposable
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// 文件加载完成后挂外部音轨(DASH 视频/音频分离)。
+    ///
+    /// ★ 为什么不用 file-local 的 `audio-file`: 实测那个选项在当前 libmpv 上不会生效
+    ///   (track-list 里根本没有音轨, audio-codec-name 为空), 必须走 `audio-add` 命令。
+    /// ★ 必须等 FILE_LOADED 之后: 提前发 audio-add 会因为"还没有当前文件"被拒。
+    /// </summary>
+    private void AttachExternalAudio()
+    {
+        var audio = _pendingAudioUrl;
+        _pendingAudioUrl = null;
+        if (string.IsNullOrEmpty(audio)) return;
+        var rc = Command(MpvOptions.BuildAudioAddCommand(audio));
+        _log?.Invoke(rc < 0
+            ? $"[mpv] audio-add failed: {ErrorText(rc)}"
+            : "[mpv] audio-add ok");
     }
 
     private void RaiseProperty(MpvNative.MpvEvent ev)
