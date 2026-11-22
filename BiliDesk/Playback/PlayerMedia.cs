@@ -65,7 +65,7 @@ public sealed record PlayerEngineOptions
     /// <summary>音频输出模块; 空 = 引擎自选。</summary>
     public string AudioOutput { get; init; } = "";
 
-    /// <summary>引擎自己的诊断日志(转给 WriteLibVLCDebug 那种落盘实现)。</summary>
+    /// <summary>引擎自己的诊断日志(转给 PlayerLog.Write 落盘)。</summary>
     public Action<string>? Log { get; init; }
 }
 

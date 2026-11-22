@@ -365,7 +365,7 @@ public partial class App : Application
 
     /// <summary>
     /// 记一条**非异常**的诊断信息(2026-11-20, issue #98: 视频输出模块 / NVIDIA overlay 是否注入)。
-    /// ★ 只在排查开关(如 BILIDESK_VLC_DEBUG=1)下调用, 普通运行不写;
+    /// ★ 只在排查开关(如 BILIDESK_MPV_DEBUG=1)下调用, 普通运行不写;
     ///   因此不做单独的轮转 —— 它会追加到与错误日志同一个文件, 轮转由 <see cref="ReportError"/> 负责。
     /// </summary>
     public static void ReportNote(string note)
