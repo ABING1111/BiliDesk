@@ -475,6 +475,9 @@ public class FollowViewModel : ObservableObject
             FeedItems.Clear();
             CancelWallAppends();
             WallItems.Clear();
+            // 集合清空了, 缓存的"可见视频总数"也得跟着归零, 否则提示会留在空墙上。
+            _wallVisibleVideoCount = 0;
+            RefreshWallLimitHint();
             TotalFollowings = 0;
             HasMoreUsers = false;
             SelectedUp = null;
@@ -897,6 +900,10 @@ public class FollowViewModel : ObservableObject
     private bool _useCardWall = Svc.Settings.FollowCardWall;
     private bool _showWallLimitHint;
 
+    /// <summary>FeedItems 里"视频动态且没被屏蔽"的条数 —— 卡片墙的目标总量, 可能超过 300。
+    /// 由 <see cref="SyncWallItems"/> 遍历时数一次, 提示刷新就不用再扫集合。</summary>
+    private int _wallVisibleVideoCount;
+
     /// <summary>
     /// 右栏排版: true = 卡片墙(多列网格), false = 动态卡(单列: 头像 + 发布时间 + 视频)。
     ///
@@ -920,8 +927,12 @@ public class FollowViewModel : ObservableObject
 
     /// <summary>卡片墙超过 300 条时的提示(避免用户以为后面没有内容了)。
     /// ★ 卡片墙只收视频, 所以按 FeedItems 里的视频动态数比较, 不是总条数。
-    /// ★ 2026-11-20: 只数**当前没被屏蔽**的 —— 卡片墙自己过滤了, 被屏蔽的不进墙。</summary>
-    /// <summary>卡片墙超过 300 条时的提示。值在每批卡片落地后算一次, 动画帧里不再全表扫描。</summary>
+    /// ★ 2026-11-20: 只数**当前没被屏蔽**的 —— 卡片墙自己过滤了, 被屏蔽的不进墙。
+    /// ★ 2026-11-22: 改成缓存值。以前是计算属性, 分帧补卡时每帧都发一次通知、两个绑定各求值
+    ///   一次, 等于每帧全表扫描 FeedItems; 现在可见总数由 <see cref="SyncWallItems"/> 数好存进
+    ///   <c>_wallVisibleVideoCount</c>, 这里只做 O(1) 比较。
+    ///   注意不能换成"墙的目标数 &gt; 已落地数": 目标被 WallItemLimit(300) 截断, 超过 300 的场景
+    ///   那样会丢提示。</summary>
     public bool ShowWallLimitHint
     {
         get => _showWallLimitHint;
@@ -929,7 +940,7 @@ public class FollowViewModel : ObservableObject
     }
 
     private void RefreshWallLimitHint() => ShowWallLimitHint = UseCardWall &&
-        FeedItems.Count(x => x.HasAnyVideo && FilterService.Instance.IsVisible(x)) > WallItems.Count;
+        _wallVisibleVideoCount > WallItems.Count;
 
     /// <summary>
     /// 把 FeedItems 里的**视频动态**(前 300 条)同步到卡片墙集合。
@@ -954,6 +965,7 @@ public class FollowViewModel : ObservableObject
         // DynamicItem.AsVideoItem() 内部缓存, 同一条动态每次返回同一个 VideoItem 引用,
         // 下面的首尾引用比对才稳定。
         var videos = new List<VideoItem>(WallItemLimit);
+        var visible = 0;
         foreach (var it in FeedItems)
         {
             if (!it.HasAnyVideo) continue;
@@ -961,10 +973,13 @@ public class FollowViewModel : ObservableObject
             //   就会把几百张 VideoCard 在同一个回调里销毁重建(用户报的"屏蔽后卡 1 秒")。
             //   这里按同一套全局屏蔽条件自己过滤, 规则变化时只对差异做增删(见 ReconcileWall)。
             if (!FilterService.Instance.IsVisible(it)) continue;
+            // ★ 计数不跟着 300 条截断: 提示要回答的是"还有没有没显示的视频"。
+            visible++;
+            if (videos.Count >= WallItemLimit) continue;
             var v = it.AsVideoItem();
             if (v != null) videos.Add(v);
-            if (videos.Count >= WallItemLimit) break;
         }
+        _wallVisibleVideoCount = visible;
 
         if (videos.Count == 0)
         {
