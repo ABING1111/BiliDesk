@@ -244,8 +244,10 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 聆听态的视觉开关(**唯一改 ListenOverlay / 顶栏按钮形态的地方**)。
-    /// 收在一个方法里: 顶栏按钮有 4 个部件(耳机/声波/文案/底色)要跟着状态换,
-    /// 散着写必然出现"按钮点亮了但遮罩没出来"这种半状态。
+    /// 收在一个方法里: 顶栏按钮的文案与 ToolTip、遮罩的显隐要跟着状态换,
+    /// 散着写必然出现"按钮文案变了但遮罩没出来"这种半状态。
+    /// ★ 2026-11-22 用户要求去掉聆听态的强调色高亮: 胶囊不再铺底色、耳机图标也不再藏,
+    ///   顶栏唯一的视觉变化就是文案。悬停/按下反馈由样式负责, 与状态无关。
     /// </summary>
     private void ApplyListenMode(bool on)
     {
@@ -254,10 +256,6 @@ public partial class PlayerWindow : FluentWindow
         // 字幕跟着藏/还(2026-11-15): 听视频只有声音, 字幕挂在聆听画面上是噪音;
         // 退出聆听态时不在这里硬还原 —— RefreshSubtitleNow 的下一跳心跳(100ms 内)
         // 会按 _subtitleOn 与当前文本自行决定显隐, 这里抢写会跟它打架。
-        if (BtnListen != null)
-            BtnListen.Tag = on ? "on" : "off";   // 驱动 ListenGhostBtn 的琥珀 DataTrigger
-        if (ListenHeadIcon != null)
-            ListenHeadIcon.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
         // ★ 胶囊里原先那 5 根小波条已删除(2026-10-06 用户要求"胶囊里的音频波纹去掉,
         //   只保留视频播放器的"), 所以这里不再有 ListenWavePanel 要切显隐。
         //   聆听态画面里那组大波纹(BigWave1~7)照旧由 _listenWaveTimer 驱动, 不受影响。
@@ -366,7 +364,7 @@ public partial class PlayerWindow : FluentWindow
     /// 比纯随机更像"随声音起伏"(纯随机会跳得没有节奏感)。
     ///
     /// ★ 2026-10-06: 胶囊里那 5 根小波条已按用户要求删除, 现在只驱动**聆听态画面**里的
-    ///   大波纹(BigWave1~7)。胶囊待命/聆听都只显示耳机图标, 状态靠琥珀底色与文案区分。
+    ///   大波纹(BigWave1~7)。胶囊待命/聆听外观一致, 状态只靠文案区分(2026-11-22)。
     /// </summary>
     private void UpdateListenWave()
     {

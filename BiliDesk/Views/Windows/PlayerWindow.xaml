@@ -1151,22 +1151,20 @@
               · 高度 40 与旁边按钮齐平; 圆角 pill; 图标 18px; 左右内边距 18; 图文间距 9。
               · **待命**: 透明底 + 次要文字色。**无边框**(2026-10-06 用户要求去除
                 "隐约可见的胶囊边缘" —— 原来 1px 描边在顶栏底色上有对比度, 形成
-                可见的胶囊轮廓; 现在 BorderThickness=0, 只在悬停/按下/聆听时给底色)。
-              · **聆听中**: 强调色实心 + 深色文字 + 声波律动。
+                可见的胶囊轮廓; 现在 BorderThickness=0, 只在悬停/按下时给底色)。
+              · **聆听中**: 与待命**同一套底色/前景**, 只有文案换成「正在聆听 m:ss」。
               · ★ 声波条不能靠 Storyboard 逐条写: 五根条的延迟/高度各不相同, 在 XAML 里要写
                  五组 BeginStoryboard。这里改成代码驱动的 DispatcherTimer(见 _listenWaveTimer),
                  顺带解决"退出聆听后动画还在跑"这个必然会被踩的坑 —— 定时器可以一处停掉。
             ★ 文案只用「听视频 / 正在聆听 m:ss」: 设计稿第 05 节明确不写"AI"二字,
               且必须能取消(再点一次回到待命)。
 
-            ★★★ 聆听态用**主题强调色**, 不是设计稿的琥珀。2026-10-06 用户要求
-                 "听视频的颜色跟随全局主题设置" —— 设计稿那版把琥珀写死, 用户在设置页把
-                 主题色改成蓝/绿之后, 这颗按钮会始终是橙的, 和整个应用的主题脱节。
-                 改法: 底色取 AccentBrush、文字取 TextOnAccentBrush(强调色底上的专用前景,
-                 ThemeService 会按强调色亮度自动选白/黑, 见 BrandOnAccent)。
-                 ★ 声波条取 Foreground(即 TextOnAccentBrush) —— 压在强调色实心底上,
-                   跟着文字色走才保证任何主题色下都看得清。
-                 ★ 这三个键都是 ThemeService 用 DynamicResource 注入的, 换主题即时生效。
+            ★★★ 2026-11-22 用户要求: **去掉聆听态的强调色高亮**, 只让文字变化。
+                 原来聆听中是把整颗胶囊铺成主题强调色(再配深色文字), 观感像一颗
+                 "亮着的状态灯"; 用户希望它安静地留在顶栏里, 只靠「正在聆听 m:ss」
+                 这行字表达状态。所以这里**没有** on 态触发器, 待命/聆听共用同一底色;
+                 悬停/按下反馈保留(那是交互反馈, 不是状态高亮)。
+                 强调色仍用在聆听画面的大波纹上(见 ListenBigWaveBar)。
         -->
         <Style x:Key="ListenGhostBtn" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
@@ -1199,11 +1197,8 @@
                                 <Setter TargetName="Bd" Property="Background"
                                         Value="{DynamicResource ControlFillPressedBrush}" />
                             </Trigger>
-                            <!-- 聆听中: 主题强调色实心。文案/图标/声波由代码切换(见 ApplyListenMode) -->
-                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="on">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentBrush}" />
-                                <Setter Property="Foreground" Value="{DynamicResource TextOnAccentBrush}" />
-                            </DataTrigger>
+                            <!-- 聆听态不再铺强调色底(2026-11-22 用户要求"只让文字变化"),
+                                 状态仅由 ListenLabelText 的文案表达。 -->
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -1238,13 +1233,14 @@
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <!-- 「听视频」入口(2026-10-06 新增, 用户要求放播放器右上角, 设计参考 听视频.html)。
-                         幽灵胶囊: 待命 = 透明底 + 1px 描边 + 耳机图标 + "听视频";
-                         聆听中 = 琥珀实心 + "正在聆听 m:ss"(由 ApplyListenMode 切换)。
+                         幽灵胶囊: 待命 = 透明底 + 耳机图标 + "听视频";
+                         聆听中 = 同一颗胶囊, 只把文案换成 "正在聆听 m:ss"(由 ApplyListenMode 切换)。
+                         ★ 2026-11-22 用户要求去掉聆听态的强调色高亮: 不再铺实心底、
+                           也不再藏耳机图标, 状态只靠文案表达(见 ListenGhostBtn 的说明)。
                          ★ 2026-10-06 用户要求"胶囊里的音频波纹去掉, 只保留视频播放器的":
                            胶囊内原先叠了 5 根小波条(现已删除), 聆听态画面里那组大波纹保留。
-                         ★ 两段文案的宽度差很多("听视频" 3 字 vs "正在聆听 0:00"), 直接换文案会把右边的
-                           窗口按钮推着走 —— 与「稍后再看」同一个坑。这里用**同一套双层叠放**:
-                           两个 TextBlock 叠在同一格里, 容器宽度自动取两者最大值, 切换只做透明度过渡。
+                         ★ 两段文案的宽度差很多("听视频" 3 字 vs "正在聆听 0:00"), 所以用**一个 TextBlock**
+                           整体换文案(见下方说明): 不再叠放, 宽度由当前内容决定。
                          ★ 直播 / 本地文件不给这个入口(见 UpdateListenButtonState): 直播是连续流、
                            本地文件没有独立音轨, 点了只会失败。 -->
                     <Button x:Name="BtnListen" Style="{StaticResource ListenGhostBtn}"
@@ -1253,6 +1249,8 @@
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <!-- 待命/聆听态都用这一个耳机图标(lucide headphones 路径, 与设计稿一致)。
+                                 ★ 2026-11-22 用户要求"聆听时只让文字变化": 图标不再在聆听态藏起来,
+                                   两种状态都显示, 状态只由文案表达。
                                  ★ 2026-10-06 用户要求"去掉胶囊里的音频波纹, 只保留视频播放器的":
                                    这里原来还叠了一个 ListenWavePanel(5 根小波条), 与耳机图标同位切换 ——
                                    5 根 20px 高的细条挤在 20×18 的格子里, 既看不清又和耳机图标打架。
@@ -1282,7 +1280,7 @@
                                    ★ 水平垂直都居中: HorizontalAlignment/VerticalAlignment 写在
                                      TextBlock 上, 外层 Grid 与 StackPanel 也各自居中 —— 三层都居中才
                                      不会在 Padding 里偏。
-                                   ★ 深浅色一致: 前景用 Foreground 绑 Button(聆听态是 TextOnAccentBrush),
+                                   ★ 深浅色一致: 前景用 Foreground 绑 Button(待命/聆听同一套颜色),
                                      不写死任何颜色; 等宽字体用 "Consolas, Segoe UI" 带回退,
                                      Consolas 缺失时退到 Segoe UI 也不会变形。 -->
                             <TextBlock x:Name="ListenLabelText" Text="听视频"
