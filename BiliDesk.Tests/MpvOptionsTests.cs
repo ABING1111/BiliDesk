@@ -128,12 +128,13 @@ public class MpvOptionsTests
 
     [Theory]
     [InlineData(HwdecMode.AutoSafe, "auto-safe")]
-    [InlineData(HwdecMode.Auto, "auto")]
-    [InlineData(HwdecMode.No, "no")]
     [InlineData(HwdecMode.AutoCopy, "auto-copy")]
     [InlineData(HwdecMode.D3D11Va, "d3d11va")]
     [InlineData(HwdecMode.D3D11VaCopy, "d3d11va-copy")]
-    [InlineData(HwdecMode.NvdecCopy, "nvdec-copy")]
+    [InlineData(HwdecMode.D3D12, "d3d12")]
+    [InlineData(HwdecMode.Nvdec, "nvdec")]
+    [InlineData(HwdecMode.Vulkan, "vulkan")]
+    [InlineData(HwdecMode.No, "no")]
     public void 硬解模式映射到mpv的hwdec(HwdecMode mode, string expected)
     {
         Assert.Equal(expected, mode.ToMpvValue());
@@ -152,5 +153,19 @@ public class MpvOptionsTests
 
         var off = MpvOptions.BuildGlobal(new MpvGlobalOptions());
         Assert.Contains(off, kv => kv.Key == "audio-stream-silence" && kv.Value == "no");
+    }
+
+    [Fact]
+    public void D3D12与Vulkan需要gpu_next()
+    {
+        var d3d12 = MpvOptions.BuildGlobal(new MpvGlobalOptions { Hwdec = "d3d12" });
+        Assert.Contains(d3d12, kv => kv.Key == "vo" && kv.Value == "gpu-next");
+
+        var vulkan = MpvOptions.BuildGlobal(new MpvGlobalOptions { Hwdec = "vulkan" });
+        Assert.Contains(vulkan, kv => kv.Key == "vo" && kv.Value == "gpu-next");
+        Assert.Contains(vulkan, kv => kv.Key == "gpu-api" && kv.Value == "vulkan");
+
+        var d3d11 = MpvOptions.BuildGlobal(new MpvGlobalOptions { Hwdec = "d3d11va" });
+        Assert.Contains(d3d11, kv => kv.Key == "vo" && kv.Value == "gpu");
     }
 }

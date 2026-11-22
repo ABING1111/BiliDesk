@@ -29,6 +29,7 @@ public sealed class MpvEngine : IPlayerEngine
     private int _stallStreak;
     private long _startMs;
     private bool _isLive;
+    private readonly string _requestedHwdec;
     private int _loadGeneration;
     private int _decodeErrors;
     private long _decodeWindowAt = -1;
@@ -40,12 +41,14 @@ public sealed class MpvEngine : IPlayerEngine
     {
         ArgumentNullException.ThrowIfNull(options);
         _log = options.Log;
+        _requestedHwdec = options.Hwdec;
         _player = new MpvPlayer(
             new MpvGlobalOptions
             {
                 WindowId = options.WindowHandle,
                 Headless = options.Headless,
                 AudioOutput = options.AudioOutput,
+                Hwdec = options.Hwdec,
                 VerboseLog = options.VerboseLog,
                 AudioStreamSilence = options.AudioStreamSilence,
             },
@@ -311,8 +314,16 @@ public sealed class MpvEngine : IPlayerEngine
     {
         if (_disposed) return;
         _state = PlayerState.Playing;
-        _log?.Invoke($"[mpv] file-loaded hwdec={_player.GetString("hwdec-current")} " +
+        var requested = _player.GetString("hwdec");
+        var current = _player.GetString("hwdec-current");
+        _log?.Invoke($"[mpv] file-loaded hwdec={requested}/{current} " +
                      $"audio-stream-silence={_player.GetString("audio-stream-silence")}\n");
+        // 显式选了某个后端但实际没用上(常见于显卡/驱动不支持): 明确记一条, 不静默
+        if (!string.IsNullOrEmpty(requested) && requested is not ("auto-safe" or "auto" or "auto-copy") &&
+            !string.Equals(current, requested, StringComparison.Ordinal))
+        {
+            _log?.Invoke($"[mpv] 硬解回退: 请求 {requested}, 实际 {current}(显卡/驱动不支持或后端初始化失败)\n");
+        }
         Playing?.Invoke(this, EventArgs.Empty);
 
         // ★ 2026-11-22: mpv 的 `start` 选项在个别片源/线路上不生效, 会从 0 起播;

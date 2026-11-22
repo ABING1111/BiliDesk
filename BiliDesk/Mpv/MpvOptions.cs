@@ -76,7 +76,9 @@ public static class MpvOptions
             Pair("keep-open", "no"),
             Pair("audio-client-name", "BiliDesk"),
             Pair("hwdec", o.Hwdec),
-            Pair("vo", o.Headless ? "null" : "gpu"),
+            // D3D12 / Vulkan 硬解要求 vo=gpu-next; 其余保持 gpu(d3d11 context)
+            Pair("vo", o.Headless ? "null"
+                : (o.Hwdec is "d3d12" or "vulkan" or "vulkan-copy" ? "gpu-next" : "gpu")),
             Pair("ao", o.Headless ? "null" : (string.IsNullOrEmpty(o.AudioOutput) ? "wasapi" : o.AudioOutput)),
             // 网络流: 开缓存, 但不要因为缓存停顿而永远停住
             Pair("cache", "yes"),
@@ -85,6 +87,9 @@ public static class MpvOptions
             Pair("network-timeout", "15"),
         };
 
+        // Vulkan 硬解要求 vo=gpu-next + Vulkan 渲染后端(gpu-api=vulkan)
+        if (o.Hwdec is "vulkan" or "vulkan-copy")
+            list.Add(Pair("gpu-api", "vulkan"));
         if (o.WindowId != 0)
             list.Add(Pair("wid", o.WindowId.ToString(CultureInfo.InvariantCulture)));
 

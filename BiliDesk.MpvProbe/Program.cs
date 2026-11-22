@@ -31,6 +31,7 @@ internal static class Program
         var speed = 0.0;
         var verbose = false;
         var ui = false;
+        var choices = false;
         string? ua = null;
         string? referer = null;
 
@@ -49,6 +50,7 @@ internal static class Program
                 case "--referer" when i + 1 < args.Length: referer = args[++i]; break;
                 case "--verbose": verbose = true; break;
                 case "--ui": ui = true; break;
+                case "--choices": choices = true; break;
             }
         }
 
@@ -66,6 +68,18 @@ internal static class Program
         {
             var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
             app.Run(new MpvTestWindow(new MpvMediaRequest { Url = url, AudioUrl = audio, StartMs = startMs }));
+            return 0;
+        }
+
+        if (choices)
+        {
+            using var info = new MpvPlayer(new MpvGlobalOptions { Headless = true }, msg => Console.WriteLine(msg));
+            foreach (var candidate in new[] { "auto", "auto-safe", "auto-copy", "no", "d3d11va", "d3d11va-copy", "d3d12", "nvdec", "nvdec-copy", "vulkan", "vulkan-copy" })
+            {
+                var rc = info.Command("set", "hwdec", candidate);
+                var now = info.GetString("hwdec");
+                Console.WriteLine($"hwdec {candidate,-12} rc={rc,3} now={now}");
+            }
             return 0;
         }
 
