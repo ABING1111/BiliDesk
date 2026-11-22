@@ -174,7 +174,7 @@ public partial class PlayerWindow : FluentWindow
         ChapterMarks.Children.Clear();
         if (!HasChapters) return;
 
-        var total = _totalMs > 0 ? _totalMs : (_mp?.Length ?? 0);
+        var total = _totalMs > 0 ? _totalMs : (_engine?.Length ?? 0);
         if (total <= 0) return;
 
         var (offset, usable) = TrackMetrics();
@@ -255,11 +255,11 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 跳到第 index 章的开头。
     /// ★ 走统一入口 <see cref="SeekTo"/>: 播完态重建 / 看门狗重发 / seek 静音全在那里面,
-    ///   自己写 `_mp.Time = x` 会漏掉其中几样(与跳过赞助片段同一个理由)。
+    ///   自己写 `_engine.Time = x` 会漏掉其中几样(与跳过赞助片段同一个理由)。
     /// </summary>
     private void JumpToChapter(int index)
     {
-        if (_closing || _mp == null) return;
+        if (_closing || _engine == null) return;
         if (index < 0 || index >= _chapters.Count) return;
 
         var target = _chapters[index].FromMs;

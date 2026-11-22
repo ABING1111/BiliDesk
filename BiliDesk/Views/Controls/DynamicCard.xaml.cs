@@ -75,7 +75,7 @@ public partial class DynamicCard : UserControl
         {
             if (_prewarmRequested) return;
             _prewarmRequested = true;
-            VlcCore.PrewarmOnDemand();
+            
         };
         SizeChanged += (_, _) =>
         {

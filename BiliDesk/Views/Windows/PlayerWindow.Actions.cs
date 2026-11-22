@@ -20,9 +20,6 @@ using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
-using LibVLCSharp.Shared;
-using LibVLCSharp.WPF;
-using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace BiliDesk.Views;
 
@@ -55,7 +52,7 @@ public partial class PlayerWindow : FluentWindow
         //   Stop() 会阻塞约 1 秒, 但这是用户主动操作(与切清晰度/重建同款), 可接受。
         if (!_isLocalPlayback)
         {
-            try { _mp?.Stop(); } catch { /* 已经停了/正在拆解 */ }
+            try { _engine?.Stop(); } catch { /* 已经停了/正在拆解 */ }
         }
         // 直播失败要重连直播, 不能落回点播那条路(那时 _currentBvid 是空的)
         if (_isLive) _ = LoadLiveAsync(_liveRoomId);
@@ -84,7 +81,7 @@ public partial class PlayerWindow : FluentWindow
         if (_aid <= 0 || !Svc.Session.HasLogin) return;
         var (ok, _, liked) = await Svc.Api.HasLikedAsync(_aid);
         // 查不到就保持原状(别把按钮图标刷成"未赞"), 但把原因记一笔便于排查
-        if (!ok) WriteLibVLCDebug($"\n[HasLiked] 查询失败 aid={_aid}\n");
+        if (!ok) PlayerLog.Write($"\n[HasLiked] 查询失败 aid={_aid}\n");
         else _isLiked = liked;
         if (!_closing) UpdateActionCounts();
     }
@@ -103,7 +100,7 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_aid <= 0 || !Svc.Session.HasLogin || _isLocalPlayback || _isLive) return;
         var (ok, _, coins) = await Svc.Api.GetCoinCountAsync(_aid);
-        if (!ok) { WriteLibVLCDebug($"\n[Coined] 查询失败 aid={_aid}\n"); return; }
+        if (!ok) { PlayerLog.Write($"\n[Coined] 查询失败 aid={_aid}\n"); return; }
         _isCoined = coins > 0;
         if (!_closing) UpdateActionCounts();
     }

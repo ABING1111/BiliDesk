@@ -916,41 +916,63 @@ public class SettingsViewModel : ObservableObject
         ? "退出时记住主界面窗口大小和位置, 下次启动沿用"
         : "主界面每次启动都用默认窗口大小并居中显示";
 
-    // ----------------- 视频输出(2026-11-20, issue #98) -----------------
+    // ----------------- 硬件解码(2026-11-22, mpv --hwdec) -----------------
 
-    /// <summary>下拉框显示项; 下标与 <see cref="VideoOutputMode"/> 的数值一一对应。</summary>
-    public string[] VideoOutputOptions { get; } =
-        { "自动(推荐)", "Direct3D 11", "Direct3D 9", "OpenGL" };
+    /// <summary>下拉框显示项; 下标与 <see cref="HwdecMode"/> 的数值一一对应。</summary>
+    public string[] HwdecOptions { get; } =
+    {
+        "自动", "自动（复制）", "D3D11", "D3D11 (Copy)",
+        "D3D12", "NVDEC", "Vulkan", "软件解码"
+    };
 
     /// <summary>
-    /// 当前视频输出模块(用字符串投影, 理由同 QualitySelected: SettingsStore 没有变化通知)。
-    /// ★ LibVLC 是进程级单例, 改完要重启应用才生效 —— Hint 里写清楚, 免得用户以为没生效。
+    /// 当前硬件解码模式(用字符串投影, 理由同 QualitySelected: SettingsStore 没有变化通知)。
+    /// ★ 播放器创建时生效: 改完重新打开播放器即可, 不必重启整个应用。
     /// </summary>
-    public string VideoOutputSelected
+    public string HwdecSelected
     {
         get
         {
-            var mode = Svc.Settings.VideoOutputMode;
-            var index = Enum.IsDefined(typeof(VideoOutputMode), mode) ? (int)mode : 0;
-            return VideoOutputOptions[index];
+            var mode = Svc.Settings.HwdecMode;
+            var index = Enum.IsDefined(typeof(HwdecMode), mode) ? (int)mode : 0;
+            return HwdecOptions[index];
         }
         set
         {
-            var index = Array.IndexOf(VideoOutputOptions, value);
+            var index = Array.IndexOf(HwdecOptions, value);
             if (index < 0) return;
 
-            var mode = (VideoOutputMode)index;
-            if (mode == Svc.Settings.VideoOutputMode) return;
-            Svc.Settings.SetVideoOutputMode(mode);
+            var mode = (HwdecMode)index;
+            if (mode == Svc.Settings.HwdecMode) return;
+            Svc.Settings.SetHwdecMode(mode);
             OnPropertyChanged();
-            OnPropertyChanged(nameof(VideoOutputHint));
+            OnPropertyChanged(nameof(HwdecHint));
         }
     }
 
-    /// <summary>说明默认行为、排查方向与"需要重启"这件容易踩的事。</summary>
-    public string VideoOutputHint => Svc.Settings.VideoOutputMode == VideoOutputMode.Auto
-        ? "由播放器自动选择(通常是 Direct3D 11); 修改后需重启应用生效"
-        : "若画面异常或 NVIDIA 叠加层误判为游戏, 可换一档; 修改后需重启应用生效";
+    /// <summary>说明默认行为与排查方向。</summary>
+    public string HwdecHint => Svc.Settings.HwdecMode == HwdecMode.AutoSafe
+        ? "更改将在下次播放时生效；选到显卡不支持的后端会回退软解，花屏/绿屏时先试「软件解码」"
+        : "更改将在下次播放时生效；D3D12 / Vulkan 需要对应的显卡与驱动支持";
+
+    /// <summary>
+    /// 暂停时保持音频流(mpv --audio-stream-silence)。
+    /// 默认关; 部分声卡/蓝牙耳机在暂停→恢复时爆音、断连的用户可开。
+    /// </summary>
+    public bool AudioStreamSilence
+    {
+        get => Svc.Settings.AudioStreamSilence;
+        set
+        {
+            if (value == Svc.Settings.AudioStreamSilence) return;
+            Svc.Settings.AudioStreamSilence = value;
+            Svc.Settings.Save();
+            OnPropertyChanged();
+        }
+    }
+
+    public string AudioStreamSilenceHint =>
+        "暂停时让音频设备继续输出静音，避免部分声卡/蓝牙耳机在暂停→恢复时爆音或断连；重新打开播放器生效";
 
     // ----------------- 默认画质 -----------------
 

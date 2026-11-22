@@ -97,7 +97,12 @@ public partial class App : Application
         //   再 Save 回去就会覆盖第一个进程刚写的状态(登录态/设置互相打架), 还会多占一份
         //   LibVLC 原生库。所以"不是第一个"时要把整个启动流程掐掉。
         //   把已在跑的实例叫到前台这件事由 SingleInstance 自己通过管道转达(见该文件)。
-        if (!SingleInstance.Acquire())
+        // Debug 下允许并行开第二个实例(验证用); 发布版始终单实例。
+        var devMultiInstance = false;
+#if DEBUG
+        devMultiInstance = Environment.GetEnvironmentVariable("BILIDESK_DEV_MULTI") == "1";
+#endif
+        if (!SingleInstance.Acquire() && !devMultiInstance)
         {
             // 不建任何窗口, 直接退出。用 Shutdown() 而不是 Environment.Exit():
             // 这时还没有窗口/托盘资源, 但走 WPF 的正规退出路径更稳。
@@ -182,6 +187,34 @@ public partial class App : Application
         MainWindow = main;
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         main.Show();
+
+#if DEBUG
+        // 开发/验证用(mpv 迁移): BILIDESK_DEV_LOCAL=<本地视频路径> 时直接打开播放器。
+        // 只在 Debug 构建里编译, 不影响发布版与正常交互。
+        // 开发/验证用: BILIDESK_DEV_LIVE=<roomId> 直接打开直播间
+        var devLive = Environment.GetEnvironmentVariable("BILIDESK_DEV_LIVE");
+        if (long.TryParse(devLive, out var devRoom) && devRoom > 0)
+        {
+            Dispatcher.BeginInvoke(
+                new Action(() => Svc.Player.PlayLive(devRoom)),
+                System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        }
+        // 开发/验证用: BILIDESK_DEV_BVID=<bvid> 直接打开在线视频(走完整 DASH 路径)
+        var devBvid = Environment.GetEnvironmentVariable("BILIDESK_DEV_BVID");
+        if (!string.IsNullOrEmpty(devBvid))
+        {
+            Dispatcher.BeginInvoke(
+                new Action(() => Svc.Player.PlayVideo(devBvid)),
+                System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        }
+        var devLocal = Environment.GetEnvironmentVariable("BILIDESK_DEV_LOCAL");
+        if (!string.IsNullOrEmpty(devLocal))
+        {
+            Dispatcher.BeginInvoke(
+                new Action(() => Svc.Player.PlayLocalFile(devLocal)),
+                System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        }
+#endif
 
         // 系统托盘: 双击回主界面, 右键可退出(失败只记日志, 不影响启动)
         TrayService.Instance.Initialize();
@@ -332,7 +365,7 @@ public partial class App : Application
 
     /// <summary>
     /// 记一条**非异常**的诊断信息(2026-11-20, issue #98: 视频输出模块 / NVIDIA overlay 是否注入)。
-    /// ★ 只在排查开关(如 BILIDESK_VLC_DEBUG=1)下调用, 普通运行不写;
+    /// ★ 只在排查开关(如 BILIDESK_MPV_DEBUG=1)下调用, 普通运行不写;
     ///   因此不做单独的轮转 —— 它会追加到与错误日志同一个文件, 轮转由 <see cref="ReportError"/> 负责。
     /// </summary>
     public static void ReportNote(string note)
@@ -377,7 +410,7 @@ public partial class App : Application
         Svc.Settings.Flush();
         // 托盘图标先摘: 不摘的话 Explorer 会缓存一个"幽灵图标"直到鼠标划过
         TrayService.Instance.Dispose();
-        VlcCore.Shutdown();
+        
         base.OnExit(e);
     }
 }

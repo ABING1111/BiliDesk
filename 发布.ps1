@@ -2,7 +2,7 @@
 #
 # 一次产出两套(2026-09-26 定):
 #   1) 便携版(zip): 自包含 + 单文件压缩 —— 用户机器**不用装 .NET**, 解压即用;
-#   2) 安装器载荷: 框架依赖(只含 app + LibVLC, ~67MB) —— 配 Publish\installer.iss 打 Inno 安装包,
+#   2) 安装器载荷: 框架依赖(只含 app + libmpv) —— 配 Publish\installer.iss 打 Inno 安装包,
 #      .NET 桌面运行时(8+)由安装器检测、全无时引导下载 .NET 10(见 installer.iss 的 [Code];
 #      程序在 csproj 配了 RollForward=Major, 只有 .NET 10+ 也能跑)。
 #
@@ -23,6 +23,17 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Out = Join-Path $Root "Publish"
 $PortableDir = Join-Path $Out "BiliDesk-便携版"
 $InstallerDir = Join-Path $Out "BiliDesk-安装器-files"
+# libmpv 是必需载荷: 缺失或哈希不符时直接失败, 避免打出"没有播放内核"的包。
+$LibMpvPath = Join-Path $Root "BiliDesk\libmpv\win-x64\libmpv-2.dll"
+$LibMpvSha256 = "88504EE5560942A955405E99DFB5971368E4CF851321F36565BF2A667271DB1B"
+if (-not (Test-Path $LibMpvPath)) {
+    throw "缺少 libmpv-2.dll: 请按 README 放到 $LibMpvPath"
+}
+$libMpvActual = (Get-FileHash $LibMpvPath -Algorithm SHA256).Hash
+if ($libMpvActual -ne $LibMpvSha256) {
+    throw "libmpv-2.dll 哈希不匹配(可能换过构建): 实际 $libMpvActual, 期望 $LibMpvSha256; 确认后同步更新 发布.ps1 与 docs/libmpv-build.md"
+}
+Write-Host "  libmpv 校验通过: $libMpvActual"
 
 # Publish 根目录只建不清理: 里面还放着 installer.iss, 任何 Remove-Item Publish\* 都会连带删掉它。
 if (-not (Test-Path $Out)) { New-Item -ItemType Directory -Path $Out -Force | Out-Null }
@@ -57,6 +68,15 @@ dotnet publish (Join-Path $Root "BiliDesk\BiliDesk.csproj") -c Release -r win-x6
     -o $InstallerDir
 if ($LASTEXITCODE -ne 0) { throw "安装器载荷发布失败" }
 
+# 两个产物都必须带上播放内核与许可/第三方说明, 缺一即失败
+foreach ($dir in @($PortableDir, $InstallerDir)) {
+    foreach ($rel in @("libmpv\win-x64\libmpv-2.dll", "THIRD-PARTY-NOTICES.txt", "licenses\GPL-2.0.txt", "LICENSE.txt")) {
+        if (-not (Test-Path (Join-Path $dir $rel))) {
+            throw "发布产物缺少 $rel : $dir"
+        }
+    }
+}
+Write-Host "  载荷校验通过: libmpv + 许可/第三方说明齐全"
 Write-Host "== 3/5 校验 WPF 原生库版本(防旧 .NET 残留混进包) =="
 # 只查 WPF 那三个 dll: 它们的文件版本大版本号必须等于 app 目标框架的大版本(net10.0 → 10)。
 # D3DCompiler_47_cor3.dll 是 Windows SDK 的、vcruntime140_cor3.dll 是 VC 运行时的,
@@ -83,7 +103,7 @@ foreach ($dll in Get-ChildItem (Join-Path $PortableDir "*_cor3.dll") | Where-Obj
 # 为什么需要: 本机(DSH 沙箱)会给**工作区内**新建的文件打 Low 完整性标签
 # (`Mandatory Label\Low Mandatory Level`)。带这个标签的 exe 一旦被跑起来,
 # 进程就以**低完整性**运行, 于是:
-#   ① 读不了机器级证书存储 ⇒ VLC 的 GnuTLS 无法校验 B 站证书 ⇒ **视频一帧都放不出**
+#   ① 读不了机器级证书存储 ⇒ 原生 HTTP 栈无法校验 B 站证书 ⇒ **视频一帧都放不出**
 #      (表现:"视频播放出错, 请检查网络或尝试其他清晰度")。
 #      ★ 这正是"bin\Debug 下播放正常、便携版却放不出"的原因 —— 那个目录是 Medium
 #        (2026-10-11 修过一次, 见长期记忆)。

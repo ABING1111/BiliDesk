@@ -505,25 +505,30 @@ public class SettingsStore
     }
 
     /// <summary>
-    /// LibVLC 的视频输出模块(2026-11-20, issue #98)。
+    /// 硬件解码模式(2026-11-22, mpv 迁移: 原"视频输出模块"改为 --hwdec)。
     ///
-    /// ★ 默认 <see cref="Models.VideoOutputMode.Auto"/>: 让 libvlc 自己挑(Windows 上通常 direct3d11)。
-    /// ★ 为什么把它做成设置: 用户报"启动后首次打开视频, NVIDIA App 的叠加层弹出来,
-    ///   像是被识别成游戏"。叠加层挂在"创建了 D3D 交换链"的进程上, 而这条链路由 vout 插件决定;
-    ///   OpenGL 输出通常不创建 DXGI 交换链, 可作为规避手段。本机没有 NVIDIA App 无法复现,
-    ///   所以只提供**可切换 + 可回退**, 不声称已根除(它是 NVIDIA 侧的行为)。
-    /// ★ LibVLC 是进程级单例: 运行中改这项不生效, 必须重启应用(设置页的 Hint 会写明)。
+    /// ★ 默认 <see cref="Models.HwdecMode.AutoSafe"/>: mpv 只在确认安全时启用硬解,
+    ///   失败自动回退软解。
+    /// ★ 为什么开放切换: 硬解在不同显卡/驱动上表现不一(花屏、绿屏、黑屏、NVIDIA 叠加层);
+    ///   出问题时切"关闭"或换一个后端是最快的排查手段。
+    /// ★ hwdec 在播放器创建时生效: 改完重新打开播放器即可, 不必重启整个应用。
     /// </summary>
-    public VideoOutputMode VideoOutputMode { get; set; } = VideoOutputMode.Auto;
+    public HwdecMode HwdecMode { get; set; } = HwdecMode.AutoSafe;
 
-    /// <summary>设置视频输出模块并落盘(未定义的值回落 Auto)</summary>
-    public void SetVideoOutputMode(VideoOutputMode mode)
+    /// <summary>设置硬件解码模式并落盘(未定义的值回落 AutoSafe)</summary>
+    public void SetHwdecMode(HwdecMode mode)
     {
-        if (!Enum.IsDefined(typeof(VideoOutputMode), mode)) mode = VideoOutputMode.Auto;
-        if (VideoOutputMode == mode) return;
-        VideoOutputMode = mode;
+        if (!Enum.IsDefined(typeof(HwdecMode), mode)) mode = HwdecMode.AutoSafe;
+        if (HwdecMode == mode) return;
+        HwdecMode = mode;
         Save();
     }
+
+    /// <summary>
+    /// 暂停时保持音频流(对应 mpv `--audio-stream-silence`)。
+    /// ★ 默认关: 只有部分声卡/蓝牙耳机在暂停→恢复时爆音、断连的用户才需要开。
+    /// </summary>
+    public bool AudioStreamSilence { get; set; }
 
     /// <summary>
     /// 上次用的搜索类别(见 <see cref="Models.ContentKind"/>: 0=视频 1=直播间 2=番剧 3=UP主)。
@@ -967,11 +972,14 @@ public class SettingsStore
         //   null = 老配置没这个字段 = 自动(true)。
         AutoBufferPolicy = s.AutoBufferPolicy ?? true;
 
-        // 视频输出模块(2026-11-20, issue #98): 未定义的值(手改配置)一律回落"自动",
-        // 不让它流到 VlcCore 里拼成一个 libvlc 不认识的 --vout。
-        VideoOutputMode = Enum.IsDefined(typeof(VideoOutputMode), s.VideoOutputMode)
-            ? s.VideoOutputMode
-            : VideoOutputMode.Auto;
+        // 硬件解码模式: 未定义的值(手改配置)一律回落"自动(安全)",
+        // 不让它流到 mpv 里变成非法 --hwdec 值。
+        HwdecMode = Enum.IsDefined(typeof(HwdecMode), s.HwdecMode)
+            ? s.HwdecMode
+            : HwdecMode.AutoSafe;
+
+        // 暂停时保持音频流(mpv --audio-stream-silence); 老配置缺字段 ⇒ false。
+        AudioStreamSilence = s.AudioStreamSilence;
 
         // 上次的搜索类别: 老配置没这个字段 ⇒ 视频(与搜索页初始类别一致)。
         SearchKind = Enum.IsDefined(typeof(ContentKind), s.LastSearchKind)
@@ -1174,7 +1182,8 @@ public class SettingsStore
         MainWindowTop = MainWindowTop,
         NetworkCachingMs = NetworkCachingMs,
         AutoBufferPolicy = AutoBufferPolicy,
-        VideoOutputMode = VideoOutputMode,
+        HwdecMode = HwdecMode,
+        AudioStreamSilence = AudioStreamSilence,
         LastSearchKind = (int)SearchKind
     };
 

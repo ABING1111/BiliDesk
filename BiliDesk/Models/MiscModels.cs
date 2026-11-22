@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -205,21 +205,48 @@ public enum RecommendSource
 }
 
 /// <summary>
-/// LibVLC 的视频输出模块(2026-11-20, issue #98)。
+/// 硬件解码模式(2026-11-22, mpv 迁移; 原 VideoOutputMode 改为映射 mpv 的 --hwdec)。
 ///
-/// ★ Auto(默认)= 让 libvlc 自己挑, Windows 上通常是 Direct3D 11。
-/// ★ 为什么要开放切换: NVIDIA App 的"游戏内叠加"会挂到创建了 D3D 交换链的进程上,
-///   而用户报"启动后首次打开视频会弹出 NVIDIA 覆盖层, 像被识别成游戏"。
-///   OpenGL(direct3d9 之外的 glwin32)在不创建 DXGI 交换链这点上通常能绕开它。
-/// ★ 这是**规避手段**: 叠加层是否出现最终由 NVIDIA App 的检测策略决定, 应用侧无法保证。
+/// ★ AutoSafe(默认)= mpv 的 auto-safe: 只在确认安全时才启用硬解, 失败自动回退软解。
+/// ★ No = 纯软解(排查花屏/绿屏/驱动问题时用)。
+/// ★ 其余是指定后端: D3D11VA / D3D12 / NVDEC / Vulkan, "-copy" 表示解码后拷贝回内存
+///   (兼容性更好, 但多一次拷贝)。
+/// ★ hwdec 在播放器创建时确定, 改完需要重新打开播放器; 不需要重启整个应用。
 /// </summary>
-public enum VideoOutputMode
+public enum HwdecMode
 {
-    /// <summary>自动(不传 --vout, 交给 libvlc)</summary>
-    Auto = 0,
-    Direct3D11 = 1,
-    Direct3D9 = 2,
-    OpenGL = 3
+    /// <summary>自动(安全) —— mpv `hwdec=auto-safe`</summary>
+    AutoSafe = 0,
+    /// <summary>自动 + 拷贝回内存 —— mpv `hwdec=auto-copy`</summary>
+    AutoCopy = 1,
+    /// <summary>Direct3D 11 Video Acceleration(需要 vo=gpu + d3d11 context, Windows 8+)</summary>
+    D3D11Va = 2,
+    /// <summary>D3D11VA + 拷贝回内存</summary>
+    D3D11VaCopy = 3,
+    /// <summary>Direct3D 12 Video Acceleration(需要 vo=gpu-next)</summary>
+    D3D12 = 4,
+    /// <summary>NVIDIA NVDEC(需要 CUDA / NVIDIA 显卡)</summary>
+    Nvdec = 5,
+    /// <summary>Vulkan Video(需要 vo=gpu-next)</summary>
+    Vulkan = 6,
+    /// <summary>关闭硬解 —— mpv `hwdec=no`</summary>
+    No = 7,
+}
+
+public static class HwdecModeExtensions
+{
+    /// <summary>映射到 mpv 的 --hwdec 取值。</summary>
+    public static string ToMpvValue(this HwdecMode mode) => mode switch
+    {
+        HwdecMode.AutoCopy => "auto-copy",
+        HwdecMode.D3D11Va => "d3d11va",
+        HwdecMode.D3D11VaCopy => "d3d11va-copy",
+        HwdecMode.D3D12 => "d3d12",
+        HwdecMode.Nvdec => "nvdec",
+        HwdecMode.Vulkan => "vulkan",
+        HwdecMode.No => "no",
+        _ => "auto-safe",
+    };
 }
 
 /// <summary>URL 工具(纯函数, 不依赖 WPF)</summary>

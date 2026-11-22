@@ -1,0 +1,33 @@
+BiliDesk 第三方组件与许可说明
+================================
+
+本安装包/便携版包含以下第三方组件。各组件的版权归其各自作者所有。
+
+1. BiliDesk
+   许可: GNU General Public License v3.0 (见同目录 LICENSE.txt)
+   源码: https://github.com/ABING1111/BiliDesk
+
+2. mpv / libmpv
+   文件: libmpv\win-x64\libmpv-2.dll
+   版本: mpv v0.42.0-38-gbcde6b93c (shinchiro 构建 mpv-dev-x86_64-20261111-git-bcde6b93cc)
+   许可: GNU General Public License v2.0 or later (GPLv2+)
+   源码: https://github.com/mpv-player/mpv (commit bcde6b93cc)
+   构建来源: https://sourceforge.net/projects/mpv-player-windows/files/
+
+3. FFmpeg (libmpv 内置)
+   版本: N-128766-gcd4e96eb3
+   许可: GNU General Public License v2.0 or later (GPLv2+)
+   源码: https://ffmpeg.org / https://github.com/FFmpeg/FFmpeg
+
+4. Microsoft Edge WebView2 Runtime
+   许可与条款: https://learn.microsoft.com/microsoft-edge/webview2/
+
+GPLv2 完整文本见 licenses\GPL-2.0.txt。
+GPLv3 完整文本见 LICENSE.txt。
+
+关于源码获取
+------------
+BiliDesk 为开源软件, 源码公开于上述仓库。
+mpv 与 FFmpeg 的对应源码可从上述上游仓库获取; 本安装包使用的 libmpv 构建
+对应 mpv commit bcde6b93cc 与 FFmpeg 版本 N-128766-gcd4e96eb3。
+如需与安装包完全对应的源码归档, 可通过项目 issue 联系维护者。

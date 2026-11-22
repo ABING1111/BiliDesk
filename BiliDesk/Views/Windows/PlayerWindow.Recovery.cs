@@ -1,10 +1,10 @@
 using System;
+using BiliDesk.Playback;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows;
 using BiliDesk.Services;
 using BiliDesk.Utils;
-using LibVLCSharp.Shared;
 
 namespace BiliDesk.Views;
 
@@ -18,7 +18,7 @@ public partial class PlayerWindow : FluentWindow
     //        遮罩一直写着"正在缓冲"; 用户点一下「听视频」切到视频模式(或切回来)
     //        就立刻恢复。
     //
-    //   排查结论(证据见 长期记忆/vlc-debug.txt 与本机 libvlc 3.0.24 探针):
+    //   排查结论(证据见 长期记忆/player-debug.txt 与本机 libvlc 3.0.24 探针):
     //     · 真正卡住的是 LibVLC 那条 HTTP/fMP4 input —— 长连接被 CDN 静默掐断后,
     //       读线程会永久阻塞, 而且因为 access 没报错, 连 EncounteredError 都不会来;
     //     · B 站 playurl 的签名只有约 **2 小时**有效期(URL 里的 deadline),
@@ -34,10 +34,10 @@ public partial class PlayerWindow : FluentWindow
     //     ④ 仍失败给出「重试」入口, 不再无限转圈。
 
     /// <summary>读播放器状态: 原生对象可能已失效(窗口正在关闭), 这里统一兜住。</summary>
-    private VLCState SafePlayerState()
+    private PlayerState SafePlayerState()
     {
-        try { return _mp.State; }
-        catch { return VLCState.Error; }
+        try { return _engine.State; }
+        catch { return PlayerState.Error; }
     }
 
     /// <summary>
@@ -62,7 +62,7 @@ public partial class PlayerWindow : FluentWindow
                 break;
 
             case StallRecoveryAction.Rebuild:
-                WriteLibVLCDebug(
+                PlayerLog.Write(
                     $"[Stall] 卡顿自愈第{_stallPolicy.Rebuilds}次: 重建 input " +
                     $"pos={posMs}ms listen={_isListenMode} " +
                     $"deadline={_playUrlDeadline} url={HostOf(CurrentMediaUrl)}\n");
@@ -70,7 +70,7 @@ public partial class PlayerWindow : FluentWindow
                 break;
 
             case StallRecoveryAction.GiveUp:
-                WriteLibVLCDebug(
+                PlayerLog.Write(
                     $"[Stall] 自动重连放弃(已重建 {_stallPolicy.Rebuilds} 次) pos={posMs}ms " +
                     $"listen={_isListenMode} url={HostOf(CurrentMediaUrl)}\n");
                 // 不再无限转圈: 复用失败遮罩(它自带「重试」按钮, 见 OnRetryClick)。
@@ -89,7 +89,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private async Task RecoverFromStallAsync()
     {
-        if (_closing || _mp == null || _stallRecoveryInFlight) return;
+        if (_closing || _engine == null || _stallRecoveryInFlight) return;
 
         var gen = _loadGen;
         _stallRecoveryInFlight = true;
@@ -121,7 +121,7 @@ public partial class PlayerWindow : FluentWindow
         }
         catch (Exception ex)
         {
-            WriteLibVLCDebug($"[Stall] 自愈异常: {ex}\n");
+            PlayerLog.Write($"[Stall] 自愈异常: {ex}\n");
         }
         finally
         {
@@ -189,7 +189,7 @@ public partial class PlayerWindow : FluentWindow
             if (_closing || gen != _loadGen || _currentCid != cid) return;
             if (!ok || string.IsNullOrEmpty(main))
             {
-                WriteLibVLCDebug($"[UrlFresh] 重取地址失败: {err}\n");
+                PlayerLog.Write($"[UrlFresh] 重取地址失败: {err}\n");
                 return;
             }
 
@@ -203,11 +203,11 @@ public partial class PlayerWindow : FluentWindow
             if (wasDash && !string.IsNullOrEmpty(audioUrl)) _lastAudioUrl = audioUrl;
             if (!string.IsNullOrEmpty(audioUrl)) _listenAudioUrl = audioUrl;
             _playUrlRefreshedAt = Environment.TickCount64;
-            WriteLibVLCDebug($"[UrlFresh] 已换新地址 listen={_isListenMode} host={HostOf(main)}\n");
+            PlayerLog.Write($"[UrlFresh] 已换新地址 listen={_isListenMode} host={HostOf(main)}\n");
         }
         catch (Exception ex)
         {
-            WriteLibVLCDebug($"[UrlFresh] 异常: {ex.Message}\n");
+            PlayerLog.Write($"[UrlFresh] 异常: {ex.Message}\n");
         }
         finally
         {
@@ -235,7 +235,7 @@ public partial class PlayerWindow : FluentWindow
         if (string.IsNullOrEmpty(next) || string.Equals(next, _lastPlayUrl, StringComparison.Ordinal))
             return;
         _lastPlayUrl = next;
-        WriteLibVLCDebug($"[Stall] 换候选线路: {HostOf(next)}\n");
+        PlayerLog.Write($"[Stall] 换候选线路: {HostOf(next)}\n");
     }
 
     /// <summary>
@@ -259,7 +259,7 @@ public partial class PlayerWindow : FluentWindow
         if (Environment.TickCount64 - _playUrlRefreshedAt > 30 * 60 * 1000) return false;
 
         _errorRecoveryTried = true;
-        WriteLibVLCDebug("[Stall] 播放出错 → 用刷新后的地址自动重建一次\n");
+        PlayerLog.Write("[Stall] 播放出错 → 用刷新后的地址自动重建一次\n");
         _ = RecoverFromStallAsync();
         return true;
     }
@@ -280,7 +280,7 @@ public partial class PlayerWindow : FluentWindow
         _playUrlDeadline = UrlParser.ExtractQueryLong(mainUrl, "deadline");
         _playUrlFetchedAt = Environment.TickCount64;
         if (_playUrlDeadline > 0)
-            WriteLibVLCDebug(
+            PlayerLog.Write(
                 $"[UrlFresh] deadline={_playUrlDeadline} " +
                 $"({DateTimeOffset.FromUnixTimeSeconds(_playUrlDeadline).ToLocalTime():yyyy-MM-dd HH:mm:ss} 本地)\n");
     }

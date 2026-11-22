@@ -6,7 +6,6 @@
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
              xmlns:behaviors="clr-namespace:BiliDesk.Helpers"
              xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-             xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
      xmlns:sys="clr-namespace:System;assembly=mscorlib"
              Title="BiliDesk 播放器" Width="1280" Height="760"
              MinWidth="840" MinHeight="600" WindowStartupLocation="CenterScreen"
@@ -1348,7 +1347,7 @@
                   - 覆盖 Grid 本身承担单击/双击/长按手势
             -->
             <Grid Grid.Column="0" Background="Black">
-                <vlc:VideoView x:Name="VideoView">
+                <controls:PlayerVideoView x:Name="VideoView">
                     <!-- ★★ 底色必须是 **#01000000(近透明, 不是纯黑!)** —— 2026-10-13 的教训:
                          我曾把它改成 Background="Black" 想盖住 letterbox 白底, 结果**整个画面全黑**
                          (用户报"视频播放时全黑")。原因是我把层级搞反了: 这一层在
@@ -2266,7 +2265,7 @@
                                 </Popup>
                             </Grid>
                         </Grid>
-                </vlc:VideoView>
+                </controls:PlayerVideoView>
             </Grid>
 
             <!-- ============ 右: 信息面板 ============ -->

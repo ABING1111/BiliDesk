@@ -19,9 +19,6 @@ using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
-using LibVLCSharp.Shared;
-using LibVLCSharp.WPF;
-using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace BiliDesk.Views;
 
@@ -116,7 +113,7 @@ public partial class PlayerWindow : FluentWindow
 
             // ★★ 进全屏同样会按新尺寸重建 vout ⇒ 新的 `Static` 子窗口又没被刷成近黑,
             //   全屏时画面两侧/上下会露白边。与退全屏对称, 这里也刷一次。
-            StartVideoBackdropFix();
+
         }
         else
         {
@@ -136,7 +133,7 @@ public partial class PlayerWindow : FluentWindow
             //   之前设的近黑类背景刷跟着旧窗口一起没了 ⇒ 视频区边缘又露出白(用户报的
             //   "先全屏再退全屏, 播放器页面部分出现白色区域")。
             //   所以这里必须重刷一次(和起播后那次同一个入口, 见 ApplyHwndHostLetterboxBackground)。
-            StartVideoBackdropFix();
+
             // 根网格底色还给主题(与 ApplyChrome 同理: 缩回过程露出的边角要主题色)
             RootGrid.SetResourceReference(BackgroundProperty, "AppBackgroundBrush");
 
@@ -650,7 +647,7 @@ public partial class PlayerWindow : FluentWindow
     [Conditional("DEBUG")]
     private void WritePlacementLog(string tag, string detail)
     {
-        WriteLibVLCDebug($"[Placement] {tag} {detail}\n");
+        PlayerLog.Write($"[Placement] {tag} {detail}\n");
     }
 
     // ------------------------------------------------------------ 几何记忆的 Win32 兜底

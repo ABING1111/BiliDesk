@@ -79,7 +79,7 @@ public partial class BangumiCard : UserControl
     {
         if (_prewarmRequested) return;
         _prewarmRequested = true;
-        VlcCore.PrewarmOnDemand();
+        
     }
 
     private bool _prewarmRequested;

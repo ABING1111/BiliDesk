@@ -93,7 +93,7 @@ public partial class MainWindow : FluentWindow
         //   工作集同样会停在 200~300MB。这里按"最后一次鼠标/滚轮/键盘输入"计时, 45 秒没动
         //   就做一次与失焦相同的空闲回收。
         //   · 有输入就重置 ⇒ 正常浏览时永远不会触发;
-        //   · 播放器开着时 RequestIdleRelease 内部会避让(见 VlcCore.HasLivePlayers);
+        //   · 播放器开着时 RequestIdleRelease 内部会避让(见 Svc.Player.IsPlaying);
         //   · 回收只是把空闲页交还系统, 不丢数据 —— 下次操作最多多一次软缺页。
         PreviewMouseDown += OnUserActivity;
         PreviewMouseWheel += OnUserActivity;
@@ -177,7 +177,7 @@ public partial class MainWindow : FluentWindow
             // 后台/最小化由 Deactivated 那条路负责, 这里只处理"窗口在前台但没人动"
             if (!IsActive || !IsVisible || WindowState != WindowState.Normal) return;
             if (Environment.TickCount64 - _lastInputTick < ForegroundIdleMs) return;
-            if (VlcCore.HasLivePlayers) return;
+            if (Svc.Player.IsPlaying) return;
             MemoryTrim.RequestIdleRelease();
         };
         _foregroundIdleTimer.Start();
@@ -212,7 +212,7 @@ public partial class MainWindow : FluentWindow
             // 最小化窗口的 IsVisible 是 false, 不能把它当成"隐藏到托盘"跳过。
             if (!IsVisible && WindowState != WindowState.Minimized) return;
             // 正在看视频时不要做阻塞式 GC/交还工作集 —— 会打断播放/渲染。
-            if (VlcCore.HasLivePlayers) return;
+            if (Svc.Player.IsPlaying) return;
             MemoryTrim.RequestIdleRelease();
         };
         return t;
@@ -312,7 +312,7 @@ public partial class MainWindow : FluentWindow
             //   窗口已经隐藏, 阻塞几十毫秒不会被看到; 否则托盘里的进程会一直占着
             //   一屏封面/卡片的工作集, 任务管理器里显得"关不掉"。
             //   正在播放视频时跳过 —— 阻塞式 GC 会让画面/声音抖一下。
-            if (!VlcCore.HasLivePlayers) MemoryTrim.RequestIdleRelease();
+            if (!Svc.Player.IsPlaying) MemoryTrim.RequestIdleRelease();
             return;
         }
         base.OnClosing(e);

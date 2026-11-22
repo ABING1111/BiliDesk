@@ -264,13 +264,13 @@ public partial class PlayerWindow : FluentWindow
             return;
         }
 
-        // 队列空就立刻返回: 下面每 tick 都要读一次 _mp.IsPlaying(原生调用),
+        // 队列空就立刻返回: 下面每 tick 都要读一次 _engine.IsPlaying(原生调用),
         // 33ms 一拍空转也白搭。
         // ★ 但攒着的聊天消息还没灌进去时不能返回 —— 否则最后一批会卡在缓冲里,
         //   直到下一条弹幕到达才补上(表现为"聊天列表忽然不动了")。
         if (_liveDanmakuQueue.IsEmpty && _liveChatPending.Count == 0) return;
 
-        var canRender = _mp != null && _mp.IsPlaying && _dmClockRunning && _danmakuOn;
+        var canRender = _engine != null && _engine.IsPlaying && _dmClockRunning && _danmakuOn;
         var shown = 0;
         var chatDue = --_liveChatTickCounter <= 0;
         if (chatDue) _liveChatTickCounter = LiveChatTicksPerBatch;

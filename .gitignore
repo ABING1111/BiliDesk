@@ -23,7 +23,11 @@ memory/
 *.tmp
 errors.txt
 vlc-debug.txt
+player-debug.txt
 settings.json
 
 # 本地探针(离线复现/验证用, 不进仓库)
 .probes/
+
+# libmpv 原生库(mpv core 实验分支): 单文件 ~110MB, 不进仓库, 构建时本地放置
+BiliDesk/libmpv/

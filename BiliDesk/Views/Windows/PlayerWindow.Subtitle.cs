@@ -181,7 +181,7 @@ public partial class PlayerWindow : FluentWindow
             //   "时间不走"还是"时间轴本身只有一句/首句超长"。这里写一行摘要(每片一次,
             //   不刷屏): 轨、条数、首末条时间、以及本片时长 —— 首条 to 接近时长就是脏数据,
             //   首末条分布正常那就是取时间的那一侧有问题。
-            WriteLibVLCDebug(
+            PlayerLog.Write(
                 $"[Subtitle] track={track.Lan} cues={cues.Count} " +
                 $"first={cues[0].FromMs}~{cues[0].ToMs}ms " +
                 $"last={cues[^1].FromMs}~{cues[^1].ToMs}ms total={_totalMs}ms\n");

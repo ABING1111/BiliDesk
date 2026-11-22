@@ -19,9 +19,6 @@ using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
-using LibVLCSharp.Shared;
-using LibVLCSharp.WPF;
-using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace BiliDesk.Views;
 
@@ -32,6 +29,23 @@ public partial class PlayerWindow : FluentWindow
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // 诊断快照(2026-11-22, mpv 迁移): Ctrl+Shift+F12 把引擎/播放器状态写进
+        // %LOCALAPPDATA%\BiliDesk\player-debug.txt, 用户反馈"卡/没声/画面停"时直接要这份日志。
+        // 必须放在下面"Ctrl/Alt 一律放行"之前, 否则会被提前 return 掉。
+        if (e.Key == Key.F12 &&
+            Keyboard.Modifiers.HasFlag(ModifierKeys.Control) &&
+            Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+        {
+            PlayerLog.Write(
+                $"[Diag] bvid={_currentBvid} cid={_currentCid} live={_isLive} listen={_isListenMode} " +
+                $"seeking={_isSeeking} pending={_pendingSeekMs} reliable={_isReliableSeekSource} " +
+                $"videoHost={HostOf(_lastPlayUrl)} audioHost={HostOf(_lastAudioUrl)}\n" +
+                _engine.Diagnostics);
+            Svc.Toast.Show("诊断信息已写入 player-debug.txt");
+            e.Handled = true;
+            return;
+        }
+
         // 只在焦点位于"可编辑"输入框时让按键走默认路径; 只读展示框不拦截空格
         if (Keyboard.FocusedElement is TextBox { IsReadOnly: false }) return;
         // ★★★ 2026-11-16 修"对着视频选中文字按 Ctrl+C 复制失败, 右上角还弹'正在获取字幕轨…'":
@@ -61,7 +75,7 @@ public partial class PlayerWindow : FluentWindow
                 e.Handled = true;
                 return;
             // 音量: ↑↓ 走统一入口(顺带弹音量提示), M 在静音与 80 之间切换
-            // 基数用 _volumeCache: aout 未就绪时 _mp.Volume 原生读回是 -1/旧值(见 _volumeCache 的说明)
+            // 基数用 _volumeCache: aout 未就绪时 _engine.Volume 原生读回是 -1/旧值(见 _volumeCache 的说明)
             // ★★★ 2026-11-21: 长按倍速期间 ↑↓ 改为"切换 1.5x / 2x / 3x", 不再调音量 ——
             //   这是用户明确要求处理的快捷键争用。判据是 _isFastForwarding(手势态),
             //   不是"OSD 可见": 淡出动画期间 OSD 还亮着, 那时按 ↑↓ 必须已经回到音量。
@@ -193,7 +207,7 @@ public partial class PlayerWindow : FluentWindow
     private void OnRightKeyLongPressTick(object? sender, EventArgs e)
     {
         _rightKeyTimer?.Stop();
-        if (_closing || _mp == null || _isLive || _ended) return;
+        if (_closing || _engine == null || _isLive || _ended) return;
         if (_isFastForwarding) return;   // 鼠标长按快进中, 不叠加
 
         _rightKeyFast = true;
@@ -272,9 +286,9 @@ public partial class PlayerWindow : FluentWindow
 
     private void SeekRelative(double seconds)
     {
-        if (_mp.Length <= 0) return;
+        if (_engine.Length <= 0) return;
         // ★ 走统一入口(分段跳 / 重建后跳), 见 SeekTo 的说明
-        SeekTo((long)(_mp.Time + seconds * 1000));
+        SeekTo((long)(_engine.Time + seconds * 1000));
     }
 
     // ------------------------------------------------------------ 全屏

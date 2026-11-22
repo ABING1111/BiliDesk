@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -19,9 +19,6 @@ using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
-using LibVLCSharp.Shared;
-using LibVLCSharp.WPF;
-using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace BiliDesk.Views;
 
@@ -165,7 +162,7 @@ public partial class PlayerWindow : FluentWindow
         _lastSkipSeg = coverStart;
         ShowSkipNotice(
             $"已跳过{coverStart.Label}  {VideoItem.FormatSeconds((int)coverStart.EndSec)}");
-        WriteLibVLCDebug(
+        PlayerLog.Write(
             $"[Sponsor] 空降 {coverStart.Category} {coverStart.StartSec:0.##}~{coverStart.EndSec:0.##}s\n");
     }
 
@@ -197,20 +194,20 @@ public partial class PlayerWindow : FluentWindow
     ///   · <c>_pendingSeekMs</c> —— 上一次跳转还没确认时再跳会把目标改来改去, 让看门狗去重发;
     ///   · <c>_isSeeking</c> —— 用户正拖着进度条, 这时跳是跟用户抢;
     ///   · <c>_isLive/_isLocalPlayback</c> —— 没有在线语境, 也没有片段数据;
-    ///   · <c>_mp.Length &lt;= 0</c> —— 还没探到时长, Time 不可信;
+    ///   · <c>_engine.Length &lt;= 0</c> —— 还没探到时长, Time 不可信;
     ///   · <see cref="SponsorMinRemainMs"/> —— 快到片段尾巴了, 跳过去只前进一点点, 观感像画面抽了一下。
     /// </summary>
     private void MaybeSkipSponsorSegment()
     {
-        if (_closing || _mp == null) return;
+        if (_closing || _engine == null) return;
         if (_sponsorActive.Count == 0) return;
         if (_isLive || _isLocalPlayback) return;
         if (!Svc.Settings.SponsorBlockEnabled) return;
         if (_ended || _isSeeking) return;
         if (_pendingSeekMs >= 0) return;
-        if (_mp.Length <= 0) return;
+        if (_engine.Length <= 0) return;
 
-        var t = _mp.Time;
+        var t = _engine.Time;
         foreach (var seg in _sponsorActive)
         {
             if (t < seg.StartMs || t >= seg.EndMs) continue;
@@ -231,9 +228,9 @@ public partial class PlayerWindow : FluentWindow
         var target = seg.EndMs;
         _lastSkipSeg = seg;
         MarkSeekIssued(target);
-        try { _mp.Time = target; } catch { /* 播放器可能刚好失效 */ }
+        try { _engine.Time = target; } catch { /* 播放器可能刚好失效 */ }
         ShowSkipNotice($"已跳过{seg.Label}  {VideoItem.FormatSeconds((int)((target - fromMs) / 1000.0))}");
-        WriteLibVLCDebug(
+        PlayerLog.Write(
             $"[Sponsor] skip {seg.Category} {seg.StartSec:0.##}~{seg.EndSec:0.##}s (from {fromMs / 1000.0:0.##}s)\n");
     }
 
@@ -290,12 +287,12 @@ public partial class PlayerWindow : FluentWindow
     {
         var seg = _lastSkipSeg;
         HideSkipNotice();
-        if (_closing || _mp == null || seg == null) return;
+        if (_closing || _engine == null || seg == null) return;
 
         var target = seg.StartMs;
         MarkSeekIssued(target);
-        try { _mp.Time = target; } catch { }
-        WriteLibVLCDebug($"[Sponsor] undo -> {seg.StartSec:0.##}s\n");
+        try { _engine.Time = target; } catch { }
+        PlayerLog.Write($"[Sponsor] undo -> {seg.StartSec:0.##}s\n");
     }
 
     // ------------------------------------------------------------ 进度条上的片段色块
@@ -364,7 +361,7 @@ public partial class PlayerWindow : FluentWindow
         SponsorMarks.Children.Clear();
         if (_sponsorActive.Count == 0) return;
 
-        var total = _totalMs > 0 ? _totalMs : (_mp?.Length ?? 0);
+        var total = _totalMs > 0 ? _totalMs : (_engine?.Length ?? 0);
         if (total <= 0) return;
 
         var (offset, usable) = TrackMetrics();

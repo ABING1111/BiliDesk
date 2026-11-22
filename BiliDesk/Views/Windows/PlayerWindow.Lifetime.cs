@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -19,9 +19,6 @@ using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
-using LibVLCSharp.Shared;
-using LibVLCSharp.WPF;
-using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace BiliDesk.Views;
 
@@ -42,7 +39,7 @@ public partial class PlayerWindow : FluentWindow
         if (!_teardownDone)
         {
             e.Cancel = true;
-            // 必须在 Stop() 之前抓取进度: 一旦拆解开始, _mp.Time 会归零/_mp 会被 Dispose,
+            // 必须在 Stop() 之前抓取进度: 一旦拆解开始, _engine.Time 会归零/_engine 会被 Dispose,
             // 再取就只能拿到 0, 云端历史会丢位置。这里同步取好数值交给 fire-and-forget 任务。
             var finalAid = _aid;
             var finalCid = _currentCid;
@@ -51,10 +48,10 @@ public partial class PlayerWindow : FluentWindow
             var finalLength = 0L;
             try
             {
-                if (_mp != null)
+                if (_engine != null)
                 {
-                    finalLength = _mp.Length;
-                    var t = _mp.Time;
+                    finalLength = _engine.Length;
+                    var t = _engine.Time;
                     if (t > 0) finalProgressMs = t;
                 }
             }
@@ -88,20 +85,20 @@ public partial class PlayerWindow : FluentWindow
             // Pause 是非阻塞的, 在 UI 线程当场生效, 于是声音在 Hide() 之前就断了。
             // 位置必须在 `_closing = true` 之后、DetachVideoOverlay 之前 —— 与上面读进度是同一个
             // "拆解尚未开始"的安全窗口, 再晚就有碰已释放原生指针的风险。
-            // ★ 这里**不要**再叠一句 `_mp.Mute = true`: 实测(2026-09-30 探针)在 LibVLCSharp 3.8 +
+            // ★ 这里**不要**再叠一句 `_engine.Mute = true`: 实测(2026-09-30 探针)在 LibVLCSharp 3.8 +
             //   本机 libvlc 上 `MediaPlayer.Mute` 是不可靠读数 —— 全新进程里第一个播放器读回就是
             //   True, 显式置 false 也改不动; 往它上面写只会留下一个查不出真假的静音隐患。
             //   停声靠 Pause 就够了。
-            try { _mp?.SetPause(true); } catch { /* 已经停了/正在拆解 */ }
+            try { _engine?.SetPause(true); } catch { /* 已经停了/正在拆解 */ }
 
             _progressTimer?.Stop();
             _kaomojiTimer?.Stop();
             // 手势定时器必须停掉: 它们可能在窗口已经关闭之后才 Tick, 而 Tick 里会去碰
-            // 正在被 Dispose 的 _mp。访问已释放的原生指针不是托管异常, try/catch 拦不住,
+            // 正在被 Dispose 的 _engine。访问已释放的原生指针不是托管异常, try/catch 拦不住,
             // 表现为进程级访问违例(0xc0000005)。反复"打开-关闭"时这几率会被放大。
             _longPressTimer?.Stop();
             _singleClickTimer?.Stop();
-            // 长按快进也要收: 松手恢复速率的调用会碰 _mp, 而这时 _mp 可能正在 Dispose
+            // 长按快进也要收: 松手恢复速率的调用会碰 _engine, 而这时 _engine 可能正在 Dispose
             // (与上面两个手势定时器同理)
             StopFastForward();
             _localToastTimer?.Stop();
@@ -114,7 +111,7 @@ public partial class PlayerWindow : FluentWindow
             // ★ 关窗时若正按着进度条, 鼠标捕获也要放掉(2026-11-20 拖动改由代码接管后新增):
             //   浮层窗口会存活约 1 秒, 捕获留在上面的期间, 整个桌面上的点击都会被重定向给它。
             //   ★ 先清 _isSeeking 再释放: 释放会触发 LostMouseCapture → FinishProgressScrub,
-            //     那时它看到"已经不在拖动"就直接返回, 不会去碰正在拆解的 _mp。
+            //     那时它看到"已经不在拖动"就直接返回, 不会去碰正在拆解的 _engine。
             _isSeeking = false;
             if (ProgressSlider != null && ProgressSlider.IsMouseCaptured)
                 ProgressSlider.ReleaseMouseCapture();
@@ -154,7 +151,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private async Task TeardownAndCloseAsync()
     {
-        var mp = _mp;
+        var mp = _engine;
 
         // 顺序很关键: **先 Stop, 再解绑 Hwnd**。
         //
@@ -174,8 +171,7 @@ public partial class PlayerWindow : FluentWindow
         }
 
         // 回到 UI 线程解绑(VideoView 是 DependencyObject, 只能在 UI 线程操作)
-        try { VideoView.MediaPlayer = null; } catch { }
-        try { VideoView.Content = null; } catch { }
+        try { VideoView.OverlayContent = null; } catch { }
         // 释放 VideoView 自己持有的原生子窗口 + ForegroundWindow
         try { VideoView.Dispose(); } catch { }
 
@@ -203,21 +199,14 @@ public partial class PlayerWindow : FluentWindow
         StopSpeedOsd();
         HideProgressDragHint();
         HideVolumePctHint();
-        // 正常路径下 _mp / VideoView 已在 TeardownAndCloseAsync 里释放过了,
+        // 正常路径下 _engine / VideoView 已在 TeardownAndCloseAsync 里释放过了,
         // 这里只兜底那些没走完正常关闭流程的情况(例如构造中途抛异常),
         // 避免对同一个 MediaPlayer 重复 Dispose。
         if (!_teardownDone)
         {
-            try { _mp?.Stop(); } catch { }
-            try { _mp?.Dispose(); } catch { }
+            try { _engine?.Stop(); } catch { }
+            try { _engine?.Dispose(); } catch { }
             try { VideoView?.Dispose(); } catch { }
-        }
-        // 注意: 绝不释放 _libVLC —— 它是进程级共享实例(见 VlcCore),
-        // 由 App.OnExit 统一释放。窗口级别的反复创建/销毁不会再触碰原生库生命周期。
-        if (_playerRegistered)
-        {
-            _playerRegistered = false;
-            VlcCore.UnregisterPlayer();
         }
         Svc.Toast.Shown -= OnToast;
         Svc.Session.Changed -= UpdateButtonState;
@@ -350,9 +339,9 @@ public partial class PlayerWindow : FluentWindow
         _audioStateLogged = true;
         try
         {
-            WriteLibVLCDebug(
+            PlayerLog.Write(
                 $"[Audio] bvid={_currentBvid} cid={_currentCid} qn={_currentQn} " +
-                $"音轨数={_mp.AudioTrackCount} 原生音量={_mp.Volume} 应用音量={_volumeCache} " +
+                $"原生音量={_engine.Volume} 应用音量={_volumeCache} " +
                 $"独立音轨={(string.IsNullOrEmpty(_lastAudioUrl) ? "无(单文件源)" : "有")}\n");
         }
         catch { /* 诊断信息拿不到就算了, 绝不影响播放 */ }
@@ -384,22 +373,9 @@ public partial class PlayerWindow : FluentWindow
     {
         try
         {
-            var t = _mp?.Time ?? -1;
+            var t = _engine?.Time ?? -1;
             return (t < 0 || t > 24L * 3600 * 1000) ? -1 : t;
         }
         catch { return -1; }
-    }
-
-    /// <summary>原生日志(排查最近一次播放问题用, 见 WriteLibVLCDebug)</summary>
-    private static void WriteLibVLCDebug(string content)
-    {
-        try
-        {
-            var path = Path.Combine(AppPaths.DataDir, "vlc-debug.txt");
-            var f = new FileInfo(path);
-            if (f.Exists && f.Length > 256 * 1024) f.Delete();
-            File.AppendAllText(path, content);
-        }
-        catch { /* 静默 */ }
     }
 }

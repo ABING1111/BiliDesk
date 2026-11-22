@@ -19,9 +19,6 @@ using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
-using LibVLCSharp.Shared;
-using LibVLCSharp.WPF;
-using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace BiliDesk.Views;
 
@@ -298,7 +295,7 @@ public partial class PlayerWindow : FluentWindow
     {
         // 落在窗口边缘缩放带里的按下是"拖边缘改大小", 不算视频区手势(见 TryBeginEdgeResize)
         if (TryBeginEdgeResize()) { e.Handled = true; return; }
-        if (_mp == null) return;
+        if (_engine == null) return;
         // 点视频区会把焦点交给那层浮动覆盖窗口/原生视频窗口, 顺手把键盘焦点收回 WPF 树
         RestoreKeyboardFocus();
         // 点击控制栏(播放/清晰度/弹幕区域等)不作为视频区手势, 否则会误触发"单击暂停"
@@ -441,7 +438,7 @@ public partial class PlayerWindow : FluentWindow
         //   会让系统进入模态缩放循环 —— 而那个循环等的是左键松开, 右键根本不会给它。
         //   ⇒ 这里只判断"在不在缩放带", 在就放行(交给窗口默认行为), 不启动任何东西。
         if (IsOnResizeEdge()) return;
-        if (_mp == null) return;
+        if (_engine == null) return;
         RestoreKeyboardFocus();
         // 控制栏 / 跳过提示条上的右键不算视频区手势(与左键同款理由)
         if (ControlBar != null && ControlBar.IsMouseOver) return;
@@ -531,7 +528,7 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>现在是否处于"应该隐藏控制栏"的状态: 只在**播放中**自动隐藏。</summary>
     private bool ShouldHideControls()
     {
-        if (_closing || _mp == null || !_mp.IsPlaying) return false;
+        if (_closing || _engine == null || !_engine.IsPlaying) return false;
         if (QualityPopup != null && QualityPopup.IsOpen) return false;
         if (DanmakuAreaPopup != null && DanmakuAreaPopup.IsOpen) return false;
         if (SpeedPopup != null && SpeedPopup.IsOpen) return false;
@@ -774,7 +771,7 @@ public partial class PlayerWindow : FluentWindow
     //     · 唯一公开的暂停入口 Storyboard.Pause, 在"动画挂在 Border 的 RenderTransform 上"
     //       这种写法下实测**静默无效**(GetCurrentTime 直接报"Storyboard 未应用到该对象")。
     //
-    //   所以改成: 每帧从 _mp.Time 取真实媒体时间, 自己算该到哪儿。
+    //   所以改成: 每帧从 _engine.Time 取真实媒体时间, 自己算该到哪儿。
     //   这样"暂停"根本不是一个需要处理的状态 —— 媒体时间不前进, 弹幕自然就不动;
     //   顺带还白送了 seek(清表重建)与拖进度条时的正确重同步。
     private readonly List<FlyingDanmaku> _flying = new();
@@ -782,13 +779,13 @@ public partial class PlayerWindow : FluentWindow
 
     // ---- 弹幕时钟: Stopwatch 走时 + 低频校准(2026-11 修"弹幕滑动很卡, 几帧几帧地跳") ----
     //
-    // ★★★ 第一版是**每帧**直接读 `_mp.Time`(还多读了一次 `_mp.Length` 判断有没有媒体)。
+    // ★★★ 第一版是**每帧**直接读 `_engine.Time`(还多读了一次 `_engine.Length` 判断有没有媒体)。
     //   那是两次**跨语言边界的原生调用 × 每帧 60 次** = 每秒 120 次 P/Invoke,
     //   足以把渲染回调拖慢 ⇒ 用户看到的就是"弹幕几帧几帧地跳"。
     //   ★ 教训: `CompositionTarget.Rendering` 里**一次原生调用都不能有**。
     //     判"是不是还在放媒体"这类检查更不能放这里 —— 它每帧都跑, 哪怕它自己认为很便宜。
-    //   ⇒ 改成: 用 `Stopwatch` 自己走时(纯本地), 只在 `_mp.TimeChanged`(约 4Hz)校准一次,
-    //     暂停/恢复由 `_mp.Paused` 冻结/解冻。既零 P/Invoke, 又跟得上真实媒体时间
+    //   ⇒ 改成: 用 `Stopwatch` 自己走时(纯本地), 只在 `_engine.TimeChanged`(约 4Hz)校准一次,
+    //     暂停/恢复由 `_engine.Paused` 冻结/解冻。既零 P/Invoke, 又跟得上真实媒体时间
     //     (seek 会在下一个 TimeChanged 立刻纠偏)。
     private readonly Stopwatch _dmWatch = Stopwatch.StartNew();
     /// <summary>上次校准到的媒体时间(秒)</summary>
@@ -801,7 +798,7 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 当前时钟是不是**直播模式**(2026-11-17 新增)。
     ///
-    /// ★ 直播模式下**不接受** `_mp.Time` 校准 —— 见 <see cref="StartLiveDanmakuClock"/> 的说明。
+    /// ★ 直播模式下**不接受** `_engine.Time` 校准 —— 见 <see cref="StartLiveDanmakuClock"/> 的说明。
     /// ★ 它描述的是"这一路片源的时钟来源", 因此换片时必须复位(由 StopLiveDanmaku 清)。
     /// </summary>
     private bool _dmClockLive;
@@ -815,7 +812,7 @@ public partial class PlayerWindow : FluentWindow
     ///   表现就是弹幕匀速前进一小段、然后**突然跳**一截, 即"不连贯/卡顿"。
     ///   倍速越大越明显(0.5x 则反过来, 外推跑太快、每次校准往回拽)。
     ///
-    /// ★ 取值时机: 每次校准(<see cref="CalibrateDanmakuClock"/>)时读一次 `_mp.Rate` ——
+    /// ★ 取值时机: 每次校准(<see cref="CalibrateDanmakuClock"/>)时读一次 `_engine.Rate` ——
     ///   那是约 4Hz 的低频事件, 一次原生调用不心疼; 而这里(逐帧路径)必须是**纯本地字段读取**。
     ///   切换倍速后最迟 250ms 内就会被下一次校准刷新, 肉眼看不出来。
     private double _dmClockRate = 1.0;
@@ -833,12 +830,12 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 用播放器推来的真实媒体时间校准一次(顺带把走时起点重置到"现在")。
-    /// 只在 <c>_mp.TimeChanged</c> 里调 —— 那是约 4Hz 的低频事件, 一帧一次的原生调用在这里不心疼。
+    /// 只在 <c>_engine.TimeChanged</c> 里调 —— 那是约 4Hz 的低频事件, 一帧一次的原生调用在这里不心疼。
     /// </summary>
     private void CalibrateDanmakuClock(double mediaSeconds)
     {
         // ★★★ 直播**不校准**(2026-11-17 修"直播弹幕位移卡顿"):
-        //   点播的 `_mp.Time` 是精确到毫秒、连续推进的时间轴, 拿它校准只会消掉外推误差。
+        //   点播的 `_engine.Time` 是精确到毫秒、连续推进的时间轴, 拿它校准只会消掉外推误差。
         //   而直播流的时间轴是**按块上报、带抖动、缓冲后会前跳**的 —— 每次校准都等于把
         //   外推值硬拽一下, 而校准是 2Hz(见 UpdateProgressUi 的直播分支), 于是弹幕就是
         //   "匀速走一小段 → 突然跳一截", 也就是用户看到的卡顿。
@@ -857,7 +854,7 @@ public partial class PlayerWindow : FluentWindow
         _dmClockStamp = _dmWatch.ElapsedMilliseconds;
         // ★ 顺便刷新倍速(这里读原生 Rate 是低频路径, 不违反"逐帧零 P/Invoke"那条铁律)。
         //   Rate 偶尔会返 0(切换/初始化的一瞬), 那时按 1x 走, 别让外推停摆。
-        var rate = _mp?.Rate ?? 1.0f;
+        var rate = _engine?.Rate ?? 1.0f;
         _dmClockRate = rate > 0 ? rate : 1.0;
         _dmClockRunning = true;
     }
@@ -867,7 +864,7 @@ public partial class PlayerWindow : FluentWindow
     ///
     /// ★ 必须在 <c>Playing</c> 里调用, 而不是等 500ms 的进度心跳:
     ///   进直播间时 `_dmClockRunning` 还是 false, 而直播弹幕的上屏条件是
-    ///   <c>_mp.IsPlaying &amp;&amp; _dmClockRunning</c>(见 OnLiveDanmakuPumpTick) ——
+    ///   <c>_engine.IsPlaying &amp;&amp; _dmClockRunning</c>(见 OnLiveDanmakuPumpTick) ——
     ///   不在这里把它立起来, 起播后的头几百毫秒收到的弹幕就只进右侧列表、不上屏,
     ///   这正是用户说的"进直播间要等一会才出现弹幕"。
     ///
@@ -877,13 +874,13 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void StartLiveDanmakuClock()
     {
-        if (_closing || _mp == null || !_isLive) return;
+        if (_closing || _engine == null || !_isLive) return;
 
         _dmClockLive = true;
         // 直播没有倍速调节(StartFastForward 对直播直接返回), 但 Rate 是 MediaPlayer 的属性、
         // 不随 Media 重置 —— 上一条点播留下的 2x 会原样带进来, 所以这里必须显式读一次。
         float rate;
-        try { rate = _mp.Rate; }
+        try { rate = _engine.Rate; }
         catch { rate = 1.0f; }          // 原生对象可能已失效
         _dmClockRate = rate > 0 ? rate : 1.0;
 
@@ -896,19 +893,19 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 暂停/恢复时冻结/解冻弹幕时钟。
     ///
-    /// ★★★ **暂停时必须冻结在"当前外推值", 不能直接读 `_mp.Time`**(2026-11-11 用户报
+    /// ★★★ **暂停时必须冻结在"当前外推值", 不能直接读 `_engine.Time`**(2026-11-11 用户报
     ///   "暂停时弹幕会突然向后移动一点"): 校准是约 4Hz 的 TimeChanged 驱动的, 两次校准之间
     ///   弹幕钟按墙钟外推; 若外推快于实际播放(缓冲/掉帧时 TimeChanged 间隔被拉长), 冻结那一刻
-    ///   `_mp.Time` 就落后于外推值 ⇒ 弹幕整体回跳一小段。冻结语义应当是"停在此刻所见",
+    ///   `_engine.Time` 就落后于外推值 ⇒ 弹幕整体回跳一小段。冻结语义应当是"停在此刻所见",
     ///   即当前的 DanmakuClock() 读数, 而不是重新取一次媒体时间。
-    /// ★ 恢复时**也**以暂停时的冻结值为基准直接续跑, 不重新读 `_mp.Time`:
-    ///   暂停没 seek 的话两者本就几乎相等, 而读 `_mp.Time` 若略小于冻结值,
+    /// ★ 恢复时**也**以暂停时的冻结值为基准直接续跑, 不重新读 `_engine.Time`:
+    ///   暂停没 seek 的话两者本就几乎相等, 而读 `_engine.Time` 若略小于冻结值,
     ///   恢复瞬间弹幕又会回跳一次(与暂停回跳同机理)。真正需要纠偏的场景(seek)
     ///   由 TimeChanged → CalibrateDanmakuClock 在 250ms 内自然收敛, 不必抢这一帧。
     /// </summary>
     private void SetDanmakuClockRunning(bool running)
     {
-        if (running == _dmClockRunning || _closing || _mp == null) return;
+        if (running == _dmClockRunning || _closing || _engine == null) return;
         // 两侧都不额外取媒体时间: 冻结取"此刻所见", 恢复从"冻结处"续跑。
         // 基准重置到"现在"是必须的 —— Stopwatch 一直在走, 不重置恢复瞬间会前跳一大段。
         _dmClockMedia = DanmakuClock();
@@ -928,7 +925,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void SyncDanmakuClockRate(float newRate)
     {
-        if (_closing || _mp == null) return;
+        if (_closing || _engine == null) return;
         // 先把"此刻所见"落成新的校准点(位置连续), 再换速率
         _dmClockMedia = DanmakuClock();
         _dmClockStamp = _dmWatch.ElapsedMilliseconds;
@@ -1016,7 +1013,7 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing || _danmakuRaw.Count == 0) return;
 
-        var currentSeconds = _mp != null ? _mp.Time / 1000.0 : 0;
+        var currentSeconds = _engine != null ? _engine.Time / 1000.0 : 0;
 
         _danmaku.Clear();
         _danmaku.AddRange(ApplyDanmakuFilter(_danmakuRaw));
@@ -1114,8 +1111,8 @@ public partial class PlayerWindow : FluentWindow
 
     private void DispatchDanmaku()
     {
-        if (!_danmakuOn || _closing || _mp == null || _mp.Length <= 0) return;
-        var currentSeconds = _mp.Time / 1000.0;
+        if (!_danmakuOn || _closing || _engine == null || _engine.Length <= 0) return;
+        var currentSeconds = _engine.Time / 1000.0;
         // ★★★ 2026-11-21: 这里**不再**校准弹幕时钟(原来在 this 位置调 CalibrateDanmakuClock)。
         //   本方法是"发弹幕"的入口, 第一句就按 `!_danmakuOn` 早退 —— 关掉弹幕之后时钟
         //   再也得不到校准, 永远停在 0。字幕曾经借这个时钟取时间, 于是"关弹幕看网课"
@@ -1312,7 +1309,7 @@ public partial class PlayerWindow : FluentWindow
         // 屏幕弹幕上限, 防止高弹幕量视频把内存和渲染拖垮
         if (DanmakuCanvas.Children.Count >= MaxOnScreenDanmaku) return;
 
-        // ★ 用弹幕时钟(已被 TimeChanged 校准过, 2026-11-21 起校准不再挂在 DispatchDanmaku 上), 不再读 `_mp.Time`:
+        // ★ 用弹幕时钟(已被 TimeChanged 校准过, 2026-11-21 起校准不再挂在 DispatchDanmaku 上), 不再读 `_engine.Time`:
         //   这里虽是低频路径, 但它与逐帧推进必须是**同一个时间源**, 否则新弹幕的出生点
         //   和在飞弹幕算 elapsed 的基准会差一次 Stopwatch 走时, 表现为"新弹幕进场位置偏一点"。
         var currentSeconds = spawnClock ?? DanmakuClock();
@@ -1544,7 +1541,7 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 逐帧推进所有在飞的弹幕。
     ///
-    /// ★ 时间的唯一来源是 _mp.Time(真实媒体时间, 毫秒精度), 不是墙钟。
+    /// ★ 时间的唯一来源是 _engine.Time(真实媒体时间, 毫秒精度), 不是墙钟。
     ///   于是"视频暂停"这件事**根本不需要分支**: 媒体时间不前进 ⇒ elapsed 不变 ⇒ 位置不变。
     ///   这正是原来用 DoubleAnimation 做不到的地方(那个走合成线程墙钟, 跟播放器无关)。
     ///
