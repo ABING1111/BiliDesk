@@ -50,15 +50,15 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void DetachVideoOverlay()
     {
-        try { VideoView.Content = null; } catch { }
+        // 2026-11-22(mpv): 覆盖层现在由 PlayerVideoView 自己持有, 清内容 + 隐藏即可,
+        // 不再需要反射 LibVLCSharp 的 ForegroundWindow。
+        try { VideoView.OverlayContent = null; } catch { }
 
         try
         {
-            var prop = typeof(VideoView).GetProperty("ForegroundWindow",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-            if (prop?.GetValue(VideoView) is Window fw) fw.Hide();
+            if (VideoView.OverlayWindow is Window fw) fw.Hide();
         }
-        catch { /* 拿不到就算了, 内容已清空, 顶多剩下一个全透明的空窗口 */ }
+        catch { /* 拿不到就算了, 内容已清空 */ }
     }
 
     /// <summary>
@@ -81,9 +81,7 @@ public partial class PlayerWindow : FluentWindow
         if (_closing) return;
         try
         {
-            var prop = typeof(VideoView).GetProperty("ForegroundWindow",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-            if (prop?.GetValue(VideoView) is not Window fw) return;
+            if (VideoView.OverlayWindow is not Window fw) return;
             if (ReferenceEquals(fw, _overlayKeyboardWindow)) return;
             _overlayKeyboardWindow = fw;
             fw.PreviewKeyDown += OnPreviewKeyDown;

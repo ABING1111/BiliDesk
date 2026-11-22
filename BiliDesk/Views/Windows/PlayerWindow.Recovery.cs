@@ -1,4 +1,5 @@
 using System;
+using BiliDesk.Playback;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows;
@@ -34,10 +35,10 @@ public partial class PlayerWindow : FluentWindow
     //     ④ 仍失败给出「重试」入口, 不再无限转圈。
 
     /// <summary>读播放器状态: 原生对象可能已失效(窗口正在关闭), 这里统一兜住。</summary>
-    private VLCState SafePlayerState()
+    private PlayerState SafePlayerState()
     {
         try { return _mp.State; }
-        catch { return VLCState.Error; }
+        catch { return PlayerState.Error; }
     }
 
     /// <summary>

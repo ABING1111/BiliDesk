@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -174,8 +174,7 @@ public partial class PlayerWindow : FluentWindow
         }
 
         // 回到 UI 线程解绑(VideoView 是 DependencyObject, 只能在 UI 线程操作)
-        try { VideoView.MediaPlayer = null; } catch { }
-        try { VideoView.Content = null; } catch { }
+        try { VideoView.OverlayContent = null; } catch { }
         // 释放 VideoView 自己持有的原生子窗口 + ForegroundWindow
         try { VideoView.Dispose(); } catch { }
 
@@ -211,13 +210,6 @@ public partial class PlayerWindow : FluentWindow
             try { _mp?.Stop(); } catch { }
             try { _mp?.Dispose(); } catch { }
             try { VideoView?.Dispose(); } catch { }
-        }
-        // 注意: 绝不释放 _libVLC —— 它是进程级共享实例(见 VlcCore),
-        // 由 App.OnExit 统一释放。窗口级别的反复创建/销毁不会再触碰原生库生命周期。
-        if (_playerRegistered)
-        {
-            _playerRegistered = false;
-            VlcCore.UnregisterPlayer();
         }
         Svc.Toast.Shown -= OnToast;
         Svc.Session.Changed -= UpdateButtonState;

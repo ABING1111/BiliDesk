@@ -1,4 +1,5 @@
 using System;
+using BiliDesk.Playback;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -175,36 +176,16 @@ public partial class PlayerWindow : FluentWindow
         UpdateSubtitleDelayText();
         UpdateSubtitleButton();
 
-        // LibVLC 走进程级共享单例(见 VlcCore): 初始化全进程只做一次, 且永不在这里释放。
-        // 反复 new/Dispose 原生库会引发 Windows 级访问违例弹窗:
-        //   "Exception Processing Message 0xc0000005 - Unexpected parameters"
-        // 窗口只负责挂载属于自己的 MediaPlayer, 开关窗口不再触碰原生库生命周期。
-        try
-        {
-            _libVLC = VlcCore.Get();
-        }
-        catch (Exception ex)
-        {
-            WriteLibVLCDebug(
-                $"\n\n--- VlcCore.Get() failed ---\n{ex}\n");
-            throw;
-        }
-
-        // 诊断: 把环境状态写到我们自己的 debug 文件, 万一 libvlc_new 失败也能看清
+        // 2026-11-22(feat/mpv-core): 播放内核换成 libmpv。PlayerEngineAdapter 保留现有
+        // 调用面(_mp.Time / Length / Volume / ...), 交互逻辑一行不改; 引擎在第一次 Play
+        // 时才创建 —— 那时 PlayerVideoView 的宿主 HWND 已建好, mpv 的 wid 才有意义。
         WriteLibVLCDebug(
             $"AppContext.BaseDirectory = {AppContext.BaseDirectory}\n" +
-            $"LIBVLC_PATH = {Environment.GetEnvironmentVariable("LIBVLC_PATH")}\n" +
-            $"VLC_PLUGIN_PATH = {Environment.GetEnvironmentVariable("VLC_PLUGIN_PATH")}\n" +
-            $"libvlc dir = {VlcCore.LibVlcDirectory} exists = {Directory.Exists(VlcCore.LibVlcDirectory)}\n" +
-            $"plugins dir = {VlcCore.PluginsDirectory} exists = {Directory.Exists(VlcCore.PluginsDirectory)}\n"
-        );
+            $"libmpv = {BiliDesk.Mpv.MpvNative.LibraryPath} exists = {File.Exists(BiliDesk.Mpv.MpvNative.LibraryPath)}\n");
 
-        _mp = new MediaPlayer(_libVLC);
-        // 登记窗口级 MediaPlayer: 进程退出时 VlcCore 据此判断能否安全释放共享原生库
-        _playerRegistered = true;
-        VlcCore.RegisterPlayer();
-        VideoView.MediaPlayer = _mp;
-
+        _mp = new PlayerEngineAdapter(VideoView, msg => WriteLibVLCDebug(msg + "\n"));
+        // 覆盖窗口是随 PlayerVideoView.Loaded 异步建出来的: 建好后补挂键盘/滚轮/激活处理
+        VideoView.SurfaceReady += (_, _) => Dispatcher.BeginInvoke(new Action(HookOverlayKeyboard));
         _mp.TimeChanged += OnTimeChanged;
         _mp.LengthChanged += OnLengthChanged;
         _mp.EndReached += OnEndReached;
@@ -351,42 +332,8 @@ public partial class PlayerWindow : FluentWindow
             FailOverlay.Visibility = Visibility.Visible;
             FailText.Text = "视频播放出错, 请检查网络或尝试其他清晰度";
         }), _mediaEpoch);
-
-        // ★★★ vout 建立/重建的那一刻就把原生窗口底色处理掉(2026-10-17, 修"最大化/还原后白块")。
-        //   为什么必须要这个事件、不能只靠定时器: libvlc 的 `Static` 子窗口是**新建**出来的,
-        //   它第一次上屏时就已经是白的了 —— 定时器最快也要 120ms 之后才轮到, 那 120ms
-        //   在浅色主题下就是用户看到的那一下"白块"。何况最大化/还原/换清晰度都会重建它。
-        //   ⇒ 挂在这里: vout 一出现就立刻刷成近黑 + 起一轮短时守护。
-        // ★★ 这里**故意同步执行、不走 Dispatcher**(与别的事件处理器不同):
-        //   `Vout` 在 libvlc 的 vout 线程上触发, 而"改类背景刷"是纯 Win32 调用,
-        //   不碰任何 WPF 对象 —— 走 Dispatcher 会把动作推迟到下一轮消息循环, 就晚了。
-        //   原生回调里抛异常会直接终结进程, 所以整段包在 try 里。
-        // ★ 参数 `Count` = 当前 vout 个数; 为 0 表示 vout 被销毁, 不必处理。
-        _mp.Vout += (_, e) =>
-        {
-            if (_closing || e.Count <= 0) return;
-            try
-            {
-                var hwnd = FindVideoStaticWindow();
-                if (hwnd != IntPtr.Zero) VideoBackdropInterop.PaintClassBackgroundLetterbox(hwnd);
-            }
-            catch { /* 原生回调里绝不能抛 */ }
-
-            // UI 线程上再起一轮短时守护(兜住"vout 稍后才建好"与"稍后又被重绘"）
-            try
-            {
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    if (_closing) return;
-                    // vout 重建 ⇒ EOF 那层黑一定可以撤了(新画面已经在出帧)。
-                    // ★ 2026-11-03: 这里只揭 EOF 黑层; resize/最大化/全屏不再有黑布。
-                    RestoreVideoAreaBackground();
-                    StartVideoBackdropFix();
-                }));
-            }
-            catch { /* 窗口正在销毁 */ }
-        };
-
+        // 2026-11-22(mpv): 删掉 VLC 的 vout 白闪守护(刷 Static 子窗口类背景)。
+        //   mpv 的视频窗口本身就是黑的, 没有"重建后露白底"这个问题; 相关助手方法留待 P4 一起删。
         _currentBvid = bvid;
         // ★ 这条构造函数路径(直接带 bvid new 出窗口)**不走 ResetForNewMedia**
         //   —— 而 _currentQn 的字段初值是"内置默认档"而不是用户设置。

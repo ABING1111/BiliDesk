@@ -183,6 +183,18 @@ public partial class App : Application
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         main.Show();
 
+#if DEBUG
+        // 开发/验证用(mpv 迁移): BILIDESK_DEV_LOCAL=<本地视频路径> 时直接打开播放器。
+        // 只在 Debug 构建里编译, 不影响发布版与正常交互。
+        var devLocal = Environment.GetEnvironmentVariable("BILIDESK_DEV_LOCAL");
+        if (!string.IsNullOrEmpty(devLocal))
+        {
+            Dispatcher.BeginInvoke(
+                new Action(() => Svc.Player.PlayLocalFile(devLocal)),
+                System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        }
+#endif
+
         // 系统托盘: 双击回主界面, 右键可退出(失败只记日志, 不影响启动)
         TrayService.Instance.Initialize();
 

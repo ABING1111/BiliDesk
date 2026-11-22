@@ -1,4 +1,5 @@
 using System;
+using BiliDesk.Playback;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -62,8 +63,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     protected override FrameworkElement? ScaleRoot => InfoPanel;
 
-    private readonly LibVLC _libVLC;
-    private readonly MediaPlayer _mp;
+    private readonly PlayerEngineAdapter _mp;
     private readonly DispatcherTimer _progressTimer;
     private string _currentBvid = "";
     /// <summary>当前播的是离线缓存里的本地文件(没有 aid/cid, 也没有在线互动)</summary>
@@ -562,8 +562,6 @@ public partial class PlayerWindow : FluentWindow
     /// ★ 只增不清: 它是窗口级单调计数, 换片不清(否则旧事件可能"撞"回同一个值)。
     /// </summary>
     private volatile int _mediaEpoch;
-    // 是否已在 VlcCore 登记本窗口的 MediaPlayer(构造函数中途抛异常时可能没登记, 避免计数漂移)
-    private bool _playerRegistered;
 
     // --- 清晰度 ---
     /// <summary>

@@ -1,4 +1,5 @@
 using System;
+using BiliDesk.Playback;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -93,7 +94,8 @@ public partial class PlayerWindow : FluentWindow
                 // ★★★ 2026-11-19(issue #88「点重播偶尔失效」): EOF 后那条 input 停在 ENDED,
                 //   LibVLC 3 会**直接忽略** play()。必须先 Stop, 与切清晰度/重建/换片同一条规则。
                 try { _mp.Stop(); } catch { }
-                var local = new Media(_libVLC, path, FromType.FromPath);
+                // 2026-11-22(mpv): 本地文件直接交给引擎
+                var local = BuildMedia(path, null);
                 PlayMedia(local);
             }
             else
@@ -804,12 +806,12 @@ public partial class PlayerWindow : FluentWindow
         //   Stop() → Opening → Playing, 途中状态必然不是 Playing。把预算一起清了
         //   就会变成"重建 → 归零 → 再重建"的无限循环(与 _seekRebuildTried 同一个坑)。
         var state = SafePlayerState();
-        if (state != VLCState.Playing && state != VLCState.Buffering)
+        if (state != PlayerState.Playing && state != PlayerState.Buffering)
         {
             ClearStallBaseline();
             // 遮罩只在"确定不会自己起来"的状态下收: 暂停/出错/已结束。
             // Stopped/Opening 是重建途中的过渡态, 遮罩必须继续盖着(否则用户看到的是一块黑屏)。
-            if (state == VLCState.Paused || state == VLCState.Error || state == VLCState.Ended)
+            if (state == PlayerState.Paused || state == PlayerState.Error || state == PlayerState.Ended)
                 HideBufferingIfShown();
             return;
         }
@@ -1151,7 +1153,7 @@ public partial class PlayerWindow : FluentWindow
             _resumeByStartTime = false;   // 本地文件走原来的"起播后设 Time"
             _rebuiltViaStartTime = false;
             try { _mp.Stop(); } catch { }   // 同上: 不 Stop 则 play() 被忽略
-            if (!PlayMedia(new Media(_libVLC, path, FromType.FromPath)))
+            if (!PlayMedia(BuildMedia(path, null)))
             {
                 _resumeAfterSwitchMs = 0;
                 WriteLibVLCDebug("[Seek] 重建后 play() 未被接受(本地文件)\n");
@@ -1288,7 +1290,7 @@ public partial class PlayerWindow : FluentWindow
         SeekTo(targetMs);
     }
 
-    private void OnLengthChanged(object? sender, MediaPlayerLengthChangedEventArgs e)
+    private void OnLengthChanged(object? sender, PlayerLengthChangedEventArgs e)
     {
         var epoch = _mediaEpoch;
         Dispatcher.BeginInvoke(new Action(() =>
@@ -1296,8 +1298,8 @@ public partial class PlayerWindow : FluentWindow
             if (_closing || epoch != _mediaEpoch) return;
             // 只接受合法时长: 过渡期(重建/停止)可能报 0, 覆盖掉接口给的 timelength 后,
             // EOF 判定会失去"片尾"基准, 把假 EOF 误判成播完。
-            if (e.Length <= 0) return;
-            _totalMs = e.Length;
+            if (e.LengthMs <= 0) return;
+            _totalMs = e.LengthMs;
             UpdateTotalDurationText();
             // 总时长变了 ⇒ 章节刻度的比例要重算(2026-11-21)。真实流长常与接口给的
             // timelength 差几毫秒到几秒, 刻度必须按**同一个** total 画才不会与气泡/进度条错位。
@@ -1308,7 +1310,7 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>上一次 TimeChanged 的位置(遮罩安全网用来判"位置真的在推进")。-1 = 还没收到。</summary>
     private long _lastLoadingRevealMs = -1;
 
-    private void OnTimeChanged(object? sender, MediaPlayerTimeChangedEventArgs e)
+    private void OnTimeChanged(object? sender, PlayerTimeChangedEventArgs e)
     {
         // ★ 2026-11-19: 旧 input 的时间戳不能在换片后才派发到 UI —— 否则会把新片的
         //   _lastKnownMs 改成上一条的位置, 续播/EOF 判定全部跟着错。
@@ -1322,8 +1324,8 @@ public partial class PlayerWindow : FluentWindow
             // ★ 只收**合法值**: libvlc 在 input 重建 / 分段 seek 途中会报出 -1 或
             //   超大值(实测读到 18446744073709551 —— ulong 溢出), 一旦写进 _lastKnownMs,
             //   依赖它的分段跳/看门狗就会算出一个荒谬的目标(2026-10-17 修 seek 时踩到)。
-            if (e.Time >= 0 && e.Time < 24L * 3600 * 1000)
-                _lastKnownMs = e.Time;
+            if (e.TimeMs >= 0 && e.TimeMs < 24L * 3600 * 1000)
+                _lastKnownMs = e.TimeMs;
             // ★ EOF 黑层: 能收到时间推进 = 视频正在出帧, 这一刻撤掉最准。
             //   不能只靠 Playing 事件 —— 进全屏时视频本来就在播, Playing 不会再来一次。
             RestoreVideoAreaBackground();
@@ -1335,9 +1337,9 @@ public partial class PlayerWindow : FluentWindow
             //   画面已经在出帧, 遮罩没有存在意义, 强制收起。
             //   ★ 只收"跳转/缓冲"这一类, 不动"正在切换清晰度""正在获取播放地址" ——
             //     那些是加载链自己的生命周期(见 HideBufferingIfShown 的同款约定)。
-            if (e.Time >= 0 && e.Time != _lastLoadingRevealMs)
+            if (e.TimeMs >= 0 && e.TimeMs != _lastLoadingRevealMs)
             {
-                if (_lastLoadingRevealMs >= 0 && e.Time > _lastLoadingRevealMs &&
+                if (_lastLoadingRevealMs >= 0 && e.TimeMs > _lastLoadingRevealMs &&
                     LoadingOverlay != null && LoadingOverlay.Visibility == Visibility.Visible &&
                     LoadingText != null &&
                     (IsStallOverlayText(LoadingText.Text) ||
@@ -1345,7 +1347,7 @@ public partial class PlayerWindow : FluentWindow
                 {
                     HideLoading();
                 }
-                _lastLoadingRevealMs = e.Time;
+                _lastLoadingRevealMs = e.TimeMs;
             }
             // ★ 这里**不**调 UpdateProgressUi —— 进度条与跳转看门狗的唯一心跳是 _progressTimer。
             //   曾经这里也在调, 于是进度 UI 有两个时钟: 等待期定时器 100ms 一跳, 而 TimeChanged
@@ -1359,9 +1361,9 @@ public partial class PlayerWindow : FluentWindow
             //   得不到校准、停在 0; 字幕曾经借这个时钟取时间, 于是"关弹幕看网课"就表现为
             //   字幕一直停在第一句(见 RefreshSubtitleNow 的说明)。
             //   校准只取决于"媒体时间推进", 与弹幕开关无关, 所以在 TimeChanged 里无条件做。
-            //   ★ 用事件自带的 e.Time 而不是再读一次 _mp.Time: 同一个值, 少一次原生读取。
-            if (e.Time >= 0 && e.Time < 24L * 3600 * 1000)
-                CalibrateDanmakuClock(e.Time / 1000.0);
+            //   ★ 用事件自带的 e.TimeMs 而不是再读一次 _mp.Time: 同一个值, 少一次原生读取。
+            if (e.TimeMs >= 0 && e.TimeMs < 24L * 3600 * 1000)
+                CalibrateDanmakuClock(e.TimeMs / 1000.0);
 
             DispatchDanmaku();
             // 字幕同样要在这对齐一次(2026-11-15): 心跳是 100ms 粒度, seek 后靠 TimeChanged
