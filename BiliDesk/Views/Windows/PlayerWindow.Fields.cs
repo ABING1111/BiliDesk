@@ -604,7 +604,10 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 当前视频的收藏夹列表缓存。查询点亮态和打开勾选窗原本各请求一次,
-    /// 这里共用同一份结果; 换片 / 收藏提交成功后作废。
+    /// 这里共用同一份结果; 换片 / 收藏提交成功 / 账号切换后由
+    /// <see cref="InvalidateFavFolderCache"/> 作废。
+    /// ★★ 写回时必须校验请求期间没有换片(见 RefreshFavStateAsync), 否则会把上一条的
+    ///   列表挂到新 aid 上 —— 这份缓存会驱动勾选窗的预勾选与 add/del 差集。
     /// </summary>
     private List<FavFolder>? _favFolders;
     private long _favFoldersAid;

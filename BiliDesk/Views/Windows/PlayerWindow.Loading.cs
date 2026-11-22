@@ -860,8 +860,7 @@ public partial class PlayerWindow : FluentWindow
         _currentCid = 0;
         _aid = 0;
         // 收藏夹列表是按 aid 查的: 换片后上一条的缓存必须作废。
-        _favFolders = null;
-        _favFoldersAid = 0;
+        InvalidateFavFolderCache();
         // 换片源: 上一片的合流任务立刻作废(否则会白下几十兆, 也可能把结果写进新片的键)
         CancelRemuxPrefetch();
         _ownerMid = 0;
