@@ -85,6 +85,20 @@
   </ItemGroup>
 
   <!--
+    mpv core (feat/mpv-core branch): the libmpv native library is NOT committed
+    (single file ~110MB). Drop it at BiliDesk\libmpv\win-x64\libmpv-2.dll and it
+    will be copied to the output directory automatically. Missing file = the app
+    still builds, mpv engine simply reports unavailable.
+  -->
+  <ItemGroup Condition="Exists('libmpv\win-x64\libmpv-2.dll')">
+    <Content Include="libmpv\win-x64\libmpv-2.dll">
+      <Link>libmpv\win-x64\libmpv-2.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!--
     ============================ LibVLC 鍘熺敓搴撴€庝箞閮ㄧ讲 ============================
 
     VideoLAN.LibVLC.Windows 鑷繁浼氭妸鍘熺敓搴撴斁鍒?<OutDir>/libvlc/win-x64/锛堝惈 plugins/锛夛紝
