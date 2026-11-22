@@ -28,6 +28,7 @@ public sealed class MpvEngine : IPlayerEngine
     private long _stallWindowFrame = -1;
     private int _stallStreak;
     private long _startMs;
+    private bool _isLive;
     private int _loadGeneration;
     private int _decodeErrors;
     private long _decodeWindowAt = -1;
@@ -76,6 +77,10 @@ public sealed class MpvEngine : IPlayerEngine
     {
         get
         {
+            // ★ 2026-11-22: 直播没有"总时长"语义。mpv 对 HLS/FLV 直播会给出一个
+            //   滚动窗口的 duration(实测 17s), App 会把它当成点播时长显示
+            //   "00:00 / 00:17" 且进度条可拖 —— 与 main 分支的直播行为不一致。
+            if (_isLive) return 0;
             var duration = _player.Duration;
             return double.IsNaN(duration) || duration <= 0 ? 0 : (long)Math.Round(duration * 1000.0);
         }
@@ -142,6 +147,7 @@ public sealed class MpvEngine : IPlayerEngine
 
         _state = PlayerState.Opening;
         _startMs = media.StartMs;
+        _isLive = media.IsLive;
         _loadGeneration++;
         _frameNumber = -1;
         _stallWindowAt = -1;
@@ -367,6 +373,8 @@ public sealed class MpvEngine : IPlayerEngine
                 break;
             case "duration":
             {
+                // 直播的 duration 是滚动窗口, 不能传给上层(否则 "00:00 / 00:17")
+                if (_isLive) break;
                 var ms = (long)Math.Round(e.AsDouble() * 1000.0);
                 if (ms > 0) LengthChanged?.Invoke(this, new PlayerLengthChangedEventArgs(ms));
                 break;

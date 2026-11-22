@@ -186,6 +186,14 @@ public partial class App : Application
 #if DEBUG
         // 开发/验证用(mpv 迁移): BILIDESK_DEV_LOCAL=<本地视频路径> 时直接打开播放器。
         // 只在 Debug 构建里编译, 不影响发布版与正常交互。
+        // 开发/验证用: BILIDESK_DEV_LIVE=<roomId> 直接打开直播间
+        var devLive = Environment.GetEnvironmentVariable("BILIDESK_DEV_LIVE");
+        if (long.TryParse(devLive, out var devRoom) && devRoom > 0)
+        {
+            Dispatcher.BeginInvoke(
+                new Action(() => Svc.Player.PlayLive(devRoom)),
+                System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        }
         // 开发/验证用: BILIDESK_DEV_BVID=<bvid> 直接打开在线视频(走完整 DASH 路径)
         var devBvid = Environment.GetEnvironmentVariable("BILIDESK_DEV_BVID");
         if (!string.IsNullOrEmpty(devBvid))
