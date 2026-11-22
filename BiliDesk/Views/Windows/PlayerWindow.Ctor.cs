@@ -110,6 +110,18 @@ public partial class PlayerWindow : FluentWindow
         HookPopupToggle(SpeedPopup, SpeedBtn);
         HookPopupToggle(SubtitlePopup, BtnSubtitle);
         HookPopupToggle(PagesPopup, BtnPages);
+        // 分P 弹层(2026-11-22): 位置改由代码摆, 锚在**不滚动**的 InfoContentHost 上。
+        // ★ 不能再用 Placement=Bottom + PlacementTarget=BtnPages: 按钮在 InfoPanel 的
+        //   ScrollViewer 里, 滚轮一滚按钮就移动, WPF 的 Popup 会跟着 PlacementTarget 重新定位 ——
+        //   用户报的"分P 面板随滚轮一起向下移动"就是它。
+        // ★ 锚点换成信息栏外层后, 打开时按按钮的当前屏幕坐标算一次偏移(见 PositionPagesPopupAtButton);
+        //   同时页面一滚就收起弹层(见 OnInfoScrollChanged) —— 它不会跟着滚动走, 也不会
+        //   悬在滚动后的无关内容上。顺带把弹层夹回窗口内(见该方法)。
+        PagesPopup.PlacementTarget = InfoContentHost;
+        PagesPopup.Placement = System.Windows.Controls.Primitives.PlacementMode.Relative;
+        PagesPopup.Opened += (_, _) => Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Loaded,
+            new Action(PositionPagesPopupAtButton));
         HookPopupToggle(ChapterPopup, BtnChapters);
         // ★ 视频区手势判定仍直接用"是否开着"作判据(见 AnyPlayerPopupOpen), 不订阅 Closed:
         //   2026-10-13 第一版在这里订阅过 Closed 记时间窗, 实测证明 Closed 晚于视频区的

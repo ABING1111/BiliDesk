@@ -418,6 +418,19 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing) return;
         if (sender is not ScrollViewer sv) return;
+
+        // 分P 弹层(2026-11-22): 弹层的位置锚在**不滚动**的信息栏外层, 页面一滚它就会
+        // 悬在完全不相干的内容上(用户截图: 滚到相关视频了, 分P 面板还浮在那儿)。
+        // 信息栏自己滚动视作"离开这个入口"的动作, 直接收起 —— 与网页/系统下拉层的行为一致。
+        // ★★ 必须判 OriginalSource: ScrollChanged 是**冒泡**的路由事件, 弹层里分P 列表
+        //    自己的 ScrollViewer 滚动时, 事件也会送到 InfoScroll 的这个处理器上
+        //    (实测: sender=InfoScroll, OriginalSource=列表自己的 ScrollViewer,
+        //     VerticalChange=列表滚了多少)。只看 VerticalChange 会把"在面板里滚列表"
+        //     误判成"页面在滚", 面板刚滚一下就被自己关掉(用户报)。
+        // ★ 判 VerticalChange 而不是每次 ScrollChanged: 内容变高/变宽导致的布局事件
+        //   也会触发本事件, 那种情况下弹层不该被关掉。
+        if (ReferenceEquals(e.OriginalSource, sv) && Math.Abs(e.VerticalChange) > 0.5)
+            ClosePagesPopup();
         // 回到顶部要先于"往上滚就返回"判定: 往上滚回阈值以内时它也要熄灭
         UpdateCommentBackToTop(sv);
         // issue #89: 向下滚时把右下角工具列淡出, 别让它一直压着评论最右侧几列字

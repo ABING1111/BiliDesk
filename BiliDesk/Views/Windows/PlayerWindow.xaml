@@ -2705,11 +2705,14 @@
                                        于是"合集和分P 只能二选一", 那是错的。
                                        改成挂在按钮下方的 Popup 后, 合集面板开着时点分P
                                        能看见"当前 P"再决定, 两边信息都在。
-                                     ★ Popup 是独立 HWND, 位置由 PlacementTarget 保证, 不必担心
-                                       盖住 VideoView 的 airspace(合集面板当年为这个才改用 Grid)。
+                                     ★ Popup 是独立 HWND, 不必担心盖住 VideoView 的 airspace
+                                       (合集面板当年为这个才改用 Grid)。位置在代码里摆
+                                       (见 PlayerWindow.Ctor.cs 与 PositionPagesPopupAtButton):
+                                       锚点是**不滚动**的 InfoContentHost, 打开时再按「分P」按钮的
+                                       当前屏幕坐标算偏移 —— 直接锚在按钮上会被 ScrollViewer
+                                       带着一起滚(用户报"分P 面板随滚轮向下移动")。
                                      ★ MaxHeight 必填: 40 个 P 的纪录片不封顶的话弹层会顶出屏幕。 -->
-                                <Popup x:Name="PagesPopup" PlacementTarget="{Binding ElementName=BtnPages}"
-                                       Placement="Bottom" StaysOpen="False" AllowsTransparency="True"
+                                <Popup x:Name="PagesPopup" StaysOpen="False" AllowsTransparency="True"
                                        PopupAnimation="Fade" Closed="OnPagesPopupClosed">
                                     <Border Background="{DynamicResource OverlaySurfaceBrush}"
                                             CornerRadius="10" BorderThickness="1"
