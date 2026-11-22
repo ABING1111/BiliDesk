@@ -29,6 +29,9 @@ public sealed class MpvEngine : IPlayerEngine
     private int _stallStreak;
     private long _startMs;
     private int _loadGeneration;
+    private int _decodeErrors;
+    private long _decodeWindowAt = -1;
+    private long _lastDecodeStallAt = -1;
     private PlayerState _state = PlayerState.Idle;
     private bool _disposed;
 
@@ -49,6 +52,7 @@ public sealed class MpvEngine : IPlayerEngine
         _player.FileLoaded += OnFileLoaded;
         _player.EndFile += OnEndFile;
         _player.PropertyChanged += OnPropertyChanged;
+        _player.LogMessage += OnLogMessage;
     }
 
     public static bool IsAvailable => MpvPlayer.IsAvailable;
@@ -144,6 +148,8 @@ public sealed class MpvEngine : IPlayerEngine
         _stallWindowTimeMs = -1;
         _stallWindowFrame = -1;
         _stallStreak = 0;
+        _decodeErrors = 0;
+        _decodeWindowAt = -1;
         _timeThrottle.Reset();
         return _player.Load(request) >= 0;
     }
@@ -252,6 +258,37 @@ public sealed class MpvEngine : IPlayerEngine
         _stallWindowAt = now;
         _stallWindowTimeMs = timeMs;
         _stallWindowFrame = frames;
+    }
+
+    /// <summary>
+    /// 用 mpv 的 warn 日志兜底: 硬件解码器连续报 "Error while decoding / Invalid NAL"
+    /// 说明视频流已经被 CDN 的断流/重连弄坏了(2026-11-22 实测: 音频继续、画面冻住,
+    /// 但时间在走, 原来的 Time 卡顿检测完全看不到)。
+    /// </summary>
+    private void OnLogMessage(object? sender, MpvLogEventArgs e)
+    {
+        if (_disposed) return;
+        var text = e.Text;
+        if (!text.Contains("Error while decoding", StringComparison.Ordinal) &&
+            !text.Contains("Invalid NAL", StringComparison.Ordinal) &&
+            !text.Contains("Error splitting", StringComparison.Ordinal))
+            return;
+
+        var now = Environment.TickCount64;
+        if (_decodeWindowAt < 0 || now - _decodeWindowAt > 10_000)
+        {
+            _decodeWindowAt = now;
+            _decodeErrors = 0;
+        }
+
+        _decodeErrors++;
+        if (_decodeErrors < 3) return;
+        if (_lastDecodeStallAt >= 0 && now - _lastDecodeStallAt < 30_000) return;
+
+        _lastDecodeStallAt = now;
+        _decodeErrors = 0;
+        _log?.Invoke("[mpv] 连续解码错误 → 判定视频流损坏, 触发自愈\n");
+        VideoStalled?.Invoke(this, EventArgs.Empty);
     }
 
     private long ReadFrameNumber()

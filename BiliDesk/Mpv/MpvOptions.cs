@@ -66,6 +66,8 @@ public static class MpvOptions
             Pair("input-default-bindings", "no"),
             Pair("input-vo-keyboard", "no"),
             Pair("osc", "no"),
+            // 不做 youtube-dl 回退: 我们只放直链, 失败时它只会拖慢报错并刷日志
+            Pair("ytdl", "no"),
             Pair("osd-level", "0"),
             Pair("idle", "yes"),
             Pair("keep-open", "no"),

@@ -30,6 +30,21 @@ public sealed class MpvPropertyEventArgs : EventArgs
     };
 }
 
+/// <summary>mpv 原生日志(客户端 API 收到的 msg-level &lt;= warn 的消息)。</summary>
+public sealed class MpvLogEventArgs : EventArgs
+{
+    public MpvLogEventArgs(string prefix, string level, string text)
+    {
+        Prefix = prefix;
+        Level = level;
+        Text = text;
+    }
+
+    public string Prefix { get; }
+    public string Level { get; }
+    public string Text { get; }
+}
+
 public sealed class MpvEndFileEventArgs : EventArgs
 {
     public MpvEndFileEventArgs(int reason, int error)
@@ -120,6 +135,7 @@ public sealed class MpvPlayer : IDisposable
     public event EventHandler? FileLoaded;
     public event EventHandler<MpvEndFileEventArgs>? EndFile;
     public event EventHandler<MpvPropertyEventArgs>? PropertyChanged;
+    public event EventHandler<MpvLogEventArgs>? LogMessage;
 
     /// <summary>加载一个媒体。DASH 音轨走 file-local 的 audio-file, 与视频同一时刻起播。</summary>
     public int Load(MpvMediaRequest request)
@@ -272,6 +288,7 @@ public sealed class MpvPlayer : IDisposable
                     var text = msg.Text == IntPtr.Zero ? "" : Marshal.PtrToStringUTF8(msg.Text) ?? "";
                     var prefix = msg.Prefix == IntPtr.Zero ? "" : Marshal.PtrToStringUTF8(msg.Prefix) ?? "";
                     _log?.Invoke("[mpv] " + prefix + text);
+                    LogMessage?.Invoke(this, new MpvLogEventArgs(prefix, "", text));
                     break;
                 }
             }
