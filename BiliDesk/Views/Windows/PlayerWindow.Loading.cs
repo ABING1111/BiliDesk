@@ -888,6 +888,8 @@ public partial class PlayerWindow : FluentWindow
         // 评论总数属于"上一条视频" —— 不清的话换了片子那句"共 N 条评论"还挂着旧数字,
         // 而排序入口的可见性正是跟着它走的。排序**方式**(_commentSort)不清: 那是用户习惯。
         _commentTotal = 0;
+        // tab 上那个评论数小标签同理: 本地文件/直播根本不会再有新数字, 上一条的必须摘掉
+        UpdateCommentCountBadge(0);
         // 本次实际排序回到用户偏好(_commentSort); 新视频重新试热门, 热门空再回退成时间
         _effectiveCommentSort = _commentSort;
         _commentReturnRpid = 0;
@@ -2052,6 +2054,8 @@ public partial class PlayerWindow : FluentWindow
         VideoTitleText.Text = displayTitle;
         ViewCountText.Text = VideoItem.FormatCount(detail.ViewCount);
         DanmakuCountText.Text = VideoItem.FormatCount(detail.DanmakuCount);
+        // 「评论」tab 的小标签: 数字来自 view 接口的 stat.reply, 与详情同一次请求
+        UpdateCommentCountBadge(detail.ReplyCount);
         PubDateText.Text = detail.Pubdate > 0
             ? DateTimeOffset.FromUnixTimeSeconds(detail.Pubdate).LocalDateTime.ToString("yyyy-MM-dd")
             : "";

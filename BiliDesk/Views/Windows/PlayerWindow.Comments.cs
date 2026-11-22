@@ -130,6 +130,34 @@ public partial class PlayerWindow : FluentWindow
             new Action(() => UpdateContentTabIndicator(animate)));
     }
 
+    /// <summary>
+    /// 刷新「评论」tab 右上角那个评论总数小标签(2026-11-22)。
+    ///
+    /// 数字有两个来源, 先后关系不能反:
+    ///   ① view 接口的 <c>stat.reply</c>(详情就绪时就能拿到, 一次请求都不多花);
+    ///   ② 评论区首屏接口的 <c>cursor.all_count</c> —— 它只数**根评论**, 与 ① 不是同一口径,
+    ///      所以仅在 ① 缺失(0)时兜底, 不能拿它覆盖 ①。
+    /// ★ 0 / 未知一律收起标签: 挂个"0"既没信息量, 又容易让人以为评论没加载出来。
+    /// ★ 标签出现/消失会改 tab 的实测宽度, 底部横条要跟着重新对一次(无动画)。
+    /// </summary>
+    private void UpdateCommentCountBadge(long count)
+    {
+        if (CommentCountBadge == null || CommentCountBadgeText == null) return;
+        if (count <= 0)
+        {
+            CommentCountBadge.Visibility = Visibility.Collapsed;
+            QueueContentTabIndicatorUpdate(animate: false);
+            return;
+        }
+        CommentCountBadgeText.Text = VideoItem.FormatCount(count);
+        CommentCountBadge.Visibility = Visibility.Visible;
+        QueueContentTabIndicatorUpdate(animate: false);
+    }
+
+    /// <summary>标签当前是否已经有数字(供评论接口"缺失才兜底"的判断用)。</summary>
+    private bool HasCommentCountBadge =>
+        CommentCountBadge != null && CommentCountBadge.Visibility == Visibility.Visible;
+
     /// <summary>tab 行首次布局完成: 无动画地把横条摆到初始选中项下面(窗口复用时不会重入)。</summary>
     private void OnContentTabRowLoaded(object sender, RoutedEventArgs e)
         => QueueContentTabIndicatorUpdate(animate: false);
@@ -486,6 +514,9 @@ public partial class PlayerWindow : FluentWindow
                 //   `_commentsLoaded && !force` 短路, 网络抖动一次就再也刷不出来。
                 _commentsLoaded = cmtOk;
                 _commentTotal = total;
+                // tab 小标签的兜底: view 接口没给 stat.reply(个别稿件/风控降级)时,
+                // 用评论区返回的根评论总数顶上 —— 只在标签还是空的时候填, 不覆盖更准的那个数
+                if (cmtOk && total > 0 && !HasCommentCountBadge) UpdateCommentCountBadge(total);
                 _effectiveCommentSort = displaySort;
                 // 热门没数据回退成时间时, 详情页里的楼中楼也要跟着换回"时间"顺序:
                 // 否则按钮亮的是「时间」, 眼前回复还是「热门」序。
@@ -1474,7 +1505,7 @@ public partial class PlayerWindow : FluentWindow
         // tab 文案随状态走: 进详情后"评论"变"评论详情";
         // 「返回评论列表」在**右下角悬浮工具列**(2026-11-05 从 tab 行搬走:
         // 它压在「热门 / 时间」排序按钮上, 排序点不到), 这里把它亮出来。
-        TabComments.Content = "评论详情";
+        TabCommentsText.Text = "评论详情";
         // tab 变长了: 底部横条跟着变宽(见 UpdateContentTabIndicator)
         QueueContentTabIndicatorUpdate(animate: true);
         BtnBackToComments.Visibility = Visibility.Visible;
@@ -1578,7 +1609,7 @@ public partial class PlayerWindow : FluentWindow
         _detailThreadRoot = _detailFocus = null;
         ClearReplyTarget();
         // tab 文案与右下角悬浮工具列里的返回按钮一起还原
-        TabComments.Content = "评论";
+        TabCommentsText.Text = "评论";
         // 文案缩回「评论」: 横条同步收窄
         QueueContentTabIndicatorUpdate(animate: true);
         BtnBackToComments.Visibility = Visibility.Collapsed;

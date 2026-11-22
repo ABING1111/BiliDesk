@@ -331,6 +331,12 @@ public class VideoDetail
     public long ViewCount { get; set; }
     public long LikeCount { get; set; }
     public long DanmakuCount { get; set; }
+    /// <summary>
+    /// 评论总数(view 接口的 <c>stat.reply</c>)—— 「评论」tab 右上角那个小标签用。
+    /// 与评论区首屏接口的 <c>cursor.all_count</c> 是**两个统计口径**(那边只数根评论),
+    /// 所以这里优先用它, 缺失(0)时由评论区加载结果兜底(见 UpdateCommentCountBadge)。
+    /// </summary>
+    public long ReplyCount { get; set; }
     /// <summary>投币数 / 收藏数 / 分享数(操作栏"图标 + 数量"那套用; view 接口的 stat 里拿)</summary>
     public long CoinCount { get; set; }
     public long FavoriteCount { get; set; }

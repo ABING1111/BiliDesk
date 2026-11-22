@@ -2601,9 +2601,34 @@
                                     <RadioButton x:Name="TabIntro" Grid.Column="0" GroupName="ContentTab"
                                                  Style="{StaticResource PlayerContentTabStyle}" Content="简介"
                                                  Checked="TabIntro_Checked" />
+                                    <!-- 「评论」tab = 文字 + 评论总数小标签(2026-11-22)。
+                                         ★ 为什么不用 Content="评论" 再另找位置贴标签: 进「评论详情」时
+                                           代码会把文案改成「评论详情」(见 ShowCommentDetail / CloseCommentDetail),
+                                           写 Content 字符串会把整个内容换掉, 标签跟着消失。改成模板内的
+                                           TextBlock 后, 只改文字, 标签留在原处。
+                                         ★ 标签底色用 ControlFillDefaultBrush(浅灰, 两套主题各自成立),
+                                           文字 11px 次要色: 它只是"看一眼有多少条"的辅助信息,
+                                           不能和 15px 的 tab 文字抢焦点。
+                                         ★ 数字为 0 / 未知时整个标签 Collapsed(0 条不是有用信息,
+                                           而"0"挂在 tab 上反而像没加载出来)。 -->
                                     <RadioButton x:Name="TabComments" Grid.Column="1" GroupName="ContentTab"
-                                                 Style="{StaticResource PlayerContentTabStyle}" Content="评论"
-                                                 Checked="TabComments_Checked" />
+                                                 Style="{StaticResource PlayerContentTabStyle}"
+                                                 Checked="TabComments_Checked">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock x:Name="TabCommentsText" Text="评论" FontSize="15"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
+                                            <Border x:Name="CommentCountBadge" Visibility="Collapsed"
+                                                    Background="{DynamicResource ControlFillDefaultBrush}"
+                                                    CornerRadius="7" Padding="5,1" Margin="6,0,0,0"
+                                                    VerticalAlignment="Center" IsHitTestVisible="False">
+                                                <TextBlock x:Name="CommentCountBadgeText" Text="0" FontSize="11"
+                                                           FontWeight="Normal" LineHeight="14"
+                                                           VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                                            </Border>
+                                        </StackPanel>
+                                    </RadioButton>
                                     <!-- 视频合集入口(2026-10-02 新增; 2026-10-03 改成与 简介/评论 统一风格):
                                          无合集的视频整个按钮**隐藏**(不是禁用) —— 右侧信息栏只有 400px,
                                          一个常年灰着的按钮既占位又像是坏了, 而 B 站自己在没有合集时也不给入口。
