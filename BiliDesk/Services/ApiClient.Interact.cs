@@ -162,6 +162,12 @@ public partial class ApiClient
     /// 回复楼中楼时必须**同时**带 `root`(顶层评论 id) 与 `parent`(被回复的那条 id) ——
     /// 实测(2026-09-25 抓包): 只回复楼主时两者相等; 回复楼中楼里的某个人时 root 仍是顶层、
     /// parent 指向那个人。少了 root 会被服务端当成普通评论挂到根上(表现是"回错位置")。
+    ///
+    /// ★ 表情短代码(`[doge]` / `[tv_doge]`)直接放进 message 即可, **不需要**
+    ///   `new_face_version=1` —— 那个参数只有私信发送要带(见 ApiClient.Message.cs 的 SendMsgAsync)。
+    ///   2026-11-22 真机实测: 从这里发出的评论正文里带短代码, 服务端按表情入库,
+    ///   回显时由 content.emote 带回图片地址(见 ParseComment), 显示成图片表情。
+    ///   别照着私信那条去补参数: 评论接口不认它, 加了只是噪音。
     /// </summary>
     /// <param name="rootRpid">要回复的**顶层评论** id; 0 = 发普通评论(挂在新楼层上)</param>
     /// <param name="parentRpid">被回复的那条 id; 传 0 表示"回复楼主"(自动用 rootRpid)</param>
