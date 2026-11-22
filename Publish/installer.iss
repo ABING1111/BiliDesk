@@ -35,7 +35,7 @@ WizardStyle=modern
 ; 写 x64os 而不是已弃用的 x64 —— Inno 6.3+ 对 x64 会打弃用警告并自动替换成 x64os,
 ; 两者语义完全一致(都要求 OS 为 x64), 直接写 x64os 让编译输出干净。
 ; 别改成 x64compatible: 那个会允许在 ARM64 上以模拟方式安装, 而本包内含 x64 原生
-; LibVLC 插件, 没在 ARM64 上验证过。
+; libmpv 原生库, 没在 ARM64 上验证过。
 ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
 ; 应用是 x64-only
@@ -50,7 +50,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 ; Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Files]
-; 框架依赖发布目录(不含 .NET 运行时、含 libvlc/win-x64)
+; 框架依赖发布目录(不含 .NET 运行时、含 libmpv/win-x64)
 Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]

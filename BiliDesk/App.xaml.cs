@@ -405,7 +405,7 @@ public partial class App : Application
         Svc.Settings.Flush();
         // 托盘图标先摘: 不摘的话 Explorer 会缓存一个"幽灵图标"直到鼠标划过
         TrayService.Instance.Dispose();
-        VlcCore.Shutdown();
+        
         base.OnExit(e);
     }
 }

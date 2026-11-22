@@ -5,7 +5,6 @@ using System.Threading.Tasks;
 using System.Windows;
 using BiliDesk.Services;
 using BiliDesk.Utils;
-using LibVLCSharp.Shared;
 
 namespace BiliDesk.Views;
 

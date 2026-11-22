@@ -21,9 +21,6 @@ using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
 using BiliDesk.Views.Controls;
-using LibVLCSharp.Shared;
-using LibVLCSharp.WPF;
-using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace BiliDesk.Views;
 

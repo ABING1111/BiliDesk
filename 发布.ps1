@@ -1,8 +1,8 @@
-﻿# BiliDesk 发布脚本
+# BiliDesk 发布脚本
 #
 # 一次产出两套(2026-09-26 定):
 #   1) 便携版(zip): 自包含 + 单文件压缩 —— 用户机器**不用装 .NET**, 解压即用;
-#   2) 安装器载荷: 框架依赖(只含 app + LibVLC, ~67MB) —— 配 Publish\installer.iss 打 Inno 安装包,
+#   2) 安装器载荷: 框架依赖(只含 app + libmpv) —— 配 Publish\installer.iss 打 Inno 安装包,
 #      .NET 桌面运行时(8+)由安装器检测、全无时引导下载 .NET 10(见 installer.iss 的 [Code];
 #      程序在 csproj 配了 RollForward=Major, 只有 .NET 10+ 也能跑)。
 #
@@ -83,7 +83,7 @@ foreach ($dll in Get-ChildItem (Join-Path $PortableDir "*_cor3.dll") | Where-Obj
 # 为什么需要: 本机(DSH 沙箱)会给**工作区内**新建的文件打 Low 完整性标签
 # (`Mandatory Label\Low Mandatory Level`)。带这个标签的 exe 一旦被跑起来,
 # 进程就以**低完整性**运行, 于是:
-#   ① 读不了机器级证书存储 ⇒ VLC 的 GnuTLS 无法校验 B 站证书 ⇒ **视频一帧都放不出**
+#   ① 读不了机器级证书存储 ⇒ 原生 HTTP 栈无法校验 B 站证书 ⇒ **视频一帧都放不出**
 #      (表现:"视频播放出错, 请检查网络或尝试其他清晰度")。
 #      ★ 这正是"bin\Debug 下播放正常、便携版却放不出"的原因 —— 那个目录是 Medium
 #        (2026-10-11 修过一次, 见长期记忆)。

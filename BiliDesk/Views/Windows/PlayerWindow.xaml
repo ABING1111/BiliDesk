@@ -6,7 +6,6 @@
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
              xmlns:behaviors="clr-namespace:BiliDesk.Helpers"
              xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-             xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
      xmlns:sys="clr-namespace:System;assembly=mscorlib"
              Title="BiliDesk 播放器" Width="1280" Height="760"
              MinWidth="840" MinHeight="600" WindowStartupLocation="CenterScreen"
