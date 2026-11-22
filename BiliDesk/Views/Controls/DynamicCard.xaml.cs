@@ -61,6 +61,7 @@ public partial class DynamicCard : UserControl
             _expanded = false;
             _menu = null;
             ContextMenu = null;
+            SetMoreActive(false);
             // 虚拟化回收: 上一条是展开态时, 复用到下一条必须复位, 否则新卡片一进来就是"全文"态
             if (ContentTextBlock != null) ContentTextBlock.Visibility = Visibility.Visible;
             if (ContentRichText != null)
@@ -328,7 +329,23 @@ public partial class DynamicCard : UserControl
         _menu ??= BuildMenu();
         ContextMenu = _menu;
         if (sender is UIElement target) _menu.PlacementTarget = target;
+
+        // 已经开着(点第二下): 先关掉, 不让它原地重开
+        if (_menu.IsOpen)
+        {
+            _menu.IsOpen = false;
+            return;
+        }
+
+        SetMoreActive(true);
         _menu.IsOpen = true;
+    }
+
+    /// <summary>「更多」按钮的常亮态: 菜单开着时铺底, 关掉即收回(样式见 CardMoreButtonStyle)。</summary>
+    private void SetMoreActive(bool active)
+    {
+        if (MoreButton == null) return;
+        MoreButton.IsChecked = active;
     }
 
     private void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
@@ -353,6 +370,9 @@ public partial class DynamicCard : UserControl
     {
         var menu = new ContextMenu();
         var item = Current;
+
+        // 菜单一关, 「更多」按钮的常亮态跟着收回(右键菜单也走这条, 只是那边本来就没点亮)
+        menu.Closed += (_, _) => SetMoreActive(false);
 
         menu.Items.Add(MakeMenuItem("查看动态详情", "\uE8A7", (_, _) =>
         {

@@ -6,6 +6,69 @@
              Background="Transparent" Focusable="False"
              PreviewMouseLeftButtonDown="OnCardPress">
     <UserControl.Resources>
+        <!-- 动态卡右上角「更多」按钮(2026-11-22 用户要求):
+             常态**不铺底**, 只露三个点; 菜单打开期间保持一层底色, 关掉菜单才消失。
+             ★ 为什么不用 BareIconButtonStyle 了: 那个样式的底色只跟悬停/按下走, 而点这一下会
+               立刻弹出 ContextMenu —— 鼠标捕获被菜单拿走, IsPressed 马上复位, 底色只闪一帧,
+               菜单开着的时候按钮又是白的, 看起来就是"按下去没变化"。
+               所以这里改用 ToggleButton, 由 IsChecked 表示"菜单开着"(见 OnMoreClick / SetMoreActive)。
+             ★ ContentPresenter.Resources 里那段 TextBlock 补丁**必须带上** —— 全局隐式 TextBlock 样式
+               会压掉继承下来的字体, 漏了三个点一个字都画不出来(成因见 Themes/Styles.xaml 里
+               IconButtonStyle 的长注释)。 -->
+        <Style x:Key="CardMoreButtonStyle" TargetType="ToggleButton">
+            <Setter Property="Width" Value="30" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              TextElement.Foreground="{TemplateBinding Foreground}">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillHoverBrush}" />
+                            </Trigger>
+                            <!-- 菜单开着(IsChecked)也铺底: 顺序在悬停之后, 打开态比单纯悬停更实一档 -->
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillHoverBrush}" />
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsChecked" Value="True" />
+                                    <Condition Property="IsMouseOver" Value="True" />
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillPressedBrush}" />
+                            </MultiTrigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlFillPressedBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- 底部操作按钮: 常态透明、悬停铺淡底, 图标 + 计数横排。
              与播放器评论区的小动作按钮同一套观感, 不另造语言。 -->
         <Style x:Key="DynamicActionButtonStyle" TargetType="Button">
@@ -83,10 +146,9 @@
                     </StackPanel>
                 </StackPanel>
 
-                <Button Grid.Column="2" Style="{StaticResource IconButtonStyle}"
-                        Content="&#xE712;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                        FontSize="14" Width="30" Height="30"
-                        ToolTip="更多操作" Click="OnMoreClick" />
+                <ToggleButton x:Name="MoreButton" Grid.Column="2" Style="{StaticResource CardMoreButtonStyle}"
+                              Content="&#xE712;"
+                              ToolTip="更多操作" Click="OnMoreClick" />
             </Grid>
 
             <!-- ===== 正文(图文/纯文字/转发才有) =====
