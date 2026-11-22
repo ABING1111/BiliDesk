@@ -356,6 +356,11 @@ public partial class PlayerWindow : FluentWindow
         _pages = pages ?? new List<VideoPage>();
         _hasPages = _pages.Count > 1;
 
+        // 自动连播: 多P 视频的"下一段"也进连播队列(2026-11-22)。
+        // ★ 必须在这里而不是只在 ApplySeason: 分P 与合集/番剧是互不排斥的两份数据,
+        //   没有合集的多P 视频全靠这条链, 否则播完 P1 会直接跳相关视频。
+        ApplyAutoPlayPageChain();
+
         if (BtnPages == null) return;
         BtnPages.Visibility = _hasPages ? Visibility.Visible : Visibility.Collapsed;
         if (!_hasPages) ClosePagesPopup();

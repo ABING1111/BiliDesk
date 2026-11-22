@@ -41,6 +41,32 @@ public static class AutoPlayPolicy
         return false;
     }
 
+    /// <summary>
+    /// 两个队列项是不是**同一项**(bvid 相同 **且** cid 相同)。
+    ///
+    /// ★★ 2026-11-22 分P 连播: 多P 视频的各个 P **bvid 完全相同**, 只凭 bvid 判等会把
+    ///   P2 当成 P1 —— 出队时删掉队头(结果播的还是 P1 的下一个, 看起来"原地打转"),
+    ///   或者反过来删错位置。cid 才是分P 之间的区分依据(bvid 仍要判, 因为合集/相关视频
+    ///   那两种项没有 cid, 全是 0, 只能靠 bvid 区分)。
+    /// </summary>
+    public static bool SameEntry(string bvidA, long cidA, string bvidB, long cidB)
+        => cidA == cidB && string.Equals(bvidA, bvidB, StringComparison.Ordinal);
+
+    /// <summary>
+    /// "当前这一项之后还有哪些项"的下标(0 起, 按原顺序)。
+    ///
+    /// ★ 定位不上当前项(currentIndex &lt; 0)时返回**空**: 与其猜"下一集是哪一集",
+    ///   不如不接 —— 接错比不接更让人恼火(合集与分P 共用这条语义)。
+    /// </summary>
+    public static int[] FollowingIndexes(int count, int currentIndex)
+    {
+        if (count <= 0 || currentIndex < 0 || currentIndex >= count - 1) return Array.Empty<int>();
+
+        var result = new int[count - 1 - currentIndex];
+        for (var i = 0; i < result.Length; i++) result[i] = currentIndex + 1 + i;
+        return result;
+    }
+
     /// <summary>倒计时递减一秒(不会变成负数 —— 归零后由调用方停表并换片)。</summary>
     public static int NextCountdown(int remaining) => remaining > 0 ? remaining - 1 : 0;
 

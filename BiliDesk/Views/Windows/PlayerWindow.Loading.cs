@@ -326,7 +326,8 @@ public partial class PlayerWindow : FluentWindow
 
         _relatedAll = items;
 
-        // 自动连播: 这份列表就是"固定播放队列"(只有会话起点那一份会被采纳, 见实现说明)
+        // 自动连播: 这份列表就是"固定播放队列"(只有会话起点那一份会被采纳, 见实现说明)。
+        //   优先级上它排在分P / 合集链之后 —— 前两者都接不上时才轮到相关视频。
         ApplyAutoPlayVideoChain(bvid, items);
 
         if (showPanel)
@@ -1290,10 +1291,11 @@ public partial class PlayerWindow : FluentWindow
         //   会话什么时候作废由 EnsureAutoPlaySession(每次 LoadVideoAsync 开头)显式判定。
         nameof(_autoPlaySessionActive), nameof(_autoPlayOriginBvid), nameof(_autoPlayExpectedBvid),
         nameof(_autoPlayVideoChainBvid), nameof(_autoPlayVideoCursor), nameof(_autoPlayCountdown),
-        // 下面三个是引用类型(自检本来不审), 登记在这里是把"跨片保持"的语义固化下来:
+        // 下面几个是引用类型(自检本来不审), 登记在这里是把"跨片保持"的语义固化下来:
         //   _autoPlayPending 只在倒计时中存在(换片时由 CancelAutoPlayCountdown 收掉);
-        //   两个链则要活整场会话。
-        nameof(_autoPlayPending), nameof(_autoPlaySeasonChain), nameof(_autoPlayVideoChain),
+        //   三个链则要活整场会话(分P 链每次加载都会按当前 P 重建)。
+        nameof(_autoPlayPending), nameof(_autoPlayPageChain), nameof(_autoPlaySeasonChain),
+        nameof(_autoPlayVideoChain),
         // 番剧选集表(2026-11-19): 同一季连播几集都用它, 换片绝不能清 ——
         //   清了第二集就变成"普通视频", 选集面板与连播链一起消失。
         nameof(_bangumi),
