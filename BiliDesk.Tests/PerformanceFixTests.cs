@@ -1,8 +1,9 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Reflection;
+using BiliDesk.Helpers;
 using BiliDesk.Models;
-using BiliDesk.Services;
 using BiliDesk.ViewModels;
 using Xunit;
 
@@ -41,47 +42,47 @@ public class PerformanceFixTests
     }
 
     [Fact]
-    public void 通知ID新旧比较_数字与非数字语义不变()
+    public void 动态ID新旧比较_数字与非数字语义不变()
     {
-        var method = typeof(DynamicNotifyService).GetMethod("IsIdNewer", StaticPrivate,
-            new[] { typeof(string), typeof(string), typeof(bool), typeof(ulong) });
-        Assert.NotNull(method);
-
-        bool Newer(string id, string baseline)
-        {
-            var numeric = ulong.TryParse(baseline, out var num);
-            return (bool)method!.Invoke(null, new object[] { id, baseline, numeric, num })!;
-        }
-
-        Assert.True(Newer("100", "99"));
-        Assert.False(Newer("99", "100"));
-        Assert.False(Newer("100", "100"));
-        Assert.True(Newer("abc", "abd"));
-        Assert.False(Newer("abc", "abc"));
+        Assert.True(IdCompare.IsNewer("100", "99"));
+        Assert.False(IdCompare.IsNewer("99", "100"));
+        Assert.False(IdCompare.IsNewer("100", "100"));
+        Assert.True(IdCompare.IsNewer("abc", "abd"));
+        Assert.False(IdCompare.IsNewer("abc", "abc"));
         // 基准是数字而新 id 不是: 退化成字符串比较, 与旧版一致
-        Assert.True(Newer("BV123", "100"));
-        Assert.False(Newer("", "100"));
-        Assert.False(Newer("100", ""));
+        Assert.True(IdCompare.IsNewer("BV123", "100"));
+        Assert.False(IdCompare.IsNewer("", "100"));
+        Assert.False(IdCompare.IsNewer("100", ""));
+
+        // 预解析基准的版本(一轮里只解析一次)必须与单次调用等价
+        var parsed = IdCompare.ParseBaseline("100");
+        Assert.True(IdCompare.IsNewer("101", "100", parsed));
+        Assert.False(IdCompare.IsNewer("99", "100", parsed));
+        Assert.False(IdCompare.IsNewer("100", "", IdCompare.ParseBaseline("")));
+        Assert.False(IdCompare.IsNewer("", "100", parsed));
     }
 
     [Fact]
-    public void 关注列表批量添加期间_不逐条发计算属性通知()
+    public void 关注列表批量追加_计算属性只在结尾通知一次()
     {
         var vm = new UserCenterViewModel();
         var changed = new List<string>();
         vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName ?? "");
 
-        typeof(UserCenterViewModel).GetField("_followingsBatch", InstanceNonPublic)!.SetValue(vm, true);
-        for (var i = 1; i <= 5; i++)
-            vm.Followings.Add(new FollowUser { Mid = i, Name = "u" + i });
-        Assert.Empty(changed);
+        var method = typeof(UserCenterViewModel).GetMethod("AppendFollowingsPage", InstanceNonPublic,
+            new[] { typeof(IReadOnlyList<FollowUser>) });
+        Assert.NotNull(method);
 
-        typeof(UserCenterViewModel).GetField("_followingsBatch", InstanceNonPublic)!.SetValue(vm, false);
-        vm.Followings.Add(new FollowUser { Mid = 6, Name = "u6" });
+        var page = new List<FollowUser>();
+        for (var i = 1; i <= 5; i++) page.Add(new FollowUser { Mid = i, Name = "u" + i });
+        method!.Invoke(vm, new object[] { page });
 
-        Assert.Contains(nameof(UserCenterViewModel.FollowingsSummary), changed);
-        Assert.Contains(nameof(UserCenterViewModel.SummaryText), changed);
-        Assert.Contains(nameof(UserCenterViewModel.FollowingsEmpty), changed);
-        Assert.Contains(nameof(UserCenterViewModel.ShowFollowingsError), changed);
+        Assert.Equal(5, vm.Followings.Count);
+        // 逐条通知的话每个名字会出现 5 次; 批量期间压住 + 结尾补一次 = 恰好 1 次。
+        Assert.Equal(1, changed.Count(n => n == nameof(UserCenterViewModel.FollowingsSummary)));
+        Assert.Equal(1, changed.Count(n => n == nameof(UserCenterViewModel.SummaryText)));
+        // 这两条来自结尾的 RaiseTabState: 删掉它, 空态/错误遮罩就会停在"还没有关注任何人"。
+        Assert.Equal(1, changed.Count(n => n == nameof(UserCenterViewModel.FollowingsEmpty)));
+        Assert.Equal(1, changed.Count(n => n == nameof(UserCenterViewModel.ShowFollowingsError)));
     }
 }
