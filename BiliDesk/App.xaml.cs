@@ -97,7 +97,12 @@ public partial class App : Application
         //   再 Save 回去就会覆盖第一个进程刚写的状态(登录态/设置互相打架), 还会多占一份
         //   LibVLC 原生库。所以"不是第一个"时要把整个启动流程掐掉。
         //   把已在跑的实例叫到前台这件事由 SingleInstance 自己通过管道转达(见该文件)。
-        if (!SingleInstance.Acquire())
+        // Debug 下允许并行开第二个实例(验证用); 发布版始终单实例。
+        var devMultiInstance = false;
+#if DEBUG
+        devMultiInstance = Environment.GetEnvironmentVariable("BILIDESK_DEV_MULTI") == "1";
+#endif
+        if (!SingleInstance.Acquire() && !devMultiInstance)
         {
             // 不建任何窗口, 直接退出。用 Shutdown() 而不是 Environment.Exit():
             // 这时还没有窗口/托盘资源, 但走 WPF 的正规退出路径更稳。

@@ -105,111 +105,6 @@ public partial class PlayerWindow : FluentWindow
         catch { /* 拿不到就算了, 键盘至少在主窗口里是可用的 */ }
     }
 
-    /// <summary>
-    /// 把视频区原生宿主窗口处理成"近黑底 + 不覆盖子窗口"。
-    ///
-    /// ★ 根因(2026-10-17 探针 bd-probe-letterbox 钉死; 2026-11-03 去掉黑布后复核):
-    ///   `VideoView` 是 <c>HwndHost</c>, 它下面由 LibVLCSharp/libvlc 建了一串**同进程**子窗口:
-    ///   <code>
-    ///     HwndWrapper[...]   ← HwndHost 宿主窗口
-    ///       Static           ← LibVLCSharp 建的 VideoHwndHost 窗口   ★白边/白闪的作者
-    ///       VLC video main   ← 铺满整个视频区
-    ///       VLC video output ← 只盖住画面那一块
-    ///   </code>
-    ///   视频宽高比与视频区不一致时, `video output` 只占中间一条, 上下(或左右)剩下的区域
-    ///   没有任何窗口画东西 ⇒ 露出 `Static` 的**窗口类默认背景(白色)**。
-    ///   尺寸剧变(vout 重协商)时, `Static` 重绘还会把白底刷到视频子窗口上 ⇒ 整块白闪。
-    ///
-    /// ★ 处理(见 <see cref="VideoBackdropInterop.EnsureLetterboxVideoHost"/>):
-    ///   · `WS_CLIPCHILDREN`: 父窗口/Static 重绘时排除子窗口区域, 不把白底刷到画面上;
-    ///   · 子类化 Static 的 `WM_ERASEBKGND` / `WM_PAINT`: 客户区被擦/重绘时直接填近黑;
-    ///   · 父窗口 + Static 的类背景刷也设近黑: 兜住 libvlc 重新显示 Static 的瞬间。
-    ///
-    /// ★★★ 2026-11-16: 近黑(#010101)不是纯黑 —— 云母/亚克力下整个客户区是 DWM 玻璃区,
-    ///   GDI 纯黑会被当透明, 黑边就会露出材质并在 resize 时闪(详见 VideoBackdropInterop 的类注释)。
-    ///
-    /// ★ 不隐藏 Static: 真机上 `ShowWindow(SW_HIDE)` 会把**整个画面**一起藏掉
-    ///   (不同 vout/显卡组合拓扑不一样, 不能赌)。
-    /// ★ 起播 / vout 重建 / 换清晰度 / 进出全屏后都要再调一次 —— 见 `Vout`、`Playing`
-    ///   与 <see cref="StartVideoBackdropFix"/> 的调用点。
-    /// </summary>
-    private void ApplyHwndHostLetterboxBackground()
-    {
-        var hwnd = FindVideoStaticWindow();
-        if (hwnd == IntPtr.Zero) return;
-
-        // ★★ 2026-11-03(去掉 resize/最大化/全屏黑布后的根修):
-        //   不再只刷父窗口类背景刷, 而是把 `Static` 自己治成"近黑底 + 不覆盖子窗口":
-        //     · WS_CLIPCHILDREN: 父窗口/Static 重绘时不把白底刷到 `VLC video output` 上;
-        //     · 子类化 WM_ERASEBKGND / WM_PAINT: 客户区被擦/重绘时直接填近黑。
-        //   这样尺寸剧变时新暴露的区域是近黑的, 而不是 Static 的默认白底。
-        VideoBackdropInterop.EnsureLetterboxVideoHost(hwnd);
-    }
-
-    // --- 起播后把视频区原生窗口底色刷成近黑(见 ApplyHwndHostLetterboxBackground) ---
-
-    /// <summary>
-    /// **短时守护**: 每 <see cref="VideoBackdropGuardIntervalMs"/> 检查一次 `Static` 有没有
-    /// 又被 libvlc 显示出来, 是就立刻再藏一次。
-    ///
-    /// ★★★ 为什么必须有它(2026-10-17 实测, 2026-11-03 去掉黑布后保留):
-    ///   libvlc 在 **vout 建立 / 重建 / 首帧到达** 时会重新显示/重绘 `Static`,
-    ///   白色也可能跟着回来。我们的 `EnsureLetterboxVideoHost` 在那一刻可能还没拿到句柄
-    ///   (`Playing` 触发时 Static 往往还没建出来), 所以需要短时间反复套用。
-    ///   ⇒ 靠"事件触发时刷一次"必然有竞态; 只有**短时间反复确认**才能把这段时间盖死。
-    ///
-    /// ★ 为什么是"短时"而不是常驻: 起播/vout 重建之后约 2 秒内它才会折腾,
-    ///   之后再频繁去摸原生窗口纯属浪费(而且 `CompositionTarget` 那条零原生调用的规矩
-    ///   虽然只约束逐帧路径, 但也没必要给 DispatcherTimer 长期加活)。
-    /// </summary>
-    private DispatcherTimer? _videoBackdropGuard;
-    private int _videoBackdropGuardTicks;
-
-    /// <summary>守护检查间隔(ms)。比一帧长一点, 足够盖住"被重新显示"的窗口期。</summary>
-    private const int VideoBackdropGuardIntervalMs = 120;
-
-    /// <summary>守护跑多少拍收手。25 × 120ms = 3s, 覆盖 vout 重建 + 首帧那段。</summary>
-    private const int VideoBackdropGuardTicks = 25;
-
-    /// <summary>
-    /// 启动短时守护(见 <see cref="RunVideoBackdropGuard"/>): 在接下来约 3 秒内反复套用
-    /// "近黑底 + 不覆盖子窗口"的原生修复。尺寸剧变 / vout 重建 / 起播都要调一次。
-    /// </summary>
-    private void RunVideoBackdropGuard()
-    {
-        if (_closing) return;
-        ApplyHwndHostLetterboxBackground();   // 立刻先来一次, 不等第一拍
-
-        _videoBackdropGuard ??= new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(VideoBackdropGuardIntervalMs)
-        };
-        _videoBackdropGuard.Tick -= OnVideoBackdropGuardTick;
-        _videoBackdropGuard.Tick += OnVideoBackdropGuardTick;
-        _videoBackdropGuardTicks = 0;
-        _videoBackdropGuard.Stop();
-        _videoBackdropGuard.Start();
-    }
-
-    private void OnVideoBackdropGuardTick(object? sender, EventArgs e)
-    {
-        if (_closing || ++_videoBackdropGuardTicks > VideoBackdropGuardTicks)
-        {
-            _videoBackdropGuard?.Stop();
-            return;
-        }
-        ApplyHwndHostLetterboxBackground();
-    }
-
-    /// <summary>
-    /// 起播 / vout 重建 / 尺寸剧变后, 把视频区原生窗口底色处理干净并启动短时守护。
-    ///
-    /// ★ 为什么是"守护一段时间"而不是"刷几次就停"(2026-10-17 实测):
-    ///   `Playing` 触发时 `Static` 往往还没建出来(句柄 0); 建好之后 libvlc 还会在
-    ///   首帧/重建时重新显示/重绘它。固定几拍的预算在这两种情况下都不够用 ——
-    ///   ⇒ 改成 3 秒内每 120ms 套用一次(见 <see cref="RunVideoBackdropGuard"/>)。
-    /// </summary>
-    private void StartVideoBackdropFix() => RunVideoBackdropGuard();
 
     // ------------------------------------------------------------ resize 期间临时停用材质
     //
@@ -338,42 +233,6 @@ public partial class PlayerWindow : FluentWindow
         SuspendBackdropForResize();
     }
 
-    /// <summary>
-    /// 找 libvlc 那个铺满视频区的 `Static` 窗口(白边的作者)。
-    ///
-    /// ★ 反射路径有两处必须踩准(2026-10-17 探针实测, 两处都错过一次, 错一处修复就**静默失效**):
-    ///   ① `VideoView` 自己**不是** HwndHost —— 真正的宿主在私有字段 `_videoHwndHost`
-    ///      (类型 `VideoHwndHost`)。
-    ///   ② 该对象的句柄存在基类 `HwndHost._hwnd`, 类型是 **`HandleRef`**(不是 `IntPtr`),
-    ///      必须读 `.Handle`。第一版只认 `IntPtr` ⇒ 永远拿到 0 ⇒ 边带一直白着。
-    ///   ③ ★ 那个句柄拿到的**正是 `Static` 子窗口本身**(实测类名 `Static`, 父级才是
-    ///      `HwndWrapper`) —— 它由 LibVLCSharp 的 VideoHwndHost 创建, 我们这侧可以安全地
-    ///      改样式/子类化。处理入口见 <see cref="ApplyHwndHostLetterboxBackground"/>。
-    ///   ★ 别用 `PresentationSource.FromVisual(VideoView)`: 那返回的是**外层播放器窗口**
-    ///     的 HwndSource, 拿它改类背景刷会把主题底色一起改坏。
-    /// </summary>
-    private IntPtr FindVideoStaticWindow()
-    {
-        try
-        {
-            var vv = VideoView;
-            if (vv == null) return IntPtr.Zero;
-
-            var hostField = vv.GetType().GetField("_videoHwndHost",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (hostField?.GetValue(vv) is not System.Windows.Interop.HwndHost host) return IntPtr.Zero;
-
-            var hwndField = typeof(System.Windows.Interop.HwndHost).GetField("_hwnd",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            return hwndField?.GetValue(host) switch
-            {
-                HandleRef hr => hr.Handle,
-                IntPtr ip => ip,
-                _ => IntPtr.Zero
-            };
-        }
-        catch { return IntPtr.Zero; }
-    }
 
     /// <summary>
     /// 把键盘焦点从原生子窗口抢回 WPF 树。
@@ -410,7 +269,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void OnOverlayActivated(object? sender, EventArgs e)
     {
-        if (_closing || _mp == null) return;
+        if (_closing || _engine == null) return;
         // 直播: 点画面本来就不该切播放/暂停, 这套"补一次被吞掉的单击"对直播没有意义
         // (2026-11-20, issue #98 —— 只认控制栏按钮)。
         if (_isLive) return;

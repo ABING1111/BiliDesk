@@ -44,7 +44,7 @@ public partial class PlayerWindow : FluentWindow
         get
         {
             if (_closing) return false;
-            try { return _mp?.IsPlaying == true; }
+            try { return _engine?.IsPlaying == true; }
             catch { return false; }   // 拆解途中原生对象可能已失效
         }
     }
@@ -81,8 +81,8 @@ public partial class PlayerWindow : FluentWindow
     public void PlayVideo(string bvid, BangumiPlaylist? bangumi = null)
     {
         if (_closing || string.IsNullOrEmpty(bvid)) return;
-        if (bvid == _currentBvid && _mp.IsPlaying) return;
-        try { _mp.Stop(); } catch { }
+        if (bvid == _currentBvid && _engine.IsPlaying) return;
+        try { _engine.Stop(); } catch { }
         _currentBvid = bvid;
         _isLocalPlayback = false;
         _isLive = false;
@@ -602,8 +602,8 @@ public partial class PlayerWindow : FluentWindow
     public void PlayLive(long roomId, string? roomTitle = null)
     {
         if (_closing || roomId <= 0) return;
-        if (_isLive && roomId == _liveRoomId && _mp.IsPlaying) return;
-        try { _mp.Stop(); } catch { }
+        if (_isLive && roomId == _liveRoomId && _engine.IsPlaying) return;
+        try { _engine.Stop(); } catch { }
         _currentBvid = "";
         _isLocalPlayback = true;   // 没有在线上下文: 不打接口、不互动、不上报
         _isLive = true;
@@ -752,7 +752,7 @@ public partial class PlayerWindow : FluentWindow
     public void PlayLocalFile(string path)
     {
         if (_closing || string.IsNullOrEmpty(path) || !File.Exists(path)) return;
-        try { _mp.Stop(); } catch { }
+        try { _engine.Stop(); } catch { }
         _currentBvid = "";
         _isLocalPlayback = true;
         _isLive = false;
@@ -883,11 +883,6 @@ public partial class PlayerWindow : FluentWindow
         _commentTotal = 0;
         // 本次实际排序回到用户偏好(_commentSort); 新视频重新试热门, 热门空再回退成时间
         _effectiveCommentSort = _commentSort;
-        _commentReturnRpid = 0;
-        _videoBackdropGuardTicks = 0;
-        // 音频自愈的"上次检查时刻"(_audioHealCheckAt)不清: 它是宽限期计时基准,
-        // 跨片保持最多把新片的第一次检查推迟 1.5s; 清零反而会在 aout 未就绪时立刻误检。
-        // 遮罩安全网的"上次位置"同理要归零: 留着上一片的进度会让新片的第一次 TimeChanged
         // 被当成"在推进", 把刚弹出的加载遮罩误收掉。
         _lastLoadingRevealMs = -1;
         UpdateCommentSortUi(visible: false);
@@ -952,7 +947,7 @@ public partial class PlayerWindow : FluentWindow
         //   每一次点击都被重定向过去; 而 _isSeeking 为真会让进度条永不回写、控制栏永不隐藏。
         //   ★ 顺序: 先复位 _isSeeking 再 ReleaseMouseCapture —— 释放会触发
         //     LostMouseCapture → FinishProgressScrub, 那时它看到"已经不在拖动"就直接返回,
-        //     不会拿着新片的 _mp 发一条莫名其妙的 seek。
+        //     不会拿着新片的 _engine 发一条莫名其妙的 seek。
         _isSeeking = false;
         if (ProgressSlider != null && ProgressSlider.IsMouseCaptured)
             ProgressSlider.ReleaseMouseCapture();
@@ -986,7 +981,7 @@ public partial class PlayerWindow : FluentWindow
         StopActivationClickCompensation();
         _activationClickStartTick = 0;
         // 复位"该恢复到几倍速"的记录: 它只描述**本片**那次长按, 不该带到下一片
-        // (下一片起播速率由 _mp.Rate 自己决定, 这里只是清掉上一个手势的账)。
+        // (下一片起播速率由 _engine.Rate 自己决定, 这里只是清掉上一个手势的账)。
         _rateBeforeFastForward = 1.0f;
         RestoreVolumeAfterSeek();   // 上一片若停在 seek 静音中, 别把静音带进新片
         // 心跳间隔也要还原: 上一片可能停在了"跳转等待期"的 100ms 上没来得及还原
@@ -1142,7 +1137,6 @@ public partial class PlayerWindow : FluentWindow
         nameof(_startTimeRebuildRetried), nameof(_rebuiltViaStartTime),
         nameof(_eofFallbackToStartTried),
         nameof(_progressDragMoved),
-        nameof(_audioHealCheckAt),
         nameof(_volumeRestoreDeadline), nameof(_volumeRestoreTries),
         nameof(_lastLoadingRevealMs),
         // 卡顿检测
@@ -1192,8 +1186,6 @@ public partial class PlayerWindow : FluentWindow
         nameof(_isReliableSeekSource),  // seek 可靠性标志: BuildMedia 按片源设置
         nameof(_dmClockRate),           // 弹幕时钟倍率: 换片后由 CalibrateDanmakuClock 重新校准
         nameof(_commentReturnRpid),     // 评论详情返回锚: 属于"上一条评论详情", 换片必须归零
-        nameof(_videoBackdropGuardTicks), // vout 底色守护计数: 3 秒自收尾的瞬态
-        nameof(_audioHealCheckAt),      // 音频自愈上次检查时刻: 跨片保持宽限意义, 不必清(见该字段)
         // 画面冻住自愈的节流(2026-11-22, mpv): 窗口级, 换片不清(否则同一片会反复重建)
         nameof(_videoStallRecoverAt),
         // 合集: 「这个视频有没有合集」属于"这一片"的属性, 换片必须重算。
@@ -1294,7 +1286,7 @@ public partial class PlayerWindow : FluentWindow
         //   真按住不放时换片本来就是不可能的操作, 清了也没有可观察差异。
         nameof(_videoGestureActive), nameof(_rightGestureActive),
         nameof(_danmakuClockAttached),
-        // 弹幕时钟的三个量: 靠 _mp.TimeChanged(约 4Hz)自动校准 —— 换片后新片一开播,
+        // 弹幕时钟的三个量: 靠 _engine.TimeChanged(约 4Hz)自动校准 —— 换片后新片一开播,
         //   下一次 TimeChanged 就把 _dmClockMedia 推到新片时间, 260ms 内自然收敛。
         //   ★ 特意**不**在 ResetForNewMedia 里清: 那会与 CalibrateDanmakuClock 抢写,
         //     而后者才是权威来源(2026-11-11 为修"暂停回跳"刚把权威收敛到它)。
@@ -1487,13 +1479,6 @@ public partial class PlayerWindow : FluentWindow
         // 覆盖层窗口(VideoView 的 ForegroundWindow)这时才建出来 —— 把键盘处理也挂上去,
         // 否则点过一次视频/控制栏之后快捷键就全哑了(见 HookOverlayKeyboard 的说明)
         HookOverlayKeyboard();
-        // ★ 2026-11-03: 尽早把视频宿主窗口治成近黑底(不等第一帧/Vout)。
-        //   放在 Loaded 优先级: 此时 VideoView 的模板与原生宿主窗口已经建好;
-        //   拿不到句柄也没关系, Vout/Playing 还会再调(见 StartVideoBackdropFix)。
-        _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
-        {
-            if (!_closing) ApplyHwndHostLetterboxBackground();
-        }));
         // ★ 不重复启动: 新窗口第一次打开时 PlayerService 已经先调过 PlayVideo(→LoadVideoAsync),
         //   Loaded 事件随后才到。没有这个闸门就会跑两遍详情/取流/测速, 甚至
         //   "先远端起播、下完再切本地"二次重启(2026-10-30 起播慢的隐藏原因之一)。
@@ -1773,7 +1758,7 @@ public partial class PlayerWindow : FluentWindow
     /// .NET 的 GC 一点都管不到。表现就是: 每看一个视频涨一块、关掉也不回落
     /// (2026-09-27 用户报的内存问题里就有这一份)。
     ///
-    /// 之前 6 个播放点全都是 `_mp.Play(new Media(...))` 直接把 Media 丢掉, 一个都没释放。
+    /// 之前 6 个播放点全都是 `_engine.Play(new Media(...))` 直接把 Media 丢掉, 一个都没释放。
     /// </summary>
     private bool PlayMedia(PlayerMedia media)
     {
@@ -1785,7 +1770,7 @@ public partial class PlayerWindow : FluentWindow
             _mediaEpoch++;
             // 首帧计时只用于诊断日志: 每次起播(含切清晰度/重播/直播)都会重置。
             _playWatch = Stopwatch.StartNew();
-            var ok = _mp.Play(media);
+            var ok = _engine.Play(media);
             if (!ok) _playWatch = null;   // 没播起来就别留一个永远等不到 Playing 的计时器
             return ok;
         }

@@ -52,7 +52,7 @@ public partial class PlayerWindow : FluentWindow
         //   Stop() 会阻塞约 1 秒, 但这是用户主动操作(与切清晰度/重建同款), 可接受。
         if (!_isLocalPlayback)
         {
-            try { _mp?.Stop(); } catch { /* 已经停了/正在拆解 */ }
+            try { _engine?.Stop(); } catch { /* 已经停了/正在拆解 */ }
         }
         // 直播失败要重连直播, 不能落回点播那条路(那时 _currentBvid 是空的)
         if (_isLive) _ = LoadLiveAsync(_liveRoomId);

@@ -44,7 +44,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void OnProgressSliderPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (_closing || ProgressSlider == null || _mp == null) return;
+        if (_closing || ProgressSlider == null || _engine == null) return;
         // 直播没有总时长(进度条已被 IsEnabled=false 置灰, 这里再兜一道)
         if (!ProgressSlider.IsEnabled) return;
         // 只认左键; 右键在视频区有"铺满窗口"的语义, 不能在这里被吃掉
@@ -60,7 +60,7 @@ public partial class PlayerWindow : FluentWindow
         // 立刻把滑块移到指针处并亮气泡: 按下的那一刻就该看到"要跳到哪",
         // 而不是等第一次 MouseMove —— 原地按住不动时用户会以为没反应。
         // ★ 长度未知时也照样让滑块跟手(否则按下毫无反馈), 只是松手时不会发 seek ——
-        //   判据在 FinishProgressScrub 里(那里才需要 _mp.Length 做换算)。
+        //   判据在 FinishProgressScrub 里(那里才需要 _engine.Length 做换算)。
         TrackProgressFromPointer(e.GetPosition(ProgressSlider));
 
         ProgressSlider.CaptureMouse();
@@ -114,12 +114,12 @@ public partial class PlayerWindow : FluentWindow
         // 原地按一下松手(值没变)不 seek: 已经在目标附近时 SeekTo 内部也会挡,
         // 但这里先挡掉更省一次换算, 也让"点滑块不拖动"完全无副作用。
         if (!Helpers.ProgressScrub.ShouldSeek(_progressDragStartValue, value)) return;
-        if (_mp == null || _mp.Length <= 0) return;
+        if (_engine == null || _engine.Length <= 0) return;
 
-        var targetMs = (long)Math.Round(value / 1000.0 * _mp.Length);
+        var targetMs = (long)Math.Round(value / 1000.0 * _engine.Length);
         // ★ 走统一入口: 由它按片源类型决定"一步到位 / 看门狗重建"。
         SeekTo(targetMs);
-        // 拖动结束后**不要**立刻 SyncProgressNow: 此刻 _mp.Time 通常还只是 seek 的
+        // 拖动结束后**不要**立刻 SyncProgressNow: 此刻 _engine.Time 通常还只是 seek 的
         // 受理回执(目标值), 写入记录会得到一条"从没真正播放过"的进度(issue #93)。
         // 等看门狗确认落地后, 下一次 TimeChanged/心跳会自然把真实位置落库。
     }
@@ -167,12 +167,12 @@ public partial class PlayerWindow : FluentWindow
     private void UpdateProgressDragHint(double sliderValue)
     {
         if (_closing || ProgressHint == null || ProgressHintLayer == null) return;
-        if (_mp == null || _mp.Length <= 0) return;   // 直播/本地文件没有总时长, 没什么可提示
+        if (_engine == null || _engine.Length <= 0) return;   // 直播/本地文件没有总时长, 没什么可提示
 
         // 目标时间与真正 seek 的换算**必须一致** —— 否则气泡显示的时间和实际落点对不上,
         // 用户会以为跳错了。公式见 SeekTo / FinishProgressScrub。
-        var targetMs = (long)Math.Round(sliderValue / 1000.0 * _mp.Length);
-        targetMs = Math.Clamp(targetMs, 0, _mp.Length);
+        var targetMs = (long)Math.Round(sliderValue / 1000.0 * _engine.Length);
+        targetMs = Math.Clamp(targetMs, 0, _engine.Length);
 
         ProgressHintText.Text = FormatClock(TimeSpan.FromMilliseconds(targetMs));
         // 章节名(2026-11-21): 气泡第二行, 指针落在某一章里才显示。
@@ -405,7 +405,7 @@ public partial class PlayerWindow : FluentWindow
 
     private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_mp == null) return;
+        if (_engine == null) return;
         var v = (int)VolumeSlider.Value;
         // 滑块是用户拖动时的入口, 程序化赋值(SetVolume)也会走到这 —— 同值回写, 无副作用。
         // 必须同步权威值: 否则拖完滑块再滚轮, 基数还是旧缓存(见 _volumeCache 的说明)。
@@ -415,14 +415,14 @@ public partial class PlayerWindow : FluentWindow
         //   两个入口都存, 才不会出现"滚轮调的继承了、拖滑块调的没继承"。
         Svc.Settings.SetPlayerVolume(v);
         // seek 静音期间(与 SetVolume 同一套约定): 新值记为恢复目标, 声音保持静音直到画面就绪。
-        // 这里不能直接写 _mp.Volume —— 否则拖一下滑块就绕过静音, 声音又跑到画面前面去了。
+        // 这里不能直接写 _engine.Volume —— 否则拖一下滑块就绕过静音, 声音又跑到画面前面去了。
         if (_seekMuteSavedVolume >= 0)
         {
             _seekMuteSavedVolume = v;
-            try { _mp.Volume = 0; } catch { }
+            try { _engine.Volume = 0; } catch { }
             return;
         }
-        try { _mp.Volume = v; } catch { }
+        try { _engine.Volume = v; } catch { }
     }
 
     // ------------------------------------------------------------ 音量(滚轮 / 快捷键)
@@ -462,7 +462,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void OnVideoAreaMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (_mp == null || _closing || e.Delta == 0) return;
+        if (_engine == null || _closing || e.Delta == 0) return;
 
         // ★★ 2026-11-03 修"自定义倍速弹层里滚轮会调音量":
         //   弹层是独立 HWND, 但它的滚轮事件仍会冒到视频区这层 PreviewMouseWheel 上
@@ -493,7 +493,7 @@ public partial class PlayerWindow : FluentWindow
             }
             else
             {
-                // 基数用 _volumeCache 而不是 _mp.Volume: 见 _volumeCache 的说明(aout 未就绪时原生读回是 -1/旧值)
+                // 基数用 _volumeCache 而不是 _engine.Volume: 见 _volumeCache 的说明(aout 未就绪时原生读回是 -1/旧值)
                 SetVolume(_volumeCache + notches * VolumeStep);
             }
         }
@@ -507,11 +507,11 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 应用侧的音量权威值(0~100)。
     ///
-    /// 为什么不直接读 _mp.Volume(反编译 LibVLCSharp 3.8.0 确认):
+    /// 为什么不直接读 _engine.Volume(反编译 LibVLCSharp 3.8.0 确认):
     /// getter 是纯原生调用 libvlc_audio_get_volume, **没有 aout(音频输出)时返回 -1**;
     /// setter 在无 aout 时也是静默丢弃。aout 的生命周期跟媒体流走 ——
     /// 长视频走远端 DASH 双流, 起播/缓冲/拖动/换清晰度期间 aout 可能尚未就绪或刚被重建,
-    /// 这时拿 _mp.Volume 当滚轮基数, 基数就是 -1/旧值, 步进全乱(用户报的"长视频滚轮调音量不灵敏")。
+    /// 这时拿 _engine.Volume 当滚轮基数, 基数就是 -1/旧值, 步进全乱(用户报的"长视频滚轮调音量不灵敏")。
     /// 短视频是本地合流文件, aout 几乎秒建, 所以从来感觉不到 —— 时长相关性由此而来。
     /// 滚轮/键盘/滑块一律以本字段为基数, 原生侧只在 SetVolume 里单向写、在 Playing(aout 就绪)时补写。
     /// </summary>
@@ -519,12 +519,12 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 设置音量: 同步 LibVLC 与滑块, 并弹出音量提示。
-    /// 统一入口是必要的 —— 之前 ↑↓/静音键各自改一遍 _mp.Volume 和 VolumeSlider.Value,
+    /// 统一入口是必要的 —— 之前 ↑↓/静音键各自改一遍 _engine.Volume 和 VolumeSlider.Value,
     /// 再加一条滚轮路径就会变成三份容易走偏的代码。
     /// </summary>
     private void SetVolume(int volume, bool showHint = true)
     {
-        if (_closing || _mp == null) return;
+        if (_closing || _engine == null) return;
         var v = Math.Max(0, Math.Min(100, volume));
         // 权威值先落账: 之后所有路径(滚轮/键盘)都以它为基数, 不依赖原生读回(见 _volumeCache 的说明)
         _volumeCache = v;
@@ -533,16 +533,16 @@ public partial class PlayerWindow : FluentWindow
         //   SetPlayerVolume 内部有"值没变就不写"的短路, 连滚到同一值不会反复写盘。
         Svc.Settings.SetPlayerVolume(v);
         // seek 静音期间用户调音量: 把新值记为"恢复目标", 声音仍保持静音直到画面就绪 ——
-        // 若直接写 _mp.Volume 会立刻出声(又变成画面没到声音先到), 而且恢复时还会覆盖用户的值。
+        // 若直接写 _engine.Volume 会立刻出声(又变成画面没到声音先到), 而且恢复时还会覆盖用户的值。
         if (_seekMuteSavedVolume >= 0)
         {
             _seekMuteSavedVolume = v;
-            try { _mp.Volume = 0; } catch { }
+            try { _engine.Volume = 0; } catch { }
             if (VolumeSlider != null) VolumeSlider.Value = v;
             if (showHint) ShowVolumeHint(v);
             return;
         }
-        try { _mp.Volume = v; } catch { return; }
+        try { _engine.Volume = v; } catch { return; }
         if (VolumeSlider != null) VolumeSlider.Value = v;
         if (showHint) ShowVolumeHint(v);
     }
@@ -634,7 +634,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool TryStepFastForwardSpeed(int direction)
     {
-        if (_closing || _mp == null || !_isFastForwarding) return false;
+        if (_closing || _engine == null || !_isFastForwarding) return false;
 
         var next = Helpers.FastForwardSpeedPolicy.Step(_fastForwardTarget, direction);
         if (Math.Abs(next - _fastForwardTarget) > 0.001f)
@@ -642,7 +642,7 @@ public partial class PlayerWindow : FluentWindow
             _fastForwardTarget = next;
             // 与 StartFastForward 同序: 先让弹幕时钟按新倍速落定, 再真正 SetRate
             SyncDanmakuClockRate(next);
-            try { _mp.SetRate(next); } catch { /* 播放器可能刚好失效 */ }
+            try { _engine.SetRate(next); } catch { /* 播放器可能刚好失效 */ }
             // 控制栏倍速指示跟着临时档位走(见 StartFastForward 里那条修复)
             UpdateSpeedText();
             SyncSpeedOsdChips();
@@ -786,7 +786,7 @@ public partial class PlayerWindow : FluentWindow
 
     private void OnSpeedClick(object sender, RoutedEventArgs e)
     {
-        if (_mp == null) return;
+        if (_engine == null) return;
         // 点一下展开, 再点一下收起(见 HookPopupToggle): 只有展开时才灌列表
         TogglePlayerPopup(SpeedPopup, FillSpeedMenu);
     }
@@ -804,7 +804,7 @@ public partial class PlayerWindow : FluentWindow
             foreach (var rate in SpeedPresets)
                 SpeedList.Items.Add(new ListBoxItem { Tag = rate, Content = FormatRate(rate) });
 
-            var cur = _mp?.Rate ?? 1.0f;
+            var cur = _engine?.Rate ?? 1.0f;
             if (cur <= 0) cur = 1.0f;
             if (SpeedCustomText != null) SpeedCustomText.Text = FormatRateValue(cur);
             if (SpeedCustomHint != null) SpeedCustomHint.Text = "";
@@ -845,7 +845,7 @@ public partial class PlayerWindow : FluentWindow
 
     private void ApplyCustomSpeed()
     {
-        if (_mp == null) return;
+        if (_engine == null) return;
         if (!TryParseSpeed(SpeedCustomText?.Text, out var rate))
         {
             ShowSpeedCustomHint($"请输入 {FormatRate(MinPlaybackRate)} – {FormatRate(MaxPlaybackRate)} 之间的数字, 例如 1.25");
@@ -863,12 +863,12 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void ApplyPlaybackRate(float rate, bool closePopup)
     {
-        if (_mp == null) return;
+        if (_engine == null) return;
         // 保留两位小数: 避免自定义输入留下 1.1499999 这种值, 显示与存储都不好看
         rate = Math.Clamp(MathF.Round(rate, 2), MinPlaybackRate, MaxPlaybackRate);
 
         SyncDanmakuClockRate(rate);
-        try { _mp.SetRate(rate); }
+        try { _engine.SetRate(rate); }
         catch
         {
             ShowSpeedCustomHint("设置倍速失败, 播放器可能正在切换片源");
@@ -883,7 +883,7 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>把控制栏上的倍速文字同步成实际速率(不传 = 读播放器当前值)。</summary>
     private void UpdateSpeedText(float? rate = null)
     {
-        var r = rate ?? _mp?.Rate ?? 1.0f;
+        var r = rate ?? _engine?.Rate ?? 1.0f;
         if (r <= 0) r = 1.0f;
         if (SpeedText != null) SpeedText.Text = FormatRate(r);
     }
@@ -1162,7 +1162,7 @@ public partial class PlayerWindow : FluentWindow
         _switchingQuality = true;
         try
         {
-            var resumeMs = _mp.Time;
+            var resumeMs = _engine.Time;
             ShowLoading("正在切换清晰度…");
 
             // 换清晰度 = 换成另一路流: 上一档的合流立刻作废(缓存键里带 qn, 不会互相污染)
@@ -1217,7 +1217,7 @@ public partial class PlayerWindow : FluentWindow
             RememberPlayUrlFreshness(url, backups);
             // 必须先 Stop: LibVLC 3 里已有 input 在播时 play() 会被**直接忽略**,
             // 不 Stop 的话新 Media 根本不会起播 —— 这就是"切换清晰度没反应"
-            try { _mp.Stop(); } catch { }
+            try { _engine.Stop(); } catch { }
             // ★ 聆听态下切清晰度: 仍然只播音轨(用户此刻要的是声音, 不该突然出画面再切回去)。
             //   没有可用音轨时退回整路播放, 至少不会什么都不播。
             if (_isListenMode && !string.IsNullOrEmpty(_listenAudioUrl))
@@ -1277,7 +1277,7 @@ public partial class PlayerWindow : FluentWindow
             ResetLiveDanmakuLayer();
 
             // ★ LibVLC 3 里已有 input 在播时 play() 会被忽略, 必须先 Stop(与点播切清晰度同款)。
-            try { _mp.Stop(); } catch { }
+            try { _engine.Stop(); } catch { }
             if (!PlayLiveStream(url, _liveRoomId))
             {
                 ShowFail("直播流播放失败, 可能已经下播");

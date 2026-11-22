@@ -36,7 +36,7 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>读播放器状态: 原生对象可能已失效(窗口正在关闭), 这里统一兜住。</summary>
     private PlayerState SafePlayerState()
     {
-        try { return _mp.State; }
+        try { return _engine.State; }
         catch { return PlayerState.Error; }
     }
 
@@ -89,7 +89,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private async Task RecoverFromStallAsync()
     {
-        if (_closing || _mp == null || _stallRecoveryInFlight) return;
+        if (_closing || _engine == null || _stallRecoveryInFlight) return;
 
         var gen = _loadGen;
         _stallRecoveryInFlight = true;

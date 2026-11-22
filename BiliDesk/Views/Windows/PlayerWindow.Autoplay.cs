@@ -380,7 +380,7 @@ public partial class PlayerWindow : FluentWindow
     /// ★ 复用 <c>_switchingSeasonEpisode</c> 闸门: 它与"点合集/选集里的一集"是同一件事
     ///   (换 bvid), 共用一个闸门才能挡住"倒计时刚响、用户又点了一集"导致两条
     ///   LoadVideoAsync 叠跑(后回来的覆盖前一个 ⇒ 点了 A 却播了 B)。
-    /// ★ `_mp.Stop()` 走 <see cref="StopPlayerAsync"/>: 它会阻塞约 1 秒(等解码/vout 线程退出),
+    /// ★ `_engine.Stop()` 走 <see cref="StopPlayerAsync"/>: 它会阻塞约 1 秒(等解码/vout 线程退出),
     ///   放 UI 线程上就是"倒计时结束那一刻窗口定格一下"。
     /// ★ 不调 <c>Svc.Player.PlayVideo</c>: 那条路在窗口不可复用时会**新建一个播放器窗口**,
     ///   而连播必须留在本窗口(与 SwitchToSeasonEpisodeAsync 同一个理由)。

@@ -95,7 +95,7 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 后台停流。
     ///
-    /// ★★★ `_mp.Stop()` 会阻塞等待解码/vout 线程退出(实测约 1 秒, 见 TeardownAndCloseAsync),
+    /// ★★★ `_engine.Stop()` 会阻塞等待解码/vout 线程退出(实测约 1 秒, 见 TeardownAndCloseAsync),
     ///   绝不能放在 UI 线程上: 一旦它和"刚设好的遮罩/聆听画面"挤在同一个消息里,
     ///   WPF 一帧都画不出来 —— 用户看到的就是"点听视频先卡一下(窗口定格),
     ///   等 Stop 返回后界面才突然变成听视频"。
@@ -103,7 +103,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private Task StopPlayerAsync() => Task.Run(() =>
     {
-        try { _mp.Stop(); } catch { /* 已停/未起播/窗口正在拆解 */ }
+        try { _engine.Stop(); } catch { /* 已停/未起播/窗口正在拆解 */ }
     });
 
     /// <summary>
@@ -140,7 +140,7 @@ public partial class PlayerWindow : FluentWindow
         {
             _isListenMode = true;
             // 先在暂停/播到一半时也能接上: 用当前播放位置(拿不到就从 0 开始)
-            try { _listenResumeMs = _mp.Time; } catch { _listenResumeMs = 0; }
+            try { _listenResumeMs = _engine.Time; } catch { _listenResumeMs = 0; }
             if (_listenResumeMs < 0) _listenResumeMs = 0;
 
             ApplyListenMode(true);
@@ -179,7 +179,7 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 退出「听视频」: 用原来的视频 + 音轨组合重建 Media(进度同样接回来), 收掉聆听视觉。
     ///
-    /// ★ 退出时**不能**直接 _mp.Stop() 就完事: 那样视频就再也不播了。
+    /// ★ 退出时**不能**直接 _engine.Stop() 就完事: 那样视频就再也不播了。
     ///   必须用 _lastPlayUrl/_lastAudioUrl 把"进入之前那条组合"原样拼回去 ——
     ///   这正是这两个字段必须原封不动保留的原因(见 _listenAudioUrl 的说明)。
     ///
@@ -198,7 +198,7 @@ public partial class PlayerWindow : FluentWindow
         {
             _isListenMode = false;
 
-            try { _listenResumeMs = _mp.Time; } catch { _listenResumeMs = 0; }
+            try { _listenResumeMs = _engine.Time; } catch { _listenResumeMs = 0; }
             if (_listenResumeMs < 0) _listenResumeMs = 0;
 
             ApplyListenMode(false);
@@ -293,7 +293,7 @@ public partial class PlayerWindow : FluentWindow
     private string FormatListenLabel()
     {
         long ms = 0;
-        try { ms = _mp.Time; } catch { /* 播放器未就绪 */ }
+        try { ms = _engine.Time; } catch { /* 播放器未就绪 */ }
         if (ms < 0) ms = 0;
         var t = TimeSpan.FromMilliseconds(ms);
         // ★ 分钟**补两位**(设计稿写的是 "0:14", 但那样字串长度会在 10 分钟那一刻从 4 位变 5 位,

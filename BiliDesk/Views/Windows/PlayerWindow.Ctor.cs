@@ -174,25 +174,25 @@ public partial class PlayerWindow : FluentWindow
         UpdateSubtitleButton();
 
         // 2026-11-22(feat/mpv-core): 播放内核换成 libmpv。PlayerEngineAdapter 保留现有
-        // 调用面(_mp.Time / Length / Volume / ...), 交互逻辑一行不改; 引擎在第一次 Play
+        // 调用面(_engine.Time / Length / Volume / ...), 交互逻辑一行不改; 引擎在第一次 Play
         // 时才创建 —— 那时 PlayerVideoView 的宿主 HWND 已建好, mpv 的 wid 才有意义。
         PlayerLog.SessionHeader("mpv", "(libmpv)", BiliDesk.Mpv.MpvNative.LibraryPath);
 
-        _mp = new PlayerEngineAdapter(VideoView, msg => PlayerLog.Write(msg + "\n"));
+        _engine = new PlayerEngineAdapter(VideoView, msg => PlayerLog.Write(msg + "\n"));
         // 覆盖窗口是随 PlayerVideoView.Loaded 异步建出来的: 建好后补挂键盘/滚轮/激活处理
         VideoView.SurfaceReady += (_, _) => Dispatcher.BeginInvoke(new Action(HookOverlayKeyboard));
-        _mp.TimeChanged += OnTimeChanged;
-        _mp.LengthChanged += OnLengthChanged;
-        _mp.EndReached += OnEndReached;
+        _engine.TimeChanged += OnTimeChanged;
+        _engine.LengthChanged += OnLengthChanged;
+        _engine.EndReached += OnEndReached;
         // 2026-11-22(mpv): 拖动后视频流重连、时间还在走但画面冻结的兜底(见 HandleVideoStalled)
-        _mp.VideoStalled += (_, _) => Dispatcher.BeginInvoke(new Action(HandleVideoStalled));
+        _engine.VideoStalled += (_, _) => Dispatcher.BeginInvoke(new Action(HandleVideoStalled));
         // Playing 事件触发时隐藏加载遮罩; 若刚切完清晰度则恢复进度
         // 注意: LibVLC 事件都在其内部线程触发, 必须用 BeginInvoke 异步派发到 UI 线程。
-        // 若用同步 Invoke, UI 线程可能正阻塞在 _mp 属性调用等 LibVLC 内部锁, 双方互相等待 => 死锁
+        // 若用同步 Invoke, UI 线程可能正阻塞在 _engine 属性调用等 LibVLC 内部锁, 双方互相等待 => 死锁
         // 另外每个派发体都要先判 _closing: 窗口已开始关闭时回调可能仍在队列里, 必须丢弃。
         // ★ 2026-11-19(issue #88): 把事件触发时的 Media 代次一并派发到 UI 线程再比对。
         //   旧 input 的 Playing 若排在新片之后执行, 会把新片的续播/遮罩状态整个搞乱。
-        _mp.Playing += (_, _) => Dispatcher.BeginInvoke(new Action<int>(epoch =>
+        _engine.Playing += (_, _) => Dispatcher.BeginInvoke(new Action<int>(epoch =>
         {
             if (_closing || epoch != _mediaEpoch) return;
             // 首帧耗时(从 PlayMedia 算起): 与 [Timing] 那行对齐, 用来验证起播优化有没有效果
@@ -207,17 +207,17 @@ public partial class PlayerWindow : FluentWindow
             // 不补写的话 aout 就绪后音量会回到原生侧的旧值 —— 表现就是"滚轮调音量没反应"。
             // 放在函数最前: 后面 _resumeAfterSwitchMs 的 MarkSeekIssued 可能立刻进入 seek 静音,
             // 顺序反了会把静音状态顶掉(声音先于画面出来)。
-            try { _mp.Volume = _volumeCache; } catch { }
+            try { _engine.Volume = _volumeCache; } catch { }
             LogAudioStateOnce();
             // ★★★ 2026-11-19(issue #88 / #93): 续播位置先按**真实流长**校验/夹取, 再决定要不要 seek。
-            //   旧代码直接 `_mp.Time = resume`: 目标落在片尾/超过流长时会立刻触发假 EOF,
+            //   旧代码直接 `_engine.Time = resume`: 目标落在片尾/超过流长时会立刻触发假 EOF,
             //   用户看到的就是"打开长视频直接已播完""拖动进度条又已播完"。
             var resumeTarget = _resumeAfterSwitchMs;
             var resumeByStartTime = _resumeByStartTime;
             _resumeAfterSwitchMs = 0;
             _resumeByStartTime = false;
             var effectiveLength = 0L;
-            try { effectiveLength = _mp.Length; } catch { /* 原生对象可能已失效 */ }
+            try { effectiveLength = _engine.Length; } catch { /* 原生对象可能已失效 */ }
             if (effectiveLength <= 0) effectiveLength = _totalMs;
 
             if (resumeTarget > 0 && effectiveLength <= 0)
@@ -266,7 +266,7 @@ public partial class PlayerWindow : FluentWindow
             RestoreVideoAreaBackground();
             PlayerLog.Write(
                 $"\n[Playing] eofBlack={_eofBlackActive} ended={_ended} " +
-                $"bg={DescribeVideoAreaBg()} time={SafeReadTime()} state={_mp.State} " +
+                $"bg={DescribeVideoAreaBg()} time={SafeReadTime()} state={_engine.State} " +
                 $"resume={resumeTarget} byStart={resumeByStartTime}\n");
             // ★ 视频没填满时的白色边带(2026-10-17): 起播后要把那块原生窗口底色刷成近黑。
             //   ★★ 不能只调一次就完事: 实测 `Playing` 触发时 libvlc 的 `Static` 子窗口
@@ -275,7 +275,7 @@ public partial class PlayerWindow : FluentWindow
             //   ★ 用定时器而不是单个 BeginInvoke: vout 建立耗时随片源/网速变化(实测 200ms~1s),
             //     排一拍常常还是太早。重试上限 10 次 × 120ms ≈ 1.2s, 足够覆盖;
             //     命中后立刻停, 不常驻。
-            StartVideoBackdropFix();
+
             UpdatePlayButton();
             // ★ 直播弹幕时钟(2026-11-17): 起播这一刻就把墙钟立起来, 不等 500ms 的进度心跳。
             //   直播弹幕的上屏条件含 _dmClockRunning(见 OnLiveDanmakuPumpTick), 不在这里
@@ -283,7 +283,7 @@ public partial class PlayerWindow : FluentWindow
             //   用户看到的就是"进直播间要等一会才出现弹幕"。
             if (_isLive) StartLiveDanmakuClock();
             StartControlsHideCountdown();   // 播放中才开始倒计时自动隐藏
-            // 聆听态: 起播后把文案里的秒数对齐到真实位置(切流前后 _mp.Time 会有几十毫秒偏差),
+            // 聆听态: 起播后把文案里的秒数对齐到真实位置(切流前后 _engine.Time 会有几十毫秒偏差),
             // 并确保声波律动已经在跑(切清晰度/换片都会重建 Media, 但定时器是窗口级的, 不会断)。
             if (_isListenMode)
             {
@@ -296,7 +296,7 @@ public partial class PlayerWindow : FluentWindow
                 //   Time** —— 那会在解复用器刚打开的窗口里二次打断 input, 实测正是
                 //   "重建后补跳又落回开头"的来源(用户报的"最后回到开头 8 秒")。
                 //   其余路径(切清晰度/本地文件/聆听退出)保持原样。
-                if (!resumeByStartTime) { try { _mp.Time = resumeTarget; } catch { } }
+                if (!resumeByStartTime) { try { _engine.Time = resumeTarget; } catch { } }
 
                 // 遮罩不在这里收: 换成"正在缓冲…"继续盖着, 由看门狗确认到位后统一收。
                 ShowLoading(BufferingText);
@@ -311,7 +311,7 @@ public partial class PlayerWindow : FluentWindow
             // _resumeAfterSwitchMs / _resumeByStartTime 已在上面取出并清零。
         }), _mediaEpoch);
         // 暂停/停止时同步按钮图标(否则起播后图标停留在初始状态, 看起来像"反了")
-        _mp.Paused += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+        _engine.Paused += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
         {
             if (_closing) return;
             // ★ 弹幕时钟跟着视频冻结/解冻(用户要求"视频暂停时弹幕不动")。
@@ -320,12 +320,12 @@ public partial class PlayerWindow : FluentWindow
             //     播完(EndReached)时 IsPlaying 同样为 false, 顺带把弹幕也停了, 正合需要。
             //     这里的一次原生调用没问题 —— 暂停是低频事件, 与逐帧路径(必须零原生调用)
             //     不在一条路上。
-            try { SetDanmakuClockRunning(_mp.IsPlaying); } catch { /* 原生对象可能已失效 */ }
+            try { SetDanmakuClockRunning(_engine.IsPlaying); } catch { /* 原生对象可能已失效 */ }
             UpdatePlayButton();
             ShowControls();   // 暂停时控制栏常显(没有"遮挡内容"的问题, 且用户多半要操作)
         }));
         // 旧 input 的错误同样可能在换片后才派发到 UI, 不能让它给新片弹失败遮罩。
-        _mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(new Action<int>(epoch =>
+        _engine.EncounteredError += (_, _) => Dispatcher.BeginInvoke(new Action<int>(epoch =>
         {
             if (_closing || epoch != _mediaEpoch) return;
             // 诊断: 把出错时正在播的 URL 也写进 debug 文件
@@ -384,11 +384,11 @@ public partial class PlayerWindow : FluentWindow
         // ★ 也**不能**只依赖"复用同一个窗口时不重置": PlayerService 关窗重开时
         //   构造路径同样会跑到这里, 那时读的仍是设置, 所以两条路都对。
         _volumeCache = Svc.Settings.PlayerVolume;
-        try { _mp.Volume = _volumeCache; } catch { }
+        try { _engine.Volume = _volumeCache; } catch { }
         // ★★★ 滑块的 Value 也必须一起给(2026-11-12 用户报"进入下一个视频时音量条仍是 80%"):
         //   XAML 里写死 `Value="80"`, 而上面只改了 _volumeCache 与原生音量, **没碰滑块** ——
         //   于是声音确实是继承的那个值, 滑块却停在 80, 用户看到的就是"没继承"。
-        //   ★ 必须放在 _mp 就绪之后: 滑块此时已在可视树里, 赋 Value 会触发 OnVolumeChanged,
+        //   ★ 必须放在 _engine 就绪之后: 滑块此时已在可视树里, 赋 Value 会触发 OnVolumeChanged,
         //     那条路会再写一次 _volumeCache/原生音量(同值回写, 无副作用), 正好对齐。
         if (VolumeSlider != null) VolumeSlider.Value = _volumeCache;
 

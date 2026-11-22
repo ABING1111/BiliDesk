@@ -90,10 +90,6 @@ public sealed class PlayerEngineAdapter : IDisposable
         }
     }
 
-    // ---- VLC 兼容的"音轨"面: mpv 没有那个掉线竞态, 保持"永远正常"即可让自愈逻辑空转 ----
-    public int AudioTrackCount => _engine == null ? 0 : 1;
-    public int AudioTrack => 0;
-    public bool SetAudioTrack(int id) => true;
 
     public bool Play(PlayerMedia media)
     {
