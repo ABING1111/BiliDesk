@@ -51,7 +51,7 @@ public static class AudioResamplerPreference
         AudioResamplerMode.Speex =>
             "任何设备都做高质量重采样; 蓝牙耳机出现断断续续/一卡一卡时不要选它",
         AudioResamplerMode.Compat =>
-            "完全交给 libvlc 默认策略(1.8.2 行为); 44.1k 音轨在 48k 声卡上可能有轻微电流音",
+            "完全交给 libvlc 默认策略; 44.1k 音轨在 48k 声卡上可能有轻微电流音",
         _ => "直连音响/声卡用高质量重采样(修电流音); 蓝牙耳机自动回落到兼容策略(防卡顿)",
     };
 }
