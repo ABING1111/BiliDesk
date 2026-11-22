@@ -84,6 +84,14 @@ public class AppSettings
     public AudioTier PreferredAudioTier { get; set; } = AudioTier.Auto;
 
     /// <summary>
+    /// 音频重采样档位(2026-11-22 新增)。默认 Auto: 非蓝牙端点用 speex(修电流音),
+    /// 蓝牙端点回落到 any(修 1.8.3 的"蓝牙耳机一卡一卡")。
+    /// 老配置没有这个字段 ⇒ 反序列化保留 Auto ⇒ 正是想要的默认。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public AudioResamplerMode AudioResamplerMode { get; set; } = AudioResamplerMode.Auto;
+
+    /// <summary>
     /// 下次打开视频时自动跳到此前的观看进度(默认开)。
     /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
     /// </summary>

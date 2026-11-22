@@ -179,6 +179,10 @@ public partial class PlayerWindow : FluentWindow
         // 反复 new/Dispose 原生库会引发 Windows 级访问违例弹窗:
         //   "Exception Processing Message 0xc0000005 - Unexpected parameters"
         // 窗口只负责挂载属于自己的 MediaPlayer, 开关窗口不再触碰原生库生命周期。
+        // ★ 2026-11-22: 唯一的例外 —— 端点/设置变了且当前没有任何播放器窗口时,
+        //   PrepareForNewPlayer 会在这里重建一次共享实例(音频重采样模块是进程级的,
+        //   媒体级选项对 aout 无效, 见 VlcCore.PrepareForNewPlayer 的实测说明)。
+        VlcCore.PrepareForNewPlayer();
         try
         {
             _libVLC = VlcCore.Get();

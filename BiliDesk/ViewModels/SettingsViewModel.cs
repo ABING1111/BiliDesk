@@ -1020,6 +1020,37 @@ public class SettingsViewModel : ObservableObject
             : $"播放器优先使用 {AudioPreference.LabelOf(Svc.Settings.PreferredAudioTier)}; " +
               "该视频没有这一档时自动降到可用音质, 不影响画面清晰度";
 
+    // ----------------- 音频重采样(2026-11-22) -----------------
+
+    /// <summary>下拉框选项。字符串投影, 理由同 AudioTierSelected。</summary>
+    public string[] AudioResamplerOptions =>
+        AudioResamplerPreference.All.Select(AudioResamplerPreference.LabelOf).ToArray();
+
+    /// <summary>
+    /// 当前重采样档位(默认「自动」)。
+    /// ★ 自动 = 按默认输出端点决定: 直连音响用 speex(修电流音), 蓝牙耳机用 any(防卡顿)。
+    /// </summary>
+    public string AudioResamplerSelected
+    {
+        get => AudioResamplerPreference.LabelOf(Svc.Settings.AudioResamplerMode);
+        set
+        {
+            var mode = AudioResamplerPreference.Normalize(
+                AudioResamplerPreference.All.FirstOrDefault(m =>
+                    AudioResamplerPreference.LabelOf(m) == value));
+            if (mode == Svc.Settings.AudioResamplerMode) return;
+            Svc.Settings.AudioResamplerMode = mode;
+            Svc.Settings.Save();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(AudioResamplerHint));
+        }
+    }
+
+    /// <summary>副标题: 说清"哪种情况该改" —— 普通用户不应为了音质乱切。</summary>
+    public string AudioResamplerHint =>
+        AudioResamplerPreference.HintOf(Svc.Settings.AudioResamplerMode) +
+        "（切换后对新打开的视频生效）";
+
     // ----------------- 高音质音轨(2026-11-06) -----------------
 
     /// <summary>

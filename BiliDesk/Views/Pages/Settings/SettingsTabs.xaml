@@ -611,6 +611,27 @@
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
 
+                    <!-- 音频重采样(2026-11-22, 修 1.8.3 "蓝牙耳机一卡一卡").
+                         ★ 默认「自动」: 直连音响/声卡用 speex(修 44.1k→48k 电流音),
+                           蓝牙耳机自动回落到 libvlc 默认策略(防低延迟端点下的断断续续).
+                         ★ 出问题时让用户先切这里, 比让他改配置文件可靠. -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="音频重采样" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding AudioResamplerHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" Style="{StaticResource SettingsComboStyle}"
+                                  Width="170" VerticalAlignment="Center"
+                                  ItemsSource="{Binding AudioResamplerOptions}"
+                                  SelectedItem="{Binding AudioResamplerSelected, Mode=TwoWay}" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
                     <!-- 高音质音轨优先: 有 Hi-Res 无损 / 杜比音轨时优先使用。
                          ★ 只影响音频选轨, 不改画面清晰度; 普通视频仍回落到 192K AAC。 -->
                     <Grid Style="{StaticResource SettingsRowStyle}">

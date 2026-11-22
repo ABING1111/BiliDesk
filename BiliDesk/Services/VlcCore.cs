@@ -28,6 +28,8 @@ public static class VlcCore
 {
     private static readonly object Gate = new();
     private static LibVLC? _instance;
+    /// <summary>创建 _instance 时用的重采样模块(端点/设置变化时据此判断要不要重建)。</summary>
+    private static string? _instanceAudioResampler;
     private static int _livePlayers;
 
     /// <summary>libvlc.dll / libvlccore.dll 所在目录</summary>
@@ -46,18 +48,98 @@ public static class VlcCore
     public static string PluginsDirectory =>
         Path.Combine(LibVlcDirectory, "plugins");
 
+    /// <summary>高质量重采样模块: 有滤波器, 44.1→48 不会把镜像折回带内(见下面那段说明)。</summary>
+    public const string AudioResamplerSpeex = "speex";
+
     /// <summary>
-    /// 强制使用的音频重采样模块。为什么必须是 speex、不能交给 libvlc 的 "any"，
-    /// 见 <see cref="BuildCoreArguments"/> 里那段说明(附实测数据)。
+    /// 交给 libvlc 按优先级挑(= ugly: 采样率相同直接透传, 需要变比时最近邻)。
+    /// 1.8.2 及以前的行为; 蓝牙端点用它避开 speex 接管时钟漂移补偿(见下面那段说明)。
     /// </summary>
-    public const string AudioResamplerModule = "speex";
+    public const string AudioResamplerAny = "any";
+
+    /// <summary>
+    /// 诊断/应急覆盖: 值同 <see cref="ResolveAudioResampler"/> 的 preference
+    /// (auto / speex / any / compat / ugly)。给"让用户零构建 A/B"留的入口。
+    /// </summary>
+    public const string AudioResamplerEnvVar = "BILIDESK_AUDIO_RESAMPLER";
+
+    /// <summary>
+    /// 设置项 → 解析器的偏好串(auto / speex / any)。
+    /// </summary>
+    public static string PreferenceOf(AudioResamplerMode mode) => mode switch
+    {
+        AudioResamplerMode.Speex => "speex",
+        AudioResamplerMode.Compat => "any",
+        _ => "auto",
+    };
+
+    /// <summary>
+    /// 解析本次播放该用哪个重采样模块(**纯函数**, 便于单测)。
+    ///
+    /// 优先级: <paramref name="environmentOverride"/> &gt; <paramref name="preference"/> &gt; 端点类型。
+    /// 端点类型是最后的兜底: **蓝牙 → any, 其它/未知 → speex** ——
+    /// 为什么只能按端点而不是按采样率判断, 见 <see cref="BuildCoreArguments"/> 里的说明。
+    /// </summary>
+    public static string ResolveAudioResampler(string? preference = null,
+        bool defaultOutputIsBluetooth = false, string? environmentOverride = null)
+    {
+        var choice = NormalizeResamplerChoice(
+            string.IsNullOrWhiteSpace(environmentOverride) ? preference : environmentOverride);
+        return choice switch
+        {
+            "speex" => AudioResamplerSpeex,
+            "any" => AudioResamplerAny,
+            _ => defaultOutputIsBluetooth ? AudioResamplerAny : AudioResamplerSpeex,
+        };
+    }
+
+    /// <summary>偏好串归一化: 认得的映射到具体模块, 其余(含手改的垃圾值)一律 auto。</summary>
+    private static string NormalizeResamplerChoice(string? value) =>
+        (value ?? "").Trim().ToLowerInvariant() switch
+        {
+            "speex" => "speex",
+            "any" or "ugly" or "compat" => "any",
+            _ => "auto",
+        };
+
+    /// <summary>
+    /// 开新播放器窗口前的准备(在 <see cref="Get"/> / new MediaPlayer **之前**调用, UI 线程)。
+    ///
+    /// ★★★ 2026-11-22 实测结论: **媒体级 `:audio-resampler=` 对 aout 无效, 别改回去**。
+    ///   探针 select 模式(全局 speex + 媒体 ugly, mmdevice 输出)的原生日志里仍然是
+    ///   `using audio resampler module "speex_resampler"`。原因: libvlc 的 MediaPlayer
+    ///   自己持有一个 input_resource 并把它传给 input, aout 的父对象是 **MediaPlayer**,
+    ///   不在 input 的继承链上 —— input 上的媒体选项 aout 根本读不到。
+    ///   (对照: `:network-caching` / `:demux` 都是 input 的子对象读的, 所以它们有效。)
+    ///   ⇒ 只能进程级选模块: 端点/设置变了且**当前没有播放器窗口**时在这里重建共享实例,
+    ///     下一次起播生效; 有窗口在播就不动它(反复创建/销毁原生库是 0xc0000005 的高发场景)。
+    /// </summary>
+    public static void PrepareForNewPlayer()
+    {
+        lock (Gate)
+        {
+            if (_instance == null || Volatile.Read(ref _livePlayers) > 0) return;
+            var resampler = CurrentAudioResampler();
+            if (resampler == _instanceAudioResampler) return;
+            App.ReportNote($"[Audio] 重采样模块变化, 重建 LibVLC: {_instanceAudioResampler ?? "-"} → {resampler}");
+            DisposeInstanceLocked();
+        }
+    }
+
+    /// <summary>按当前设置 + 当前默认输出端点解析出这次播放要用的模块。</summary>
+    public static string CurrentAudioResampler() =>
+        ResolveAudioResampler(PreferenceOf(SettingsStore.Instance.AudioResamplerMode),
+            AudioOutputProfile.IsDefaultBluetooth(),
+            Environment.GetEnvironmentVariable(AudioResamplerEnvVar));
 
     /// <summary>
     /// 构造共享 LibVLC 的基础参数(纯函数, 便于单测)。
     /// 只放会改变播放行为的选项; 诊断日志开关由 <paramref name="nativeDebugLog"/> 控制。
+    /// <paramref name="audioResampler"/> 为 null 时按 speex(单测默认), 生产路径由
+    /// <see cref="CurrentAudioResampler"/> 传具体模块。
     /// </summary>
     public static List<string> BuildCoreArguments(int networkCachingMs, VideoOutputMode videoOutput,
-        bool nativeDebugLog = false)
+        bool nativeDebugLog = false, string? audioResampler = null)
     {
         var args = new List<string>
         {
@@ -65,24 +147,45 @@ public static class VlcCore
             "--no-osd",
             "--network-caching=" + networkCachingMs,
 
-            // ★★★ 2026-11-21 修「播放视频音质不佳、存在电流音」: 强制 speex 重采样。
+            // ★★★ 2026-11-21 / 2026-11-22 关于「音频重采样」，两条结论必须一起看：
             //
-            //   VLC 3 的 --audio-resampler 默认是 "any", 而它实际**选中 ugly(线性插值)**,
-            //   不是包里同样存在的 speex。B 站音轨绝大多数是 44.1kHz, 而 Windows 声卡的
-            //   混音格式几乎都是 48kHz ⇒ 每条视频都在经过 44.1→48 的重采样:
-            //     · 实测(探针 bd-probe-audiodump 的 mem 模式: 44.1k/1kHz 正弦 → 48k 后
-            //       把 PCM 抓回托管侧做正弦拟合):
-            //         ugly  THD+N = -27.7dB, 带内杂散 2.9k/4.9k = -42dBFS(信号 -8.7dBFS)
-            //         speex THD+N = -85.5dB, 同一对杂散 = -116dB
-            //       2.9k/4.9k 正是 44.1±1kHz 的镜像被 48k 采样折叠到的位置 ——
-            //       听感就是持续的高频"电流声/数码味", 人声齿音和镲片最明显。
-            //     · 该选项对 mmdevice/WASAPI 以及 afile/amem 所有 aout 都生效, 也覆盖
-            //       直播/重连/聆听态, 所以放在全局实例, 而不是各 Media 上。
-            //     · speex_resampler 插件随 VideoLAN.LibVLC.Windows 发布, 发布裁剪清单
-            //       (BiliDesk.csproj 的 TrimLibVLCPlugins)没有删它; 万一将来被删,
-            //       libvlc 找不到指定模块会回落 "any"(实测传一个不存在的模块名仍能播,
-            //       只是退回 ugly), 不会导致没声音。
-            "--audio-resampler=" + AudioResamplerModule,
+            //  ① **电流音**：VLC 3 的 --audio-resampler 默认 "any" 实际选中 ugly(最近邻/线性)，
+            //     不是包里同样存在的 speex。B 站音轨绝大多数是 44.1kHz，而 Windows 声卡的
+            //     混音格式几乎都是 48kHz ⇒ 每条视频都在经过 44.1→48 的重采样：
+            //       · 实测(探针 bd-probe-audiodump 的 mem 模式: 44.1k/1kHz 正弦 → 48k 后
+            //         把 PCM 抓回托管侧做正弦拟合)：
+            //           ugly  THD+N = -27.7dB, 带内杂散 2.9k/4.9k = -42dBFS(信号 -8.7dBFS)
+            //           speex THD+N = -85.5dB, 同一对杂散 = -116dB
+            //         2.9k/4.9k 正是 44.1±1kHz 的镜像被 48k 采样折叠到的位置 ——
+            //         听感就是持续的高频"电流声/数码味"。
+            //
+            //  ② **蓝牙耳机卡顿(1.8.3 回归)**：`--audio-resampler=speex` 是**全局**的，而
+            //     aout 的重采样器**不是只在需要变比时才建**——`aout_FiltersNew()` 无条件调用
+            //     FindResampler()，注释原文是 "the resampler needs to run even if resampling is 0"。
+            //     ugly 在 1:1 时 `DoWork()` 直接原样返回 block(零开销)，而 speex 的
+            //     `audio resampler` 子模块 **OpenResampler() 不检查采样率**(只有对应的
+            //     audio converter 那个 Open() 检查)，所以 1:1 也会真的每块跑一遍 64 抽头
+            //     定点 sinc。
+            //     A2DP 耳机常见就是 44.1k，正好和 B 站 AAC 同为 44.1k ⇒ 这类设备上旧版这条链
+            //     是直通，强制 speex 后却全程在做重采样。更要命的是这个对象**同时是 VLC 的
+            //     时钟漂移补偿器**：`aout_DecSynchronize()` 判定 |drift| 超阈值后，每块把
+            //     `fmt_in.i_rate` 改 ±2Hz，speex 每次都要 `speex_resampler_set_rate()` →
+            //     `update_filter()`(重算约 520 个 sinc 值 + 重标定分数相位)。
+            //     蓝牙是独立时钟、端点延迟大且抖，漂移补偿几乎一直开着；直连音响不会。
+            //     ⇒ 症状就是"只有蓝牙一卡一卡"。
+            //   ⇒ 结论: speex 只给**真正需要变比**的端点用；蓝牙端点回到 any（1.8.2 行为）。
+            //     判断只能按端点类型：蓝牙 48k 端点对 44.1k 源同样会走 speex + 漂移补偿，
+            //     按"源采样率 == 端点采样率"判会漏掉这一类。
+            //   ★ 该选项对 mmdevice/WASAPI 以及 afile/amem 所有 aout 都生效, 也覆盖
+            //     直播/重连/聆听态。它只能在**进程级**设置 —— aout 的父对象是 MediaPlayer,
+            //     读不到媒体级 `:audio-resampler=`(实测, 见 PrepareForNewPlayer 的说明);
+            //     端点/设置变化由 PrepareForNewPlayer 在"没有播放器窗口"时重建实例来跟进。
+            //   ★ speex_resampler 插件随 VideoLAN.LibVLC.Windows 发布, 发布裁剪清单
+            //     (BiliDesk.csproj 的 TrimLibVLCPlugins)没有删它; 万一将来被删,
+            //     libvlc 找不到指定模块会回落 "any"(实测传一个不存在的模块名仍能播,
+            //     只是退回 ugly), 不会导致没声音。
+            "--audio-resampler=" + (audioResampler ?? AudioResamplerSpeex),
+
         };
 
         var vout = VoutModuleFor(videoOutput);
@@ -156,7 +259,11 @@ public static class VlcCore
             var mode = SettingsStore.Instance.VideoOutputMode;
             var vout = VoutModuleFor(mode);
             var debug = Environment.GetEnvironmentVariable("BILIDESK_VLC_DEBUG") == "1";
-            var args = BuildCoreArguments(caching, mode, debug);
+            // ★ 2026-11-22: 重采样模块不再写死 speex —— 蓝牙端点必须回到 any(见 BuildCoreArguments)。
+            //   它是**进程级**选项: 端点/设置变化由 PrepareForNewPlayer 在开新播放器前重建实例,
+            //   不在本方法里重建(这里可能正被预热线程调用)。
+            var resampler = CurrentAudioResampler();
+            var args = BuildCoreArguments(caching, mode, debug, resampler);
 
             // ★ 2026-11-14(issue #81): 原生日志开关。
             //   排查"播放几小时后卡死/断流"时必须看 libvlc 自己怎么说 ——
@@ -196,9 +303,14 @@ public static class VlcCore
                 {
                     // 拿不到模块列表只是少一条诊断, 不影响播放
                 }
+
+                // 2026-11-22: 音频重采样选谁、为什么 —— 排查"蓝牙耳机一卡一卡"时,
+                // 一眼要能看到当前端点是不是蓝牙、最终选了哪个模块(见 AudioOutputProfile)。
+                App.ReportNote("[Audio] " + AudioOutputProfile.Describe(resampler));
             }
 
             _instance = new LibVLC(args.ToArray());
+            _instanceAudioResampler = resampler;
 
             if (debug)
             {
@@ -264,12 +376,21 @@ public static class VlcCore
     {
         lock (Gate)
         {
-            if (_instance == null) return;
             if (Volatile.Read(ref _livePlayers) > 0) return;
-            // 日志文件是原生 FILE*: 必须在 Dispose 之前关掉, 否则句柄和缓冲都要靠 CRT 退出时兜底
-            try { _instance.CloseLogFile(); } catch { /* 退出阶段忽略 */ }
-            try { _instance.Dispose(); } catch { /* 退出阶段忽略 */ }
-            _instance = null;
+            DisposeInstanceLocked();
         }
+    }
+
+    /// <summary>
+    /// 释放共享实例(调用方必须持有 <see cref="Gate"/>, 且已确认没有存活窗口)。
+    /// 日志文件是原生 FILE*: 必须在 Dispose 之前关掉, 否则句柄和缓冲都要靠 CRT 退出时兜底。
+    /// </summary>
+    private static void DisposeInstanceLocked()
+    {
+        if (_instance == null) return;
+        try { _instance.CloseLogFile(); } catch { /* 退出/重建阶段忽略 */ }
+        try { _instance.Dispose(); } catch { /* 退出/重建阶段忽略 */ }
+        _instance = null;
+        _instanceAudioResampler = null;
     }
 }
