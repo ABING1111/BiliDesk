@@ -6,7 +6,7 @@
 
 **干净、流畅的哔哩哔哩第三方 Windows 桌面客户端**
 
-*WPF · .NET 10 · LibVLC*
+*WPF · .NET 10 · libmpv*
 
 <br>
 
@@ -30,7 +30,7 @@
 
 **播放**
 
-- LibVLC 内核，DASH 音视频双流，最高 4K，HEVC 优先选流
+- mpv（libmpv）内核，DASH 音视频双流，最高 4K，HEVC 优先选流
 - 默认画质可预选（该清晰度不可用时自动降级），线路跟随服务端（默认）或手动指定，免登录 1080P
 - 倍速播放：0.25x–4.0x 预设，也可自定义输入任意倍速
 - 视频「铺满窗口」与全屏
@@ -100,7 +100,24 @@ cd BiliDesk
 dotnet build BiliDesk/BiliDesk.csproj -c Release
 ```
 
-LibVLC 原生库由 NuGet 包（`VideoLAN.LibVLC.Windows`）自动部署，无需手动安装。
+libmpv 原生库**不进仓库**（约 122MB），需要自行下载并放到固定位置：
+
+1. 从 [shinchiro 的 mpv Windows 构建](https://sourceforge.net/projects/mpv-player-windows/files/) 下载
+   `mpv-dev-x86_64-*.7z`（**基线 x86_64 版**，不要选 `-v3`，除非确认目标机器都支持 AVX2）；
+2. 解压出其中的 `libmpv-2.dll`；
+3. 放到下面这个路径（目录不存在就新建）：
+
+   ```text
+   BiliDesk/libmpv/win-x64/libmpv-2.dll
+   ```
+
+构建时会自动复制到输出目录；文件缺失时工程仍可构建，只是播放内核不可用。
+
+> 本项目固定使用 `mpv-dev-x86_64-20261111-git-bcde6b93cc`
+> （mpv `v0.42.0-38-gbcde6b93c` / FFmpeg `N-128766-gcd4e96eb3`）。
+> SHA-256、许可与来源见 [`docs/libmpv-build.md`](docs/libmpv-build.md)。
+> 该 DLL 已被 `.gitignore` 排除，不会进入提交。
+
 完整发布（便携版 zip + Inno 安装器载荷）运行仓库根目录的 `发布.ps1`。
 
 ## ⚖️ 许可
