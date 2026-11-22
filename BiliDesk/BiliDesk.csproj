@@ -47,6 +47,21 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
   </ItemGroup>
 
+  <!-- 发行包里的许可与第三方说明(便携版 zip / 安装器载荷都会带上) -->
+  <ItemGroup>
+    <Content Include="..\LICENSE" Link="LICENSE.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="..\docs\third-party-notices.txt" Link="THIRD-PARTY-NOTICES.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="..\docs\licenses\GPL-2.0.txt" Link="licenses\GPL-2.0.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
   <!--
     mpv core (feat/mpv-core): libmpv 原生库不进仓库(单文件 ~110MB)。
     放到 BiliDesk\libmpv\win-x64\libmpv-2.dll 后构建/发布会自动复制到输出目录;

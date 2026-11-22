@@ -1,4 +1,4 @@
-# BiliDesk 发布脚本
+﻿# BiliDesk 发布脚本
 #
 # 一次产出两套(2026-09-26 定):
 #   1) 便携版(zip): 自包含 + 单文件压缩 —— 用户机器**不用装 .NET**, 解压即用;
@@ -23,6 +23,17 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Out = Join-Path $Root "Publish"
 $PortableDir = Join-Path $Out "BiliDesk-便携版"
 $InstallerDir = Join-Path $Out "BiliDesk-安装器-files"
+# libmpv 是必需载荷: 缺失或哈希不符时直接失败, 避免打出"没有播放内核"的包。
+$LibMpvPath = Join-Path $Root "BiliDesk\libmpv\win-x64\libmpv-2.dll"
+$LibMpvSha256 = "88504EE5560942A955405E99DFB5971368E4CF851321F36565BF2A667271DB1B"
+if (-not (Test-Path $LibMpvPath)) {
+    throw "缺少 libmpv-2.dll: 请按 README 放到 $LibMpvPath"
+}
+$libMpvActual = (Get-FileHash $LibMpvPath -Algorithm SHA256).Hash
+if ($libMpvActual -ne $LibMpvSha256) {
+    throw "libmpv-2.dll 哈希不匹配(可能换过构建): 实际 $libMpvActual, 期望 $LibMpvSha256; 确认后同步更新 发布.ps1 与 docs/libmpv-build.md"
+}
+Write-Host "  libmpv 校验通过: $libMpvActual"
 
 # Publish 根目录只建不清理: 里面还放着 installer.iss, 任何 Remove-Item Publish\* 都会连带删掉它。
 if (-not (Test-Path $Out)) { New-Item -ItemType Directory -Path $Out -Force | Out-Null }
@@ -57,6 +68,15 @@ dotnet publish (Join-Path $Root "BiliDesk\BiliDesk.csproj") -c Release -r win-x6
     -o $InstallerDir
 if ($LASTEXITCODE -ne 0) { throw "安装器载荷发布失败" }
 
+# 两个产物都必须带上播放内核与许可/第三方说明, 缺一即失败
+foreach ($dir in @($PortableDir, $InstallerDir)) {
+    foreach ($rel in @("libmpv\win-x64\libmpv-2.dll", "THIRD-PARTY-NOTICES.txt", "licenses\GPL-2.0.txt", "LICENSE.txt")) {
+        if (-not (Test-Path (Join-Path $dir $rel))) {
+            throw "发布产物缺少 $rel : $dir"
+        }
+    }
+}
+Write-Host "  载荷校验通过: libmpv + 许可/第三方说明齐全"
 Write-Host "== 3/5 校验 WPF 原生库版本(防旧 .NET 残留混进包) =="
 # 只查 WPF 那三个 dll: 它们的文件版本大版本号必须等于 app 目标框架的大版本(net10.0 → 10)。
 # D3DCompiler_47_cor3.dll 是 Windows SDK 的、vcruntime140_cor3.dll 是 VC 运行时的,
