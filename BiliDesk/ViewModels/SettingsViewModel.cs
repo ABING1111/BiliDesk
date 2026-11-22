@@ -921,8 +921,8 @@ public class SettingsViewModel : ObservableObject
     /// <summary>下拉框显示项; 下标与 <see cref="HwdecMode"/> 的数值一一对应。</summary>
     public string[] HwdecOptions { get; } =
     {
-        "自动（安全）", "自动", "关闭（软解）",
-        "D3D11VA", "D3D11VA（复制）", "DXVA2", "DXVA2（复制）", "NVDEC", "NVDEC（复制）"
+        "自动（安全）", "自动", "自动（复制回内存）", "关闭（软解）",
+        "D3D11VA", "D3D11VA（复制）", "NVDEC", "NVDEC（复制）"
     };
 
     /// <summary>
@@ -952,7 +952,7 @@ public class SettingsViewModel : ObservableObject
 
     /// <summary>说明默认行为与排查方向。</summary>
     public string HwdecHint => Svc.Settings.HwdecMode == HwdecMode.AutoSafe
-        ? "默认：mpv 确认安全时才启用硬解，失败自动回退软解；修改后重新打开播放器生效"
+        ? "默认：mpv 确认安全时才启用硬解，失败自动回退软解；修改后重新打开播放器生效（D3D11VA 需 Windows 8+，NVDEC 需 NVIDIA 显卡）"
         : "出花屏/绿屏/黑屏时切回「自动（安全）」或「关闭（软解）」；修改后重新打开播放器生效";
 
     /// <summary>

@@ -130,9 +130,9 @@ public class MpvOptionsTests
     [InlineData(HwdecMode.AutoSafe, "auto-safe")]
     [InlineData(HwdecMode.Auto, "auto")]
     [InlineData(HwdecMode.No, "no")]
+    [InlineData(HwdecMode.AutoCopy, "auto-copy")]
     [InlineData(HwdecMode.D3D11Va, "d3d11va")]
     [InlineData(HwdecMode.D3D11VaCopy, "d3d11va-copy")]
-    [InlineData(HwdecMode.Dxva2, "dxva2")]
     [InlineData(HwdecMode.NvdecCopy, "nvdec-copy")]
     public void 硬解模式映射到mpv的hwdec(HwdecMode mode, string expected)
     {

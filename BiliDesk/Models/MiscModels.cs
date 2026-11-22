@@ -209,7 +209,7 @@ public enum RecommendSource
 ///
 /// ★ AutoSafe(默认)= mpv 的 auto-safe: 只在确认安全时才启用硬解, 失败自动回退软解。
 /// ★ No = 纯软解(排查花屏/绿屏/驱动问题时用)。
-/// ★ 其余是指定后端: D3D11VA / DXVA2 / NVDEC, "-copy" 表示解码后拷贝回内存
+/// ★ 其余是指定后端: D3D11VA / NVDEC, "-copy" 表示解码后拷贝回内存
 ///   (兼容性更好, 但多一次拷贝)。
 /// ★ hwdec 在播放器创建时确定, 改完需要重新打开播放器; 不需要重启整个应用。
 /// </summary>
@@ -219,20 +219,18 @@ public enum HwdecMode
     AutoSafe = 0,
     /// <summary>自动 —— mpv `hwdec=auto`(不保证安全, 失败可能黑屏)</summary>
     Auto = 1,
+    /// <summary>自动 + 拷贝回内存 —— mpv `hwdec=auto-copy`</summary>
+    AutoCopy = 2,
     /// <summary>关闭硬解 —— mpv `hwdec=no`</summary>
-    No = 2,
-    /// <summary>Direct3D 11 Video Acceleration</summary>
-    D3D11Va = 3,
+    No = 3,
+    /// <summary>Direct3D 11 Video Acceleration(需要 vo=gpu/gpu-next + d3d11 context)</summary>
+    D3D11Va = 4,
     /// <summary>D3D11VA + 拷贝回内存</summary>
-    D3D11VaCopy = 4,
-    /// <summary>DXVA2(较老的 D3D9 硬解)</summary>
-    Dxva2 = 5,
-    /// <summary>DXVA2 + 拷贝回内存</summary>
-    Dxva2Copy = 6,
-    /// <summary>NVIDIA NVDEC</summary>
-    Nvdec = 7,
+    D3D11VaCopy = 5,
+    /// <summary>NVIDIA NVDEC(需要 CUDA)</summary>
+    Nvdec = 6,
     /// <summary>NVDEC + 拷贝回内存</summary>
-    NvdecCopy = 8,
+    NvdecCopy = 7,
 }
 
 public static class HwdecModeExtensions
@@ -241,11 +239,10 @@ public static class HwdecModeExtensions
     public static string ToMpvValue(this HwdecMode mode) => mode switch
     {
         HwdecMode.Auto => "auto",
+        HwdecMode.AutoCopy => "auto-copy",
         HwdecMode.No => "no",
         HwdecMode.D3D11Va => "d3d11va",
         HwdecMode.D3D11VaCopy => "d3d11va-copy",
-        HwdecMode.Dxva2 => "dxva2",
-        HwdecMode.Dxva2Copy => "dxva2-copy",
         HwdecMode.Nvdec => "nvdec",
         HwdecMode.NvdecCopy => "nvdec-copy",
         _ => "auto-safe",
