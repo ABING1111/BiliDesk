@@ -981,6 +981,11 @@ public class FollowViewModel : ObservableObject
         }
         _wallVisibleVideoCount = visible;
 
+        // ★ 卡片墙按视频自己的发布时间倒序(issue #120), 不受评论产生的新动态时间影响。
+        //   动态卡列表仍按 FeedItems 的动态时间排 —— 两边排序规则分开。
+        //   OrderByDescending 是稳定排序, 同一发布时间保持原动态顺序。
+        videos = videos.OrderByDescending(v => v.Pubdate).ToList();
+
         if (videos.Count == 0)
         {
             CancelWallAppends();

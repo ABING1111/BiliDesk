@@ -93,6 +93,12 @@ public class DynamicItem : INotifyPropertyChanged
     /// <summary>Unix 秒。扁平路径只有展示文本时是反推的近似值。</summary>
     public long Pubdate { get; set; }
 
+    /// <summary>
+    /// 视频自身的发布时间(archive.pubdate), 与动态发布时间分开。
+    /// 评论会产生新动态并推高 Pubdate, 但卡片墙要按这个时间排序。
+    /// </summary>
+    public long VideoPubdate { get; set; }
+
     /// <summary>接口排好版的发布时间原文("昨天 20:50" / "2小时前")。</summary>
     public string PubTimeLabel { get; set; } = "";
 
@@ -307,7 +313,8 @@ public class DynamicItem : INotifyPropertyChanged
             Duration = src.Duration,
             ViewCount = src.ViewCount,
             DanmakuCount = src.DanmakuCount,
-            Pubdate = Pubdate > 0 ? Pubdate : src.Pubdate,
+            Pubdate = src.VideoPubdate > 0 ? src.VideoPubdate
+                      : Pubdate > 0 ? Pubdate : src.Pubdate,
             PubTimeLabel = PubTimeLabel,
             PubDateApprox = PubDateApprox,
             RoomId = src.RoomId,
