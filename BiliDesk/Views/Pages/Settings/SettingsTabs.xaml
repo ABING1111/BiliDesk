@@ -886,6 +886,26 @@
                                   ItemsSource="{Binding VideoOutputOptions}"
                                   SelectedItem="{Binding VideoOutputSelected, Mode=TwoWay}" />
                     </Grid>
+
+                    <!-- 硬件解码(2026-11-22, issue #119): VLC 3.0.24 在部分 NVIDIA 显卡上
+                         暂停再恢复后画面会永久停在最后一帧(音频继续)。关掉后新起播的 Media
+                         改走 CPU 软解 —— 永久规避, 代价是高分辨率更吃性能。 -->
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="硬件解码" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding HardwareDecodingHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding HardwareDecoding, Mode=TwoWay}" />
+                    </Grid>
                 </StackPanel>
             </Border>
 

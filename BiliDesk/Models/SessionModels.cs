@@ -206,6 +206,14 @@ public class AppSettings
     public VideoOutputMode VideoOutputMode { get; set; } = VideoOutputMode.Auto;
 
     /// <summary>
+    /// 是否允许 libvlc 使用硬件解码(默认 true)。
+    /// ★ 用可空类型接: 老配置没有这个字段 ⇒ null ⇒ 按 true(默认开)处理,
+    ///   不需要版本兼容代码(与 <see cref="AutoBufferPolicy"/> 同一套理由)。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool? HardwareDecodingEnabled { get; set; }
+
+    /// <summary>
     /// 上次用的搜索类别(见 <see cref="ContentKind"/>: 0=视频 1=直播间 2=番剧 3=UP主)。
     /// 存 int 而不是枚举本身: JSON 里枚举按数字走, 老配置没有这个字段时默认 0(视频),
     /// 与搜索页的初始类别一致。★ 取值范围由 SettingsStore.SearchKind 夹取。

@@ -276,6 +276,11 @@ public partial class PlayerWindow : FluentWindow
         // 这里只作为"看门狗提前放行"时的兜底 —— 见 SeekGraceMs 的说明。
         var inSeekGrace = Environment.TickCount64 < _seekGraceUntil;
 
+        // ---- 画面输出冻结检测(2026-11-22, issue #119): 音频在走、vout 不出帧 ----
+        // ★ 必须放在跳转看门狗的 `return` 之前: 暂停/拖动/等待 seek 的拍子也要喂给
+        //   policy(它会走“不合格 → 清冻结窗口”的分支), 否则暂停时间会被算进 4 秒冻结。
+        UpdateVoutFreezeDetector(inSeekGrace);
+
         // ---- 跳转看门狗: 目标迟迟没到位就重发 seek, 等待久了给缓冲提示 ----
         if (_pendingSeekMs >= 0 && !_isSeeking && !_ended && _mp.Length > 0)
         {
@@ -928,6 +933,159 @@ public partial class PlayerWindow : FluentWindow
         _stallPolicy.Reset();
         HideBufferingIfShown();
     }
+
+    // ------------------------------------------------------------ 画面输出冻结的自愈
+    //
+    // ★★★ 2026-11-22(issue #119): 现有卡顿自愈只看 `_mp.Time` 是否冻结, 而这里
+    //   音频时钟一直在走, Time 正常推进 —— 所以那套永远不会触发。改用
+    //   `MediaStats.DisplayedPictures`(vout 真正出帧的次数)判定画面是否还活着。
+    //   阈值与预算全在 Services/VoutFreezePolicy.cs, 这里只负责采样与执行动作。
+
+    /// <summary>
+    /// 每个心跳(实际降到 1 秒一次)采样一次 DisplayedPictures, 交给 policy 判定。
+    /// ★ 只在"播放器可见且激活"时判定: 窗口最小化/被切走时 DWM 可能本来就停止呈现,
+    ///   那不是故障; 误判会导致后台听视频被无谓重建。
+    /// </summary>
+    private void UpdateVoutFreezeDetector(bool inSeekGrace)
+    {
+        if (_closing || _mp == null) return;
+
+        // 直播/聆听/播完没有“画面输出”语义: 直接清窗口, 不采样。
+        if (_isLive || _isListenMode || _ended)
+        {
+            _voutPolicy.OnCannotSample();
+            return;
+        }
+
+        // 心跳平时 500ms; 这里降频到 1 秒。seek 等待期的 100ms 心跳也不加采样。
+        var now = Environment.TickCount64;
+        if (_lastVoutSampleAt >= 0 && now - _lastVoutSampleAt < VoutSampleIntervalMs) return;
+        _lastVoutSampleAt = now;
+
+        var eligible =
+            _mp.IsPlaying
+            && !_isSeeking && _pendingSeekMs < 0 && !inSeekGrace
+            && !_switchingQuality && !_stallRecoveryInFlight && !_voutRecoveryInFlight
+            // 拖窗口边缘 / 全屏切换的尺寸重协商期间 vout 本来就可能短暂不出帧, 不算故障。
+            && !_modalResizeInProgress && !_placementSettling
+            && (LoadingOverlay == null || LoadingOverlay.Visibility != Visibility.Visible)
+            && IsVisible && WindowState != WindowState.Minimized
+            // 主窗口或覆盖层窗口激活都算“用户正在看”; 后台/被遮挡时不判定。
+            && (IsActive || _overlayKeyboardWindow?.IsActive == true);
+
+        if (!eligible)
+        {
+            // 用 false 走 policy 的“暂停时间不计时”分支。这里传 0 只是占位,
+            // 下一拍合格时会拿到真实计数并重新取基线。
+            _voutPolicy.Tick(now, 0, 0, eligible: false);
+            return;
+        }
+
+        var displayed = ReadDisplayedPictures();
+        if (displayed < 0)
+        {
+            _voutPolicy.OnCannotSample();
+            return;
+        }
+
+        var posMs = CurrentPlaybackMs();
+        var action = _voutPolicy.Tick(now, displayed, posMs, eligible: true);
+
+        if (_voutPolicy.StatsUnavailable && !_voutStatsUnavailableLogged)
+        {
+            _voutStatsUnavailableLogged = true;
+            WriteLibVLCDebug(
+                $"[Vout] 未收到 DisplayedPictures 增长, 统计可能不可用, 暂不自动恢复 " +
+                $"pos={posMs}ms display={displayed}\n");
+        }
+
+        switch (action)
+        {
+            case VoutFreezeAction.Recover:
+                WriteLibVLCDebug(
+                    $"[Vout] 画面停止出帧: 第{_voutPolicy.Recoveries}次自动恢复 " +
+                    $"pos={posMs}ms display={displayed} listen={_isListenMode} " +
+                    $"softDecode={PlaybackCompatibility.ForceSoftwareDecode}\n");
+                _ = RecoverFromFrozenVoutAsync(posMs);
+                break;
+
+            case VoutFreezeAction.GiveUp:
+                if (_voutGiveUpToasted) break;
+                _voutGiveUpToasted = true;
+                WriteLibVLCDebug(
+                    $"[Vout] 自动恢复放弃(已恢复 {_voutPolicy.Recoveries} 次) pos={posMs}ms " +
+                    $"display={displayed}\n");
+                Svc.Toast.Show(PlaybackCompatibility.ForceSoftwareDecode
+                    ? "画面仍未恢复，请拖动进度条或重新打开视频"
+                    : "画面仍未恢复，可在 设置 → 兼容性 关闭硬件解码后重试");
+                break;
+        }
+    }
+
+    /// <summary>读 `MediaStats.DisplayedPictures`; 拿不到返回 -1(原生对象可能正在拆解)。</summary>
+    private int ReadDisplayedPictures()
+    {
+        try
+        {
+            // `_mp.Media` 每次都会 retain 一份原生引用, 必须 using 掉;
+            // 每秒一次的包装分配可以忽略, 但不能泄漏原生 media。
+            using var media = _mp?.Media;
+            if (media == null) return -1;
+            return media.Statistics.DisplayedPictures;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    /// <summary>
+    /// 画面冻结自愈: 把当前 input 用**软件解码**在原地重建, 从当前位置接上。
+    ///
+    /// ★ 为什么直接软解而不是先 seek 试一下: 这个故障的根因是 d3d11va 输出视图池耗尽,
+    ///   原位置 seek 并不能释放那些视图(用户实测拖进度条也救不回来); 只有重建 input
+    ///   才会新建解码器与 vout 池。软解同时避免新 input 再踩同一个池缺陷。
+    /// ★ 地址保鲜复用卡顿自愈那套: 若暂停期间 playurl 已过期, 不先重取地址的话
+    ///   重建会 403, 画面还是回不来。
+    /// </summary>
+    private async Task RecoverFromFrozenVoutAsync(long posMs)
+    {
+        if (_closing || _mp == null || _voutRecoveryInFlight) return;
+
+        var gen = _loadGen;
+        _voutRecoveryInFlight = true;
+        try
+        {
+            // 先切软解: RebuildMediaAndSeek → PlayMedia 会读到这个标记。
+            PlaybackCompatibility.UseSoftwareDecode();
+            ShowLoading(VoutRecoveringText);
+            ClearSeekWatchdog(hideBuffering: false);
+
+            if (ShouldRefreshUrlBeforeRebuild())
+            {
+                await RefreshPlayUrlAsync();
+                if (_closing || gen != _loadGen) return;
+                // 重取期间用户拖了进度条/发起了新跳转: 让位给 seek 看门狗。
+                if (_isSeeking || _pendingSeekMs >= 0) return;
+            }
+
+            RebuildMediaAndSeek(posMs, loadingText: VoutRecoveringText,
+                retryOnFailure: true);
+            // 新 input 的统计从 0 开始, 下一拍立即重新取基线。
+            _lastVoutSampleAt = -1;
+        }
+        catch (Exception ex)
+        {
+            WriteLibVLCDebug($"[Vout] 自愈异常: {ex}\n");
+        }
+        finally
+        {
+            _voutRecoveryInFlight = false;
+        }
+    }
+
+    /// <summary>本片是否已经记录过“拿不到画面统计”(只记一次, 免得日志每秒一行)</summary>
+    private bool _voutStatsUnavailableLogged;
 
     /// <summary>把一次跳转记下来: 打上宽限期, 并立刻把进度条/时间钉到目标位置</summary>
     private void MarkSeekIssued(long targetMs)

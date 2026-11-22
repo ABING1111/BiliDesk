@@ -398,6 +398,36 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>一次自愈重建(含可能的重取地址)是否正在进行 —— 防同一段卡顿叠出两条重建</summary>
     private bool _stallRecoveryInFlight;
 
+    // ------------------------------------------------------------ 画面输出冻结的自愈
+    //
+    // ★★★ 2026-11-22(issue #119「鼠标点画面暂停时随机卡死」):
+    //   点画面与空格最终都走同一个 `_mp.Pause()`, 所以不是暂停逻辑的差异。真正的原因在
+    //   打包的 libvlc 3.0.24: 显示池需要超过 30 个 slice 时, 它对 NVIDIA 一律退回一个
+    //   “刚好够解码器用”的内部输出池; 暂停帧 + 显示缓冲帧把池占满后, 恢复时创建不出新的
+    //   DecoderOutputView —— 音频继续、画面永冻。
+    //   上游 VLC 3.0.25 才修(videolan/vlc#30187), NuGet 目前只有 3.0.24。
+    //   ⇒ 这里用 `MediaStats.DisplayedPictures`(vout 真正出帧的次数)做看门狗: 音频时钟在走、
+    //     displayed 却连续 4 秒不涨 ⇒ 判定画面停住, 用软解重建一次当前 input。
+    //     决策逻辑在 Services/VoutFreezePolicy.cs(纯逻辑, 可单测)。
+
+    /// <summary>画面冻结自愈的决策状态机</summary>
+    private readonly VoutFreezePolicy _voutPolicy = new();
+
+    /// <summary>一次画面冻结自愈是否正在进行(防和心跳/卡顿自愈叠出两条重建)</summary>
+    private bool _voutRecoveryInFlight;
+
+    /// <summary>上一次采样 MediaStats 的时刻(TickCount64; 心跳是 500ms, 这里降频到 1s)</summary>
+    private long _lastVoutSampleAt = -1;
+
+    /// <summary>本片是否已经提示过“自动恢复放弃”(只弹一次, 别每个心跳刷 Toast)</summary>
+    private bool _voutGiveUpToasted;
+
+    /// <summary>画面冻结自愈时的遮罩文案(与“正在缓冲”“网络卡顿”区分开, 便于日志与收尾判断)</summary>
+    private const string VoutRecoveringText = "画面卡住，正在恢复…";
+
+    /// <summary>MediaStats 采样间隔(毫秒)。1 秒足够判定 4 秒冻结, 又不给心跳添负担。</summary>
+    private const long VoutSampleIntervalMs = 1_000;
+
     // ------------------------------------------------------------ 播放地址保鲜
     //
     // ★ B 站 playurl 地址里带 deadline(Unix 秒), 实测有效期只有**约 2 小时**

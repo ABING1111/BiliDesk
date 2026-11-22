@@ -952,6 +952,40 @@ public class SettingsViewModel : ObservableObject
         ? "由播放器自动选择(通常是 Direct3D 11); 修改后需重启应用生效"
         : "若画面异常或 NVIDIA 叠加层误判为游戏, 可换一档; 修改后需重启应用生效";
 
+    // ----------------- 硬件解码(2026-11-22, issue #119) -----------------
+
+    /// <summary>
+    /// 是否允许 libvlc 硬件解码(默认开)。关掉后新起播的 Media 会带 `:avcodec-hw=none`,
+    /// 走 CPU 软解 —— 这是 VLC 3.0.24“暂停后画面卡死、音频继续”的永久规避手段。
+    /// ★ 与视频输出不同, 它按 Media 级选项生效, **不需要重启应用**, 下一次起播就生效。
+    /// </summary>
+    public bool HardwareDecoding
+    {
+        get => Svc.Settings.HardwareDecodingEnabled;
+        set
+        {
+            if (value == Svc.Settings.HardwareDecodingEnabled) return;
+            Svc.Settings.SetHardwareDecodingEnabled(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HardwareDecodingHint));
+        }
+    }
+
+    /// <summary>说明用途、代价与生效时机(避免用户以为关了马上会对当前画面生效)。</summary>
+    public string HardwareDecodingHint
+    {
+        get
+        {
+            if (!Svc.Settings.HardwareDecodingEnabled)
+                return "已关闭：新起播的视频用 CPU 软解，可规避部分显卡暂停后画面卡住；下次起播生效";
+            // 自动自愈是**会话级**的: 设置本身仍写着“开”, 但本次运行已经临时软解。
+            // 不解释的话用户会看到开关是开的、却一直在软解。
+            if (PlaybackCompatibility.ForceSoftwareDecode)
+                return "本次运行检测到画面冻结，已临时改用软解；重新打开应用可恢复硬解，也可在此关闭此项";
+            return "默认开启; 若暂停/恢复后画面不再更新而声音正常，可关闭此项（软解更吃 CPU，下次起播生效）";
+        }
+    }
+
     // ----------------- 默认画质 -----------------
 
     /// <summary>默认画质下拉框的显示项(顺序即 QualityPreference.All 的顺序)</summary>

@@ -534,6 +534,26 @@ public class SettingsStore
     }
 
     /// <summary>
+    /// 是否允许硬件解码(默认开)。2026-11-22, issue #119。
+    ///
+    /// ★ 为什么要暴露给用户: 打包的 libvlc 3.0.24 在 NVIDIA 上有一个已知缺陷 ——
+    ///   暂停再恢复后 d3d11va 的输出视图池可能耗尽, 画面永久停在最后一帧而音频继续
+    ///   (上游 3.0.25 才修, 见 VoutFreezePolicy 的说明)。项目会先自动检测并用软解重建,
+    ///   这里给用户一个**永久**规避手段; 软解更吃 CPU, 所以默认仍然开启硬解。
+    /// ★ 它按 Media 级 `:avcodec-hw=none` 生效(见 PlayerWindow.PlayMedia), 不需要重启应用,
+    ///   但只影响**下一次起播**的 input。
+    /// </summary>
+    public bool HardwareDecodingEnabled { get; set; } = true;
+
+    /// <summary>设置是否允许硬件解码并落盘</summary>
+    public void SetHardwareDecodingEnabled(bool enabled)
+    {
+        if (HardwareDecodingEnabled == enabled) return;
+        HardwareDecodingEnabled = enabled;
+        Save();
+    }
+
+    /// <summary>
     /// 上次用的搜索类别(见 <see cref="Models.ContentKind"/>: 0=视频 1=直播间 2=番剧 3=UP主)。
     ///
     /// ★ 为什么要记住它(2026-11-12 用户报"番剧依然无法被搜索"):
@@ -984,6 +1004,10 @@ public class SettingsStore
             ? s.VideoOutputMode
             : VideoOutputMode.Auto;
 
+        // 硬件解码(2026-11-22, issue #119): 老配置没有这个字段 ⇒ null ⇒ 默认开启。
+        // 用可空接是为了区分“没写过”与“明确关掉”, 与 AutoBufferPolicy 同一套约定。
+        HardwareDecodingEnabled = s.HardwareDecodingEnabled ?? true;
+
         // 上次的搜索类别: 老配置没这个字段 ⇒ 视频(与搜索页初始类别一致)。
         SearchKind = Enum.IsDefined(typeof(ContentKind), s.LastSearchKind)
             ? (ContentKind)s.LastSearchKind
@@ -1187,6 +1211,7 @@ public class SettingsStore
         NetworkCachingMs = NetworkCachingMs,
         AutoBufferPolicy = AutoBufferPolicy,
         VideoOutputMode = VideoOutputMode,
+        HardwareDecodingEnabled = HardwareDecodingEnabled,
         LastSearchKind = (int)SearchKind
     };
 

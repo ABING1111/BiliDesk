@@ -1025,6 +1025,13 @@ public partial class PlayerWindow : FluentWindow
         //   _loadGen 作废旧结果; 但闸门留着会让新片的第一次卡顿永远等不到重建。
         _stallPolicy.Reset();
         _stallRecoveryInFlight = false;
+        // 画面输出冻结自愈同样属于"这一片": 换片后重新观察新片的 DisplayedPictures,
+        // 上一片的恢复预算/在途闸/放弃提示都不能带过来。
+        _voutPolicy.Reset();
+        _voutRecoveryInFlight = false;
+        _lastVoutSampleAt = -1;
+        _voutGiveUpToasted = false;
+        _voutStatsUnavailableLogged = false;
         _backups.Clear();
         _playUrlDeadline = 0;
         _playUrlFetchedAt = 0;
@@ -1173,6 +1180,9 @@ public partial class PlayerWindow : FluentWindow
         // 卡顿自愈与播放地址保鲜(2026-11-14, issue #81): 都属于"这一片" ——
         // 换片后重建预算、地址到期时间、在途闸全部要重来。
         nameof(_stallRecoveryInFlight),
+        // 画面输出冻结自愈(2026-11-22, issue #119): 采样时刻/在途闸/放弃提示都属于"这一片"。
+        nameof(_lastVoutSampleAt), nameof(_voutRecoveryInFlight),
+        nameof(_voutGiveUpToasted), nameof(_voutStatsUnavailableLogged),
         nameof(_playUrlDeadline), nameof(_playUrlFetchedAt),
         nameof(_urlRefreshAttemptAt), nameof(_urlRefreshInFlight),
         nameof(_playUrlRefreshedAt), nameof(_errorRecoveryTried),
@@ -1803,6 +1813,16 @@ public partial class PlayerWindow : FluentWindow
     {
         try
         {
+            // ★ 2026-11-22(issue #119): 所有新 input 都从这里走, 软解开关只在这一处加。
+            //   用**媒体级**选项而不是进程级 `--avcodec-hw`: ① 不需要重启应用;
+            //   ② 画面冻结自愈可以在运行中把后续 Media 切成软解, 不必重建 LibVLC 实例。
+            //   ★ aout 选项不能走媒体级(见 VlcCore.PrepareForNewPlayer), 但解码器是 input
+            //     的子对象, 会继承 Media 上的选项 —— 这条路径与 `:demux` / `:network-caching`
+            //     同类; 交付前需用探针复核原生日志确实从 D3D11VA 切到软件解码。
+            if (PlaybackCompatibility.ShouldDisableHardwareDecoding)
+            {
+                try { media.AddOption(":avcodec-hw=none"); } catch { /* 选项加不上就按原样播 */ }
+            }
             // ★ 2026-11-19(issue #88): 每次起一条新 input 都换代次。
             //   旧 input 排队中的 Playing/EndReached/TimeChanged 会因为这个比对失败被丢弃,
             //   不会再把"上一条播完了/上一条的时间"写到新片身上。
