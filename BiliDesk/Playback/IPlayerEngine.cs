@@ -60,6 +60,9 @@ public interface IPlayerEngine : IDisposable
     /// </summary>
     event EventHandler? VideoStalled;
 
+    /// <summary>诊断快照(引擎侧关键状态), 写日志/排障用。</summary>
+    string GetDiagnostics();
+
     /// <summary>加载并开始播放。返回 false 表示引擎拒绝(未初始化/无可播地址)。</summary>
     bool Play(PlayerMedia media);
 

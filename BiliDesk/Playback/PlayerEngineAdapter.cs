@@ -118,6 +118,9 @@ public sealed class PlayerEngineAdapter : IDisposable
 
     public void SetRate(float rate) => Rate = rate;
 
+    /// <summary>引擎诊断快照(PlayerWindow 的调试快捷键用)。</summary>
+    public string Diagnostics => _engine?.GetDiagnostics() ?? "engine=not-created";
+
     private void EnsureEngine()
     {
         if (_engine != null || _disposed) return;
@@ -144,6 +147,7 @@ public sealed class PlayerEngineAdapter : IDisposable
         _engine.EncounteredError += (_, e) => EncounteredError?.Invoke(this, e);
         _engine.VideoStalled += (_, _) => VideoStalled?.Invoke(this, EventArgs.Empty);
 
+        _log?.Invoke("[Engine] " + _engine.GetDiagnostics() + "\n");
         _engine.SetVolume(_volume);
         _engine.SetRate(_rate);
         _engine.SetMute(_mute);

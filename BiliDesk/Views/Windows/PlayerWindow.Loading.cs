@@ -1571,7 +1571,7 @@ public partial class PlayerWindow : FluentWindow
             //   它已经处于选中态时 Checked 事件不会再触发, 新视频的评论就永远不加载 ——
             //   用户看到的就是"停在评论区、一片空白, 必须先点简介再点回来"(2026-10-30)。
             //   这里补一次(与取流并行, 不占起播时间)。
-            WriteLibVLCDebug($"\n[Load] 详情就绪 aid={_aid} cid={_currentCid} tabComments={TabComments?.IsChecked}\n");
+            PlayerLog.Write($"\n[Load] 详情就绪 aid={_aid} cid={_currentCid} tabComments={TabComments?.IsChecked}\n");
             if (TabComments?.IsChecked == true) _ = LoadCommentsAsync();
 
             // ★ 片段查询**立刻发起, 与下面"取播放地址 / 合流下载"并行** ——
@@ -1685,7 +1685,7 @@ public partial class PlayerWindow : FluentWindow
             _playUrlRefreshedAt = 0;
             _errorRecoveryTried = false;
             _stallPolicy.Reset();
-            WriteLibVLCDebug(
+            PlayerLog.Write(
                 $"\n[LoadVideo] bvid={_currentBvid} cid={_currentCid} qn={actualQn} url={url} audio={playAudio}\n");
 
             // 片段数据: 只落地"已经回来"的结果 —— 绝不为它推迟起播(见 BeforePlayApplySponsorAsync)
@@ -1694,7 +1694,7 @@ public partial class PlayerWindow : FluentWindow
             if (_closing || gen != _loadGen) return;
 
             // 起播耗时诊断: 每段都是**本段耗时**(不是累计), 与 [Playing] 的 first-frame 对齐看
-            WriteLibVLCDebug(
+            PlayerLog.Write(
                 $"\n[Timing] bvid={_currentBvid} detail={tDetail}ms " +
                 $"playurl={tPlayUrl - tDetail}ms remux={tRemux - tPlayUrl}ms " +
                 $"sponsor={tSponsor - tRemux}ms toPlay={sw.ElapsedMilliseconds}ms " +
@@ -1718,7 +1718,7 @@ public partial class PlayerWindow : FluentWindow
                               ResumePolicy.IsResumable(resumeMs, durMs);
             _resumeAfterSwitchMs = resumeValid ? resumeMs : 0;
             if (resumePlan != null)
-                WriteLibVLCDebug(
+                PlayerLog.Write(
                     $"[Resume] plan pos={resumeMs}ms source={resumePlan.Source} dur={durMs}ms " +
                     $"valid={resumeValid}\n");
             var started = false;
@@ -1794,7 +1794,7 @@ public partial class PlayerWindow : FluentWindow
         }
         catch (Exception ex)
         {
-            WriteLibVLCDebug($"[mpv] Play failed: {ex}\n");
+            PlayerLog.Write($"[mpv] Play failed: {ex}\n");
             _playWatch = null;
             return false;
         }
@@ -1829,7 +1829,7 @@ public partial class PlayerWindow : FluentWindow
                  : BufferMediaKind.VodDash;
         var cachingMs = BufferPolicy.Resolve(kind, url, isShortVideo,
             Svc.Settings.NetworkCachingMs, Svc.Settings.AutoBufferPolicy);
-        WriteLibVLCDebug($"[BufferPolicy] kind={kind} short={isShortVideo} nc={cachingMs}ms " +
+        PlayerLog.Write($"[BufferPolicy] kind={kind} short={isShortVideo} nc={cachingMs}ms " +
                          $"auto={Svc.Settings.AutoBufferPolicy}\n");
 
         return new PlayerMedia

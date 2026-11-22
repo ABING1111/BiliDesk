@@ -84,7 +84,7 @@ public partial class PlayerWindow : FluentWindow
         if (_aid <= 0 || !Svc.Session.HasLogin) return;
         var (ok, _, liked) = await Svc.Api.HasLikedAsync(_aid);
         // 查不到就保持原状(别把按钮图标刷成"未赞"), 但把原因记一笔便于排查
-        if (!ok) WriteLibVLCDebug($"\n[HasLiked] 查询失败 aid={_aid}\n");
+        if (!ok) PlayerLog.Write($"\n[HasLiked] 查询失败 aid={_aid}\n");
         else _isLiked = liked;
         if (!_closing) UpdateActionCounts();
     }
@@ -103,7 +103,7 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_aid <= 0 || !Svc.Session.HasLogin || _isLocalPlayback || _isLive) return;
         var (ok, _, coins) = await Svc.Api.GetCoinCountAsync(_aid);
-        if (!ok) { WriteLibVLCDebug($"\n[Coined] 查询失败 aid={_aid}\n"); return; }
+        if (!ok) { PlayerLog.Write($"\n[Coined] 查询失败 aid={_aid}\n"); return; }
         _isCoined = coins > 0;
         if (!_closing) UpdateActionCounts();
     }

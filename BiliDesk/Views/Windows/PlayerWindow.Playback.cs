@@ -167,7 +167,7 @@ public partial class PlayerWindow : FluentWindow
         if (_eofBlackActive)
         {
             RestoreVideoAreaBackground();
-            WriteLibVLCDebug("[Replay] 起播前揭掉 EOF 黑层\n");
+            PlayerLog.Write("[Replay] 起播前揭掉 EOF 黑层\n");
         }
     }
     private void OnReplayClick(object sender, RoutedEventArgs e) => RestartFromBeginning();
@@ -348,7 +348,7 @@ public partial class PlayerWindow : FluentWindow
                     //   保持遮罩可见、只换文案, 整个重建过程一张遮罩盖到底。
                     ShowLoading("正在跳转…");
                     ClearSeekWatchdog(hideBuffering: false);
-                    WriteLibVLCDebug(
+                    PlayerLog.Write(
                         $"[Seek] 落点弹回别处(time={time}ms target={bounceTarget}ms from={bounceFrom}ms) → 重建 Media\n");
                     RebuildMediaAndSeek(bounceTarget);
                     return;
@@ -594,7 +594,7 @@ public partial class PlayerWindow : FluentWindow
     ///   ② 距上次检查超过宽限期 —— 避免对同一次过渡反复操作;
     ///   ③ 音轨数 >0 而 AudioTrack == -1 —— "有轨道却没选"就是那个竞态的指纹。
     /// 修复动作 = SetAudioTrack(0) 把第一条音轨选回来(单音轨片源恒正确;
-    /// 多音轨片源 libvlc 本来就默认选 0)。只打一次日志, 避免刷爆 vlc-debug.txt。
+    /// 多音轨片源 libvlc 本来就默认选 0)。只打一次日志, 避免刷爆 player-debug.txt。
     /// </summary>
     /// <param name="why">调用点标签, 进诊断日志</param>
     private void HealAudioIfDead(string why)
@@ -610,7 +610,7 @@ public partial class PlayerWindow : FluentWindow
             if (_mp.AudioTrackCount <= 0) return;          // 本来就没有音轨(纯视频/直播占位), 无事可做
             if (_mp.AudioTrack != -1) return;              // 音轨选着呢, 一切正常
             var ok = _mp.SetAudioTrack(0);
-            WriteLibVLCDebug(
+            PlayerLog.Write(
                 $"[Audio] 自愈: 检出音轨掉线({why}, tracks={_mp.AudioTrackCount}) → SetAudioTrack(0)={ok}\n");
         }
         catch { /* 播放器已失效就算了 */ }
@@ -633,7 +633,7 @@ public partial class PlayerWindow : FluentWindow
         if (_videoStallRecoverAt >= 0 && now - _videoStallRecoverAt < 30_000) return;
         _videoStallRecoverAt = now;
         var target = _lastKnownMs > 0 ? _lastKnownMs : 0;
-        WriteLibVLCDebug($"[VideoStall] 时间在走但画面停住 → 重建自愈 at={target}ms\n");
+        PlayerLog.Write($"[VideoStall] 时间在走但画面停住 → 重建自愈 at={target}ms\n" + _mp.Diagnostics);
         RebuildMediaAndSeek(target, loadingText: "正在恢复画面…");
     }
 
@@ -676,7 +676,7 @@ public partial class PlayerWindow : FluentWindow
             if (applied != v)
             {
                 _volumeRestoreDeadline = Environment.TickCount64 + VolumeRestoreTimeoutMs;
-                WriteLibVLCDebug($"[Audio] 音量写回未生效(applied={applied}, want={v}) → 稍后补写\n");
+                PlayerLog.Write($"[Audio] 音量写回未生效(applied={applied}, want={v}) → 稍后补写\n");
             }
         }
         catch { }
@@ -709,7 +709,7 @@ public partial class PlayerWindow : FluentWindow
             var applied = _mp.Volume;
             if (applied == v)
             {
-                WriteLibVLCDebug($"[Audio] 音量补写成功(第{_volumeRestoreTries + 1}次尝试, v={v})\n");
+                PlayerLog.Write($"[Audio] 音量补写成功(第{_volumeRestoreTries + 1}次尝试, v={v})\n");
                 _volumeRestoreDeadline = 0;
                 _volumeRestoreTries = 0;
                 return;
@@ -721,7 +721,7 @@ public partial class PlayerWindow : FluentWindow
         {
             // 超时: 别再耗着, 直接按权威值硬写一次然后收队(playing 事件还会再补一轮)
             try { _mp.Volume = _volumeCache; } catch { }
-            WriteLibVLCDebug($"[Audio] 音量补写超时放弃(tried={_volumeRestoreTries + 1})\n");
+            PlayerLog.Write($"[Audio] 音量补写超时放弃(tried={_volumeRestoreTries + 1})\n");
             _volumeRestoreDeadline = 0;
             _volumeRestoreTries = 0;
             return;
@@ -910,7 +910,7 @@ public partial class PlayerWindow : FluentWindow
                 // ★ 用"真正在拉的那条流": 聆听态是音轨 host, 拿视频地址归因会记错 CDN。
                 BufferPolicy.ReportStall(CurrentMediaUrl);
                 // 诊断: 用户报"卡住"时, 这行能说明是"位置冻住了"(而不是没起播)
-                WriteLibVLCDebug(
+                PlayerLog.Write(
                     $"[Stall] 播放位置冻结 pos={now}ms listen={_isListenMode} " +
                     $"host={HostOf(CurrentMediaUrl)}\n");
             }
@@ -1048,7 +1048,7 @@ public partial class PlayerWindow : FluentWindow
         //   发一次 seek, 就会把它的解复用器打断(表现: 又要缓冲一次)。
         if (_seekAfterEndedGuard)
         {
-            WriteLibVLCDebug("[Seek] 播完后的跳转已处理过, 忽略重复触发的那条\n");
+            PlayerLog.Write("[Seek] 播完后的跳转已处理过, 忽略重复触发的那条\n");
             return;
         }
         if (_ended)
@@ -1057,7 +1057,7 @@ public partial class PlayerWindow : FluentWindow
             // ★ 用户在「已播完」页面拖了进度条 = 他要继续看这一条, 不是想换下一条。
             //   立刻收掉自动连播倒计时(它那条仍留在队列里, 下次播完还会再提示)。
             CancelAutoPlayCountdown();
-            WriteLibVLCDebug($"[Seek] 已播完, 进度条跳转 → 重建 Media(目标 {targetMs}ms)\n");
+            PlayerLog.Write($"[Seek] 已播完, 进度条跳转 → 重建 Media(目标 {targetMs}ms)\n");
             RebuildMediaAndSeek(targetMs);
             return;
         }
@@ -1177,7 +1177,7 @@ public partial class PlayerWindow : FluentWindow
             if (!PlayMedia(BuildMedia(path, null)))
             {
                 _resumeAfterSwitchMs = 0;
-                WriteLibVLCDebug("[Seek] 重建后 play() 未被接受(本地文件)\n");
+                PlayerLog.Write("[Seek] 重建后 play() 未被接受(本地文件)\n");
                 if (retryOnFailure) ShowFail("播放中断，请点击重试");
                 else RestoreEndedOverlay();
             }
@@ -1202,7 +1202,7 @@ public partial class PlayerWindow : FluentWindow
         var urlForRebuild = _isListenMode && !string.IsNullOrEmpty(_listenAudioUrl)
             ? _listenAudioUrl!
             : url;
-        WriteLibVLCDebug(
+        PlayerLog.Write(
             $"[Seek] 重建 Media url={(urlForRebuild == url ? "video" : "listen-audio")} " +
             $"audio={(!string.IsNullOrEmpty(audioForRebuild) ? "slave" : "none")} " +
             $"stall={stallRecovery} start-time={targetMs}ms\n");
@@ -1236,7 +1236,7 @@ public partial class PlayerWindow : FluentWindow
         {
             _resumeAfterSwitchMs = 0;
             _resumeByStartTime = false;
-            WriteLibVLCDebug("[Seek] 重建后 play() 未被接受(远端流)\n");
+            PlayerLog.Write("[Seek] 重建后 play() 未被接受(远端流)\n");
             // 起播没被接受 ⇒ 屏幕上不会有画面。此时必须把"重播"入口还回去,
             // 否则用户面对的是"遮罩收掉了但什么都没有"(这正是本次要修的那个症状)。
             // ★ 卡顿自愈发起的重建: 退回"已播完"是误导(用户会以为片子看完了),
@@ -1270,7 +1270,7 @@ public partial class PlayerWindow : FluentWindow
         _seekAfterEndedGuard = false;
         // 任何残留遮罩都收掉: 若停在"正在跳转…", 它会在半透明的已播完遮罩后面继续转圈。
         HideLoading();
-        WriteLibVLCDebug("[Seek] 重建失败 → 退回「已播完」态(保留重播入口)\n");
+        PlayerLog.Write("[Seek] 重建失败 → 退回「已播完」态(保留重播入口)\n");
     }
 
     /// <summary>
@@ -1485,7 +1485,7 @@ public partial class PlayerWindow : FluentWindow
                 hasSource: !string.IsNullOrEmpty(_lastPlayUrl)))
         {
             _startTimeRebuildRetried = true;
-            WriteLibVLCDebug(
+            PlayerLog.Write(
                 $"[EndReached] :start-time 定位没生效(pos={_lastKnownMs}ms " +
                 $"target={_lastSeekTargetMs}ms) → 改用「正常起播 + 设 Time」重试\n");
             _ended = false;
@@ -1534,7 +1534,7 @@ public partial class PlayerWindow : FluentWindow
             restartFromStartTried: _eofFallbackToStartTried,
             hasPlayableSource: !string.IsNullOrEmpty(_lastPlayUrl));
 
-        WriteLibVLCDebug(
+        PlayerLog.Write(
             $"[EndReached] action={action} pos={_lastKnownMs}ms length={effectiveTotalMs}ms " +
             $"pending={_pendingSeekMs} target={_lastSeekTargetMs} unlanded={seekLooksUnlanded} " +
             $"resume={_eofResumeCount}/{EofResumeMax} fallback={_eofFallbackToStartTried}\n");
@@ -1546,7 +1546,7 @@ public partial class PlayerWindow : FluentWindow
                 var target = _pendingSeekMs >= 0 ? _pendingSeekMs : _lastSeekTargetMs;
                 _ended = false;
                 _eofSeekRebuildTried = true;
-                WriteLibVLCDebug(
+                PlayerLog.Write(
                     $"[EndReached] 疑似远跳假EOF(target={target}ms time={_lastKnownMs}ms " +
                     $"pending={_pendingSeekMs}) → 重建 Media 续跳\n");
                 // ★ 先换文案再清看门狗并保持遮罩可见: 避免淡出/淡入造成闪屏。
@@ -1561,7 +1561,7 @@ public partial class PlayerWindow : FluentWindow
                 _eofResumeCount++;
                 _lastEofResumeMs = _lastKnownMs;
                 var resume = _lastKnownMs;
-                WriteLibVLCDebug(
+                PlayerLog.Write(
                     $"[EndReached] 提前 EOF → 从 {resume}ms 续播(第{_eofResumeCount}次)\n");
                 ShowLoading("正在继续播放…");
                 // 起播后由 Playing 事件恢复到断点(见 _resumeAfterSwitchMs 那套机制)
@@ -1589,7 +1589,7 @@ public partial class PlayerWindow : FluentWindow
             {
                 _eofFallbackToStartTried = true;
                 _ended = false;
-                WriteLibVLCDebug("[EndReached] 续播/重建都接不上 → 兜底从头起播\n");
+                PlayerLog.Write("[EndReached] 续播/重建都接不上 → 兜底从头起播\n");
                 Svc.Toast.Show("无法从上次位置继续播放，已从头开始");
                 ClearSeekWatchdog(hideBuffering: false);
                 RebuildMediaAndSeek(0, loadingText: "正在重新播放…", retryOnFailure: true);
@@ -1603,7 +1603,7 @@ public partial class PlayerWindow : FluentWindow
                 ClearSeekWatchdog(hideBuffering: false);
                 RestoreVolumeAfterSeek();
                 HideLoading();
-                WriteLibVLCDebug("[EndReached] 提前结束且无法自救 → 失败重试态(不显示已播完)\n");
+                PlayerLog.Write("[EndReached] 提前结束且无法自救 → 失败重试态(不显示已播完)\n");
                 // 先把真实位置落库: 点「重试」/下次打开能从断点接上, 而不是从头。
                 if (_lastKnownMs > 0 && !_isLive && !_isLocalPlayback)
                     Svc.PlaybackProgress.SaveNow(_currentBvid, _currentCid,
@@ -1628,7 +1628,7 @@ public partial class PlayerWindow : FluentWindow
         //   ★ 2026-11-03: 这是**唯一**还压黑手势层的路径。resize/最大化/全屏的白闪已改为
         //     在原生宿主窗口上根治(见 VideoBackdropInterop.EnsureLetterboxVideoHost), 不再压黑布。
         //     所以这里只需记一个 `_eofBlackActive`, 起播时由 RestoreVideoAreaBackground() 撤掉。
-        WriteLibVLCDebug(
+        PlayerLog.Write(
             $"[EndReached] 压黑手势层 time={_lastKnownMs} bgBefore={DescribeVideoAreaBg()}\n");
         VideoAreaRoot.Background = Brushes.Black;
         _eofBlackActive = true;

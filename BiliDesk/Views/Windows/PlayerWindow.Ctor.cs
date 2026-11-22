@@ -179,11 +179,9 @@ public partial class PlayerWindow : FluentWindow
         // 2026-11-22(feat/mpv-core): 播放内核换成 libmpv。PlayerEngineAdapter 保留现有
         // 调用面(_mp.Time / Length / Volume / ...), 交互逻辑一行不改; 引擎在第一次 Play
         // 时才创建 —— 那时 PlayerVideoView 的宿主 HWND 已建好, mpv 的 wid 才有意义。
-        WriteLibVLCDebug(
-            $"AppContext.BaseDirectory = {AppContext.BaseDirectory}\n" +
-            $"libmpv = {BiliDesk.Mpv.MpvNative.LibraryPath} exists = {File.Exists(BiliDesk.Mpv.MpvNative.LibraryPath)}\n");
+        PlayerLog.SessionHeader("mpv", "(libmpv)", BiliDesk.Mpv.MpvNative.LibraryPath);
 
-        _mp = new PlayerEngineAdapter(VideoView, msg => WriteLibVLCDebug(msg + "\n"));
+        _mp = new PlayerEngineAdapter(VideoView, msg => PlayerLog.Write(msg + "\n"));
         // 覆盖窗口是随 PlayerVideoView.Loaded 异步建出来的: 建好后补挂键盘/滚轮/激活处理
         VideoView.SurfaceReady += (_, _) => Dispatcher.BeginInvoke(new Action(HookOverlayKeyboard));
         _mp.TimeChanged += OnTimeChanged;
@@ -203,7 +201,7 @@ public partial class PlayerWindow : FluentWindow
             // 首帧耗时(从 PlayMedia 算起): 与 [Timing] 那行对齐, 用来验证起播优化有没有效果
             if (_playWatch != null)
             {
-                WriteLibVLCDebug($"[Timing] first-frame={_playWatch.ElapsedMilliseconds}ms\n");
+                PlayerLog.Write($"[Timing] first-frame={_playWatch.ElapsedMilliseconds}ms\n");
                 _playWatch = null;
             }
             // aout(音频输出)就绪后把应用侧记住的音量补写回去:
@@ -229,13 +227,13 @@ public partial class PlayerWindow : FluentWindow
             {
                 // 连总时长都不知道: 无法判断目标是否越界, 宁可从头播也不要 seek 到未知区域
                 // (那里一旦是流尾, 就会立刻假 EOF, 正好复现"一打开就提示已播完")。
-                WriteLibVLCDebug($"[Resume] 时长未知, 跳过续播 pos={resumeTarget}ms\n");
+                PlayerLog.Write($"[Resume] 时长未知, 跳过续播 pos={resumeTarget}ms\n");
                 resumeTarget = 0;
             }
             else if (resumeTarget > 0 && !ResumePolicy.IsResumable(resumeTarget, effectiveLength))
             {
                 // 已经到片尾/越界: 当作看完, 从头播。绝不 seek 进尾部 —— 那正是假 EOF 的来源。
-                WriteLibVLCDebug(
+                PlayerLog.Write(
                     $"[Resume] 跳过续播 pos={resumeTarget}ms length={effectiveLength}ms (片尾/越界)\n");
                 if (!_isLive && !_isLocalPlayback)
                     Svc.PlaybackProgress.MarkCompleted(_currentBvid, _currentCid);
@@ -246,7 +244,7 @@ public partial class PlayerWindow : FluentWindow
                 var clamped = ResumePolicy.ClampResumeMs(resumeTarget, effectiveLength);
                 if (clamped != resumeTarget)
                 {
-                    WriteLibVLCDebug(
+                    PlayerLog.Write(
                         $"[Resume] 夹取续播位置 {resumeTarget}→{clamped}ms length={effectiveLength}ms\n");
                     resumeTarget = clamped;
                 }
@@ -261,7 +259,7 @@ public partial class PlayerWindow : FluentWindow
             // 新 input 的 vout 已经起来, 后面要能看见画面。
             // ★ 2026-11-03: 只处理 EOF 那一层; 改窗口大小/最大化/全屏不再压黑布。
             RestoreVideoAreaBackground();
-            WriteLibVLCDebug(
+            PlayerLog.Write(
                 $"\n[Playing] eofBlack={_eofBlackActive} ended={_ended} " +
                 $"bg={DescribeVideoAreaBg()} time={SafeReadTime()} state={_mp.State}\n");
             // ★ 视频没填满时的白色边带(2026-10-17): 起播后要把那块原生窗口底色刷成近黑。
@@ -325,7 +323,7 @@ public partial class PlayerWindow : FluentWindow
         {
             if (_closing || epoch != _mediaEpoch) return;
             // 诊断: 把出错时正在播的 URL 也写进 debug 文件
-            WriteLibVLCDebug(
+            PlayerLog.Write(
                 $"\n[EncounteredError] bvid={_currentBvid} cid={_currentCid} lastUrl={_lastPlayUrl}\n");
             // ★ 2026-11-14(issue #81): 地址过期导致的重连 403 —— 手里有新地址就先自救一次,
             //   救不了(或与过期无关)再弹失败遮罩, 不打断几个小时的连续播放。

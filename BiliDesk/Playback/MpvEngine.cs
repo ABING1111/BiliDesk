@@ -1,4 +1,6 @@
 using System;
+using System.Globalization;
+using System.Text;
 using BiliDesk.Mpv;
 
 namespace BiliDesk.Playback;
@@ -85,6 +87,33 @@ public sealed class MpvEngine : IPlayerEngine
 
     /// <summary>时间在走、但视频帧号不再前进(2026-11-22: mpv 下拖动后视频流重连、画面冻结的兜底信号)。</summary>
     public event EventHandler? VideoStalled;
+
+    /// <summary>诊断快照(写日志/用户反馈用): 一次给出引擎侧关键状态。</summary>
+    public string GetDiagnostics()
+    {
+        var sb = new StringBuilder();
+        sb.Append("state=").Append(State)
+          .Append(" pos=").Append(TimeMs)
+          .Append(" len=").Append(LengthMs)
+          .Append(" rate=").Append(Rate.ToString("0.##", CultureInfo.InvariantCulture))
+          .Append(" volume=").Append(Volume)
+          .Append(" mute=").Append(Mute)
+          .Append(" frames=").Append(_frameNumber)
+          .Append('\n');
+        sb.Append("video=").Append(_player.GetString("video-codec"))
+          .Append(" audio=").Append(_player.GetString("audio-codec-name"))
+          .Append(" tracks=").Append(_player.GetString("track-list/count"))
+          .Append(" cache=").Append(_player.GetString("demuxer-cache-duration"))
+          .Append(" buffering=").Append(_player.GetString("cache-buffering-state"))
+          .Append(" pausedForCache=").Append(_player.GetString("paused-for-cache"))
+          .Append('\n');
+        sb.Append("drop=").Append(_player.GetString("frame-drop-count"))
+          .Append(" decDrop=").Append(_player.GetString("decoder-frame-drop-count"))
+          .Append(" mpv=").Append(_player.GetString("mpv-version"))
+          .Append(" ffmpeg=").Append(_player.GetString("ffmpeg-version"))
+          .Append('\n');
+        return sb.ToString();
+    }
 
     public bool Play(PlayerMedia media)
     {

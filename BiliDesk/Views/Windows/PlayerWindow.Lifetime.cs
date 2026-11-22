@@ -342,7 +342,7 @@ public partial class PlayerWindow : FluentWindow
         _audioStateLogged = true;
         try
         {
-            WriteLibVLCDebug(
+            PlayerLog.Write(
                 $"[Audio] bvid={_currentBvid} cid={_currentCid} qn={_currentQn} " +
                 $"音轨数={_mp.AudioTrackCount} 原生音量={_mp.Volume} 应用音量={_volumeCache} " +
                 $"独立音轨={(string.IsNullOrEmpty(_lastAudioUrl) ? "无(单文件源)" : "有")}\n");
@@ -380,18 +380,5 @@ public partial class PlayerWindow : FluentWindow
             return (t < 0 || t > 24L * 3600 * 1000) ? -1 : t;
         }
         catch { return -1; }
-    }
-
-    /// <summary>原生日志(排查最近一次播放问题用, 见 WriteLibVLCDebug)</summary>
-    private static void WriteLibVLCDebug(string content)
-    {
-        try
-        {
-            var path = Path.Combine(AppPaths.DataDir, "vlc-debug.txt");
-            var f = new FileInfo(path);
-            if (f.Exists && f.Length > 256 * 1024) f.Delete();
-            File.AppendAllText(path, content);
-        }
-        catch { /* 静默 */ }
     }
 }

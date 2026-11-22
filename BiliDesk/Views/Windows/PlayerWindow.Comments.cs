@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -382,7 +382,7 @@ public partial class PlayerWindow : FluentWindow
         // ★ 记住发起时的 aid: 网络回来时用户可能已经换片了。没有这道的话,
         //   上一条视频的评论会灌进新视频(列表/条数/排序入口全是旧的)。
         var aidAtStart = _aid;
-        WriteLibVLCDebug($"\n[Comments] start aid={aidAtStart} loaded={_commentsLoaded} force={force}\n");
+        PlayerLog.Write($"\n[Comments] start aid={aidAtStart} loaded={_commentsLoaded} force={force}\n");
         // force: 刚发表完评论要重新拉一次(rpid/楼层/审核状态本地编不出来)。
         // 但"看过就不再拉"这个短路必须保留 —— 切 Tab 会反复调到这里, 不短路就是白刷接口。
         // ★ 切换排序必须走 force=true: 它要的就是"同一份数据换个顺序重拉"。
@@ -449,7 +449,7 @@ public partial class PlayerWindow : FluentWindow
                     await Svc.Api.GetCommentsAsync(aidAtStart, 30, 2);
                 if (fbOk && fbList.Count > list.Count && _commentSort == 3)
                 {
-                    WriteLibVLCDebug(
+                    PlayerLog.Write(
                         $"[Comments] hot fallback aid={aidAtStart} hotRoots={hotRootCount} " +
                         $"total={total} -> timeRoots={fbList.Count}\n");
                     list = fbList;

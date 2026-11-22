@@ -284,7 +284,7 @@ public partial class PlayerWindow : FluentWindow
         _autoPlayCountdownTimer.Tick += OnAutoPlayCountdownTick;
         _autoPlayCountdownTimer.Start();
 
-        WriteLibVLCDebug($"[AutoPlay] 倒计时开始 → {entry.Bvid} {entry.Title}\n");
+        PlayerLog.Write($"[AutoPlay] 倒计时开始 → {entry.Bvid} {entry.Title}\n");
     }
 
     private void UpdateAutoPlayCountdownText()
@@ -361,7 +361,7 @@ public partial class PlayerWindow : FluentWindow
     {
         CancelAutoPlayCountdown();
         ShowEndNormalState();
-        WriteLibVLCDebug("[AutoPlay] 用户取消连播(该条仍留在队列)\n");
+        PlayerLog.Write("[AutoPlay] 用户取消连播(该条仍留在队列)\n");
     }
 
     /// <summary>「立即播放」: 跳过剩余倒计时。</summary>
@@ -400,7 +400,7 @@ public partial class PlayerWindow : FluentWindow
             _autoPlayExpectedBvid = entry.Bvid;
             CancelAutoPlayCountdown();
 
-            WriteLibVLCDebug($"[AutoPlay] 切换 → {entry.Bvid} {entry.Title}\n");
+            PlayerLog.Write($"[AutoPlay] 切换 → {entry.Bvid} {entry.Title}\n");
 
             await StopPlayerAsync();
             if (_closing) return;

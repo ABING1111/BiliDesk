@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -151,7 +151,7 @@ public partial class PlayerWindow : FluentWindow
 
             var sw = Stopwatch.StartNew();
             await StopPlayerAsync();
-            WriteLibVLCDebug($"[Listen] enter stop={sw.ElapsedMilliseconds}ms\n");
+            PlayerLog.Write($"[Listen] enter stop={sw.ElapsedMilliseconds}ms\n");
 
             // 等待期间被换片 / 切清晰度 / 关窗顶掉: 交给接管的那条流程, 这里绝不再起播 ——
             // 否则会拿旧地址把新流程刚起的流盖掉(最典型的是"新片开头突然响上一集的声音")。
@@ -170,7 +170,7 @@ public partial class PlayerWindow : FluentWindow
             _isListenMode = false;
             ApplyListenMode(false);
             HideLoading();
-            WriteLibVLCDebug($"[Listen] enter failed: {ex.Message}\n");
+            PlayerLog.Write($"[Listen] enter failed: {ex.Message}\n");
             Svc.Toast.Show("切换到听视频失败: " + ex.Message);
         }
         finally
@@ -218,7 +218,7 @@ public partial class PlayerWindow : FluentWindow
             ShowLoading("正在恢复视频…");
             var sw = Stopwatch.StartNew();
             await StopPlayerAsync();
-            WriteLibVLCDebug($"[Listen] exit stop={sw.ElapsedMilliseconds}ms\n");
+            PlayerLog.Write($"[Listen] exit stop={sw.ElapsedMilliseconds}ms\n");
 
             // 等待期间换片 / 切清晰度 / 又重新点了聆听: 让接管的那条流程起播
             if (_closing || loadGen != _loadGen || _isListenMode) return;
@@ -233,7 +233,7 @@ public partial class PlayerWindow : FluentWindow
         {
             if (_closing) return;
             HideLoading();
-            WriteLibVLCDebug($"[Listen] exit failed: {ex.Message}\n");
+            PlayerLog.Write($"[Listen] exit failed: {ex.Message}\n");
             Svc.Toast.Show("恢复视频失败: " + ex.Message);
         }
         finally

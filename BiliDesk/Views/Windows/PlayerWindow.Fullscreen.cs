@@ -650,7 +650,7 @@ public partial class PlayerWindow : FluentWindow
     [Conditional("DEBUG")]
     private void WritePlacementLog(string tag, string detail)
     {
-        WriteLibVLCDebug($"[Placement] {tag} {detail}\n");
+        PlayerLog.Write($"[Placement] {tag} {detail}\n");
     }
 
     // ------------------------------------------------------------ 几何记忆的 Win32 兜底

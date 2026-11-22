@@ -32,6 +32,23 @@ public partial class PlayerWindow : FluentWindow
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // 诊断快照(2026-11-22, mpv 迁移): Ctrl+Shift+F12 把引擎/播放器状态写进
+        // %LOCALAPPDATA%\BiliDesk\player-debug.txt, 用户反馈"卡/没声/画面停"时直接要这份日志。
+        // 必须放在下面"Ctrl/Alt 一律放行"之前, 否则会被提前 return 掉。
+        if (e.Key == Key.F12 &&
+            Keyboard.Modifiers.HasFlag(ModifierKeys.Control) &&
+            Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+        {
+            PlayerLog.Write(
+                $"[Diag] bvid={_currentBvid} cid={_currentCid} live={_isLive} listen={_isListenMode} " +
+                $"seeking={_isSeeking} pending={_pendingSeekMs} reliable={_isReliableSeekSource} " +
+                $"videoHost={HostOf(_lastPlayUrl)} audioHost={HostOf(_lastAudioUrl)}\n" +
+                _mp.Diagnostics);
+            Svc.Toast.Show("诊断信息已写入 player-debug.txt");
+            e.Handled = true;
+            return;
+        }
+
         // 只在焦点位于"可编辑"输入框时让按键走默认路径; 只读展示框不拦截空格
         if (Keyboard.FocusedElement is TextBox { IsReadOnly: false }) return;
         // ★★★ 2026-11-16 修"对着视频选中文字按 Ctrl+C 复制失败, 右上角还弹'正在获取字幕轨…'":

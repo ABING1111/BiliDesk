@@ -23,6 +23,7 @@ memory/
 *.tmp
 errors.txt
 vlc-debug.txt
+player-debug.txt
 settings.json
 
 # 本地探针(离线复现/验证用, 不进仓库)

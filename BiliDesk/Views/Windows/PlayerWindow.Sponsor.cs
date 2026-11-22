@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -165,7 +165,7 @@ public partial class PlayerWindow : FluentWindow
         _lastSkipSeg = coverStart;
         ShowSkipNotice(
             $"已跳过{coverStart.Label}  {VideoItem.FormatSeconds((int)coverStart.EndSec)}");
-        WriteLibVLCDebug(
+        PlayerLog.Write(
             $"[Sponsor] 空降 {coverStart.Category} {coverStart.StartSec:0.##}~{coverStart.EndSec:0.##}s\n");
     }
 
@@ -233,7 +233,7 @@ public partial class PlayerWindow : FluentWindow
         MarkSeekIssued(target);
         try { _mp.Time = target; } catch { /* 播放器可能刚好失效 */ }
         ShowSkipNotice($"已跳过{seg.Label}  {VideoItem.FormatSeconds((int)((target - fromMs) / 1000.0))}");
-        WriteLibVLCDebug(
+        PlayerLog.Write(
             $"[Sponsor] skip {seg.Category} {seg.StartSec:0.##}~{seg.EndSec:0.##}s (from {fromMs / 1000.0:0.##}s)\n");
     }
 
@@ -295,7 +295,7 @@ public partial class PlayerWindow : FluentWindow
         var target = seg.StartMs;
         MarkSeekIssued(target);
         try { _mp.Time = target; } catch { }
-        WriteLibVLCDebug($"[Sponsor] undo -> {seg.StartSec:0.##}s\n");
+        PlayerLog.Write($"[Sponsor] undo -> {seg.StartSec:0.##}s\n");
     }
 
     // ------------------------------------------------------------ 进度条上的片段色块

@@ -84,7 +84,8 @@ public sealed class MpvPlayer : IDisposable
         var init = MpvNative.mpv_initialize(_handle);
         if (init < 0) throw new InvalidOperationException("mpv_initialize 失败: " + ErrorText(init));
 
-        if (options.VerboseLog) MpvNative.mpv_request_log_messages(_handle, "v");
+        // 默认只接 warn/error(TLS reset/重连这些正好在 warn), BILIDESK_MPV_DEBUG=1 时接全量
+        MpvNative.mpv_request_log_messages(_handle, options.VerboseLog ? "v" : "warn");
 
         // 观察对上层有用的属性; 其余按需用 GetDouble/GetString 现读
         foreach (var (name, format) in new[]
