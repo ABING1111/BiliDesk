@@ -43,6 +43,7 @@ public class DynamicParserTests
                   "title": "老板娘今天是可爱鬼呀！",
                   "cover": "http://i2.hdslb.com/bfs/archive/x.jpg",
                   "duration_text": "00:16",
+                  "pubdate": 1723800000,
                   "jump_url": "//www.bilibili.com/video/BV1oeWNebEv2/",
                   "stat": { "play": "1.4万", "danmaku": "217" }
                 }
@@ -62,6 +63,7 @@ public class DynamicParserTests
         Assert.Equal("BV1oeWNebEv2", item.Bvid);
         Assert.Equal(112981396619958, item.Aid);
         Assert.Equal("00:16", item.Duration);
+        Assert.Equal(1723800000, item.VideoPubdate);
         Assert.Equal(14000, item.ViewCount);
         Assert.Equal(217, item.DanmakuCount);
         Assert.Equal("投稿了视频", item.ActionLabel);
@@ -75,6 +77,119 @@ public class DynamicParserTests
         // 视频动态没有 basic 时, 评论区应回退到视频 aid + type=1
         Assert.Equal(112981396619958, item.CommentOid);
         Assert.Equal(1, item.CommentType);
+    }
+
+    [Fact]
+    public void Modules_Video_无archivePubdate时卡片墙用动态时间()
+    {
+        // 真实 feed/all 的 archive 不带 pubdate(2026-11-23 实测), 这里按真实字段形状精简。
+        var item = Parse("""
+        {
+          "id_str": "1273865850963623953",
+          "type": "DYNAMIC_TYPE_AV",
+          "modules": {
+            "module_author": {
+              "mid": 11298139,
+              "name": "青岛LUCIFER",
+              "pub_time": "2小时前",
+              "pub_ts": 1723959548,
+              "pub_action": "投稿了视频"
+            },
+            "module_dynamic": {
+              "major": {
+                "type": "MAJOR_TYPE_ARCHIVE",
+                "archive": {
+                  "bvid": "BV1oeWNebEv2",
+                  "title": "老板娘今天是可爱鬼呀！",
+                  "cover": "http://i2.hdslb.com/bfs/archive/x.jpg",
+                  "duration_text": "00:16",
+                  "jump_url": "//www.bilibili.com/video/BV1oeWNebEv2/"
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        Assert.NotNull(item);
+        Assert.Equal(0, item!.VideoPubdate);
+        Assert.Equal(1723959548, item.Pubdate);
+        Assert.Equal(1723959548, item.AsVideoItem()!.Pubdate);
+    }
+
+    [Fact]
+    public void AsVideoItem_视频发布时间优先于动态时间()
+    {
+        var direct = new DynamicItem
+        {
+            Kind = DynamicKind.Video,
+            Bvid = "BV1Direct",
+            Title = "direct",
+            Pubdate = 2000,
+            VideoPubdate = 1000,
+        };
+        var directVideo = direct.AsVideoItem();
+        Assert.NotNull(directVideo);
+        Assert.Equal(1000, directVideo!.Pubdate);
+        Assert.Same(directVideo, direct.AsVideoItem());   // 缓存不能丢, ReconcileWall 靠引用比对
+    }
+
+    [Fact]
+    public void AsVideoItem_无archive发布时间时用本条动态时间()
+    {
+        // ★ 2026-11-23 真机: feed/all 的 archive 不返回 pubdate, VideoPubdate 恒为 0。
+        //   原投稿的动态 pub_ts 与视频发布时间只差几秒, 所以直接用本条动态时间。
+        var direct = new DynamicItem
+        {
+            Kind = DynamicKind.Video,
+            Bvid = "BV1Direct",
+            Title = "direct",
+            Pubdate = 2000,
+        };
+        var v = direct.AsVideoItem();
+        Assert.NotNull(v);
+        Assert.Equal(2000, v!.Pubdate);
+    }
+
+    [Fact]
+    public void AsVideoItem_转发取原动态时间而不是转发时间()
+    {
+        // ★ 2026-11-23 真机: 外层 pub_ts 是转发时间(3000), 原动态 pub_ts(900) 才是视频发布时间。
+        //   旧写法优先用外层 Pubdate, 于是几个月前的视频被转发一下就会跳到卡片墙最前面。
+        var orig = new DynamicItem
+        {
+            Kind = DynamicKind.Video,
+            Bvid = "BV1Orig",
+            Title = "orig",
+            Pubdate = 900,
+        };
+        var forward = new DynamicItem
+        {
+            Kind = DynamicKind.Forward,
+            Orig = orig,
+            Pubdate = 3000,
+        };
+        var forwardVideo = forward.AsVideoItem();
+        Assert.NotNull(forwardVideo);
+        Assert.Equal(900, forwardVideo!.Pubdate);
+    }
+
+    [Fact]
+    public void AsVideoItem_转发优先用原文archive发布时间()
+    {
+        // 接口日后若在 archive 里补了 pubdate, 它的精度仍高于原动态 pub_ts。
+        var orig = new DynamicItem
+        {
+            Kind = DynamicKind.Video,
+            Bvid = "BV1Orig",
+            Title = "orig",
+            Pubdate = 900,
+            VideoPubdate = 800,
+        };
+        var forward = new DynamicItem { Orig = orig, Pubdate = 3000 };
+        var forwardVideo = forward.AsVideoItem();
+        Assert.NotNull(forwardVideo);
+        Assert.Equal(800, forwardVideo!.Pubdate);
     }
 
     [Fact]
@@ -194,7 +309,7 @@ public class DynamicParserTests
               "module_dynamic": {
                 "major": {
                   "type": "MAJOR_TYPE_ARCHIVE",
-                  "archive": { "bvid": "BV1orig", "title": "原视频", "cover": "https://i0.hdslb.com/bfs/archive/o.jpg", "duration_text": "01:00" }
+                  "archive": { "bvid": "BV1orig", "title": "原视频", "cover": "https://i0.hdslb.com/bfs/archive/o.jpg", "duration_text": "01:00", "pubdate": 1723700000 }
                 }
               }
             }
@@ -209,6 +324,7 @@ public class DynamicParserTests
         Assert.NotNull(item.Orig);
         Assert.True(item.Orig!.HasPlayableVideo);
         Assert.Equal("BV1orig", item.VideoBvid);
+        Assert.Equal(1723700000, item.Orig!.VideoPubdate);
         Assert.True(item.HasAnyVideo);
         Assert.Equal("转发了动态", item.ActionLabel);
         // 转发动态的评论区挂在这条转发自己身上, 不是原视频

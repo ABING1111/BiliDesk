@@ -335,6 +335,7 @@ public static class DynamicParser
         item.Cover = UrlUtil.Normalize(GetStr(arc, "cover"));
         item.Duration = GetStr(arc, "duration_text");
         item.JumpUrl = GetStr(arc, "jump_url");
+        item.VideoPubdate = GetLongLoose(arc, "pubdate");
 
         if (string.IsNullOrEmpty(item.Bvid))
             item.Bvid = ExtractBvidFromJumpUrl(item.JumpUrl);

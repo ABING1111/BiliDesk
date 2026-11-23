@@ -93,6 +93,13 @@ public class DynamicItem : INotifyPropertyChanged
     /// <summary>Unix 秒。扁平路径只有展示文本时是反推的近似值。</summary>
     public long Pubdate { get; set; }
 
+    /// <summary>
+    /// 视频自身的发布时间(archive.pubdate), 与动态发布时间分开。
+    /// ★ 2026-11-23 实测: 现有 feed/all 的 archive **不返回**这个字段(130 条视频全为 0),
+    ///   这里只作为接口日后补字段时的优先值; 真正的兜底见 <see cref="AsVideoItem"/>。
+    /// </summary>
+    public long VideoPubdate { get; set; }
+
     /// <summary>接口排好版的发布时间原文("昨天 20:50" / "2小时前")。</summary>
     public string PubTimeLabel { get; set; } = "";
 
@@ -307,9 +314,16 @@ public class DynamicItem : INotifyPropertyChanged
             Duration = src.Duration,
             ViewCount = src.ViewCount,
             DanmakuCount = src.DanmakuCount,
-            Pubdate = Pubdate > 0 ? Pubdate : src.Pubdate,
-            PubTimeLabel = PubTimeLabel,
-            PubDateApprox = PubDateApprox,
+            // ★ 视频自己的发布时间(2026-11-23 真机核对):
+            //   · archive.pubdate 现在并不返回, 有就用;
+            //   · 原投稿: 本条动态的 pub_ts 与视频发布时间只差几秒;
+            //   · 转发: 外层 pub_ts 是转发时间, 原动态(Orig)的 pub_ts 才是视频发布时间。
+            //   ⇒ 统一取 src 的时间, 而不是外层的 Pubdate。
+            Pubdate = src.VideoPubdate > 0 ? src.VideoPubdate
+                      : src.Pubdate > 0 ? src.Pubdate
+                      : Pubdate,
+            PubTimeLabel = src.PubTimeLabel,
+            PubDateApprox = src.PubDateApprox,
             RoomId = src.RoomId,
             AreaName = src.AreaName,
         };
