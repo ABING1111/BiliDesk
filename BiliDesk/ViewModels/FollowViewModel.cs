@@ -81,18 +81,20 @@ public class FollowViewModel : ObservableObject
     ///   以前每 Add 一条 FeedItems 就把整墙 Clear 再重建一遍, 而 CardWallPanel 没有虚拟化,
     ///   一页 20 条 = 20 次 × 最多 300 张卡片容器的创建/销毁。连续翻几页后 UI 线程与
     ///   WPF 渲染层都被这堆废容器淹没, 表现为越滚越卡、最后直接闪退。
-    ///   现在只在整批落地后调一次, 且只把**新增的尾巴**追加进来(见 SyncWallItems)。
+    ///   现在只在整批落地后调一次, 且只把**缺少的条目**补进来(见 SyncWallItems)。
     ///
     /// ★★ 2026-11-20(用户报"动态页视频卡下滑加载时, 加载的那一拍画面冻结"):
     ///   整页新增仍然是一次性 Add —— 卡片墙不虚拟化, 一页十几张 VideoCard 会在同一拍
     ///   全部实例化(模板/标题换行/入场动画), 压在 Normal 优先级的加载回调里。
     ///   现在由 <see cref="SyncWallItems"/> 登记目标, 泵(<see cref="DrainWallAppends"/>)
     ///   按帧补 2~12 张, 与首页 DeferredFill 的追加分帧同一套思路。
+    ///   ★ 2026-11-23(PR #121): 卡片墙按视频发布时间排序后, 新翻一页除了尾巴, 还可能有
+    ///     **插到旧卡中间**的转发视频; 泵会按目标顺序把两种缺口一起、分帧补齐。
     /// </summary>
     public ObservableCollection<VideoItem> WallItems { get; } = new();
     private const int WallItemLimit = 300;
 
-    /// <summary>卡片墙分帧追加的目标快照(null = 没有待补内容)。</summary>
+    /// <summary>卡片墙分帧补齐的目标快照(null = 没有待补内容)。</summary>
     private List<VideoItem>? _wallAppendTarget;
 
     /// <summary>本帧的追加任务是否已经排上(合并同一帧里的多次请求)。</summary>
@@ -946,17 +948,19 @@ public class FollowViewModel : ObservableObject
     /// 把 FeedItems 里的**视频动态**(前 300 条)同步到卡片墙集合。
     /// 图文/文字/专栏不进卡片墙 —— VideoCard 依赖 16:9 封面与播放数据, 硬塞会破坏网格。
     ///
-    /// ★★ 增量追加(2026-11-07): 只有"墙确实接不上"时才整墙清空, 其余情况只补尾巴。
+    /// ★★ 增量同步(2026-11-07): 只有"整批内容被换过"时才整墙清空, 其余情况只补缺少的条目。
     ///   整墙清空 = CardWallPanel 把最多 300 个卡片容器全部销毁再重建; 连续下滑时
     ///   每翻一页都来一次, 是"越滚越卡 → 崩溃"的直接来源。
     ///
-    /// 整墙重建的三种情况:
+    /// 整墙重建的情况:
     ///   ① 墙空了(want &gt; 0) —— 正常从 0 开始补;
     ///   ② 墙比目标长(刷新/换 UP/切回卡片墙后 FeedItems 变短);
-    ///   ③ 墙的首尾条目与视频源对不上 —— 说明整批内容被换过(刷新/切选择/屏蔽)。
-    ///   其余情况(最常见: 翻页后 FeedItems 只是变长)走 append, 开销 = 新增那几条。
+    ///   ③ 一半以上的旧卡已不在目标里 —— 整批内容被换过(刷新/切选择/屏蔽);
+    ///   ④ 留下来的旧卡在目标里顺序全变 —— 同上。
+    ///   其余情况只补"缺的条目": 多数在尾部; 按视频发布时间排序后, 新页的转发视频
+    ///   也可能插到旧卡中间(2026-11-23, PR #121) —— 两种都交给分帧泵, 不在回调里同步建卡。
     ///
-    /// ★★ 2026-11-20: append 不再当场逐条 Add, 而是登记目标后交给
+    /// ★★ 2026-11-20: 补齐不再当场逐条 Add, 而是登记目标后交给
     ///   <see cref="PumpWallAppends"/> 按帧补(见 WallItems 的说明)。
     ///   返回 true 表示还有卡片没落地(调用方据此决定是否把 LoadingMore 撑到泵结束)。
     /// </summary>
@@ -981,7 +985,8 @@ public class FollowViewModel : ObservableObject
         }
         _wallVisibleVideoCount = visible;
 
-        // ★ 卡片墙按视频自己的发布时间倒序(issue #120), 不受评论产生的新动态时间影响。
+        // ★ 卡片墙按视频自己的发布时间倒序(issue #120), 不受转发/评论产生的新动态时间影响。
+        //   时间由 AsVideoItem 取: 原投稿用本条 pub_ts, 转发用 Orig.pub_ts(≈原视频发布时间)。
         //   动态卡列表仍按 FeedItems 的动态时间排 —— 两边排序规则分开。
         //   OrderByDescending 是稳定排序, 同一发布时间保持原动态顺序。
         videos = videos.OrderByDescending(v => v.Pubdate).ToList();
@@ -1014,7 +1019,7 @@ public class FollowViewModel : ObservableObject
             }
         }
 
-        // 剩下的尾部仍走分帧追加(新翻一页 / 首屏)
+        // 还缺的条目(尾部新增 / 中间插入)统一交给分帧泵, 不要在这里同步实例化。
         _wallAppendTarget = WallItems.Count < videos.Count ? videos : null;
         PumpWallAppends();
         RefreshWallLimitHint();
@@ -1030,15 +1035,15 @@ public class FollowViewModel : ObservableObject
         SyncWallItems();
     }
 
-    /// <summary>一次同步补回这么多张以上就改走"清空 + 分帧重铺", 免得又造出一次长冻结。</summary>
-    private const int MaxWallInserts = 6;
-
     /// <summary>
     /// 把卡片墙收敛到新的目标列表：只摘掉被屏蔽的卡、插回恢复可见的卡，其余容器原地不动。
     ///
     /// ★ 前提: 墙与目标有超过一半的卡片是同一批对象(否则外面已经走清空重铺)。
-    /// ★ 调用前 <paramref name="desired"/> 已建好; 插入的数量超过 <see cref="MaxWallInserts"/>
-    ///   时会放弃增量, 改为清空后交给分帧泵 —— 取消一大批屏蔽时仍会分帧重铺。
+    /// ★ 调用前 <paramref name="desired"/> 已建好。中间插入与尾部新增都不在这里同步做,
+    ///   由调用方登记目标后交给分帧泵(<see cref="DrainWallAppends"/>)。
+    /// ★ 2026-11-23(PR #121): 卡片墙改按视频发布时间排序后, 新翻的一页里转发来的旧视频
+    ///   会插到已有卡中间(而不是尾部); 旧写法把"本页新增 > 6 条"当成整批换内容而整墙重建,
+    ///   于是一路下滑每翻一页都销毁重建最多 300 张卡 —— 正是追加分帧要避免的那下冻结。
     /// </summary>
     private void ReconcileWall(List<VideoItem> videos, HashSet<VideoItem> desired)
     {
@@ -1048,25 +1053,11 @@ public class FollowViewModel : ObservableObject
         // 尾部新增(翻页)交给分帧泵, 不要在这里同步实例化一整页
         if (IsPrefix(WallItems, videos)) return;
 
-        if (!OrderCompatible(WallItems, videos) || videos.Count - WallItems.Count > MaxWallInserts)
+        // 顺序全变 = 换了一批内容, 只能清空重铺
+        if (!OrderCompatible(WallItems, videos))
         {
             CancelWallAppends();
             WallItems.Clear();
-            return;
-        }
-
-        var j = 0;
-        for (var i = 0; i < videos.Count; i++)
-        {
-            if (j < WallItems.Count && ReferenceEquals(WallItems[j], videos[i]))
-            {
-                j++;
-                continue;
-            }
-            var v = videos[i];
-            BiliDesk.Views.Controls.VideoCard.MarkNoEntranceAnimation(v);
-            WallItems.Insert(j, v);
-            j++;
         }
     }
 
@@ -1105,7 +1096,7 @@ public class FollowViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 把待补的视频卡按**这一帧的批量**搬进卡片墙。
+    /// 把待补的视频卡按**这一帧的批量**补进卡片墙(尾部追加或中间插入)。
     ///
     /// ★★ 为什么要分帧(2026-11-20, 用户报"动态页视频卡下滑加载时, 加载的那一拍画面冻结"):
     ///   卡片墙(CardWallPanel)不虚拟化, 一次 Add 一整页 = 一次布局同步实例化十几张
@@ -1132,17 +1123,36 @@ public class FollowViewModel : ObservableObject
         _wallAppendLastTick = now;
 
         var added = 0;
-        while (added < _wallAppendBatch && WallItems.Count < target.Count)
+        var j = 0;
+        // ★ 2026-11-23(PR #121): 目标里可能同时有"尾部新增"和"中间插入"(按视频发布时间
+        //   排序后, 新页的转发视频会落到旧卡之间)。统一按目标顺序补齐: 遇到对不上的位置
+        //   就 Insert, 每帧最多 _wallAppendBatch 张 —— 与单纯追加一样只实例化这一帧的卡。
+        while (added < _wallAppendBatch && j < target.Count)
         {
-            var v = target[WallItems.Count];
+            if (j < WallItems.Count && ReferenceEquals(WallItems[j], target[j]))
+            {
+                j++;
+                continue;
+            }
+
+            var v = target[j];
             BiliDesk.Views.Controls.VideoCard.MarkNoEntranceAnimation(v);
-            WallItems.Add(v);
+            WallItems.Insert(j, v);
             added++;
+            j++;
         }
 
         RefreshWallLimitHint();
 
-        if (WallItems.Count < target.Count)
+        if (WallItems.Count > target.Count)
+        {
+            // 墙比目标还长(理论上由 SyncWallItems 先摘掉): 不再补, 等下一轮同步收敛。
+            _wallAppendTarget = null;
+            EndWallAppendHold();
+            return;
+        }
+
+        if (WallItems.Count < target.Count || !IsPrefix(WallItems, target))
         {
             PumpWallAppends();   // 还有存货, 下一帧继续
             return;
