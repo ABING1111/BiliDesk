@@ -69,11 +69,26 @@ public partial class DynamicDetailView : UserControl
 
     private void UpdateVideoHeight()
     {
-        if (DetailVideoHost == null) return;
-        var w = DetailVideoHost.ActualWidth;
-        if (w <= 0) return;
-        DetailVideoHost.Height = Math.Min(w * 9 / 16, 420);
+        if (DetailVideoHost == null || OrigVideoHost == null) return;
+        FitVideoHost(DetailVideoHost, 420);
+        FitVideoHost(OrigVideoHost, 420);
     }
+
+    /// <summary>封面块按 16:9 定高(宽度撑满时高度跟着走, 否则转发封面会被裁成长条 —— issue #122)。</summary>
+    private static void FitVideoHost(Border host, double maxHeight)
+    {
+        var w = host.ActualWidth;
+        if (w <= 0) return;
+        var h = Math.Min(w * 9 / 16, maxHeight);
+        // 高度被设过之后重排会再触发一次 SizeChanged, 差值判断让它在第二轮停下。
+        // ★ NaN 必须单独判: 没设过 Height 时 Height 是 NaN, 而 NaN > 0.5 是 false ——
+        //   只写差值判断会让首次设高被自己挡掉(探针实测: 高度一直停在角标那 20px)。
+        if (double.IsNaN(host.Height) || Math.Abs(host.Height - h) > 0.5) host.Height = h;
+    }
+
+    /// <summary>转发原文封面自己定高: 只在 IsForward 时可见, 不能只指望面板的 SizeChanged。</summary>
+    private void OnOrigVideoHostSizeChanged(object sender, SizeChangedEventArgs e)
+        => FitVideoHost(OrigVideoHost, 420);
 
     private void OnAuthorClick(object sender, MouseButtonEventArgs e)
     {

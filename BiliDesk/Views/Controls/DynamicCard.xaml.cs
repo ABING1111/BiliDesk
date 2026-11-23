@@ -314,10 +314,28 @@ public partial class DynamicCard : UserControl
 
     private void UpdateVideoHeight()
     {
-        var w = VideoHost.ActualWidth;
-        if (w <= 0) return;
-        VideoHost.Height = Math.Min(w * 9 / 16, 405);
+        FitVideoHost(VideoHost, 405);
+        FitVideoHost(OrigVideoHost, 405);
     }
+
+    /// <summary>封面块按 16:9 定高(宽度撑满时高度跟着走, 否则封面会被裁成长条 —— issue #122)。</summary>
+    private static void FitVideoHost(Border host, double maxHeight)
+    {
+        var w = host.ActualWidth;
+        if (w <= 0) return;
+        var h = Math.Min(w * 9 / 16, maxHeight);
+        // 高度被设过之后重排会再触发一次 SizeChanged, 差值判断让它在第二轮停下。
+        // ★ NaN 必须单独判: 没设过 Height 时 Height 是 NaN, 而 NaN > 0.5 是 false ——
+        //   只写差值判断会让首次设高被自己挡掉(探针实测: 高度一直停在角标那 20px)。
+        if (double.IsNaN(host.Height) || Math.Abs(host.Height - h) > 0.5) host.Height = h;
+    }
+
+    /// <summary>
+    /// 转发原文的封面块自己也要能定高: 它只在 IsForward 时可见, 虚拟化回收复用到新数据时
+    /// 外层卡尺寸可能没变(不触发卡片的 SizeChanged), 只能靠它自己被量出宽度这一下。
+    /// </summary>
+    private void OnOrigVideoHostSizeChanged(object sender, SizeChangedEventArgs e)
+        => FitVideoHost(OrigVideoHost, 405);
 
     private void OnVideoEnter(object sender, MouseEventArgs e) => PlayOverlay.Opacity = 1;
     private void OnVideoLeave(object sender, MouseEventArgs e) => PlayOverlay.Opacity = 0;

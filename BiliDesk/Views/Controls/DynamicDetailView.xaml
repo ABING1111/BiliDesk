@@ -174,9 +174,12 @@
                                Margin="0,6,0,0" TextWrapping="Wrap"
                                Foreground="{DynamicResource TextPrimaryBrush}"
                                Visibility="{Binding HasTitle, Converter={StaticResource BoolToVis}}" />
-                    <Border Margin="0,8,0,0" CornerRadius="6" ClipToBounds="True" Height="160"
+                    <!-- ★ 高度由代码按 16:9 算(见 UpdateVideoHeight): 原来写死 Height="160",
+                         全宽下同样是长条, 封面被 UniformToFill 裁掉上下(issue #122)。 -->
+                    <Border x:Name="OrigVideoHost" Margin="0,8,0,0" CornerRadius="6" ClipToBounds="True"
                             Background="{DynamicResource PlaceholderBrush}"
                             Cursor="Hand" MouseLeftButtonUp="OnOrigVideoClick"
+                            SizeChanged="OnOrigVideoHostSizeChanged"
                             Visibility="{Binding HasPlayableVideo, Converter={StaticResource BoolToVis}}">
                         <Grid>
                             <Border CornerRadius="6" helpers:Cover.Source="{Binding Cover}" />

@@ -265,9 +265,13 @@
                                TextTrimming="CharacterEllipsis"
                                Foreground="{DynamicResource TextPrimaryBrush}"
                                Visibility="{Binding HasTitle, Converter={StaticResource BoolToVis}}" />
-                    <Border Margin="0,8,0,0" CornerRadius="6" ClipToBounds="True" Height="120"
+                    <!-- ★ 高度由代码按 16:9 算(见 UpdateVideoHeight): 原来写死 Height="120",
+                         而宽度跟转发块撑满 → 约 5.5:1 的长条, 封面被 UniformToFill 裁掉上下(issue #122)。
+                         这里不设固定高度: 量出宽度前是 0 高, 由自己的 SizeChanged 定高。 -->
+                    <Border x:Name="OrigVideoHost" Margin="0,8,0,0" CornerRadius="6" ClipToBounds="True"
                             Background="{DynamicResource PlaceholderBrush}"
                             Cursor="Hand" MouseLeftButtonUp="OnOrigVideoClick"
+                            SizeChanged="OnOrigVideoHostSizeChanged"
                             Visibility="{Binding HasPlayableVideo, Converter={StaticResource BoolToVis}}">
                         <Grid>
                             <Border CornerRadius="6" helpers:Cover.Source="{Binding Cover}" />
