@@ -81,6 +81,27 @@ public static class PlayerWindowPlacement
     }
 
     /// <summary>
+    /// 候选工作区里与 <paramref name="rect"/> 重叠最多的一块; 一块都不重叠返回 null。
+    /// </summary>
+    public static PlacementRect? BestWorkArea(PlacementRect rect, IReadOnlyList<PlacementRect> workAreas)
+    {
+        if (workAreas == null || workAreas.Count == 0) return null;
+
+        var best = workAreas[0];
+        var bestArea = IntersectionArea(rect, best);
+        for (var i = 1; i < workAreas.Count; i++)
+        {
+            var area = IntersectionArea(rect, workAreas[i]);
+            if (area > bestArea)
+            {
+                bestArea = area;
+                best = workAreas[i];
+            }
+        }
+        return bestArea > 0 ? best : null;
+    }
+
+    /// <summary>
     /// 从多个候选工作区(每个显示器一块)里挑**与目标重叠最多**的那块并夹取。
     /// 一块都没有重叠(副屏被拔掉 / 显示器重新排列)时返回 null —— 由调用方决定
     /// "退回主屏居中", 而不是把窗口硬塞进某个缝里。
@@ -89,21 +110,52 @@ public static class PlayerWindowPlacement
         PlacementRect desired, IReadOnlyList<PlacementRect> workAreas,
         double visibleMinWidth, double visibleMinHeight)
     {
+        var best = BestWorkArea(desired, workAreas);
+        return best is { } area ? ClampToBounds(desired, area, visibleMinWidth, visibleMinHeight) : null;
+    }
+
+    // ------------------------------------------------------------ 小窗模式(issue #127)
+
+    /// <summary>小窗画面的宽高比(16:9, 与绝大多数视频一致)。</summary>
+    public const double MiniWindowAspect = 16.0 / 9.0;
+
+    /// <summary>
+    /// 算出进入小窗模式后的窗口几何(DIP)。
+    ///
+    /// 规则:
+    ///   ① <paramref name="last"/> 是**本次运行里上一次用过的小窗几何**: 还有效(尺寸不小于下限)
+    ///      且落在某块工作区上 ⇒ 整窗夹进"重叠最多的那块"后原样复用(用户上次拖到哪、拉多大都保留);
+    ///   ② 否则用默认位: 在**窗口当前所在**的显示器工作区右下角, 宽 = 工作区宽 ×
+    ///      <paramref name="widthRatio"/>(夹在 min/max 之间, 且不超出工作区), 高按 16:9;
+    ///      四周留 <paramref name="margin"/> —— 工作区本身不含任务栏, 所以小窗会浮在任务栏上方。
+    ///   ③ 一块工作区都没有(理论上不会)返回 null, 调用方按"不进小窗"处理。
+    ///
+    /// ★ 为什么默认在右下而不是居中: 小窗的用途是"边打游戏/干活边看", 放角落最不挡事,
+    ///   也与各家播放器的小窗习惯一致。
+    /// ★ 全是纯矩形运算, 多屏负坐标天然成立(见 <see cref="ClampToBounds"/> 的说明)。
+    /// </summary>
+    public static PlacementRect? ComputeMiniWindowRect(
+        IReadOnlyList<PlacementRect> workAreas, PlacementRect current, PlacementRect? last,
+        double widthRatio, double minWidth, double minHeight, double maxWidth, double margin)
+    {
         if (workAreas == null || workAreas.Count == 0) return null;
 
-        var best = workAreas[0];
-        var bestArea = IntersectionArea(desired, best);
-        for (var i = 1; i < workAreas.Count; i++)
+        if (last is { } prev && IsUsable(prev, minWidth, minHeight))
         {
-            var area = IntersectionArea(desired, workAreas[i]);
-            if (area > bestArea)
-            {
-                bestArea = area;
-                best = workAreas[i];
-            }
+            // 可见下限取窗口自身大小 ⇒ 尽量整窗留在工作区内(窗口比工作区还大时由 ClampToBounds 收敛)
+            if (ClampToBestWorkArea(prev, workAreas, prev.Width, prev.Height) is { } reused)
+                return reused;
         }
 
-        if (bestArea <= 0) return null;
-        return ClampToBounds(desired, best, visibleMinWidth, visibleMinHeight);
+        // 当前窗口不在任何工作区上(极端情况) ⇒ 用第一块(主屏), 总比没有强
+        var area = BestWorkArea(current, workAreas) ?? workAreas[0];
+
+        var width = Math.Clamp(area.Width * widthRatio, minWidth, maxWidth);
+        width = Math.Min(width, Math.Max(minWidth, area.Width - margin * 2));
+        var height = Math.Max(minHeight, width / MiniWindowAspect);
+        height = Math.Min(height, Math.Max(minHeight, area.Height - margin * 2));
+
+        var rect = new PlacementRect(area.Right - margin - width, area.Bottom - margin - height, width, height);
+        return ClampToBounds(rect, area, Math.Min(width, area.Width), Math.Min(height, area.Height));
     }
 }

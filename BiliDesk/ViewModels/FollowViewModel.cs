@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
@@ -881,6 +883,9 @@ public class FollowViewModel : ObservableObject
                 if (!hasMore && FeedItems.Count > 0)
                     SetAtFeedBottom(true);
 
+                // 页内搜索: 新内容落地后空态可能已变(0 → 有 / 有 → 0)
+                OnPropertyChanged(nameof(ShowFeedSearchEmpty));
+
                 // 左栏未读状态由应用级服务维护; 这里只把最新状态应用上(**不重排**,
                 // 位置只在进入动态页/点刷新时刷新, 见 RefreshUserPositions)。
                 ApplyNotifyStates();
@@ -977,6 +982,8 @@ public class FollowViewModel : ObservableObject
             //   就会把几百张 VideoCard 在同一个回调里销毁重建(用户报的"屏蔽后卡 1 秒")。
             //   这里按同一套全局屏蔽条件自己过滤, 规则变化时只对差异做增删(见 ReconcileWall)。
             if (!FilterService.Instance.IsVisible(it)) continue;
+            // 页内搜索(2026-11-25): 与动态卡列表同一个谓词 —— 否则"筛过一遍"和"卡片墙"会各说各话
+            if (!MatchesFeedSearch(it)) continue;
             // ★ 计数不跟着 300 条截断: 提示要回答的是"还有没有没显示的视频"。
             visible++;
             if (videos.Count >= WallItemLimit) continue;
@@ -1446,6 +1453,82 @@ public class FollowViewModel : ObservableObject
             }
             cts.Dispose();
         }
+    }
+
+    // ------------------------------------------------------------ 右栏页内搜索(2026-11-25, issue #127)
+
+    private string _feedSearchText = "";
+    private string[] _feedSearchTerms = Array.Empty<string>();
+    private DispatcherTimer? _feedSearchDebounce;
+
+    /// <summary>
+    /// 右栏搜索框文本。输入即筛选**已加载**的动态(180ms 防抖), 清空恢复全部。
+    ///
+    /// ★ 为什么是页内筛选而不是跳搜索页(2026-11-25 用户澄清): 这个框的用途是
+    ///   "在我关注的动态里找那条视频", 不是在 B 站全站搜索 —— 两者结果完全不同。
+    /// ★ 只筛已加载的部分: 动态流是游标分页, 应用没有"搜索关注动态"的服务端接口
+    ///   (那等于扫全部关注); 筛空时页面会看到内容不足一屏并继续补页(见 FollowPage)。
+    /// ★ 词条在 setter 里立刻算好(谓词闭包读的就是它), 防抖只推迟"刷新视图"这一步 ——
+    ///   否则连续打字期间, 视图刷新与词条更新可能错开一拍, 出现"框里是新词、列表是旧词"。
+    /// </summary>
+    public string FeedSearchText
+    {
+        get => _feedSearchText;
+        set
+        {
+            if (!SetProperty(ref _feedSearchText, value)) return;
+            _feedSearchTerms = FeedSearchPolicy.SplitTerms(value);
+            OnPropertyChanged(nameof(HasFeedSearch));
+            QueueFeedSearchApply();
+        }
+    }
+
+    /// <summary>右栏是否在按关键词筛选(为空 = 显示全部)。</summary>
+    public bool HasFeedSearch => _feedSearchTerms.Length > 0;
+
+    /// <summary>页内搜索一条都没命中时, 右栏显示空态提示。</summary>
+    public bool ShowFeedSearchEmpty
+    {
+        get
+        {
+            if (!HasFeedSearch) return false;
+            var view = System.Windows.Data.CollectionViewSource.GetDefaultView(FeedItems) as ICollectionView;
+            return view?.IsEmpty ?? FeedItems.Count == 0;
+        }
+    }
+
+    /// <summary>页内搜索谓词: 传给 FilterService.Attach 的 extra(与全局屏蔽取"与")。</summary>
+    public bool MatchesFeedSearch(object? item) => FeedSearchPolicy.Matches(item, _feedSearchTerms);
+
+    private void QueueFeedSearchApply()
+    {
+        _feedSearchDebounce ??= new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(180),
+        };
+        _feedSearchDebounce.Tick -= OnFeedSearchDebounceTick;
+        _feedSearchDebounce.Tick += OnFeedSearchDebounceTick;
+        _feedSearchDebounce.Stop();
+        _feedSearchDebounce.Start();
+    }
+
+    private void OnFeedSearchDebounceTick(object? sender, EventArgs e)
+    {
+        _feedSearchDebounce?.Stop();
+        ApplyFeedSearch();
+    }
+
+    /// <summary>把当前关键词应用到右栏(动态卡列表 + 卡片墙)并刷新空态。</summary>
+    private void ApplyFeedSearch()
+    {
+        // 动态卡列表: 谓词挂在 FilterService 的视图上(见 FollowPage 的 Attach), 这里只刷新
+        (System.Windows.Data.CollectionViewSource.GetDefaultView(FeedItems) as ICollectionView)?.Refresh();
+
+        // 卡片墙不挂 view.Filter(它不虚拟化, Refresh 会重建整墙), 由 SyncWallItems 自己按同一谓词过滤
+        if (UseCardWall) SyncWallItems();
+
+        OnPropertyChanged(nameof(HasFeedSearch));
+        OnPropertyChanged(nameof(ShowFeedSearchEmpty));
     }
 
     private void ClearUserSearch()

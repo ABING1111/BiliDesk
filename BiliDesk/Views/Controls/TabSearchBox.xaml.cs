@@ -18,12 +18,14 @@ namespace BiliDesk.Views.Controls;
 ///   · 程序把 Text 设成非空(VM 里保留了上次的关键词)时自动展开, 不会出现
 ///     "看不见输入框、列表却还在过滤"的状态。
 ///
-/// 与 <see cref="SearchBox"/> 的分工: SearchBox 是常驻输入框(动态页左栏), 这里是
-/// tab 栏里的可折叠版本。占位符/清除按钮同样由 TextChanged 直接置 Visibility。
+/// 与 <see cref="SearchBox"/> 的分工: SearchBox 是常驻输入框(动态页左栏 / 右栏的页内搜索),
+/// 这里是 tab 栏里的可折叠版本(历史 / 收藏页)。占位符/清除按钮同样由 TextChanged 直接置 Visibility。
 /// </summary>
 public partial class TabSearchBox : UserControl
 {
-    /// <summary>展开后的目标宽度(空间不够时会按可用宽度收敛, 见 ExpandedTargetWidth)。</summary>
+    /// <summary>
+    /// 展开后的目标宽度(空间不够时会按可用宽度收敛, 见 ExpandedTargetWidth)。
+    /// </summary>
     private const double ExpandedWidth = 240;
 
     /// <summary>

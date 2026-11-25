@@ -416,6 +416,16 @@ public partial class PlayerWindow : FluentWindow
     private void OnOverlayActivated(object? sender, EventArgs e)
     {
         if (_closing || _mp == null) return;
+        // ★ 小窗栏(2026-11-25, issue #127): 它的点击不走下面"补一次暂停"那套, 各有各的处理;
+        //   而且**必须排在 Mouse.LeftButton 判定之前** —— 激活那一下 WPF 不派发鼠标消息,
+        //   它记录的按键状态可能还停在"松开"(实测: 排在后面时这个分支永远进不来)。
+        if (IsPointerOnMiniBar)
+        {
+            // 按在抓手上就当场起拖; 按在按钮上等松开补一次 Click(这次点击已被激活吃掉)
+            if (MiniWindowGrip != null && MiniWindowGrip.IsMouseOver) BeginMiniWindowDrag();
+            else QueueMiniBarButtonClick(BtnMiniRestore is { IsMouseOver: true } ? BtnMiniRestore : BtnMiniClose);
+            return;
+        }
         // 直播: 点画面本来就不该切播放/暂停, 这套"补一次被吞掉的单击"对直播没有意义
         // (2026-11-20, issue #98 —— 只认控制栏按钮)。
         if (_isLive) return;

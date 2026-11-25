@@ -74,7 +74,8 @@
         <Button x:Name="OpenButton" Padding="0"
                 HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                 Cursor="Hand" FocusVisualStyle="{x:Null}"
-                ToolTip="搜索" Click="OnOpenClick">
+                ToolTip="{Binding PlaceholderText, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                Click="OnOpenClick">
             <Button.Template>
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Bd" CornerRadius="22" Background="Transparent" />

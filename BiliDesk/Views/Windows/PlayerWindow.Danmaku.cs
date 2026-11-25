@@ -306,6 +306,8 @@ public partial class PlayerWindow : FluentWindow
         // 跳过提示条上的点击(「撤回」按钮)同样不算视频区手势 ——
         // 它是覆盖层里除了控制栏之外唯一会吃掉左键的自绘元素, 不挡住就会"点撤回顺带切一次播放/暂停"。
         if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
+        // 小窗栏上的按下同理(拖动抓手 / 还原 / 关闭各有各的处理, 见 PlayerWindow.MiniWindow.cs)
+        if (IsPointerOnMiniBar) return;
         // ★ 弹层开着 ⇒ 这次按下属于浮层, 视频区手势**不起步**。
         //   这是整套防护的地基(见 _videoGestureActive 的说明): 不起步, 随后漏进来的
         //   那个孤立 Up 才会因为"没有配对 Down"而被丢掉。
@@ -370,6 +372,9 @@ public partial class PlayerWindow : FluentWindow
         if (ControlBar != null && ControlBar.IsMouseOver) return;
         // ★ 与 Down 对称: 跳过提示条上的「撤回」点击也不触发单击暂停
         if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
+        // ★ 与 Down 对称: 小窗栏上的松开要原样放给它的按钮(Button 的 Click 靠这一次 Up 触发),
+        //   在这里被当成"弹层余波"吞掉的话, 「还原」「关闭」就成了按不动的摆设。
+        if (IsPointerOnMiniBar) return;
         // ★★ 弹层余波(2026-10-13 第三轮修正, 前两轮都没修对):
         //   关闭清晰度/弹幕弹层那一次点击, Down 被弹层 HWND 吃掉, 只有 Up 漏进视频区。
         //   实测它到达时 IsOpen 已 false、Mouse.LeftButton 已 Released、Closed 还没来
@@ -446,6 +451,7 @@ public partial class PlayerWindow : FluentWindow
         // 控制栏 / 跳过提示条上的右键不算视频区手势(与左键同款理由)
         if (ControlBar != null && ControlBar.IsMouseOver) return;
         if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
+        if (IsPointerOnMiniBar) return;
         // 弹层开着 ⇒ 这一下属于浮层, 不起步(地基, 见方法说明)
         if (AnyPlayerPopupOpen) { _rightGestureActive = false; return; }
         _rightGestureActive = true;

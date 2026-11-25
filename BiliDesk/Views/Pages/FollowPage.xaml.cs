@@ -160,7 +160,8 @@ public partial class FollowPage : UserControl, IRefreshable
             SyncAllDynamicEntry();
 
             // 动态流与"关注的主播正在直播"都纳入全局屏蔽(与首页/收藏/历史同一套条件)
-            FilterService.Instance.Attach(vm.FeedItems, isActive: () => IsVisible);
+            // extra: 右栏搜索框的页内筛选(与屏蔽取"与", 见 FilterService.Attach 的说明)
+            FilterService.Instance.Attach(vm.FeedItems, extra: vm.MatchesFeedSearch, isActive: () => IsVisible);
             FilterService.Instance.Attach(vm.LiveNow, isActive: () => IsVisible);
             // ★ 卡片墙**不再挂 view.Filter**(2026-11-20)。它不虚拟化, view.Refresh 一发 Reset,
             //   几百张 VideoCard 会在下一拍里全部销毁重建 —— 正是"屏蔽后卡 1 秒"的来源。

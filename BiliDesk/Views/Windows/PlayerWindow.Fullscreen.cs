@@ -31,6 +31,11 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing) return;
 
+        // ★ 小窗与全屏互斥(2026-11-25, issue #127): 小窗里按 F/双击/控制栏全屏 ⇒ 先还原成常规窗口。
+        //   ExitMiniWindow 会还原常规几何并把稳定期续上; 紧接着 CaptureNormalPlacement 因
+        //   "稳定期内不采"直接返回, 落盘用的仍是进入小窗前存下的那份快照(两端口径一致)。
+        if (!_isFullscreen && _isMiniWindow) ExitMiniWindow();
+
         // 进全屏前把常规几何落盘: 进全屏后 Width/Height 会变成全屏尺寸, 读不到可信值了。
         if (!_isFullscreen)
         {
@@ -234,21 +239,21 @@ public partial class PlayerWindow : FluentWindow
     private const double FillWindowMinHeight = 200;
 
     /// <summary>
-    /// 按两个开关的当前值把右侧信息栏设成"该收"或"该展"。**唯一改 InfoPanel / RightColumn 的地方。**
+    /// 按全屏 / 铺满窗口 / 小窗三个开关把右侧信息栏设成"该收"或"该展"。**唯一改 InfoPanel / RightColumn 的地方。**
     ///
     /// ★ 为什么信息栏必须**整个 Collapsed**, 不能只把列宽设成 0:
     ///   宽度为 0 的面板仍然参与 measure/arrange/render —— 里面挂着几百张评论卡
     ///   (无对象池, 见 notes-player-internals), 每切一次都要把这棵评论树重新量一遍,
     ///   这就是用户说的"卡顿一下"(退出时还要再付一次)。
     ///
-    /// ★ 为什么必须收敛到一个入口: 收信息栏的现在有两个开关(全屏 / 铺满窗口), 各自改一遍
+    /// ★ 为什么必须收敛到一个入口: 收信息栏的现在有三个开关(全屏 / 铺满窗口 / 小窗), 各自改一遍
     ///   会立刻出现"退出全屏把铺满窗口的状态也顶掉"这种互相打架 ——
     ///   两个开关叠加时, 谁先谁后都不能让信息栏闪一下或者卡在错误状态。
     /// </summary>
     private void ApplyInfoPanelState()
     {
         if (_closing) return;
-        var hide = _isFullscreen || _isFillWindow;
+        var hide = _isFullscreen || _isFillWindow || _isMiniWindow;
         if (InfoPanel != null)
             InfoPanel.Visibility = hide ? Visibility.Collapsed : Visibility.Visible;
         // ★ 列宽必须跟着一起给回去: 只把 Visibility 改回 Visible 而列宽还停在 0,
@@ -262,10 +267,15 @@ public partial class PlayerWindow : FluentWindow
         //   再拿它当底线没有道理。视频列的 MinWidth 同理 —— 不跟着放开,
         //   窗口缩到 320 以下时列宽比窗口还宽, 画面会被裁偏。
         //   (FluentWindow 的 WM_GETMINMAXINFO 在每次拖动时重读 MinWidth/MinHeight, 改属性即可。)
+        //   小窗(2026-11-25)把下限再收到 320×180: 它本来就是一颗"缩到角落"的窗口。
         if (VideoColumn != null)
             VideoColumn.MinWidth = hide ? 0 : VideoColumnNormalMinWidth;
-        MinWidth = hide ? FillWindowMinWidth : NormalWindowMinWidth;
-        MinHeight = hide ? FillWindowMinHeight : NormalWindowMinHeight;
+        MinWidth = _isMiniWindow ? MiniWindowMinWidth
+               : hide ? FillWindowMinWidth
+               : NormalWindowMinWidth;
+        MinHeight = _isMiniWindow ? MiniWindowMinHeight
+                : hide ? FillWindowMinHeight
+                : NormalWindowMinHeight;
     }
 
     // ------------------------------------------------------------ 播放器窗口大小/位置记忆
@@ -415,7 +425,7 @@ public partial class PlayerWindow : FluentWindow
     private void VerifyAppliedPlacement()
     {
         if (_closing || !IsLoaded) return;
-        if (_isFullscreen || _isFillWindow || WindowState != WindowState.Normal) return;
+        if (_isFullscreen || _isFillWindow || _isMiniWindow || WindowState != WindowState.Normal) return;
 
         if (_rememberedPlacement is { } target)
         {
@@ -483,7 +493,7 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool IsNormalStateForPlacement()
     {
-        return IsLoaded && !_closing && !_isFullscreen && !_isFillWindow
+        return IsLoaded && !_closing && !_isFullscreen && !_isFillWindow && !_isMiniWindow
             && !_placementSettling
             && WindowState == WindowState.Normal
             && ActualWidth >= 100 && ActualHeight >= 100;
@@ -555,8 +565,8 @@ public partial class PlayerWindow : FluentWindow
         _placementSettleTimer?.Stop();
         if (_closing) return;
 
-        // 全屏/最大化/铺满态没有"常规几何"可采: 退出这些状态时会重新进稳定期。
-        if (WindowState != WindowState.Normal || _isFullscreen || _isFillWindow)
+        // 全屏/最大化/铺满/小窗态没有"常规几何"可采: 退出这些状态时会重新进稳定期。
+        if (WindowState != WindowState.Normal || _isFullscreen || _isFillWindow || _isMiniWindow)
         {
             _placementSettling = false;
             _hasPlacementSettleSample = false;
@@ -616,6 +626,8 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_windowPlacementSaved) return;
         _windowPlacementSaved = true;
+        // 小窗里直接关窗: 小窗自己的几何先记进进程内缓存(下次进小窗复用), 再走常规几何的落盘
+        if (_isMiniWindow) RememberMiniWindowRect();
         if (!Svc.Settings.RememberPlayerWindowSize) return;
 
         // 常规态关闭: 先按当前值补采一次(覆盖"程序改了几何但没发事件"的边角情况)。

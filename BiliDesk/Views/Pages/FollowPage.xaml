@@ -450,11 +450,21 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <!-- 右栏标题 + 排版切换(用户要求"可以自己切换排版") -->
+                    <!-- 右栏标题 + 排版切换(用户要求"可以自己切换排版") + 全站搜索胶囊 -->
+                    <!-- ★ 三列: 标题(*) / 切换按钮(Auto) / 搜索胶囊(Auto)。胶囊展开时它所在的
+                         Auto 列跟着变宽, 标题列让位 —— 所以胶囊设了 OverlayExpand=False(不向左借位),
+                         否则它会平移到两枚切换按钮上面把它们遮住。 -->
                     <Grid Grid.Row="0" Margin="8,0,8,10">
-                        <TextBlock Text="{Binding SelectionTitle}" FontSize="15"
-                                   FontWeight="SemiBold" VerticalAlignment="Center" />
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <!-- 标题可被搜索胶囊挤窄: 超长 UP 名要省略, 否则文字溢出到右邻的按钮上 -->
+                        <TextBlock Grid.Column="0" Text="{Binding SelectionTitle}" FontSize="15"
+                                   FontWeight="SemiBold" VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
                                     VerticalAlignment="Center">
                             <Button x:Name="BtnLayoutCards" Style="{StaticResource FeedLayoutChipStyle}"
                                     Content="动态卡" Click="OnLayoutCardsClick"
@@ -463,6 +473,15 @@
                                     Content="卡片墙" Margin="6,0,0,0" Click="OnLayoutWallClick"
                                     ToolTip="多列卡片墙(一屏铺更多, 但没有头像与发布时间)" />
                         </StackPanel>
+                        <!-- 页内搜索(2026-11-25, issue #127): 在**本页已加载的动态**里按关键词筛选
+                             (标题 / 正文 / UP 名, 转发的连原动态一起看), 不跳搜索页、不请求服务端。
+                             与左栏「搜索已关注的 UP」是两件事: 那个搜人, 这个筛内容。
+                             ★ 控件与左栏同一个 SearchBox(高 34 / 圆角 17 / 浅灰底), 用户要求两边观感一致;
+                               早先是可折叠的圆形胶囊, 收起态是一颗圆, 与左边不像。 -->
+                        <controls:SearchBox x:Name="FeedSearchBox" Grid.Column="2" Width="240"
+                                            Margin="10,0,0,0" VerticalAlignment="Center"
+                                            PlaceholderText="搜索动态里的视频"
+                                            Text="{Binding FeedSearchText, Mode=TwoWay}" />
                     </Grid>
 
                     <!-- ===== 关注直播看板(2026-10-31 新增) =====
@@ -647,6 +666,22 @@
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                             </ListBox>
+
+                            <!-- 页内搜索空态(2026-11-25, issue #127): 有筛选词、但已加载的动态里
+                                 一条都没命中。浮在列表区域中央, 不占布局高度。 -->
+                            <StackPanel x:Name="FeedSearchEmptyHint" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                        Panel.ZIndex="6" IsHitTestVisible="False"
+                                        Visibility="{Binding ShowFeedSearchEmpty, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="26" HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                                <TextBlock Text="已加载的动态里没有匹配的视频" FontSize="13" Margin="0,10,0,0"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <TextBlock Text="换个词试试；继续下滑会自动加载更早的动态" FontSize="11.5"
+                                           Margin="0,6,0,0" HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                            </StackPanel>
 
                             <!-- 底部状态浮层: 盖在列表底部, 不占高度。
                                  ★★★ 2026-11-06 用户报"底部状态区加载一遍后会出现椭圆一样的东西

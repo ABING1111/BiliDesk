@@ -1312,6 +1312,7 @@ public partial class PlayerWindow : FluentWindow
         //   清了第二集就变成"普通视频", 选集面板与连播链一起消失。
         nameof(_bangumi),
         nameof(_isFillWindow),       // 「铺满窗口」是窗口级的显示模式(同 _isFullscreen), 换片不该把它弹回去
+        nameof(_isMiniWindow),       // 「小窗」同理: 窗口级的显示模式, 换片/连播下一集仍留在小窗里
         nameof(_commentSort),        // 评论排序是用户看评论的习惯(同 _seasonOpen): 选过一次就一直是那个顺序
         nameof(_isListenMode),       // 「听视频」是窗口级的播放模式(同 _isFullscreen): 换片不该把它弹回视频
         // hover 预览锁是"上一次操作的瞬时反馈"(750ms 自己过期, 与片源无关), 不属于任何一片

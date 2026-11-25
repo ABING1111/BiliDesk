@@ -42,7 +42,7 @@ public partial class PlayerWindow : FluentWindow
         //   ⇒ 带 Ctrl / Alt 的组合键**一律放行**给系统与文本控件(Ctrl+C/V/A/X/Z 全部恢复);
         //   裸 C 仍然开关字幕, Shift 组合(方向键 30s 快进)不受影响。
         if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) != 0) return;
-        switch (e.Key)
+        switch (RealKey(e))
         {
             // ★ 直播的暂停只留控制栏那颗按钮(2026-11-20, issue #98): 空格/点画面太容易误触,
             //   而直播暂停是低频操作。这里只是不放行**键盘**入口, 按钮本身仍走 OnPlayPauseClick。
@@ -84,14 +84,31 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
+    /// 这一次按键的**真实键**。
+    ///
+    /// ★★★ 输入法在处理按键时, WPF 报上来的 e.Key 是 <see cref="Key.ImeProcessed"/>, 真正按下的键
+    ///   放在 <see cref="KeyEventArgs.ImeProcessedKey"/> 里。中文输入法处于激活状态时, **不在输入框里**
+    ///   的按键也会整批变成 ImeProcessed(2026-11-25 探针 bd-probe-miniwindow 实测: 小窗里按 F 和 Esc,
+    ///   到达时 e.Key 都是 ImeProcessed) —— 直接按 e.Key 匹配的话, 这时所有快捷键一起哑掉。
+    /// ★ 这里还原是安全的: 能走到下面的开关, 焦点一定**不在可编辑输入框里**(上面已经放行),
+    ///   不存在"正在打拼音、字母键其实是要输入的字符"这种情况。
+    /// ★ KeyUp(OnPreviewKeyUp)也必须用同一个换算: 长按 → 是"KeyDown 起步、KeyUp 收尾",
+    ///   两边判据不一致的话, 快进一旦起速就永远停不下来。
+    /// </summary>
+    private static Key RealKey(KeyEventArgs e) =>
+        e.Key == Key.ImeProcessed && e.ImeProcessedKey != Key.None ? e.ImeProcessedKey : e.Key;
+
+    /// <summary>
     /// "返回上一层"的统一处理(键盘 Esc / 鼠标侧键共用)。
     ///
-    /// 四层语义, **由内到外**逐级退, 与所有播放器一致:
+    /// 五层语义, **由内到外**逐级退, 与所有播放器一致:
     ///   评论详情中 → 先回评论列表(用户点进楼中楼后, "返回"指的是这一层);
     ///   全屏中     → 先退全屏(而不是直接关窗口, 否则用户按一下就"连界面一起没了");
+    ///   小窗中     → 再还原成常规窗口(2026-11-25, issue #127: 小窗里没有顶栏, 「还原」除了
+    ///                小窗栏那颗按钮就只有 Esc —— 少了这一级, 在小窗里按 Esc 会直接关播放器);
     ///   已铺满窗口 → 再退铺满窗口(信息栏回来);
     ///   都没有     → 关闭播放器回到主界面。
-    /// ★ 铺满窗口必须夹在中间: 它是最"内层"的一个显示模式(窗口尺寸都没变), 用户按 Esc 的
+    /// ★ 铺满窗口必须夹在后面: 它是最"外层"的一个显示模式(窗口尺寸都没变), 用户按 Esc 的
     ///   预期是"先把我刚展开的这个视图收回去", 而不是"直接关掉播放器"。
     ///   少了这一级, 用户在铺满窗口状态下按 Esc 会直接关窗 —— 与真全屏下按 Esc 的行为不一致。
     /// 两个入口必须走同一个方法, 不然很容易出现"Esc 是对的、侧键直接关窗"这种不一致。
@@ -113,6 +130,12 @@ public partial class PlayerWindow : FluentWindow
             BeginPlacementTransition();
             _isFullscreen = false;
             ApplyFullscreen(false);
+            return;
+        }
+        if (_isMiniWindow)
+        {
+            // 小窗没有系统还原动画, 但尺寸剧变后的稳定期照旧要进(由 ExitMiniWindow 自己续上)
+            ExitMiniWindow();
             return;
         }
         if (_isFillWindow)
@@ -208,7 +231,7 @@ public partial class PlayerWindow : FluentWindow
         //   KeyDown 被放行(不启计时器), 而 KeyUp 若照常走到 "短按 → 跳 5 秒",
         //   就会变成"在弹幕/评论输入框里按 → 视频往前跳" —— 按住方向键移光标更是一路狂跳。
         if (Keyboard.FocusedElement is TextBox { IsReadOnly: false }) return;
-        if (e.Key != Key.Right) return;
+        if (RealKey(e) != Key.Right) return;
         _rightKeyTimer?.Stop();
 
         // 这一次按下已经被"失焦作废"处理过了(见 _rightKeyDiscardUp): 松开只清标记,
