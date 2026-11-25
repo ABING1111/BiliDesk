@@ -34,6 +34,31 @@ public partial class PlayerWindow : FluentWindow
     {
         // 只在焦点位于"可编辑"输入框时让按键走默认路径; 只读展示框不拦截空格
         if (Keyboard.FocusedElement is TextBox { IsReadOnly: false }) return;
+        // ★ 上/下一个视频(2026-11-25): Alt+←/→ 退回上一条 / 回到刚才那条 —— 与浏览器
+        //   "后退/前进"的快捷键一致。裸的 ←/→ 早已被快退/快进占用(见下面的 case), 只能带 Alt。
+        //   ★ Alt 按住时 WPF 把 e.Key 报成 Key.System, 真正的键在 e.SystemKey 里;
+        //   ★ 带 Ctrl 的组合(Ctrl+Alt+← 之类)不接管, 仍按下面那条"放行给系统"处理。
+        if ((Keyboard.Modifiers & ModifierKeys.Alt) != 0 &&
+            (Keyboard.Modifiers & ModifierKeys.Control) == 0)
+        {
+            var altKey = e.Key == Key.System ? e.SystemKey : e.Key;
+            if (altKey == Key.Left)
+            {
+                _ = GoHistoryAsync(back: true);
+                e.Handled = true;
+                return;
+            }
+            if (altKey == Key.Right)
+            {
+                // ★ 吞掉随后的 KeyUp: 用户常先松 Alt 再松 →, 那时修饰键已经没了,
+                //   OnPreviewKeyUp 会把它当成"短按 → 跳 5 秒"。复用 _rightKeyDiscardUp
+                //   那套"这一次松手作废"的机制(下一次按 → 会自己清掉它)。
+                _rightKeyDiscardUp = true;
+                _ = GoHistoryAsync(back: false);
+                e.Handled = true;
+                return;
+            }
+        }
         // ★★★ 2026-11-16 修"对着视频选中文字按 Ctrl+C 复制失败, 右上角还弹'正在获取字幕轨…'":
         //   下面是**一批裸字母**快捷键(C 字幕 / D 弹幕 / M 静音 / L 点赞 / U UP主), 以前不看修饰键,
         //   于是 Ctrl+C 在**窗口级隧道事件**里就被 case Key.C 吃掉并 e.Handled = true ——

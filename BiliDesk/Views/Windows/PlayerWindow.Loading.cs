@@ -627,6 +627,10 @@ public partial class PlayerWindow : FluentWindow
         SetBangumiPlaylist(null);  // 直播间没有"番剧选集"这回事
         ResetForNewMedia();
         if (!string.IsNullOrEmpty(roomTitle)) VideoTitleText.Text = roomTitle;
+        // 上/下一个视频(2026-11-25): 直播间和点播视频一样算"一条"。
+        // ★ 房名拿不到时用"直播间 {roomId}"兜底 —— 箭头 ToolTip 不能是一片空白。
+        NoteHistoryOpened(PlayerHistoryEntry.ForLive(roomId,
+            string.IsNullOrWhiteSpace(roomTitle) ? $"直播间 {roomId}" : roomTitle));
         _ = LoadLiveAsync(roomId);
     }
 
@@ -780,6 +784,8 @@ public partial class PlayerWindow : FluentWindow
         // 本地文件没有 bvid, 自然也没有相关视频
         ClearRelatedPanel();
         LoadLocalFile(path);
+        // 上/下一个视频(2026-11-25): 本地文件同样算"一条"(标题与 LoadLocalFile 保持一致)。
+        NoteHistoryOpened(PlayerHistoryEntry.ForLocal(path, Path.GetFileNameWithoutExtension(path)));
     }
 
     /// <summary>
@@ -1363,6 +1369,10 @@ public partial class PlayerWindow : FluentWindow
         //   换片时若清成 false, 那条在途链回来仍会按 loadGen 自行作废; 清了反而多一个
         //   "闸门被外力打开"的窗口, 让第二次点击另起一条链。
         nameof(_listenSwitching),
+        // 上/下一个视频(2026-11-25)的换片闸: 与 _listenSwitching 同类 —— async 停流期间的
+        //   防重入标记, 由自己的 finally 收尾。★ 特别注意**不能清**: ResetForNewMedia 正是在
+        //   这个闸门里面调用的, 清成 false 等于把闸门打开, 第二次点箭头会另起一条加载链。
+        nameof(_switchingHistory),
         // 「播放页」按钮的状态广播缓存: 它记的是"上一次通知出去的值", 换片时新片一开播
         //   就会由 UpdatePlayButton 重新收敛(暂停/停止 → 播放必有一次变化), 不需要清。
         nameof(_reportedIsPlaying),
@@ -1521,6 +1531,9 @@ public partial class PlayerWindow : FluentWindow
         // 聆听态是跨窗口复用的窗口级模式: 复用一个"上次停在聆听态"的窗口时,
         // 顶栏按钮与遮罩都要还原成聆听态(否则按钮说"听视频"、实际播的是音轨)
         if (_isListenMode) ApplyListenMode(true);
+        // 上/下一个视频(2026-11-25): 历史是进程级的, 新窗口一打开就按现有的栈摆好箭头状态
+        // (随后的 LoadVideoAsync 会再记一次账并刷新)。
+        UpdateHistoryButtons();
         // 覆盖层窗口(VideoView 的 ForegroundWindow)这时才建出来 —— 把键盘处理也挂上去,
         // 否则点过一次视频/控制栏之后快捷键就全哑了(见 HookOverlayKeyboard 的说明)
         HookOverlayKeyboard();
@@ -1585,6 +1598,10 @@ public partial class PlayerWindow : FluentWindow
             _ownerMid = detail.OwnerMid;
             _ownerName = detail.Owner;
             UpdateUiFromDetail(detail);
+            // 上/下一个视频(2026-11-25): 详情到手、cid 已确定 ⇒ 这一条**真的打开了**, 记进历史。
+            // ★ 放在这里而不是方法开头: 详情取不到 / 视频已删这些失败分支不该进历史。
+            NoteHistoryOpened(PlayerHistoryEntry.ForVideo(
+                _currentBvid, _currentCid, detail.Title, _bangumi));
             // 标签: 与字幕/相关视频同款, 后台取, 不挡起播(失败静默, 见 LoadVideoTagsAsync)
             _ = LoadVideoTagsAsync(gen, _currentBvid);
             // 合集数据在详情里就已经解析好了(见 ApiClient.GetVideoAsync), 这里零额外请求。

@@ -1333,6 +1333,40 @@
                                    FontSize="14" />
                     </Button>
 
+                    <!-- 上一个 / 下一个视频(2026-11-25, 用户要求: 箭头表示 —— 左 = 上一个, 右 = 下一个;
+                         位置由用户指定: 顶栏「铺满窗口」右边)。
+                         ★ 语义是浏览器式后退/前进(记录见 PlayerHistoryStack): 左箭头回到上一条看过的,
+                           右箭头回到后退之前所在的那条; 没有可去的方向时置灰(不收起, 收起会让后面的
+                           窗口控件横跳)。ToolTip 里带目标标题。真实状态由代码同步(UpdateHistoryButtons)。
+                         ★ 图标画 chevron 而不是实心三角: 视频画面上的播放键就是实心三角, 形状必须拉开。
+                         ★ 描边色绑按钮前景(与隔壁两颗线性图标同款): 全局隐式 TextBlock 样式会吃掉
+                           字体字形的前景色, 用矢量 + Foreground 绑定才在深浅主题下都对。
+                         ★ 顶栏在小窗/全屏时整个收起(见 EnterMiniWindow / ApplyFullscreen), 那时这两颗
+                           箭头自然不可见 —— 快捷键 Alt+←/→ 不受影响。
+                         ★ IsEnabled=False 只是"还没记账"的初值。 -->
+                    <Button x:Name="BtnPrevVideo" Style="{StaticResource BareIconButtonStyle}"
+                            Width="34" Height="34" IsEnabled="False"
+                            ToolTip="上一个视频 (Alt+←)" Click="OnPrevVideoClick"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <!-- 16×16 画布、1.6px 描边、圆头: 与 FloatingIcons 的线性图标同一种观感。
+                             ★ 不写 Stretch —— 几何本身就是 16 画布内的坐标, 拉伸会把描边一起放大。 -->
+                        <Path Width="16" Height="16"
+                              Data="M 10,3.5 L 5.5,8 L 10,12.5"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.6" StrokeLineJoin="Round"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                    </Button>
+                    <Button x:Name="BtnNextVideo" Style="{StaticResource BareIconButtonStyle}"
+                            Width="34" Height="34" IsEnabled="False"
+                            ToolTip="下一个视频 (Alt+→)" Click="OnNextVideoClick"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Path Width="16" Height="16"
+                              Data="M 6,3.5 L 10.5,8 L 6,12.5"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.6" StrokeLineJoin="Round"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                    </Button>
+
                     <!-- 最小化 / 最大化 / 关闭。
                          顶栏底色跟着主题走(浅色主题是浅底), 所以这里用控件的默认色 ——
                          IconBrush 取 TextPrimaryBrush、悬停取 ControlFillHoverBrush, 深浅都对得上。 -->

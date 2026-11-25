@@ -761,6 +761,8 @@ public partial class PlayerWindow : FluentWindow
     ///   收起这两项后约 340 DIP, 常规窄窗仍可用。
     /// ★ 用 VideoAreaRoot 的实际宽度判断而不是窗口宽度: 信息栏一收/一展、
     ///   窗口一拖, 视频列宽度都会变, 这个信号最直接。
+    /// ★ 上/下一个视频的两颗箭头**不归这里管**(2026-11-25 用户指定放在顶栏「铺满窗口」右边),
+    ///   顶栏本来就是另一套布局, 别为了它们动控制栏的阈值。
     /// </summary>
     private const double CompactControlBarWidth = 520;
 
