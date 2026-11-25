@@ -145,7 +145,7 @@ public partial class DynamicDetailView : UserControl
         if (_composerOpen) return;
         _composerOpen = true;
         ++_composerAnimGen;
-        CommentFabIcon.Text = "\uE74A";   // ChevronDown: 收起
+        CommentFabIcon.Text = "\uE70D";   // ChevronDown: 收起
         CommentFab.ToolTip = "收起评论框";
 
         var panel = CommentComposerPanel;
