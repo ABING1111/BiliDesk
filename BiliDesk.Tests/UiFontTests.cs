@@ -69,15 +69,24 @@ public class UiFontTests
     public void BuildSystemSource_拼上中文回退()
     {
         // 纯西文字体下中文仍可读: 回退栈必须跟在用户所选字体之后
-        Assert.Equal("Arial, Microsoft YaHei UI, Microsoft YaHei", UiFont.BuildSystemSource("Arial"));
+        Assert.Equal("Arial, Microsoft YaHei UI, Microsoft YaHei, Tahoma", UiFont.BuildSystemSource("Arial"));
     }
 
     [Fact]
     public void BuildSystemSource_默认栈常量未被改动()
     {
         // 默认字体栈是 FluentWindow 搬过来的单一来源, 改动它等于改全应用默认观感 —— 用测试钉住
-        Assert.Equal("Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI, Microsoft YaHei",
+        Assert.Equal("Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI, Microsoft YaHei, Tahoma",
             UiFont.DefaultSource);
+    }
+
+    [Fact]
+    public void 回退栈必须带文字回退()
+    {
+        // 2026-11-25: WPF 自动回退不覆盖阿拉伯/希伯来等文字, 删掉这层会让字幕弹层再出现空白选项
+        Assert.EndsWith(", " + UiFont.ScriptFallback, UiFont.DefaultSource);
+        Assert.EndsWith(", " + UiFont.ScriptFallback, UiFont.CjkFallback);
+        Assert.EndsWith(", " + UiFont.ScriptFallback, UiFont.BuildSystemSource("Arial"));
     }
 
     // ---------------- SanitizeBaseName: 导入目录名清洗 ----------------

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 
@@ -29,16 +30,36 @@ public sealed class SubtitleTrack
     /// <summary>字幕本体 JSON 的下载地址(已补全 https:)</summary>
     public string Url { get; set; } = "";
 
-    /// <summary>弹层里显示的名字: 优先服务端的 lan_doc, AI 轨追加标注</summary>
+    /// <summary>
+    /// 弹层里显示的名字: 优先服务端的 lan_doc, AI 轨追加标注。
+    /// ★ 名字"看不见"不等于"没有名字"(2026-11-25): 服务端偶尔下发零宽/纯空白的 lan_doc ——
+    ///   在弹层里就是一个空白选项。这里把"没有可见字符"一律当作空, 依次回落 lan, 再不行给一句
+    ///   「未知字幕」; AI 标注只在真有名字时追加, 绝不出现只有「 · AI」的条目。
+    ///   (字体缺字形导致"有宽度、无字形"是另一类, 由 UiFont.ScriptFallback 修。)
+    /// </summary>
     public string DisplayName
     {
         get
         {
-            var baseName = string.IsNullOrWhiteSpace(LanDoc) ? Lan : LanDoc;
-            return IsAi && !baseName.Contains("AI", StringComparison.Ordinal)
-                ? baseName + " · AI"
-                : baseName;
+            var name = HasVisibleText(LanDoc) ? LanDoc.Trim()
+                : HasVisibleText(Lan) ? Lan.Trim()
+                : "未知字幕";
+            return IsAi && !name.Contains("AI", StringComparison.Ordinal)
+                ? name + " · AI"
+                : name;
         }
+    }
+
+    /// <summary>字符串里是否至少有一个可见字符(空白、控制字符、零宽格式字符都不算)。</summary>
+    private static bool HasVisibleText(string s)
+    {
+        foreach (var c in s)
+        {
+            if (char.IsWhiteSpace(c) || char.IsControl(c)) continue;
+            if (CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.Format) continue;
+            return true;
+        }
+        return false;
     }
 }
 

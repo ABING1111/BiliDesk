@@ -36,6 +36,11 @@ namespace BiliDesk.Helpers;
 ///   选系统字体时拼回退栈 "<所选>, Microsoft YaHei UI, Microsoft YaHei": 纯西文字体(如 Arial)
 ///   下中文仍可读。导入字体无法与系统字体拼进同一个 FontFamily(位置 URI 不同), 靠 WPF 的
 ///   逐字形自动回退(GlobalUserInterface 复合字体)兜底 CJK —— 这正是"只写 Segoe UI 也能显示中文"的机制。
+///
+/// ## 文字回退(2026-11-25)
+///   回退栈末尾再拼 <see cref="ScriptFallback"/>(Tahoma): WPF 的自动回退**不覆盖**阿拉伯/希伯来/
+///   波斯/亚美尼亚 —— 不显式写进栈, 这些文字会"有宽度、无字形"(字幕弹层因此出现过空白选项,
+///   详见该常量的说明)。中文/拉丁/日文先命中前面的族, 不受影响。
 /// </summary>
 public static class UiFont
 {
@@ -48,10 +53,25 @@ public static class UiFont
     /// 默认字体栈。★ 原写死在 Views/FluentWindow 构造函数里, 2026-11-14 搬到这里作单一来源 ——
     /// FluentWindow 与设置页「默认」项的预览都引用它, 别在别处再抄一份。
     /// </summary>
-    public const string DefaultSource = "Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI, Microsoft YaHei";
+    public const string DefaultSource =
+        "Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI, Microsoft YaHei, " + ScriptFallback;
 
-    /// <summary>系统字体的中文回退栈(拼在用户所选字体之后, 见类注释"中文回退")</summary>
-    public const string CjkFallback = "Microsoft YaHei UI, Microsoft YaHei";
+    /// <summary>系统字体的中文/文字回退栈(拼在用户所选字体之后, 见类注释"中文回退"/"文字回退")</summary>
+    public const string CjkFallback = "Microsoft YaHei UI, Microsoft YaHei, " + ScriptFallback;
+
+    /// <summary>
+    /// 中英文之外的文字回退(Tahoma), 必须**显式**列进 FontFamily 才生效。
+    /// ★★★ 2026-11-25 修「部分视频字幕面板存在一个空白选项」: B 站给有些视频下发的 lan_doc 是
+    ///   **阿拉伯文**(如「العربية」), 而默认栈里的族都没有这批脚本的字形 —— 更糟的是 WPF 的
+    ///   自动回退(GlobalUserInterface)对阿拉伯/希伯来/波斯/亚美尼亚**不生效**(泰文/韩文/印度系
+    ///   反而能回退), 于是"按正确步进留白、一个字形都不画": 条目只剩后面拼的「 · AI」。
+    ///   实测(12 DIP): 旧栈下「العربية」宽 84.0、着墨 0; 栈末加 Tahoma 后宽 31.5、着墨 114
+    ///   (着墨 = 渲染位图里非背景像素数, 见 .probes/bd-probe-subtitle-rtl)。
+    /// ★ 为什么是 Tahoma: Win10/11 自带, 覆盖阿拉伯/希伯来/亚美尼亚, 且抢不走中文与拉丁
+    ///   (前面的族先命中, 观感不变 —— 实测中文/英文/日文宽度与着墨一字不差)。
+    /// ★ 同一个栈也用于字幕浮层与弹幕(UiFont.Current): RTL 字幕内容同样受益。
+    /// </summary>
+    public const string ScriptFallback = "Tahoma";
 
     /// <summary>存储值的三种形态</summary>
     public enum StoredKind { Default, System, File }

@@ -142,6 +142,30 @@ public class SubtitleParserTests
         Assert.Equal(2, tracks.Count);
     }
 
+    // ------------------------------------------------------------ DisplayName(2026-11-25)
+
+    [Fact]
+    public void 显示名_零宽或空白名_回落到语言代码()
+    {
+        // 服务端偶尔下发零宽/纯空白的 lan_doc: 直接拿去显示就是弹层里的"空白选项"
+        Assert.Equal("ai-ko · AI", new SubtitleTrack { Lan = "ai-ko", LanDoc = "\u200B", IsAi = true }.DisplayName);
+        Assert.Equal("ai-ko · AI", new SubtitleTrack { Lan = "ai-ko", LanDoc = "   ", IsAi = true }.DisplayName);
+    }
+
+    [Fact]
+    public void 显示名_名字与语言代码都不可见_给兜底文案()
+    {
+        Assert.Equal("未知字幕", new SubtitleTrack { Lan = "\u200B", LanDoc = "" }.DisplayName);
+    }
+
+    [Fact]
+    public void 显示名_正常名字_不受加固影响()
+    {
+        Assert.Equal("العربية · AI",
+            new SubtitleTrack { Lan = "ai-ar", LanDoc = "العربية", IsAi = true }.DisplayName);
+        Assert.Equal("中文(简体)", new SubtitleTrack { Lan = "zh-Hans", LanDoc = "中文(简体)" }.DisplayName);
+    }
+
     // ------------------------------------------------------------ ParseBody
 
     private const string BodyJson = """
