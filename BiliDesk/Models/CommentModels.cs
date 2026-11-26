@@ -76,6 +76,12 @@ public class CommentItem : System.ComponentModel.INotifyPropertyChanged
     public bool IsUp { get; set; }
 
     /// <summary>
+    /// 这条评论是否被 UP 主点过赞（接口 <c>up_action.like</c>）。
+    /// 界面在正文和点赞按钮之间挂一行小字"UP 主觉得很赞"。
+    /// </summary>
+    public bool IsUpLiked { get; set; }
+
+    /// <summary>
     /// 这条是不是**置顶评论**(UP 主置顶 / 管理员置顶)。
     ///
     /// ★ 2026-10-03 修"置顶评论不可见": 置顶那条**不在** `data.replies` 里, 而在

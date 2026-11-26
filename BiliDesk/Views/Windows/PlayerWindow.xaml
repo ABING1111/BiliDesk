@@ -858,6 +858,10 @@
                 <ContentControl Content="{Binding}" Margin="0,6,0,0" HorizontalAlignment="Left"
                                 ContentTemplate="{StaticResource CommentPicturesTemplate}"
                                 Visibility="{Binding HasPictures, Converter={StaticResource BoolToVis}}" />
+                <!-- UP 主觉得很赞: 正文/图片之后、操作行之前; 与正文左对齐 -->
+                <TextBlock Text="UP 主觉得很赞" FontSize="12" Margin="0,4,0,0"
+                           Foreground="{DynamicResource AccentTextBrush}"
+                           Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
                 <!-- 评论操作行(赞 / 踩 / 回复): 统一走 CommentActionBarTemplate, 别在这里另写一份 -->
                 <ContentControl Content="{Binding}" HorizontalAlignment="Left" Margin="0,4,0,0"
                                 ContentTemplate="{StaticResource CommentActionBarTemplate}" />
@@ -3241,6 +3245,9 @@
                                                                 <ContentControl Content="{Binding}" Margin="0,6,0,0" HorizontalAlignment="Left"
                                                                                 ContentTemplate="{StaticResource CommentPicturesTemplate}"
                                                                                 Visibility="{Binding HasPictures, Converter={StaticResource BoolToVis}}" />
+                                                                <TextBlock Text="UP 主觉得很赞" FontSize="12" Margin="0,3,0,0"
+                                                                           Foreground="{DynamicResource AccentTextBrush}"
+                                                                           Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
                                                                 <ContentControl Content="{Binding}"
                                                                                 HorizontalAlignment="Left" Margin="0,6,0,0"
                                                                                 ContentTemplate="{StaticResource CommentActionBarTemplate}" />
@@ -3308,6 +3315,9 @@
                                                                     <ContentControl Content="{Binding}" Margin="0,4,0,0" HorizontalAlignment="Left"
                                                                                     ContentTemplate="{StaticResource CommentPicturesTemplate}"
                                                                                     Visibility="{Binding HasPictures, Converter={StaticResource BoolToVis}}" />
+                                                                    <TextBlock Text="UP 主觉得很赞" FontSize="12" Margin="0,2,0,0"
+                                                                               Foreground="{DynamicResource AccentTextBrush}"
+                                                                               Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
                                                                     <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
                                                                         <ContentControl Content="{Binding}"
                                                                                         ContentTemplate="{StaticResource CommentActionBarTemplate}" />

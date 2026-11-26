@@ -234,6 +234,16 @@ public partial class ApiClient
         // UP 标: 评论者就是本稿件 UP 主本人
         item.IsUp = upperMid > 0 && item.Mid == upperMid;
 
+        // UP 主觉得很赞: up_action.like。接口正常下发 bool，也兼容 0/1 数字。
+        if (e.TryGetProperty("up_action", out var upAction) &&
+            upAction.ValueKind == JsonValueKind.Object &&
+            upAction.TryGetProperty("like", out var upLiked))
+        {
+            item.IsUpLiked = upLiked.ValueKind == JsonValueKind.True ||
+                (upLiked.ValueKind == JsonValueKind.Number &&
+                 upLiked.TryGetInt32(out var upLikeNum) && upLikeNum != 0);
+        }
+
         // IP 属地。接口给的是 `reply_control.location`, 形如 "IP属地：上海";
         // 它**本来就是带前缀的展示串**, 所以直接取用、不再自己拼"IP属地"。
         // 值可能缺失(老接口 / 用户设置里关了展示), 缺了就不显示。
