@@ -1499,6 +1499,10 @@ public partial class PlayerWindow : FluentWindow
             var media = new Media(_libVLC, path, FromType.FromPath);
             if (_closing) { media.Dispose(); return; }
             _lastPlayUrl = path;
+            // 本地缓存可能由下载器写入了 chpl 章节: 直接读文件, 不请求接口。
+            // 老缓存没有章节时返回 false, _chapters 保持空, 行为与以前一致。
+            if (Mp4ChapterReader.TryRead(path, out var localChapters, out _))
+                ApplyChapters(localChapters);
             // 本地文件是单文件源, seek 一次到位(与 durl 合流单流同性质)
             _isReliableSeekSource = true;
             PlayMedia(media);

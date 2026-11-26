@@ -131,6 +131,8 @@ public static class VideoDownloader
             }
 
             // 全部写完才改成正式名字(保证"看得见的文件一定是完整的")
+            // ★ 章节必须在改名之前写入: 失败只影响章节, 不影响已经下载好的媒体。
+            await TryAttachChaptersAsync(req, part);
             if (File.Exists(path)) File.Delete(path);
             File.Move(part, path);
 
@@ -151,6 +153,32 @@ public static class VideoDownloader
             TryDelete(part);
             Svc.Toast.Show("下载失败: " + ex.Message);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// 下载完成后把 B 站章节写进 MP4 的 `moov/udta/chpl`。
+    ///
+    /// ★ 章节只是增强: 接口失败/视频本来没有章节/写入失败都不影响下载结果,
+    ///   所以这里全部静默处理, 只记诊断日志。
+    /// </summary>
+    private static async Task TryAttachChaptersAsync(VideoDownloadRequest req, string part)
+    {
+        if (req.Cid <= 0 || string.IsNullOrEmpty(req.Bvid) || !File.Exists(part)) return;
+        try
+        {
+            var (ok, _, _, _, chapters) = await Svc.Api.GetPlayerInfoAsync(req.Bvid, req.Cid);
+            if (!ok || chapters == null || chapters.Count < 2) return;
+
+            if (Mp4ChapterWriter.TryAdd(part, chapters, out var err))
+                System.Diagnostics.Debug.WriteLine(
+                    $"[Download] 章节已写入 {chapters.Count} 条 bvid={req.Bvid} cid={req.Cid}\n");
+            else if (!string.IsNullOrEmpty(err))
+                System.Diagnostics.Debug.WriteLine($"[Download] 章节写入失败: {err}\n");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[Download] 获取/写入章节异常: {ex.Message}\n");
         }
     }
 
