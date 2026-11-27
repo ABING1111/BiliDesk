@@ -23,39 +23,64 @@
                 Background="{DynamicResource ControlFillDefaultBrush}"
                 BorderBrush="Transparent" BorderThickness="1" />
 
-        <!-- 放大镜: 纯装饰, 不参与命中测试 -->
+        <!-- 放大镜: 纯装饰, 不参与命中测试。
+             收起态水平居中(圆里), 展开时由 code-behind 切到左端(输入框图标位)。 -->
         <TextBlock x:Name="SearchGlyph" Text="&#xE721;"
                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                    FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Left"
                    Margin="12,0,0,0" IsHitTestVisible="False"
                    Foreground="{DynamicResource TextTertiaryBrush}" />
 
-        <TextBox x:Name="Box"
-                 Background="Transparent" BorderThickness="0"
-                 Foreground="{DynamicResource TextPrimaryBrush}"
-                 CaretBrush="{DynamicResource TextPrimaryBrush}"
-                 SelectionBrush="{DynamicResource AccentBrush}"
-                 FontSize="12.5" Padding="34,0,28,0"
-                 VerticalContentAlignment="Center"
-                 FocusVisualStyle="{x:Null}"
-                 TextChanged="OnTextChanged"
-                 KeyDown="OnBoxKeyDown"
-                 GotKeyboardFocus="OnBoxFocusChanged"
-                 LostKeyboardFocus="OnBoxFocusChanged"
-                 Text="{Binding Text, RelativeSource={RelativeSource AncestorType=UserControl}, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+        <!-- 展开后的输入区。收起时整块隐藏, 只剩底衬圆 + 放大镜。 -->
+        <Grid x:Name="ContentHost">
+            <TextBox x:Name="Box"
+                     Background="Transparent" BorderThickness="0"
+                     Foreground="{DynamicResource TextPrimaryBrush}"
+                     CaretBrush="{DynamicResource TextPrimaryBrush}"
+                     SelectionBrush="{DynamicResource AccentBrush}"
+                     FontSize="12.5" Padding="34,0,28,0"
+                     VerticalContentAlignment="Center"
+                     FocusVisualStyle="{x:Null}"
+                     TextChanged="OnTextChanged"
+                     KeyDown="OnBoxKeyDown"
+                     GotKeyboardFocus="OnBoxFocusChanged"
+                     LostKeyboardFocus="OnBoxFocusChanged"
+                     Text="{Binding Text, RelativeSource={RelativeSource AncestorType=UserControl}, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-        <TextBlock x:Name="Placeholder" Text="搜索"
-                   FontSize="12.5" VerticalAlignment="Center"
-                   Margin="34,0,28,0" IsHitTestVisible="False"
-                   Foreground="{DynamicResource TextTertiaryBrush}" />
+            <TextBlock x:Name="Placeholder" Text="搜索"
+                       FontSize="12.5" VerticalAlignment="Center"
+                       Margin="34,0,28,0" IsHitTestVisible="False"
+                       Foreground="{DynamicResource TextTertiaryBrush}" />
 
-        <Button x:Name="ClearButton" Content="&#xE711;"
-                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                FontSize="10" Width="24" Height="24" Padding="0"
-                HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0"
-                Style="{StaticResource BareIconButtonStyle}"
-                Foreground="{DynamicResource TextTertiaryBrush}"
-                ToolTip="清除搜索" Click="OnClearClick"
-                Visibility="Collapsed" />
+            <Button x:Name="ClearButton" Content="&#xE711;"
+                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                    FontSize="10" Width="24" Height="24" Padding="0"
+                    HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0"
+                    Style="{StaticResource BareIconButtonStyle}"
+                    Foreground="{DynamicResource TextTertiaryBrush}"
+                    ToolTip="清除搜索" Click="OnClearClick"
+                    Visibility="Collapsed" />
+        </Grid>
+
+        <!-- 收起态的点击区(仅 Collapsible=true 时启用): 透明按钮盖住整个圆,
+             展开后让位给输入框。悬停底用**圆形**(CornerRadius=17), 与输入框同高。 -->
+        <Button x:Name="OpenButton" Padding="0"
+                HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                Cursor="Hand" FocusVisualStyle="{x:Null}"
+                ToolTip="{Binding PlaceholderText, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                Click="OnOpenClick"
+                Visibility="Collapsed">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" CornerRadius="17" Background="Transparent" />
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background"
+                                    Value="{DynamicResource ControlFillHoverBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
     </Grid>
 </UserControl>
