@@ -15,11 +15,7 @@
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white&style=flat-square)](#-从源码构建)
 [![License](https://img.shields.io/github/license/ABING1111/BiliDesk?style=flat-square)](LICENSE)
 
-[下载](https://github.com/ABING1111/BiliDesk/releases/latest) · [功能特性](#-功能特性) · [快捷键](#-快捷键) · [从源码构建](#-从源码构建)
-
-<br>
-
-<img width="100%" alt="BiliDesk 首页" src="docs/screenshot-home-rounded.png">
+[下载](https://github.com/ABING1111/BiliDesk/releases/latest) · [功能特性](#-功能特性) · [软件预览](#-软件预览) · [快捷键](#-快捷键) · [从源码构建](#-从源码构建)
 
 </div>
 
@@ -64,6 +60,43 @@
 - 快捷键可自定义：设置 → 快捷键，可改绑播放器按键与 F5 刷新，支持清空、冲突检测与一键恢复默认
 - 亚克力 / 云母窗口材质
 - 托盘常驻，自动检查更新
+
+## 📸 软件预览
+
+<table>
+  <tr>
+    <td width="50%"><img width="100%" src="docs/preview-search.png" alt="搜索结果"></td>
+    <td width="50%"><img width="100%" src="docs/preview-category.png" alt="分区浏览"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>搜索结果</b><br>视频 / 直播间 / 番剧 / UP主</td>
+    <td align="center"><b>分区浏览</b><br>全部分区浮层导航</td>
+  </tr>
+  <tr>
+    <td width="50%"><img width="100%" src="docs/preview-dynamic.png" alt="动态"></td>
+    <td width="50%"><img width="100%" src="docs/preview-settings.png" alt="应用设置"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>动态</b><br>关注 UP 动态流</td>
+    <td align="center"><b>应用设置</b><br>主题 / 字体 / 快捷键</td>
+  </tr>
+  <tr>
+    <td width="50%"><img width="100%" src="docs/preview-player.png" alt="播放器"></td>
+    <td width="50%"><img width="100%" src="docs/preview-live.png" alt="直播间"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>播放器</b><br>弹幕 / 清晰度 / 相关信息</td>
+    <td align="center"><b>直播间</b><br>实时弹幕 / 主播信息 / 清晰度</td>
+  </tr>
+  <tr>
+    <td width="50%"><img width="100%" src="docs/preview-home.png" alt="首页推荐"></td>
+    <td width="50%"><img width="100%" src="docs/preview-dark.png" alt="深色模式"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>首页推荐</b><br>排行榜 / 热门 / 直播 / 追番</td>
+    <td align="center"><b>深色模式</b><br>亮色 / 暗色 / 跟随系统</td>
+  </tr>
+</table>
 
 ## ⌨️ 快捷键
 
