@@ -902,10 +902,12 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <!-- 底部提示行: 明确"这里能点", 顺便给出真实回复总数 -->
+                        <!-- 底部提示行: 明确"这里能点", 顺便给出真实回复总数
+                             ★ 预览已列全全部回复时这行会收起来(见 ReplyBoxText) -->
                         <TextBlock Text="{Binding ReplyBoxText}" FontSize="11" Margin="0,1,0,0"
                                    FontWeight="SemiBold"
-                                   Foreground="{DynamicResource AccentTextBrush}" />
+                                   Foreground="{DynamicResource AccentTextBrush}"
+                                   Visibility="{Binding ReplyBoxText, Converter={StaticResource StrToVis}}" />
                     </StackPanel>
                 </Border>
         </StackPanel>

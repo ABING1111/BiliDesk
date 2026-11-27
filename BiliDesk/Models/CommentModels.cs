@@ -285,8 +285,10 @@ public class CommentItem : System.ComponentModel.INotifyPropertyChanged
 
     // ------------------------------------------------------------ 楼中楼预览方框
 
-    /// <summary>方框底部那行提示文字(点整框进详情页)</summary>
-    public string ReplyBoxText => ReplyCount > 0 ? $"共 {ReplyCount} 条回复" : "";
+    /// <summary>方框底部那行提示文字(点整框进详情页)。
+    /// ★ 2026-11-28: 预览框已经把全部回复都列出来时, 不再显示"共 N 条回复" ——
+    ///   条数就摆在眼前, 再报一遍纯属重复; 只有还有没显示的回复时才需要提示总数。</summary>
+    public string ReplyBoxText => ReplyCount > PreviewReplies.Count ? $"共 {ReplyCount} 条回复" : "";
 
     /// <summary>
     /// 方框/详情页里一条回复的**前缀**(用户名那一截)。
@@ -368,6 +370,8 @@ public class CommentItem : System.ComponentModel.INotifyPropertyChanged
     {
         PreviewReplies.Clear();
         foreach (var r in Replies.Take(max)) PreviewReplies.Add(r);
+        // 预览条数变了 → "共 N 条回复"的显示条件也跟着变(全部已显示时要收起来)
+        Raise(nameof(ReplyBoxText));
     }
 
     /// <summary>

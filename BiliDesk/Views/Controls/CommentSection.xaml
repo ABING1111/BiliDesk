@@ -219,7 +219,8 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
                                 <TextBlock Text="{Binding ReplyBoxText}" FontSize="11" Margin="0,3,0,0"
-                                           Foreground="{DynamicResource AccentTextBrush}" />
+                                           Foreground="{DynamicResource AccentTextBrush}"
+                                           Visibility="{Binding ReplyBoxText, Converter={StaticResource StrToVis}}" />
                             </StackPanel>
                         </Border>
                     </StackPanel>

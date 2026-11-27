@@ -45,4 +45,24 @@ public class CommentItemTests
         Assert.Equal(3, root.Replies.Count);
         Assert.Equal(2, root.RepliesNextPage);
     }
+
+    [Fact]
+    public void 预览已显示全部回复时不显示总条数()
+    {
+        var root = new CommentItem { Rpid = 1, ReplyCount = 3 };
+        for (var i = 1; i <= 3; i++) root.Replies.Add(Reply(i));
+        root.SyncPreviewReplies();
+
+        Assert.Equal("", root.ReplyBoxText);
+    }
+
+    [Fact]
+    public void 预览没显示全部回复时仍显示总条数()
+    {
+        var root = new CommentItem { Rpid = 1, ReplyCount = 5 };
+        for (var i = 1; i <= 3; i++) root.Replies.Add(Reply(i));
+        root.SyncPreviewReplies();
+
+        Assert.Equal("共 5 条回复", root.ReplyBoxText);
+    }
 }
