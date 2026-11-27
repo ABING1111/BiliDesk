@@ -13,27 +13,37 @@
 
     <vw:FluentWindow.Resources>
         <!--
-            图片左右切换按钮(浮在图片两侧的半透明圆钮)。
+            图片左右切换按钮(浮在图片两侧的圆钮)。
 
             ★ 为什么不直接用 IconButtonStyle: 那个样式常态是 4% 浅灰(给纯色页面底用的),
               浮在照片上等于没有底 —— 浅色照片里箭头会糊进画面, 与 HistoryPage/FavoritesPage
-              里"浮在封面上"那批按钮是同一个坑。这里三种状态都给**半透明黑底**,
+              里"浮在封面上"那批按钮是同一个坑。这里三种状态都是**不透明深灰底**,
               在任意亮度的照片上都读得出来。
 
-            ★ ContentPresenter.Resources 里那段同名隐式 TextBlock 样式**必须带着**:
-              全局隐式 TextBlock 样式里有 Foreground, 优先级压过这里继承下去的
-              FontFamily/Foreground, 结果是 E76B/E76C 这两个私用区字形**一个字都画不出来**
-              (与 Styles.xaml 里 IconButtonStyle 那段长注释同因)。
+            ★★★ 2026-11-28 用户要求"调大箭头 + 修黑色背景下箭头不明显":
+              旧版是 40×40 圆钮 + 45% 半透明黑底(#73000000) + 14px 的 Segoe 字形 E76B/E76C。
+              两个毛病叠在一起:
+                1) 45% 黑压在本窗口的纯黑画面区(#0E0E0E)上等于没有底, 圆钮整个消失,
+                   只剩一根又细又小的浅灰箭头漂在那儿 —— 这就是"黑底时箭头不明显";
+                2) Segoe 的 chevron 笔画本身就细, 14px 下更像一道划痕;
+                   而且字形墨迹在 em 框里偏左上, 居中居的是行框不是墨迹(见 MEMORY 同名一节)。
+              改法: 56×56 圆钮 + **不透明**深灰底 + 1px 浅色描边(黑底上靠这条边把圆钮"框"出来)
+                    + 矢量箭头(ChevronLeft/RightIconGeometry, 墨迹严格对称于画布中心)。
+              别再把底色改回半透明: 那条边和这层不透明底就是黑底可见性的唯一来源。
+
+            ★ 投影挂在**独立的空 ShadowBd** 上, 不挂在装箭头的 Bd 上: Effect 会把整棵子树
+              栅格化再往上画, 挂在 Bd 上箭头会发糊(FloatingIconButtonStyle 里踩过的同一个坑)。
         -->
         <Style x:Key="PreviewNavButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="40" />
-            <Setter Property="Height" Value="40" />
-            <Setter Property="Background" Value="#73000000" />
-            <Setter Property="Foreground" Value="#F0F0F0" />
-            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Width" Value="56" />
+            <Setter Property="Height" Value="56" />
+            <!-- 深灰 #D6 而不是纯黑: 压在纯黑照片上还能看出"这里有一颗按钮" -->
+            <Setter Property="Background" Value="#D61C1C1C" />
+            <!-- 黑底可见性靠这一圈浅色描边; 亮照片上则靠底色+投影 -->
+            <Setter Property="BorderBrush" Value="#40FFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="#F2F2F2" />
             <Setter Property="Padding" Value="0" />
-            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
-            <Setter Property="FontSize" Value="14" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <!-- 不抢键盘焦点: 点完箭头后 ←→ 仍要能被窗口的 OnKey 收到(而不是被按钮当成焦点导航) -->
@@ -43,27 +53,35 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="20">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
-                                              TextElement.Foreground="{TemplateBinding Foreground}">
-                                <ContentPresenter.Resources>
-                                    <Style TargetType="TextBlock" BasedOn="{x:Null}">
-                                        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
-                                    </Style>
-                                </ContentPresenter.Resources>
-                            </ContentPresenter>
-                        </Border>
+                        <Grid>
+                            <!-- 投影层: 空底 + 柔和影子, 只负责让圆钮从亮照片上"浮起来" -->
+                            <Border x:Name="ShadowBd" Background="{TemplateBinding Background}"
+                                    CornerRadius="28">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="12" ShadowDepth="2" Direction="270"
+                                                      Opacity="0.45" Color="Black" />
+                                </Border.Effect>
+                            </Border>
+                            <!-- 内容层: 透明底, 悬停/按下底色打在它身上(ShadowBd 被盖住, 只出影子) -->
+                            <Border x:Name="Bd" Background="Transparent" CornerRadius="28"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}">
+                                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                            </Border>
+                        </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#8C000000" />
+                                <Setter TargetName="Bd" Property="Background" Value="#F02A2A2A" />
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#66FFFFFF" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#A6000000" />
+                                <Setter TargetName="Bd" Property="Background" Value="#FF383838" />
                             </Trigger>
-                            <!-- 首/尾禁用态: 淡出即可, 位置留着(否则箭头会跳一格) -->
+                            <!-- 首/尾禁用态: 淡出即可, 位置留着(否则箭头会跳一格)。
+                                 0.32 而不是原来的 0.3: 大号箭头淡下去之后仍要能看出"到头了"。 -->
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.3" />
+                                <Setter Property="Opacity" Value="0.32" />
                                 <Setter Property="Cursor" Value="Arrow" />
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -119,17 +137,38 @@
 
                 <!-- 左右切换: 只在**多图**时出现(单图由 UpdateNavState 收成 Collapsed)。
                      ★ 压在图片上层(Panel.ZIndex), 不然会被 Image 挡住点不到;
-                       不循环 —— 首张禁用"上一张", 末张禁用"下一张", 位置固定不跳动。 -->
+                       不循环 —— 首张禁用"上一张", 末张禁用"下一张", 位置固定不跳动。
+                     ★ 箭头用矢量(不是 Segoe 字形 E76B/E76C): 字形在 em 框里偏左上、
+                       且笔画偏细, 放大后更明显 —— 见 PreviewNavButtonStyle 上方注释。
+                       写法与 MainWindow 动态详情的关闭按钮一致: Viewbox 30 包 20×20 的画布。 -->
                 <Button x:Name="PrevButton" Style="{StaticResource PreviewNavButtonStyle}"
-                        Content="&#xE76B;" Panel.ZIndex="1"
+                        Panel.ZIndex="1"
                         HorizontalAlignment="Left" VerticalAlignment="Center"
-                        Margin="14,0,0,0" Visibility="Collapsed"
-                        Click="OnPrevClick" ToolTip="上一张 (←)" />
+                        Margin="16,0,0,0" Visibility="Collapsed"
+                        Click="OnPrevClick" ToolTip="上一张 (←)">
+                    <Viewbox Width="30" Height="30" Stretch="Uniform">
+                        <Path Data="{StaticResource ChevronLeftIconGeometry}"
+                              Width="20" Height="20" Stretch="None"
+                              StrokeThickness="1.6"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </Viewbox>
+                </Button>
                 <Button x:Name="NextButton" Style="{StaticResource PreviewNavButtonStyle}"
-                        Content="&#xE76C;" Panel.ZIndex="1"
+                        Panel.ZIndex="1"
                         HorizontalAlignment="Right" VerticalAlignment="Center"
-                        Margin="0,0,14,0" Visibility="Collapsed"
-                        Click="OnNextClick" ToolTip="下一张 (→)" />
+                        Margin="0,0,16,0" Visibility="Collapsed"
+                        Click="OnNextClick" ToolTip="下一张 (→)">
+                    <Viewbox Width="30" Height="30" Stretch="Uniform">
+                        <Path Data="{StaticResource ChevronRightIconGeometry}"
+                              Width="20" Height="20" Stretch="None"
+                              StrokeThickness="1.6"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </Viewbox>
+                </Button>
             </Grid>
 
             <!-- 底部工具条 -->
