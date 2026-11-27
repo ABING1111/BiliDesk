@@ -10,37 +10,21 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 返回 + 标题 + 操作。
-             这一页不在左侧导航栏上(入口在首页右上角工具列), 所以必须自带一个明确的返回入口。 -->
-        <!--
-                    右上角的窗口按钮(最小化/最大化/关闭)浮在内容区之上、占 y=4~36。
-                    头部因此撑到 62 高: 标题贴顶(和左侧 logo 同一水平线), 右侧操作按钮
-                    贴底 —— 它们的顶边落在 44, 正好让开窗口按钮, 谁也不压谁。
-                -->
-        <Grid Grid.Row="0" Margin="36,20,36,0" MinHeight="62">
-            <!-- VerticalAlignment="Top" 不能省(和消息页同一个坑): 这一行被 MinHeight=62 撑高,
+        <!-- 返回 + 标题 + 摘要。
+             这一页不在左侧导航栏上(入口在「我的」页), 所以必须自带一个明确的返回入口;
+             2026-11-27 起返回/刷新/打开文件夹都收进**右下角浮动工具列**, 头部只留标题。
+             (操作按钮搬走后头部不再需要为躲开窗口按钮而撑到 62 高, 收到 40。) -->
+        <Grid Grid.Row="0" Margin="36,20,36,0" MinHeight="40">
+            <!-- VerticalAlignment="Top" 不能省(和消息页同一个坑): 这一行被 MinHeight 撑高,
                  若让它拉伸, 标题与后面那句"摘要"小字(VerticalAlignment=Bottom)会被拉开 30 多像素。 -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
-                <!-- 旧的左上角"返回首页"按钮已删(2026-09-26): 返回入口统一收在右上角刷新左边 -->
+                <!-- 旧的左上角"返回首页"按钮已删(2026-09-26): 返回入口统一收在右下角工具列 -->
                 <TextBlock Text="&#xE896;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                            FontSize="20" VerticalAlignment="Center"
                            Foreground="{DynamicResource AccentTextBrush}" />
                 <TextBlock Text="离线缓存" Style="{StaticResource PageTitleStyle}" Margin="10,0,0,0" />
                 <TextBlock Text="{Binding Summary}" VerticalAlignment="Bottom" Margin="6,0,0,6"
                            Foreground="{DynamicResource TextTertiaryBrush}" FontSize="14" />
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
-                <Button Content="打开文件夹" Style="{StaticResource SubtleButtonStyle}"
-                        Command="{Binding OpenFolderCommand}" Padding="14,6" FontSize="12" />
-                <!-- 返回「我的」页(2026-09-26): 历史/收藏/缓存的入口都在「我的」页, 统一给一条回去的路 -->
-                <Button Style="{StaticResource IconButtonStyle}" Margin="8,0,0,0"
-                        Click="OnBackToMineClick" ToolTip="返回「我的」">
-                    <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-                </Button>
-                <Button Style="{StaticResource IconButtonStyle}" Margin="8,0,0,0"
-                        Command="{Binding RefreshCommand}" ToolTip="刷新（F5）">
-                    <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
-                </Button>
             </StackPanel>
         </Grid>
 
@@ -75,9 +59,10 @@
                  挂在 ScrollViewer 上会把滚动条一起往里推(这里是 36px), 于是各页滚动条
                  有的贴窗口右缘、有的内缩 —— 就是用户报的"长度不一"。
                  按全应用约定: 滚动条贴滚动区右缘, 留白一律交给内容。 -->
-            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,4,0,0"
+            <ScrollViewer x:Name="PageScroll" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0"
+                          ScrollChanged="OnScrollChanged"
                           Visibility="{Binding Error, Converter={StaticResource InvStrToVis}}">
-                <StackPanel Margin="36,0,36,24">
+                <StackPanel Margin="36,0,36,220">
                     <!-- 空状态: 没有任何缓存文件时才显示 -->
                     <StackPanel Margin="0,40,0,0" HorizontalAlignment="Center"
                                 Visibility="{Binding ShowEmpty, Converter={StaticResource BoolToVis}}">
@@ -159,5 +144,43 @@
                 </StackPanel>
             </ScrollViewer>
         </Grid>
+
+        <!-- ============ 右下角浮动工具列(2026-11-27) ============
+             用户要求"订阅和下载界面右上角的按钮做进右下角的工具列"。
+             与历史/收藏/稍后再看/首页同一套: FloatingIconButtonStyle 三种状态都不透明,
+             浮在列表上不会糊进底色; 外面不加底板, 投影在样式模板里。
+             ★ Panel.ZIndex 浮在内容之上、不占独立列 —— 占列会把滚动条挤到按钮左边。
+               右边留 16 正好避让滚动条; 列表底部留了 220px(播放页入口也亮着时 4 颗按钮
+               约占 214px), 最后一行不会被压住。 -->
+        <StackPanel x:Name="ToolBar" Grid.Row="0" Grid.RowSpan="3" Panel.ZIndex="20"
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="0,0,16,20">
+
+            <!-- 播放页快捷入口: 放在最上面, 出现/收起不会推动下面按钮 -->
+            <controls:PlayerFab Margin="0,0,0,6" />
+
+            <!-- 顶部 = 刷新 / 下滑 = 回到顶部(见 OnTopRefreshClick) -->
+            <controls:TopRefreshButton x:Name="BtnTopRefresh" Click="OnTopRefreshClick" />
+
+            <!-- 打开下载目录(原右上角的"打开文件夹") -->
+            <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
+                    Command="{Binding OpenFolderCommand}" ToolTip="打开文件夹">
+                <Path Data="{StaticResource FolderIconGeometry}"
+                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                      StrokeThickness="1.6" StrokeLineJoin="Round"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                      Width="18" Height="18" Stretch="Uniform" />
+            </Button>
+
+            <!-- 返回「我的」页: 历史/收藏/缓存的入口都在「我的」页, 统一给一条回去的路 -->
+            <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
+                    Click="OnBackToMineClick" ToolTip="返回「我的」">
+                <Path Data="{StaticResource BackIconGeometry}"
+                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                      StrokeThickness="1.6" StrokeLineJoin="Round"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                      Width="18" Height="18" Stretch="Uniform" />
+            </Button>
+        </StackPanel>
     </Grid>
 </UserControl>

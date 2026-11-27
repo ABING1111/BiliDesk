@@ -401,6 +401,14 @@ public partial class MainWindow : FluentWindow
 
         EmbeddedTitle.Text = title;
         EmbeddedContent.Content = page;
+
+        // 番剧详情页的返回按钮放右上角(2026-11-27 用户要求): 标题仍在左, 返回贴右。
+        // 其它内嵌页(UP 主主页 / 合集详情)保持"返回在左、标题紧随其后"的原样。
+        // 按页面类型判断而不是按"谁调用了 ShowEmbeddedPage": 返回栈回弹的上一页也要还原同样的位置。
+        var backOnRight = page is BangumiPage;
+        DockPanel.SetDock(EmbeddedBackButton, backOnRight ? Dock.Right : Dock.Left);
+        EmbeddedTitle.Margin = backOnRight ? new Thickness(0) : new Thickness(14, 0, 0, 0);
+
         // 页面层整体藏起来(显示中的那一页保持原状, 收起内嵌页后立刻还原, 不必重新布局)
         PageLayer.Visibility = Visibility.Collapsed;
         EmbeddedHost.Visibility = Visibility.Visible;

@@ -44,6 +44,11 @@ public partial class SubscriptionPage : UserControl, IRefreshable
         DataContextChanged += (_, e) => AttachVm(e.NewValue as SubscriptionViewModel);
         Loaded += OnLoaded;
         Unloaded += (_, _) => AttachVm(null);
+        // 页面常驻 PageLayer、切回来时不一定再发 ScrollChanged —— 按当前滚动区补一次工具列状态
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) BtnTopRefresh.UpdateForOffset(CurrentScroll);
+        };
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -127,6 +132,8 @@ public partial class SubscriptionPage : UserControl, IRefreshable
         _collectionAutoFills = 0;
         await Vm.SwitchTabAsync(tab);
         if (tab == SubscriptionTab.Collections) RequestCollectionAutoFill();
+        // 换 tab = 换 ScrollViewer, 工具列的二合一按钮按新滚动区的偏移重置
+        BtnTopRefresh.UpdateForOffset(CurrentScroll);
     }
 
     // ------------------------------------------------------------ 滚动 / 加载
@@ -140,9 +147,28 @@ public partial class SubscriptionPage : UserControl, IRefreshable
 
     private void OnScrollToTop() => CurrentScroll?.ScrollToTop();
 
+    /// <summary>追番 / 追剧列表滚动: 只用来更新工具列的「刷新 ⇄ 回到顶部」状态。</summary>
+    private void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (sender is ScrollViewer sv) BtnTopRefresh.UpdateForOffset(sv);
+    }
+
+    /// <summary>工具列二合一按钮: 顶部 = 刷新当前 tab, 下滑 = 回到顶部。</summary>
+    private void OnTopRefreshClick(object sender, RoutedEventArgs e)
+    {
+        if (BtnTopRefresh.ShowsBackToTop)
+        {
+            CurrentScroll?.ScrollToTop();
+            return;
+        }
+
+        Refresh();
+    }
+
     /// <summary>合集 tab 滚到底追加下一页; 内容不足一屏时主动补。</summary>
     private void OnCollectionsScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        if (sender is ScrollViewer scrollViewer) BtnTopRefresh.UpdateForOffset(scrollViewer);
         if (!IsLoaded || Vm == null || !Vm.IsCollectionsTab) return;
 
         // 缩放/分帧填充会连续发 ScrollChanged, 这一拍的高度不是稳定版式, 先跳过

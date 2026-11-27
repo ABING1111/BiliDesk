@@ -81,6 +81,10 @@ public partial class App : Application
             if (args.ExceptionObject is Exception ex) ReportError(ex);
         };
 
+        // 悬停提示默认要等 1000ms(系统 MouseHoverTime), 用户要求"出现得快一点"(2026-11-27)。
+        // 放在建窗口之前: 全局默认值一改, 之后创建的每一个 ToolTip 都按新延时走。
+        ToolTipTiming.Apply();
+
         // ★★★ 探针/测试宿主: 只提供 App.xaml 资源, 不跑真实启动流程。
         //   2026-11-17 修"agent 一执行任务就弹『找不到资源 assets/app.png』":
         //   探针在自己的 EXE 里 new App(), 入口程序集不是 BiliDesk —— 上面的兜底只记日志,

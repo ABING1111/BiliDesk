@@ -18,6 +18,11 @@ public partial class CachePage : UserControl
     {
         InitializeComponent();
         Loaded += OnLoaded;
+        // 页面常驻 PageLayer、切回来时不一定再发 ScrollChanged —— 按当前偏移补一次工具列状态
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) BtnTopRefresh.UpdateForOffset(PageScroll);
+        };
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -28,7 +33,24 @@ public partial class CachePage : UserControl
         await Vm.LoadAsync();
     }
 
-    /// <summary>右上角返回按钮: 历史/收藏/缓存的入口都在「我的」页, 统一回那里(旧的"返回首页"按钮已删)</summary>
+    /// <summary>工具列二合一按钮: 顶部 = 重新扫描缓存目录, 下滑 = 回到顶部。</summary>
+    private void OnTopRefreshClick(object sender, RoutedEventArgs e)
+    {
+        if (BtnTopRefresh.ShowsBackToTop)
+        {
+            PageScroll.ScrollToTop();
+            return;
+        }
+
+        if (Vm?.RefreshCommand.CanExecute(null) == true) Vm.RefreshCommand.Execute(null);
+    }
+
+    private void OnScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (sender is ScrollViewer sv) BtnTopRefresh.UpdateForOffset(sv);
+    }
+
+    /// <summary>右下角工具列的返回按钮: 历史/收藏/缓存的入口都在「我的」页, 统一回那里</summary>
     private void OnBackToMineClick(object sender, RoutedEventArgs e)
         => App.MainVm.Navigate(PageKey.Mine);
 

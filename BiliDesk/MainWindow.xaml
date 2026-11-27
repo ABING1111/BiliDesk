@@ -327,11 +327,17 @@
 
                 <!-- 顶部内边距 44: 内嵌页盖在内容区上、也从窗口最上沿开始,
                      返回按钮要落到右上角窗口按钮(y=4~36)的下方, 否则和它们叠在一起 -->
+                <!--
+                    DockPanel 而不是 StackPanel: 返回按钮的停靠边由代码按页面类型切换 ——
+                    番剧详情把返回放右上角(2026-11-27 用户要求), 其它内嵌页(UP 主主页 / 合集详情)
+                    仍在左上角。LastChildFill 让标题占住剩余宽度, 两种停靠边下标题都在左侧。
+                -->
                 <Border Grid.Row="0" Padding="36,44,36,14"
                         Background="{DynamicResource AppBackgroundBrush}"
                         BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1">
-                    <StackPanel Orientation="Horizontal">
-                        <Button Style="{StaticResource SubtleButtonStyle}" Click="OnEmbeddedBackClick"
+                    <DockPanel LastChildFill="True">
+                        <Button x:Name="EmbeddedBackButton" DockPanel.Dock="Left"
+                                Style="{StaticResource SubtleButtonStyle}" Click="OnEmbeddedBackClick"
                                 Padding="10,6" FontSize="13" VerticalAlignment="Center" ToolTip="返回上一页">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -342,7 +348,7 @@
                         <TextBlock x:Name="EmbeddedTitle" Margin="14,0,0,0" FontSize="13"
                                    VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
-                    </StackPanel>
+                    </DockPanel>
                 </Border>
 
                 <ContentPresenter x:Name="EmbeddedContent" Grid.Row="1" />

@@ -42,4 +42,7 @@
            只带 Segoe MDL2 Assets 的系统上会显示成方框。 -->
     <PathGeometry x:Key="MiniWindowIconGeometry" PresentationOptions:Freeze="True"
         Figures="M 3,12.5 V 5.6 A 1.6,1.6 0 0 1 4.6,4 H 15.4 A 1.6,1.6 0 0 1 17,5.6 V 8 M 8,16 H 4.6 A 1.6,1.6 0 0 1 3,14.4 M 11.5,10.5 H 16 A 1,1 0 0 1 17,11.5 V 15 A 1,1 0 0 1 16,16 H 11.5 A 1,1 0 0 1 10.5,15 V 11.5 A 1,1 0 0 1 11.5,10.5 Z" />
+    <!-- 打开文件夹(2026-11-27, 离线缓存页右下角工具列): 与其它线性图标同一画布/描边 -->
+    <PathGeometry x:Key="FolderIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 3.2,15.4 V 5.4 A 1.2,1.2 0 0 1 4.4,4.2 H 7.6 L 9.4,6.2 H 15.6 A 1.2,1.2 0 0 1 16.8,7.4 V 15.4 A 1.2,1.2 0 0 1 15.6,16.6 H 4.4 A 1.2,1.2 0 0 1 3.2,15.4 Z" />
 </ResourceDictionary>
