@@ -65,6 +65,14 @@
 
 <table>
   <tr>
+    <td width="50%"><img width="100%" src="docs/preview-home.png" alt="首页推荐"></td>
+    <td width="50%"><img width="100%" src="docs/preview-dark.png" alt="深色模式"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>首页推荐</b><br>排行榜 / 热门 / 直播 / 追番</td>
+    <td align="center"><b>深色模式</b><br>亮色 / 暗色 / 跟随系统</td>
+  </tr>
+  <tr>
     <td width="50%"><img width="100%" src="docs/preview-search.png" alt="搜索结果"></td>
     <td width="50%"><img width="100%" src="docs/preview-category.png" alt="分区浏览"></td>
   </tr>
@@ -87,14 +95,6 @@
   <tr>
     <td align="center"><b>播放器</b><br>弹幕 / 清晰度 / 相关信息</td>
     <td align="center"><b>直播间</b><br>实时弹幕 / 主播信息 / 清晰度</td>
-  </tr>
-  <tr>
-    <td width="50%"><img width="100%" src="docs/preview-home.png" alt="首页推荐"></td>
-    <td width="50%"><img width="100%" src="docs/preview-dark.png" alt="深色模式"></td>
-  </tr>
-  <tr>
-    <td align="center"><b>首页推荐</b><br>排行榜 / 热门 / 直播 / 追番</td>
-    <td align="center"><b>深色模式</b><br>亮色 / 暗色 / 跟随系统</td>
   </tr>
 </table>
 
