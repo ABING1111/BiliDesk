@@ -133,7 +133,7 @@
                                且它按底色亮度自动取黑/白(见 Styles.xaml 的说明)。 -->
                         <Border Style="{StaticResource UpLikedBadgeStyle}"
                                 Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
-                            <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                            <TextBlock Text="{Binding UpLikedText}" FontSize="10"
                                        Foreground="{DynamicResource TextOnAccentBrush}" />
                         </Border>
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
@@ -307,7 +307,7 @@
                                且它按底色亮度自动取黑/白(见 Styles.xaml 的说明)。 -->
                         <Border Style="{StaticResource UpLikedBadgeStyle}"
                                 Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
-                            <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                            <TextBlock Text="{Binding UpLikedText}" FontSize="10"
                                        Foreground="{DynamicResource TextOnAccentBrush}" />
                         </Border>
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
@@ -419,7 +419,7 @@
                                且它按底色亮度自动取黑/白(见 Styles.xaml 的说明)。 -->
                         <Border Style="{StaticResource UpLikedBadgeStyle}"
                                 Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
-                            <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                            <TextBlock Text="{Binding UpLikedText}" FontSize="10"
                                        Foreground="{DynamicResource TextOnAccentBrush}" />
                         </Border>
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">

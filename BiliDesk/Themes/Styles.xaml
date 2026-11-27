@@ -2628,11 +2628,14 @@
            用户把主题色调成浅黄/浅绿时自动变黑字, 任何主题色下都读得清。
          ★ 放应用级(这里)而不是各自的 XAML: 视频评论区(PlayerWindow)与动态评论区
            (CommentSection)都要用, 抄两遍的话改一次颜色容易漏改一处。
+         ★ 尺寸(2026-11-27 用户要求"标签大小调小一些"): 字号 12 → 10, 内边距 5,1 → 4,1,
+           圆角 4 → 3 —— 与同屏的「置顶 / UP / 等级」小标(9~9.5px)观感接近, 但仍是
+           一行**可读的整句**, 不一味追平小标字号。字号写在各自模板里(6 处), 改时要一起改。
          ★ IsHitTestVisible=False: 纯展示, 不该截走点击(同 FollowedBadgeStyle 的理由)。 -->
     <Style x:Key="UpLikedBadgeStyle" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-        <Setter Property="CornerRadius" Value="4" />
-        <Setter Property="Padding" Value="5,1" />
+        <Setter Property="CornerRadius" Value="3" />
+        <Setter Property="Padding" Value="4,1" />
         <Setter Property="Margin" Value="0,4,0,0" />
         <Setter Property="HorizontalAlignment" Value="Left" />
         <Setter Property="VerticalAlignment" Value="Center" />

@@ -865,7 +865,7 @@
                             且它按底色亮度自动取黑/白(见 Styles.xaml 的说明)。 -->
                 <Border Style="{StaticResource UpLikedBadgeStyle}"
                         Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
-                    <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                    <TextBlock Text="{Binding UpLikedText}" FontSize="10"
                                Foreground="{DynamicResource TextOnAccentBrush}" />
                 </Border>
                 <!-- 评论操作行(赞 / 踩 / 回复): 统一走 CommentActionBarTemplate, 别在这里另写一份 -->
@@ -3254,7 +3254,7 @@
                                                                 <!-- UP 主觉得很赞: 淡强调色底的圆角方框(共享样式) -->
                                                                 <Border Style="{StaticResource UpLikedBadgeStyle}" Margin="0,3,0,0"
                                                                         Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
-                                                                    <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                                                                    <TextBlock Text="{Binding UpLikedText}" FontSize="10"
                                                                                Foreground="{DynamicResource TextOnAccentBrush}" />
                                                                 </Border>
                                                                 <ContentControl Content="{Binding}"
@@ -3327,7 +3327,7 @@
                                                                     <!-- UP 主觉得很赞: 淡强调色底的圆角方框(共享样式) -->
                                                                     <Border Style="{StaticResource UpLikedBadgeStyle}" Margin="0,2,0,0"
                                                                             Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
-                                                                        <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                                                                        <TextBlock Text="{Binding UpLikedText}" FontSize="10"
                                                                                    Foreground="{DynamicResource TextOnAccentBrush}" />
                                                                     </Border>
                                                                     <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
