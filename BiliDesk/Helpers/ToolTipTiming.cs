@@ -5,7 +5,7 @@ using System.Windows.Controls;
 namespace BiliDesk.Helpers;
 
 /// <summary>
-/// 全局缩短「鼠标悬停多久才出现 ToolTip」的等待时间(2026-11-27 用户要求)。
+/// 全局调整「鼠标悬停多久才出现 ToolTip」的等待时间(2026-11-27 用户要求)。
 ///
 /// ★ 为什么改 DependencyProperty 的元数据, 而不是在 Styles.xaml 里加一条 Setter:
 ///   ToolTipService.InitialShowDelay 是**附加属性且不继承**(没有 FrameworkPropertyMetadataOptions.Inherits),
@@ -14,12 +14,13 @@ namespace BiliDesk.Helpers;
 ///   ⇒ 用 DependencyProperty.AddOwner 给 FrameworkElement 补一份默认元数据:
 ///     之后所有 FrameworkElement(及其派生控件)读到的默认值就是这里给的值,
 ///     某个元素上显式设过 InitialShowDelay 的仍然以它自己的为准。
-/// ★ 默认值取系统 MouseHoverTime(本机 1000ms)。缩到 250ms: 明显更快, 又不至于
-///   鼠标扫过按钮时到处弹提示。
+/// ★ 默认值取系统 MouseHoverTime(本机 1000ms)。2026-11-27 曾缩到 250ms,
+///   2026-11-28 用户反馈"光标一放上去就显示"太急, 稍微调到 500ms:
+///   仍比系统默认快一截, 但鼠标扫过按钮时不会立刻弹提示。
 /// </summary>
 internal static class ToolTipTiming
 {
-    private const int DelayMs = 250;
+    private const int DelayMs = 500;
 
     private static bool _applied;
 
