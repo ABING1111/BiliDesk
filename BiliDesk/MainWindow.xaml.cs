@@ -71,7 +71,7 @@ public partial class MainWindow : FluentWindow
 
         _vm.PageChanged += OnPageChanged;
         Svc.Toast.Shown += ShowToast;
-        // 鼠标侧键(拇指键) = 返回。挂在窗口的隧道路由上, 不会被页面里的控件吃掉。
+        // 鼠标侧键(拇指键) = 返回上一级。挂在窗口的隧道路由上, 不会被页面里的控件吃掉。
         PreviewMouseDown += OnPreviewMouseDown;
 
         // 分区面板: 3 列数据, 每列 10 个分区(来源与生成说明见 PartitionCatalog)
@@ -102,8 +102,10 @@ public partial class MainWindow : FluentWindow
         PreviewKeyDown += OnUserActivity;
         // F5 = 刷新当前页面(2026-11-12 用户要求"所有的刷新绑定到 F5")
         PreviewKeyDown += OnRefreshKey;
-        // Esc 关闭动态详情 / 评论输入面板
+        // Esc 关闭动态详情 / 评论输入面板(更靠内, 走隧道先处理)
         PreviewKeyDown += OnDynamicDetailKeyDown;
+        // Esc = 返回上一级(2026-11-28)。必须用冒泡: 搜索框自己要处理 Esc, 见 OnBackKeyDown。
+        KeyDown += OnBackKeyDown;
         Loaded += (_, _) => StartForegroundIdleTimer();
         Closed += (_, _) => _foregroundIdleTimer?.Stop();
     }
@@ -273,11 +275,10 @@ public partial class MainWindow : FluentWindow
     }
 
     /// <summary>
-    /// 鼠标侧键(XButton1/XButton2) = 返回上一层。
+    /// 鼠标侧键(XButton1/XButton2) = 返回上一级。
     ///
-    /// 主窗口的"上一层"是**内嵌页**(UP 主主页那种盖在内容区上的页面, 可能已经叠了多层历史)。
-    /// 没有内嵌页时什么都不做 —— 不擅自把用户弹回首页: 在设置页/历史页按一下侧键
-    /// 就被踢走, 那是"误触"而不是"返回"。
+    /// 具体退哪一层由 <see cref="TryGoBackOneLevel"/> 决定(与 Esc 共用那一条);
+    /// 这里只负责"认键 + 吞事件"。
     ///
     /// 两个侧键都当返回: 各家鼠标把拇指键映射成哪个 XButton 并不统一, 本应用也没有
     /// "前进"这个语义可用(播放器那边同样处理)。
@@ -285,16 +286,72 @@ public partial class MainWindow : FluentWindow
     private void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.XButton1 && e.ChangedButton != MouseButton.XButton2) return;
-        // 分区面板开着时, 侧键先把它收起来(优先级高于内嵌页, 因为面板压在最上层)
+        if (TryGoBackOneLevel()) e.Handled = true;
+    }
+
+    /// <summary>
+    /// 统一的"返回上一级"(2026-11-28 用户要求): 鼠标侧键与 Esc 共用。
+    ///
+    /// 由**内到外**逐级退 —— 与播放器的 PlayerWindow.HandleBackRequest 同一套路,
+    /// 两个入口走同一个方法, 否则很容易出现"Esc 是对的、侧键直接跳页"这种不一致:
+    ///   ① 动态详情遮罩(最内层; 评论输入面板先收面板) → 关详情;
+    ///   ② 分区面板 → 收起;
+    ///   ③ 内嵌页(UP 主主页 / 番剧详情 / 合集详情) → 弹内嵌返回栈;
+    ///   ④ 子页面(订阅 / 历史 / 稍后再看 / 收藏 / 离线缓存 / 私信) → 回来源页;
+    ///   ⑤ 其它页面(首页 / 动态 / 我的 / 设置 / 搜索 / 分区) → **什么都不做**。
+    ///
+    /// ★ 第 ⑤ 条是刻意的(原实现的注释就写着这条): 没有"上一级"的页面按一下侧键 / Esc
+    ///   就被弹走, 用户的心智是"误触"而不是"返回" —— 别把它做成全局后退按钮。
+    /// </summary>
+    /// <returns>true = 确实退了一层, 调用方据此决定吞不吞这次输入。</returns>
+    private bool TryGoBackOneLevel()
+    {
+        if (_dynamicDetailOpen)
+        {
+            // 与 Esc 原本的处理一致: 评论输入面板开着时先收面板, 再按一次才关详情。
+            if (DynamicDetailHost.IsComposerOpen) DynamicDetailHost.CloseComposer();
+            else CloseDynamicDetail();
+            return true;
+        }
+
+        // 分区面板压在内嵌页上面, 优先级更高(点开 logo 后它盖住整个内容区)。
         if (PartitionPanel.Visibility == Visibility.Visible)
         {
-            e.Handled = true;
             HidePartition();
-            return;
+            return true;
         }
-        if (EmbeddedHost.Visibility != Visibility.Visible) return;
-        e.Handled = true;
-        GoBackEmbedded();
+
+        if (EmbeddedHost.Visibility == Visibility.Visible)
+        {
+            GoBackEmbedded();
+            return true;
+        }
+
+        // ④ 子页面: 回到进入本页时的来源页(见 MainViewModel._origins 的说明)。
+        var current = _vm.Current;
+        if (!PageBackPolicy.IsChildPage(current)) return false;
+
+        _vm.Navigate(_vm.ResolveBackTarget(current));
+        return true;
+    }
+
+    /// <summary>
+    /// Esc = 返回上一级(2026-11-28 用户要求, 与侧键共用 <see cref="TryGoBackOneLevel"/>)。
+    ///
+    /// ★★ 必须挂**冒泡**的 KeyDown, 不能挂 PreviewKeyDown:
+    ///   页面里的搜索框(TabSearchBox / SearchBox)自己就在 KeyDown 里处理 Esc(先清关键词、
+    ///   空了才收圆)。隧道事件从窗口根往下走, 比搜索框先到 —— 用 Preview 会把那一层抢掉,
+    ///   表现就是"在搜索框里按 Esc 直接被弹回上一页"。
+    ///   挂冒泡后, 搜索框处理完把事件标记成已处理, 这里根本收不到; 正是想要的顺序。
+    /// ★ 动态详情那层由 OnDynamicDetailKeyDown(Preview)接管(它更靠内), 这里再兜一次
+    ///   防重复处理; 焦点在可编辑输入框里时 Esc 属于输入框自己(例如私信草稿), 一律放行。
+    /// </summary>
+    private void OnBackKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape || e.Handled) return;
+        if (_dynamicDetailOpen) return;
+        if (Keyboard.FocusedElement is TextBox { IsReadOnly: false }) return;
+        if (TryGoBackOneLevel()) e.Handled = true;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)

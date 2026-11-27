@@ -48,6 +48,27 @@ public class MainViewModel : ObservableObject
 
     public event Action? PageChanged;
 
+    /// <summary>
+    /// 子页面的「来源页」(2026-11-28 用户要求"侧键返回上一级")。
+    ///
+    /// ★ 键 = 子页面自己, 值 = **进入它时**停着的那一页。
+    ///   侧键 / Esc / 页面上的返回按钮都用它来决定退回哪一页 —— 用户回到的是自己真的来过的
+    ///   地方, 而不是各页写死的目标(那些目标只对"现在的入口"成立)。
+    /// ★ 只记 <see cref="PageBackPolicy.IsChildPage"/> 认的那 6 个页面: 首页/动态/我的/设置
+    ///   没有"上一级"概念, 不进这张表, 侧键落在它们上面仍然什么都不做。
+    /// </summary>
+    private readonly Dictionary<PageKey, PageKey> _origins = new();
+
+    /// <summary>某个页面的来源页; 没记录过返回 null(由调用方回落到默认上级)。</summary>
+    public PageKey? OriginOf(PageKey key)
+        => _origins.TryGetValue(key, out var parent) ? parent : null;
+
+    /// <summary>
+    /// "返回上一级"的目标页。没有上一级的页面返回它自己, 调用方据此判断"没得退"。
+    /// ★ 页面上那颗返回按钮与主窗口的侧键 / Esc 都走这一条, 保证三处目标永远一致。
+    /// </summary>
+    public PageKey ResolveBackTarget(PageKey key) => PageBackPolicy.Resolve(key, OriginOf(key));
+
     public ICommand NavigateCommand { get; }
 
     public MainViewModel()
@@ -65,6 +86,11 @@ public class MainViewModel : ObservableObject
             PageChanged?.Invoke();
             return;
         }
+
+        // ★ 记来源(2026-11-28): 是"真切页"才记 —— 点当前页那条分支在上面已经 return,
+        //   否则"点一下当前导航项"就会把来源冲成自己, 侧键立刻退不回去。
+        if (PageBackPolicy.IsChildPage(key)) _origins[key] = Current;
+
         Current = key; // setter 内部已 fire PageChanged
     }
 

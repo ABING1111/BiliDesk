@@ -288,8 +288,12 @@ public partial class SubscriptionPage : UserControl, IRefreshable
             Svc.Navigate?.OpenSpaceCollection(item);
     }
 
+    /// <summary>
+    /// 返回"上一级": 目标与鼠标侧键 / Esc 一致 —— 有来源页回来源页, 没有才回「我的」,
+    /// 见 MainViewModel.ResolveBackTarget。
+    /// </summary>
     private void OnBackToMineClick(object sender, RoutedEventArgs e)
-        => App.MainVm.Navigate(PageKey.Mine);
+        => App.MainVm.Navigate(App.MainVm.ResolveBackTarget(PageKey.Subscription));
 
     public void Refresh()
     {

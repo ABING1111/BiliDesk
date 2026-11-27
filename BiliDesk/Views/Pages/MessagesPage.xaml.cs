@@ -273,9 +273,12 @@ public partial class MessagesPage : UserControl, IRefreshable
         return item;
     }
 
-    /// <summary>返回首页(本页不在导航栏上, 必须有明确的返回入口)</summary>
+    /// <summary>
+    /// 返回上一级: 目标与鼠标侧键 / Esc 一致 —— 有来源页回来源页(通常就是首页),
+    /// 没有才回首页, 见 MainViewModel.ResolveBackTarget。
+    /// </summary>
     private void OnBackClick(object sender, RoutedEventArgs e)
-        => App.MainVm.Navigate(PageKey.Home);
+        => App.MainVm.Navigate(App.MainVm.ResolveBackTarget(PageKey.Messages));
 
     // ---------------------------------------------------------------- 输入
 

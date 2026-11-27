@@ -73,9 +73,13 @@ public partial class HistoryPage : UserControl
         if (Vm?.ReloadCommand.CanExecute(null) == true) Vm.ReloadCommand.Execute(null);
     }
 
-    /// <summary>右下角工具列的返回按钮: 历史/收藏/缓存的入口都在「我的」页, 统一回那里</summary>
+    /// <summary>
+    /// 右下角工具列的返回按钮: 回"上一级"。
+    /// 目标与鼠标侧键 / Esc 完全一致(见 MainViewModel.ResolveBackTarget): 有来源页就回来源页,
+    /// 没有(启动后直接落到本页)才回到入口页「我的」。
+    /// </summary>
     private void OnBackToMineClick(object sender, RoutedEventArgs e)
-        => App.MainVm.Navigate(PageKey.Mine);
+        => App.MainVm.Navigate(App.MainVm.ResolveBackTarget(PageKey.History));
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {

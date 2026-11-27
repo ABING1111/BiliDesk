@@ -50,6 +50,12 @@ public partial class FavoritesPage : UserControl
                 // 页面常驻 PageLayer, 切回来时不一定再发 ScrollChanged —— 按当前偏移补一次状态
                 BtnTopRefresh.UpdateForOffset(PageScroll);
             }
+            else
+            {
+                // ★ 2026-11-28: 被侧键 / Esc 退回上一级时页面只是 Collapsed, 浮层不会自己关
+                //   (它是独立窗口, 不跟随宿主可见性) —— 不收掉会在别的页面上悬着一块收藏夹浮层。
+                FolderMorePopup.IsOpen = false;
+            }
         };
         // 纳入全局屏蔽(命中关键词的内容会被隐藏), 见 FilterService
         DataContextChanged += (_, e) =>
@@ -255,7 +261,6 @@ public partial class FavoritesPage : UserControl
     private void OnFolderPopupChipClick(object sender, RoutedEventArgs e)
         => FolderMorePopup.IsOpen = false;
 
-    /// <summary>右下角工具列的返回按钮: 历史/收藏/缓存的入口都在「我的」页, 统一回那里</summary>
     /// <summary>工具列二合一按钮: 顶部 = 刷新收藏, 下滑 = 回到顶部。</summary>
     private void OnTopRefreshClick(object sender, RoutedEventArgs e)
     {
@@ -268,8 +273,13 @@ public partial class FavoritesPage : UserControl
         if (Vm?.ReloadCommand.CanExecute(null) == true) Vm.ReloadCommand.Execute(null);
     }
 
+    /// <summary>
+    /// 右下角工具列的返回按钮: 回"上一级"。
+    /// 目标与鼠标侧键 / Esc 完全一致(见 MainViewModel.ResolveBackTarget): 有来源页就回来源页,
+    /// 没有才回到入口页「我的」。
+    /// </summary>
     private void OnBackToMineClick(object sender, RoutedEventArgs e)
-        => App.MainVm.Navigate(PageKey.Mine);
+        => App.MainVm.Navigate(App.MainVm.ResolveBackTarget(PageKey.Favorites));
 
     /// <summary>列表滚动: 吸顶位移 + 工具列按钮状态</summary>
     private void OnListScrollChanged(object sender, ScrollChangedEventArgs e)

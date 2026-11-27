@@ -174,7 +174,7 @@
 
             <!-- 返回「我的」页: 历史/收藏/缓存的入口都在「我的」页, 统一给一条回去的路 -->
             <Button Style="{StaticResource FloatingIconButtonStyle}" Margin="0,6,0,0"
-                    Click="OnBackToMineClick" ToolTip="返回「我的」">
+                    Click="OnBackToMineClick" ToolTip="返回上一级">
                 <Path Data="{StaticResource BackIconGeometry}"
                       Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                       StrokeThickness="1.6" StrokeLineJoin="Round"

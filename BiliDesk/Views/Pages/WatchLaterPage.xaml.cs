@@ -99,6 +99,10 @@ public partial class WatchLaterPage : UserControl
         if (Vm?.ReloadCommand.CanExecute(null) == true) Vm.ReloadCommand.Execute(null);
     }
 
+    /// <summary>
+    /// 返回"上一级"(入口在「我的」页): 目标与鼠标侧键 / Esc 一致 —— 有来源页回来源页,
+    /// 没有才回「我的」, 见 MainViewModel.ResolveBackTarget。
+    /// </summary>
     private void OnBackToMineClick(object sender, RoutedEventArgs e)
-        => App.MainVm.Navigate(PageKey.Mine);
+        => App.MainVm.Navigate(App.MainVm.ResolveBackTarget(PageKey.WatchLater));
 }
