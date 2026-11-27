@@ -169,6 +169,10 @@ public partial class PlayerWindow : FluentWindow
             }
         }
 
+        // 控制栏那颗全屏按钮的箭头跟着状态翻: 全屏时朝里(退出), 常规时朝外(进入)。
+        // ★ 放在 if/else 之后统一调用: 进/出两条分支、以及 Esc/侧键退全屏都汇到这里。
+        UpdateFullscreenButton();
+
         // 几何/状态都改完了: 尺寸稳定后把材质挂回去(期间 SizeChanged 会不断续期)。
         ResumeBackdropAfterResize();
     }
@@ -804,6 +808,21 @@ public partial class PlayerWindow : FluentWindow
         // E9A6 = 虚线框(填充区域) / E73F = 向内的双箭头(还原)。两者在本字体里形状差异明显。
         if (FillWindowGlyph != null) FillWindowGlyph.Text = _isFillWindow ? "\uE73F" : "\uE9A6";
         BtnFillWindow.ToolTip = _isFillWindow ? "还原 (退出铺满窗口)" : "铺满窗口";
+    }
+
+    /// <summary>
+    /// 同步控制栏「全屏」按钮的字形与提示(2026-11-28 用户要求: 全屏时箭头朝里)。
+    ///
+    /// E740 = 向外的双箭头("进入全屏") / E73F = 向内的双箭头("退出全屏")。
+    /// 与顶栏「铺满窗口」的 UpdateFillWindowButton 同一套思路: 同一个位置点两下是进出,
+    /// 字形不变的话用户看不出再点一下会发生什么。
+    /// ★ 唯一调用点是 ApplyFullscreenLayout —— F 键 / 双击视频 / 控制栏 / Esc / 鼠标侧键
+    ///   退全屏最终都经过那里, 不需要在别处补。
+    /// </summary>
+    private void UpdateFullscreenButton()
+    {
+        if (FullscreenGlyph != null) FullscreenGlyph.Text = _isFullscreen ? "\uE73F" : "\uE740";
+        if (BtnFullscreen2 != null) BtnFullscreen2.ToolTip = _isFullscreen ? "退出全屏 (F)" : "全屏 (F)";
     }
 
 }

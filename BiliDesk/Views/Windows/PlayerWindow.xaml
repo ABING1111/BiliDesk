@@ -2197,10 +2197,15 @@
                                             <Border Grid.Column="10" Width="1" Height="16" Background="#1FFFFFFF"
                                                     Margin="7,0,7,0" VerticalAlignment="Center" />
 
-                                            <!-- 全屏 -->
+                                            <!-- 全屏(2026-11-28 用户要求: 全屏时箭头改朝里)。
+                                                 ★ 字形与提示由 UpdateFullscreenButton 按 _isFullscreen 切换:
+                                                   常规 = E740(向外双箭头, "进入全屏");
+                                                   全屏 = E73F(向内双箭头, "退出全屏")。
+                                                   同一个按钮点两下是进出, 字形不变的话用户看不出再点会怎样。 -->
                                             <Button Grid.Column="11" x:Name="BtnFullscreen2" Style="{StaticResource PlayerIconBtn}"
                                                     Click="OnFullscreenClick" ToolTip="全屏 (F)">
-                                                <TextBlock Text="&#xE740;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                <TextBlock x:Name="FullscreenGlyph" Text="&#xE740;"
+                                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                            FontSize="15" Foreground="White" />
                                             </Button>
                                         </Grid>
