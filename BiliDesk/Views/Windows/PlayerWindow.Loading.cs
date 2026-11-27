@@ -1019,6 +1019,12 @@ public partial class PlayerWindow : FluentWindow
         // 复位"该恢复到几倍速"的记录: 它只描述**本片**那次长按, 不该带到下一片
         // (下一片起播速率由 _mp.Rate 自己决定, 这里只是清掉上一个手势的账)。
         _rateBeforeFastForward = 1.0f;
+        // 长按档位记忆只属于"当前这一条视频": 换片一律回到默认 2x, 不继承。
+        _fastForwardChoice = 1;
+        _fastForwardRememberedChoice = 1;
+        _fastForwardSmart = false;
+        _fastForwardTarget = FastForwardRate;
+        _scriptPace = null;
         RestoreVolumeAfterSeek();   // 上一片若停在 seek 静音中, 别把静音带进新片
         // 心跳间隔也要还原: 上一片可能停在了"跳转等待期"的 100ms 上没来得及还原
         if (_progressTimer != null) _progressTimer.Interval = ProgressTickIdle;
@@ -1162,6 +1168,8 @@ public partial class PlayerWindow : FluentWindow
         nameof(_subtitleNeedsLogin), nameof(_fillingSubtitleMenu), nameof(_subtitleError),
         nameof(_subtitleLan), nameof(_subtitleDelayMs), nameof(_subtitleLastText),
         nameof(_subtitleFontSliderSyncing),
+        nameof(_scriptPace), nameof(_fastForwardSmart),
+        nameof(_fastForwardChoice), nameof(_fastForwardRememberedChoice),
         // 进度 / 时长 / EOF 自救
         nameof(_totalMs), nameof(_lastKnownMs), nameof(_eofResumeCount), nameof(_lastEofResumeMs),
         nameof(_resumeAfterSwitchMs), nameof(_ended), nameof(_eofBlackActive), nameof(_anchorMs), nameof(_anchorWall),

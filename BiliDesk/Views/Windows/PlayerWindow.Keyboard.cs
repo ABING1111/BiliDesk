@@ -199,7 +199,7 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 长按 → 进入倍速播放时的默认倍速(2026-11-21 由 3x 改为 2x, 用户指定)。
-    /// ★ 长按期间 ↑/↓ 在 1.5x / 2x / 3x 之间切换(见 FastForwardSpeedPolicy),
+    /// ★ 长按期间 ↑/↓ 在 1.5x / 2x / 3x / 智能 之间切换(见 FastForwardSpeedPolicy),
     ///   默认值同时也是 OSD 里高亮的那一档。
     /// </summary>
     private const float RightKeyFastRate = FastForwardSpeedPolicy.Default;
@@ -221,7 +221,7 @@ public partial class PlayerWindow : FluentWindow
     /// → 键按下(非自动重复):
     ///   短按(不到 <see cref="RightKeyLongPressMs"/> 毫秒) = 松开时跳 5 秒(Shift 30 秒), 保持原来的即时手感;
     ///   继续按住超过阈值 = 进入倍速播放(默认 2x), 松开恢复按下前的倍速。
-    ///   长按期间 ↑/↓ 在 1.5x / 2x / 3x 之间切换(<see cref="TryStepFastForwardSpeed"/>)。
+    ///   长按期间 ↑/↓ 在 1.5x / 2x / 3x / 智能 之间切换(<see cref="TryStepFastForwardSpeed"/>)。
     /// </summary>
     private void OnRightKeyPressed()
     {

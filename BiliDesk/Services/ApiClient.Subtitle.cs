@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -38,7 +39,7 @@ public partial class ApiClient
     ///     ★ 降级那一路**不给章节**(空列表): 既然响应可能是别的视频的, 章节同样不可信。
     /// </summary>
     public async Task<(bool ok, string? err, List<SubtitleTrack> tracks, bool needLogin,
-        List<VideoChapter> chapters)>
+        List<VideoChapter> chapters, double? scriptPace)>
         GetPlayerInfoAsync(string bvid, long cid, CancellationToken ct = default)
     {
         try
@@ -58,20 +59,34 @@ public partial class ApiClient
             {
                 var legacy = await GetLegacySubtitleTracksAsync(bvid, cid);
                 if (legacy != null)
-                    return (true, null, legacy, false, new List<VideoChapter>());
+                    return (true, null, legacy, false, new List<VideoChapter>(), null);
             }
             if (code != 0 || data == null)
                 return (false, msg ?? "获取字幕列表失败", new List<SubtitleTrack>(), false,
-                    new List<VideoChapter>());
+                    new List<VideoChapter>(), null);
 
             var tracks = SubtitleParser.ParseTracks(data.Value, out var needLogin);
             var chapters = ChapterParser.Parse(data.Value);
-            return (true, null, tracks, needLogin, chapters);
+            // 智能长按倍速: 接口给的是一个整集标量, 不是时间轴。
+            // 缺失 = null(官方回落 3x); 非数字字符串按 NaN 处理(官方会落 1.5x)。
+            double? scriptPace = null;
+            if (data.Value.TryGetProperty("script_pace", out var pace))
+            {
+                if (pace.ValueKind == JsonValueKind.Number && pace.TryGetDouble(out var num))
+                    scriptPace = num;
+                else if (pace.ValueKind == JsonValueKind.String)
+                {
+                    scriptPace = double.TryParse(pace.GetString(),
+                        NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+                        ? parsed : double.NaN;
+                }
+            }
+            return (true, null, tracks, needLogin, chapters, scriptPace);
         }
         catch (Exception ex)
         {
             App.ReportError(ex);
-            return (false, ex.Message, new List<SubtitleTrack>(), false, new List<VideoChapter>());
+            return (false, ex.Message, new List<SubtitleTrack>(), false, new List<VideoChapter>(), null);
         }
     }
 
