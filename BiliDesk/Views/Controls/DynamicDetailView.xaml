@@ -271,7 +271,7 @@
                                 Width="26" Height="26" Padding="0" Margin="0"
                                 Click="OnComposerExpandClick"
                                 ToolTip="展开输入框, 写长评时能通读全文">
-                            <TextBlock x:Name="ComposerExpandIcon" Text="&#xE70D;"
+                            <TextBlock x:Name="ComposerExpandIcon" Text="&#xE70E;"
                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                        FontSize="11"
                                        Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />

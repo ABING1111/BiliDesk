@@ -3814,14 +3814,18 @@
                         <!-- ★ 面板头行: 展开高度切换(2026-11-01)。
                              长评(1000 字上限)在 66px 的默认框里只能看见两三行, 写到后面全是"摸黑改";
                              这个小按钮把输入框拉到 200px, 写长文时能整篇通读再发。
-                             图标随状态换(下箭头=展开 / 上箭头=收回), 动画在代码 ApplyComposerSize。 -->
+                             图标随状态换(上箭头=展开 / 下箭头=收回), 映射在代码 ApplyComposerSize。
+                             ★ 与 HomePage 的历史下拉**方向相反**, 是刻意的: 箭头指"内容要长出去的方向"。
+                               面板贴底(VerticalAlignment=Bottom), 66→200 时顶边上移、底边不动,
+                               内容向上长 → 收起态给上箭头; 下拉那边内容长在下面, 才用下箭头。
+                               (2026-11-27 评审 PR #130 定稿: 原注释写反了, 别再翻回去) -->
                         <DockPanel Margin="0,0,0,6">
                             <Button DockPanel.Dock="Right" x:Name="BtnComposerExpand"
                                     Style="{StaticResource SubtleButtonStyle}"
                                     Width="26" Height="26" Padding="0" Margin="0"
                                     Click="OnComposerExpandClick"
                                     ToolTip="展开输入框, 写长评时能通读全文">
-                                <TextBlock x:Name="ComposerExpandIcon" Text="&#xE70D;"
+                                <TextBlock x:Name="ComposerExpandIcon" Text="&#xE70E;"
                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                            FontSize="11"
                                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />

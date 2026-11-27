@@ -381,7 +381,7 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing || CommentDraft == null || ComposerExpandIcon == null) return;
         var target = _composerExpanded ? ComposerExpandedHeight : ComposerNormalHeight;
-        ComposerExpandIcon.Text = _composerExpanded ? "\uE70E" : "\uE70D";  // 上下箭头互换
+        ComposerExpandIcon.Text = _composerExpanded ? "\uE70D" : "\uE70E";  // 上箭头=展开(内容向上长)
         var btn = BtnComposerExpand;
         if (btn != null) btn.ToolTip = _composerExpanded ? "收回输入框" : "展开输入框, 写长评时能通读全文";
 
@@ -487,7 +487,7 @@ public partial class PlayerWindow : FluentWindow
         // 滚动自动收起可能正把整列按钮藏着(issue #89): 面板开了就得把 FAB 放出来 ——
         // 此刻它是「收起输入框」按钮, 藏着就没法关面板
         SetCommentFabBarHidden(false, animate: true);
-        CommentFabIcon.Text = "\uE74A";   // ChevronDown: 收起
+        CommentFabIcon.Text = "\uE70D";   // ChevronDown: 收起
         CommentFab.ToolTip = "收起评论框";
 
         var panel = CommentComposerPanel;
