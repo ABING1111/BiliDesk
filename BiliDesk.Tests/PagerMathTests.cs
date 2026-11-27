@@ -60,10 +60,11 @@ public class PagerMathTests
 public class PagedViewModelContractTests
 {
     [Fact]
-    public void 收藏页与UP主页都满足页码栏契约()
+    public void 收藏页与UP主页和订阅页都满足页码栏契约()
     {
         AssertPaged(new FavoritesViewModel());
         AssertPaged(new UserSpaceViewModel());
+        AssertPaged(new SubscriptionViewModel());
     }
 
     private static void AssertPaged(IPagedViewModel vm)

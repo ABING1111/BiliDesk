@@ -351,9 +351,10 @@ public partial class ApiClient
     //    免得以后有人改全局默认值时顺手把这一处带崩。)
 
     /// <summary>
-    /// 某个用户关注的番剧("我的追番")。
+    /// 某个用户关注的番剧 / 追剧, **带权威总数**（「我的订阅」页的页码与 tab 条数要用）。
     ///
     /// 接口: /x/space/bangumi/follow/list —— type: 1 追番 / 2 追剧(电视剧、纪录片)。
+    /// 两类的数据形状完全一致, 只是 type 不同; 2026-11-27 实测 type=2 同样返回 code=0 + total。
     ///
     /// ★ 为什么不是网上常见的 /x/v2/follow/seasons 或 /pgc/season/follow/list:
     ///   那两条 2026-10-11 实测**已经 404**(带登录 Cookie 也一样), 这个才是活的。
@@ -361,10 +362,10 @@ public partial class ApiClient
     ///
     /// ★ 需要登录: 匿名访问私有设置的用户会拿到 53013。调用方应先判 <c>SessionManager.HasLogin</c>。
     /// </summary>
-    public async Task<(bool ok, string? err, List<BangumiItem>? items)>
-        GetMyBangumiAsync(long vmid, int pn = 1, int ps = 30)
+    public async Task<(bool ok, string? err, List<BangumiItem>? items, int total)>
+        GetMyBangumiPageAsync(long vmid, int type, int pn = 1, int ps = 20)
     {
-        if (vmid <= 0) return (false, "用户 ID 无效", null);
+        if (vmid <= 0) return (false, "用户 ID 无效", null, 0);
         try
         {
             var (code, msg, data) = await GetJsonAsync(
@@ -374,14 +375,16 @@ public partial class ApiClient
                     ["vmid"] = vmid.ToString(),
                     ["pn"] = Math.Max(1, pn).ToString(),
                     ["ps"] = Math.Clamp(ps, 1, 100).ToString(),
-                    ["type"] = "1" // 只要番剧; 追剧(影视)不在追番页里
+                    ["type"] = type == 2 ? "2" : "1"
                 },
                 referer: "https://www.bilibili.com/");
 
-            if (code != 0 || data == null) return (false, msg ?? $"加载追番失败({code})", null);
+            if (code != 0 || data == null) return (false, msg ?? $"加载订阅失败({code})", null, 0);
+
+            var total = GetInt(data.Value, "total");
             if (!data.Value.TryGetProperty("list", out var list) ||
                 list.ValueKind != JsonValueKind.Array)
-                return (true, null, new List<BangumiItem>());
+                return (true, null, new List<BangumiItem>(), total);
 
             var items = new List<BangumiItem>();
             foreach (var el in list.EnumerateArray())
@@ -390,13 +393,24 @@ public partial class ApiClient
                 var item = ParseBangumiItem(el);
                 if (item != null) items.Add(item);
             }
-            return (true, null, items);
+            return (true, null, items, total);
         }
         catch (Exception ex)
         {
             App.ReportError(ex);
-            return (false, "加载追番失败: " + ex.Message, null);
+            return (false, "加载订阅失败: " + ex.Message, null, 0);
         }
+    }
+
+    /// <summary>
+    /// 旧的「我的追番」签名（首页追番栏 / <see cref="BangumiFollowCache"/> 用）:
+    /// 只要 type=1 的列表, 不关心总数。内部转调 <see cref="GetMyBangumiPageAsync"/>。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<BangumiItem>? items)>
+        GetMyBangumiAsync(long vmid, int pn = 1, int ps = 30)
+    {
+        var (ok, err, items, _) = await GetMyBangumiPageAsync(vmid, 1, pn, ps);
+        return (ok, err, items);
     }
 
     /// <summary>

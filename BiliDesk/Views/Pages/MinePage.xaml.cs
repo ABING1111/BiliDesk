@@ -12,6 +12,7 @@ namespace BiliDesk.Views.Pages;
 /// 「我的」页: 资料 + 统计 + 快捷入口 + 收藏夹卡片。
 /// 页面实例被 MainWindow 缓存, 每次切进来 Loaded 都会重拉一次数据 ——
 /// 硬币/经验/粉丝这类数字过期了看着难受, 而且本页请求量小, 重拉没有成本压力。
+/// ★ 2026-11-27: 快捷入口第三枚改成「我的订阅」(进订阅页); 下方收藏夹区块保持原样。
 /// </summary>
 public partial class MinePage : UserControl, IRefreshable
 {
@@ -105,6 +106,10 @@ public partial class MinePage : UserControl, IRefreshable
 
     private void OnOpenHistoryClick(object sender, RoutedEventArgs e)
         => App.MainVm.Navigate(PageKey.History);
+
+    /// <summary>快捷入口「我的订阅」: 进订阅页(追番/追剧/订阅的合集)。</summary>
+    private void OnOpenSubscriptionClick(object sender, RoutedEventArgs e)
+        => App.MainVm.Navigate(PageKey.Subscription);
 
     private void OnOpenFavoritesClick(object sender, RoutedEventArgs e)
         => App.MainVm.Navigate(PageKey.Favorites);

@@ -867,7 +867,12 @@ public static class Cover
         while (queue.Count > 0)
         {
             var cur = queue.Dequeue();
-            if (cur is Border b && b.ReadLocalValue(SourceProperty) != DependencyProperty.UnsetValue)
+            // ★★ 不能用 `ReadLocalValue(SourceProperty) != UnsetValue` 判断:
+            //   写在 **DataTemplate** 里的 `helpers:Cover.Source` 的值来源是 ParentTemplate,
+            //   ReadLocalValue 会返回 UnsetValue —— 于是"模板内联的卡片"(如「我的」页的收藏夹卡)
+            //   永远找不到自己的封面 Border, 卡片墙也就永远不会给它们补图(界面一片空白)。
+            //   用有效的 Source 值判断: Source 是不可继承的附加属性, 有值就说明这一格挂了封面。
+            if (cur is Border b && !string.IsNullOrEmpty(GetSource(b)))
                 found.Add(b);
 
             var n = VisualTreeHelper.GetChildrenCount(cur);

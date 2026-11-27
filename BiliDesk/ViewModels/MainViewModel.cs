@@ -25,7 +25,9 @@ public enum PageKey
     /// <summary>我的页(2026-09-26 新增: 资料+快捷入口+收藏夹; 收藏/历史从侧栏收进这里)</summary>
     Mine = 9,
     /// <summary>稍后再看(2026-09-28 新增: 入口是「我的」页的快捷入口, 不在导航栏上)</summary>
-    WatchLater = 10
+    WatchLater = 10,
+    /// <summary>我的订阅(2026-11-27 新增: 追番/追剧/订阅的合集; 入口是「我的」页)</summary>
+    Subscription = 11
 }
 
 /// <summary>主窗口 ViewModel: 导航(登录态/用户信息的展示由各页面自己的 VM 负责)</summary>

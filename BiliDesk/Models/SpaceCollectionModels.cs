@@ -52,6 +52,13 @@ public sealed class SpaceCollectionItem
     public string PubDateShort => VideoItem.FormatPubDateShort(UpdatedAt);
 
     /// <summary>
+    /// 卡片标题要不要拼「合集· / 系列·」前缀。
+    /// ★ 订阅的合集卡封面右下角已经有「合集」角标, 标题里再拼一次是重复信息;
+    ///   调用方(订阅页)把它设为 false。UP 主空间的合集/系列列表保持默认 true。
+    /// </summary>
+    public bool ShowKindPrefix { get; init; } = true;
+
+    /// <summary>
     /// 卡片标题: 统一成「合集·xxx / 系列·xxx」。
     /// ★ 不能无条件拼前缀 —— 合集接口的 meta.name 本身就带「合集·」,
     ///   直接拼会变成「合集·合集·xxx」。
@@ -61,6 +68,7 @@ public sealed class SpaceCollectionItem
         get
         {
             if (string.IsNullOrWhiteSpace(Title)) return KindText;
+            if (!ShowKindPrefix) return Title;
             if (Title.StartsWith(KindText, StringComparison.Ordinal)) return Title;
             return KindText + "·" + Title;
         }

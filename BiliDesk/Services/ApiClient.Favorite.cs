@@ -20,7 +20,7 @@ namespace BiliDesk.Services;
 public partial class ApiClient
 {
     /// <summary>
-    /// 当前登录用户的收藏夹列表(**带封面/隐私字段**, 「我的」页的文件夹卡片用)。
+    /// 当前登录用户的收藏夹列表(**带封面/隐私字段**，「我的」页的文件夹卡片用)。
     /// 接口: /x/v3/fav/folder/created/list(分页接口, pn=1/ps=50 一次拿够)。
     /// 与 GetFavFoldersAsync(list-all) 的区别: 那个只取 id/标题/数量(收藏页 chip 够用),
     /// 这个才下发 cover 和 privacy。失败语义与 GetFavFoldersAsync 一致。
@@ -81,7 +81,82 @@ public partial class ApiClient
     }
 
     /// <summary>
-    /// 新建一个云端收藏夹。
+    /// 我订阅的 UGC 合集（「我的订阅」页的「合集」tab / 「我的」页预览）。
+    ///
+    /// 接口: /x/v3/fav/folder/collected/list —— 收藏与订阅混在同一个列表里:
+    ///   type=21 = 订阅的 UGC 合集; type=11 = 收藏的收藏夹（不属于订阅, 这里过滤掉）。
+    ///
+    /// ★★ 没有"只要合集"的服务端筛选: 响应里的 count 是两类之和, 不能当合集总数。
+    ///    调用方按 has_more 翻页, 自己累计"已加载 N 个合集"。
+    /// ★ 签名: 先按同域 created/list 的写法走 WBI(sign: true); PiliPlus 的实现是无签名 ——
+    ///   真实账号下若被拒, 再退回无签名的调用(注释保留这条退路)。
+    /// ★ 需要登录; 未登录直接返回失败, 与收藏夹接口同一套语义。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<SpaceCollectionItem>? items, bool hasMore)>
+        GetSubscribedCollectionsAsync(long mid, int pn = 1, int ps = 20)
+    {
+        if (mid <= 0) return (false, "用户 ID 无效", null, false);
+        if (!SessionManager.Instance.HasLogin) return (false, "云端订阅需要登录", null, false);
+
+        try
+        {
+            await EnsureBuvidAsync();
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/v3/fav/folder/collected/list",
+                new Dictionary<string, string>
+                {
+                    ["up_mid"] = mid.ToString(),
+                    ["pn"] = Math.Max(1, pn).ToString(),
+                    ["ps"] = Math.Clamp(ps, 1, 50).ToString(),
+                    ["platform"] = "web"
+                },
+                sign: true,
+                referer: $"https://space.bilibili.com/{mid}/favlist");
+            if (code != 0 || data == null)
+                return (false, msg ?? $"请求失败 (code {code})", null, false);
+            if (data.Value.ValueKind != JsonValueKind.Object)
+                return (true, null, new List<SpaceCollectionItem>(), false);
+
+            var items = new List<SpaceCollectionItem>();
+            if (data.Value.TryGetProperty("list", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var f in arr.EnumerateArray())
+                {
+                    if (f.ValueKind != JsonValueKind.Object) continue;
+                    // 11 = 收藏的收藏夹; 只有 21 才是订阅的 UGC 合集
+                    if (GetInt(f, "type") != 21) continue;
+                    var id = GetLong(f, "id");
+                    if (id <= 0) continue;
+
+                    var updated = GetLong(f, "mtime");
+                    if (updated <= 0) updated = GetLong(f, "ctime");
+                    items.Add(new SpaceCollectionItem
+                    {
+                        Kind = SpaceCollectionKind.Season,
+                        SeasonId = id,
+                        Mid = GetLong(f, "mid"),
+                        Title = GetStr(f, "title"),
+                        Cover = UrlUtil.Normalize(GetStr(f, "cover")),
+                        Intro = GetStr(f, "intro"),
+                        Count = GetInt(f, "media_count"),
+                        UpdatedAt = updated,
+                        // 卡片封面右下角已有「合集」角标, 标题不再重复前缀
+                        ShowKindPrefix = false
+                    });
+                }
+            }
+
+            var hasMore = data.Value.TryGetProperty("has_more", out var hm) &&
+                          hm.ValueKind == JsonValueKind.True;
+            return (true, null, items, hasMore);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null, false);
+        }
+    }
+
+
     /// 接口: POST /x/v3/fav/folder/add (需要 csrf, 所以必须登录)。
     ///
     /// 参数: title 名称 / intro 简介(这里固定空串) / privacy 0 公开 1 私密。

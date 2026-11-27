@@ -244,7 +244,11 @@ public partial class MainWindow : FluentWindow
             // 分区页(也不在导航栏上): 入口是左上角 logo 的分区面板
             PageKey.Region => new RegionPage { DataContext = new RegionViewModel() },
             // 稍后再看(也不在导航栏上): 入口是「我的」页的快捷入口
-            _ => new WatchLaterPage { DataContext = new WatchLaterViewModel() }
+            PageKey.WatchLater => new WatchLaterPage { DataContext = new WatchLaterViewModel() },
+            // 我的订阅(也不在导航栏上): 入口是「我的」页的「我的订阅」/「查看更多」
+            PageKey.Subscription => new SubscriptionPage { DataContext = new SubscriptionViewModel() },
+            // 新增 PageKey 必须在这里显式接上; 别用兜底静默落到某一页
+            _ => throw new ArgumentOutOfRangeException(nameof(key), key, "未知页面")
         };
 
         _pages[key] = page;
@@ -641,7 +645,7 @@ public partial class MainWindow : FluentWindow
     /// </summary>
 
     /// <summary>
-    /// 从「我的」页点某个收藏夹卡片: 切到收藏页并直接选中那个夹。
+    /// 按夹打开收藏页: 切过去并直接选中那个夹(供"按夹跳转"的入口使用)。
     /// 与 NavigateToRegion 同一套路 —— 不新开窗口, 走导航栏那套切页。
     /// </summary>
     public void OpenFavFolder(FavFolder folder)

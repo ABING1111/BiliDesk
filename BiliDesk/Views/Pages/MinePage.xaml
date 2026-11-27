@@ -10,8 +10,10 @@
         ★ 2026-11-27: 「动态/关注/粉丝」从资料头下面单独一行搬进资料头这一行,
           紧跟在昵称块后面(整条从左连续排开) —— 中途试过"靠右对齐",
           结果头像块与三项分居页面两端、中间空 1100px, 视觉上头重脚轻, 用户退回。
-        快捷入口现有四个: 离线缓存 / 观看记录 / 我的收藏 / 稍后再看(2026-09-28 加)。
-        我的订阅暂不做(用户拍板), 参考图里那个位置空着。
+        快捷入口现有四个: 离线缓存 / 观看记录 / 我的订阅 / 稍后再看(2026-09-28 加)。
+        ★ 2026-11-27: 第三枚「我的收藏」改成「我的订阅」(用户要求, 入口对标 B 站),
+          点它进新增的「我的订阅」页(追番/追剧/订阅的合集)。
+          下方的「我的收藏」收藏夹区块**保持原样** —— 收藏页的入口仍由它承担。
     -->
     <UserControl.Resources>
         <!--
@@ -298,7 +300,7 @@
                     <Border Grid.Row="1"
                             x:Name="HeaderGap" Height="0" />
 
-                <!-- == 快捷入口(四个: 离线缓存 / 观看记录 / 我的收藏 / 稍后再看) ==
+                <!-- == 快捷入口(四个: 离线缓存 / 观看记录 / 我的订阅 / 稍后再看) ==
                      ★ 2026-11-27 改成「横向胶囊 + 从左依次排开」(用户反馈排版不自然):
                        原来是 UniformGrid 把四块**均匀撒满整行**(图标在上、文字在下, 112×66)。
                        资料头聚到左边 ~640px 之后, 两行的疏密正好相反 —— 上面紧、下面散,
@@ -361,11 +363,13 @@
                             <TextBlock Text="观看记录" Style="{StaticResource QuickEntryText}" />
                         </StackPanel>
                     </Border>
-                    <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenFavoritesClick"
-                            ToolTip="打开我的收藏">
+                    <!-- 我的订阅(2026-11-27): 追番 / 追剧 / 订阅的合集。
+                         ★ 原来的「我的收藏」胶囊已去掉 —— 收藏页入口交给下方收藏夹区块。 -->
+                    <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenSubscriptionClick"
+                            ToolTip="打开我的订阅">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE735;" Style="{StaticResource QuickEntryIcon}" />
-                            <TextBlock Text="我的收藏" Style="{StaticResource QuickEntryText}" />
+                            <TextBlock Text="&#xE006;" Style="{StaticResource QuickEntryIcon}" />
+                            <TextBlock Text="我的订阅" Style="{StaticResource QuickEntryText}" />
                         </StackPanel>
                     </Border>
                     <!-- 稍后再看(2026-09-28 新增) -->
@@ -431,27 +435,31 @@
                         Command="{Binding CreateFolderCommand}"
                         Visibility="{Binding NoFolders, Converter={StaticResource BoolToVis}}" />
 
-                <!-- 收藏夹卡片: 和视频页同一套 WrapPanel 自动换行(2026-09-26 用户要求,
-                     之前横向单行最右边那夹会被窗口右缘裁掉一截) -->
+                <!-- 收藏夹卡片: 走 CardWall(2026-11-27 用户要求"尽量让卡片铺满")。
+                     ★ 原来固定 168 宽的 WrapPanel 只在最左边排满, 右侧会剩一截空白(尤其
+                       新建/刷新按钮下方那一块)。
+                     ★ CardWall 按可用宽度算列宽, 卡片自动撑满整行; 它的 Gap=16 要求卡片
+                       左右外边距各 8(见 Helpers/CardWall.cs 的"与 VideoCard 的耦合")。
+                     ★ 封面比例沿用原来的 168:104 ≈ 1.6, 封面圆角仍写在装图的那层 Border 自己身上。 -->
                 <ItemsControl ItemsSource="{Binding Folders}" Margin="0,16,0,0"
                               Visibility="{Binding FolderError, Converter={StaticResource InvStrToVis}}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <WrapPanel Orientation="Horizontal" />
+                            <helpers:CardWallPanel helpers:CardWall.Enable="True"
+                                                   helpers:CardWall.Aspect="1.6" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <!-- 一个收藏夹卡片: 封面 168x104 + 标题 + "共N条视频 · 私密"。
-                                 封面圆角必须写在装图的那层 Border 自己身上
-                                 (外层 Border 的 CornerRadius 裁不到子元素);
-                                 右/下留 14/16 间距, WrapPanel 换行时行距就靠下边距 -->
-                            <StackPanel Width="168" Margin="0,0,14,16" Cursor="Hand"
+                            <!-- 一个收藏夹卡片: 封面 + 标题 + "共N条视频 · 私密"。
+                                 宽高都读卡片墙的继承属性, 不再写死 168x104。 -->
+                            <StackPanel Cursor="Hand" Margin="8,10" Background="Transparent"
                                         MouseLeftButtonUp="OnFolderClick"
-                                        Background="Transparent">
-                                <Grid Width="168" Height="104">
-                                    <Border x:Name="FolderCover" Width="168" Height="104"
-                                            CornerRadius="8"
+                                        Width="{Binding (helpers:CardWall.ItemWidth),
+                                                        RelativeSource={RelativeSource Self}}">
+                                <Grid Height="{Binding (helpers:CardWall.CoverHeight),
+                                                       RelativeSource={RelativeSource AncestorType=StackPanel}}">
+                                    <Border x:Name="FolderCover" CornerRadius="8"
                                             Background="{DynamicResource CardBackgroundBrush}"
                                             helpers:Cover.Source="{Binding Cover}">
                                         <!-- 注意: 不能放兜底图标 —— Cover.Source 把图画在 Border 的
