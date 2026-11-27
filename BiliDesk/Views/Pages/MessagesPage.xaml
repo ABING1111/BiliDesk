@@ -232,10 +232,19 @@
                                        Margin="0,10,0,0" HorizontalAlignment="Center" />
                         </StackPanel>
 
+                        <!-- ★ 2026-11-28 用户要求"左栏会话列表滚轮平滑":
+                             默认 ScrollUnit=Item 时偏移单位是"条", 全局 WheelScroll 的按像素
+                             两级低通会主动跳过(见 WheelScroll.IsItemScrolling), 一格滚轮 = 瞬移 3 行。
+                             与 FollowPage 的 FollowUserListStyle 同款改成 Pixel 后, 偏移是像素,
+                             左栏同样走全局平滑滚轮, 距离由设置页「滚轮速度」统一控制。 -->
                         <ListBox x:Name="SessionList" ItemsSource="{Binding Sessions}"
                                  SelectedItem="{Binding Current, Mode=TwoWay}"
                                  Background="Transparent" BorderThickness="0"
                                  Margin="8,10,8,10"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.VirtualizationMode="Recycling"
+                                 VirtualizingPanel.ScrollUnit="Pixel"
+                                 ScrollViewer.CanContentScroll="True"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  SelectionChanged="OnSessionSelectionChanged">
                             <ListBox.ItemContainerStyle>
@@ -253,8 +262,10 @@
                                     <Setter Property="Margin" Value="0" />
                                     <!-- 兜底：点击的显式入口，不依赖 ListBox 自身的选中逻辑 -->
                                     <EventSetter Event="PreviewMouseLeftButtonDown" Handler="OnSessionRowPressed" />
-                                    <!-- 右键菜单(打开 UP 主主页): 在 Opening 里现挂, 见 handler 的说明 -->
-                                    <EventSetter Event="ContextMenuOpening" Handler="OnSessionContextMenuOpening" />
+                                    <!-- 右键菜单(打开 UP 主主页): 在右键**按下**时现挂菜单本身,
+                                         不能等 ContextMenuOpening —— 那时服务已经把菜单取走了,
+                                         见 handler 的说明 -->
+                                    <EventSetter Event="PreviewMouseRightButtonDown" Handler="OnSessionRightButtonDown" />
                                     <Setter Property="Template">
                                         <Setter.Value>
                                             <ControlTemplate TargetType="ListBoxItem">
@@ -678,8 +689,10 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
-                            <!-- 表情 / 图片 -->
-                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <!-- 表情 / 图片。
+                                 ★ 贴底对齐: 输入框会随内容长高(单行 → 多行), 居中的话按钮
+                                   会浮在框的垂直中间, 离底部越来越远。 -->
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Bottom">
                                 <Button Style="{StaticResource MsgToolButtonStyle}"
                                         Command="{Binding ToggleEmojiPanelCommand}"
                                         ToolTip="表情" IsEnabled="{Binding HasCurrent}">
@@ -694,13 +707,21 @@
                                 </Button>
                             </StackPanel>
 
+                            <!-- ★ 2026-11-28 用户要求"消息过长自动扩展":
+                                 多行 + 换行后, 外层 Auto 行会随内容长高(空框约 50, 每多一行 +16.5,
+                                 最多 120 ≈ 4 行), 超过 MaxHeight 就在框内出纵向滚动条,
+                                 不再把输入区撑爆。
+                                 宽度由所在列的 * 决定, 所以 TextBox 量出来的高度就是换行后的真实行数。 -->
                             <TextBox x:Name="DraftBox" Grid.Column="1"
                                      Style="{StaticResource FluentTextBoxStyle}"
                                      Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
                                      KeyDown="OnDraftKeyDown" MaxLength="500"
+                                     AcceptsReturn="True" TextWrapping="Wrap"
+                                     MaxHeight="120"
+                                     VerticalScrollBarVisibility="Auto"
                                      IsEnabled="{Binding CanType}" />
 
-                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom">
                                 <!-- 上传中: 按钮位置换成一句提示, 不弹窗、不阻塞界面 -->
                                 <TextBlock Text="正在发送图片…" VerticalAlignment="Center" Margin="0,0,10,0"
                                            FontSize="11.5"

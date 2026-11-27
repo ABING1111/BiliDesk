@@ -20,6 +20,21 @@ public partial class MessagesPage : UserControl, IRefreshable
     /// <summary>互动列表是否已经请求过下一页(防止滚到底时连发几次)</summary>
     private bool _feedMorePending;
 
+    /// <summary>
+    /// 有一次右键引起的选中变化还没处理。WPF 的 ListBoxItem.OnMouseRightButtonDown 默认
+    /// 也会把行选中(它内部调 NotifyListItemClicked), 而选中变化会走 SelectionChanged →
+    /// 打开会话。这个标记让**紧接着的那一次**选中变化只回滚、不加载私信,
+    /// 处理完立刻清掉 —— 否则我们自己的回滚会再进一次 SelectionChanged, 又被当成右键。
+    /// 见 <see cref="OnSessionRightButtonDown"/>。
+    /// </summary>
+    private bool _pendingRightClickRestore;
+
+    /// <summary>右键按下前右栏正在显示的会话(回滚选中用)</summary>
+    private MsgSession? _selectionBeforeRightClick;
+
+    /// <summary>正在把选中回滚到右键前的会话(回滚自身触发的 SelectionChanged 要忽略)</summary>
+    private bool _restoringSelection;
+
     /// <summary>F5 / 顶部刷新按钮: 刷当前 Tab</summary>
     public void Refresh() => _ = Vm?.RefreshAsync();
 
@@ -112,6 +127,39 @@ public partial class MessagesPage : UserControl, IRefreshable
         // 直接用 ListBox 自己的选中项, 不绕 Vm.Current 一圈 ——
         // 少一层"选中 → 双向绑定回写 → 再读回来"的往返, 就少一个"点了没反应"的可能。
         if ((sender as ListBox)?.SelectedItem is not MsgSession session) return;
+
+        // ★ 右键引起的选中: 不打开会话, 并把选中回滚到右键前的那条(2026-11-28)。
+        //   WPF 的 ListBoxItem 右键按下时自己也会选中行, 只删掉旧版手动改 SelectedItem
+        //   的代码还不够 —— 选中变化照样会走到这里。
+        //
+        // ★★ 回滚必须用**高于 Render(7) 的优先级**(2026-11-28 用户反馈"右键时右边会闪一下
+        //   对方的聊天页"): 第一次写成 Input(5), 而 WPF 的布局/渲染跑在 Render(7) 上 ——
+        //   优先级更高, 于是错误状态先被排了一帧版, 下一轮才轮到我们回滚, 肉眼就是闪一下。
+        //   改成 Normal(9) 后, 回滚一定在渲染之前完成, 那一帧根本不会发生。
+        //
+        // ★★ 顺序也不能反(2026-11-28 第二版): 回滚自身也会触发一次 SelectionChanged。
+        //   如果先判"右键标记"再判 _restoringSelection, 这次回滚就会被当成新的右键事件,
+        //   而 _selectionBeforeRightClick 已经被清成 null —— 于是再回滚成"没有选中",
+        //   右栏彻底变空。所以 _restoringSelection 必须最先判, 右键标记只用一次就清。
+        if (_restoringSelection) return;
+
+        if (_pendingRightClickRestore)
+        {
+            _pendingRightClickRestore = false;
+            var shown = _selectionBeforeRightClick;
+            _selectionBeforeRightClick = null;
+            if (!ReferenceEquals(SessionList.SelectedItem, shown))
+            {
+                _restoringSelection = true;
+                _ = Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try { SessionList.SelectedItem = shown; }
+                    finally { _restoringSelection = false; }
+                }), System.Windows.Threading.DispatcherPriority.Normal);
+            }
+            return;
+        }
+
         await OpenSessionAsync(session);
     }
 
@@ -170,24 +218,33 @@ public partial class MessagesPage : UserControl, IRefreshable
     /// <summary>
     /// 会话行的右键菜单(2026-11-15 用户要求, 视觉与首页视频卡片的右键菜单一致)。
     ///
-    /// ★★ "右键两下才出现"的根因与修法(2026-11-16 实测钉下来的):
-    ///   在 ContextMenuOpening **事件里**给 row.ContextMenu 赋值, WPF 的
-    ///   ContextMenuService 在事件**之前**就已经完成了"取菜单"这一步 —— 它拿到的是
-    ///   null, 直接不弹; 等下一次右键时菜单已经挂在元素上, 才弹得出来。
-    ///   (MSDN 对 ContextMenuOpening 的备注原话就是 "You should not use this event
-    ///    to set the ContextMenu property"。)
-    ///   修法: 赋值之后**手动 IsOpen=true**, 并把事件标记 Handled —— 让系统这一次就弹,
-    ///   而不是等下一回。VideoCard 那边没这个问题是因为它的菜单建好后就一直挂在元素上,
-    ///   只有"菜单内容随数据修正"走 Opening; 我们这里是每行动态造菜单, 必须补这一下。
+    /// ★★ 为什么挂在 **PreviewMouseRightButtonDown**、并且不再改选中项(2026-11-28 修):
+    ///   旧版在 ContextMenuOpening 里给 row.ContextMenu 赋值再手动 IsOpen —— WPF 的
+    ///   ContextMenuService 在事件**之前**就已经完成了"取菜单"这一步, 拿到的是 null,
+    ///   只能靠手动 IsOpen 补一枪; 而手动弹出的菜单绕过了服务正常的打开流程。
+    ///   更直接的副作用是旧版顺手把 SelectedItem 改成被右键的那一行, 选中变化又触发
+    ///   SelectionChanged → OpenSessionAsync, 表现就是"右键一下等于左键点了会话"
+    ///   (右栏内容被切走、私信开始加载)。现在:
+    ///   · 菜单在右键**按下**时就挂到行上, 由服务在右键抬起时按正常流程弹出;
+    ///   · 不再手动改选中项。但 WPF 的 ListBoxItem 右键按下时**自己**也会选中行,
+    ///     所以还要配合 <see cref="OnSessionSelectionChanged"/> 里的 `_pendingRightClickRestore`
+    ///     分支: 那条选中变化只回滚、不加载, 右栏保持原样。
     /// </summary>
-    private void OnSessionContextMenuOpening(object sender, ContextMenuEventArgs e)
+    private void OnSessionRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not FrameworkElement row) return;
         if (row.DataContext is not MsgSession session) return;
 
-        // 右键同时钳住选中: 右键一条没选中的会话时, 右边内容也应该跟着切过去
-        if (!ReferenceEquals(SessionList.SelectedItem, session))
-            SessionList.SelectedItem = session;
+        // 记下右键前的显示会话 + 标记"下一次选中变化是右键引起的":
+        // 选中变化在本次事件里同步发生, 复位放到 Input 优先级(本次输入处理完之后),
+        // 所以既能拦住它, 又不会误伤后续真正的左键。
+        _pendingRightClickRestore = true;
+        _selectionBeforeRightClick = Vm?.Current;
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _pendingRightClickRestore = false;
+            _selectionBeforeRightClick = null;
+        }), System.Windows.Threading.DispatcherPriority.Input);
 
         var menu = new ContextMenu();
         menu.Items.Add(MakeMenuItem("打开 UP 主主页", "\uE77B", () => OpenUserSpace(session.TalkerId)));
@@ -197,13 +254,8 @@ public partial class MessagesPage : UserControl, IRefreshable
         menu.Items.Add(MakeMenuItem("在官方消息页打开", "\uE8A7", () =>
             Services.LinkLauncher.OpenInBrowser("https://message.bilibili.com/", Window.GetWindow(this))));
 
+        // 每次右键都按当前行重建: ListBoxItem 会被虚拟化复用, 旧菜单的闭包指向旧会话。
         row.ContextMenu = menu;
-
-        // ★ 赋值发生在服务取完菜单之后, 本次要自己弹(见方法头部的根因说明)
-        e.Handled = true;
-        menu.PlacementTarget = row;
-        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
-        menu.IsOpen = true;
     }
 
     /// <summary>与 VideoCard.MakeMenuItem 同款: 图标 + 文字(首页右键菜单的观感)</summary>
@@ -227,10 +279,15 @@ public partial class MessagesPage : UserControl, IRefreshable
 
     // ---------------------------------------------------------------- 输入
 
-    /// <summary>回车即发送(B 站网页端的习惯)</summary>
+    /// <summary>
+    /// 回车即发送(B 站网页端的习惯)。
+    /// ★ 输入框现在支持多行自动扩展, Shift+Enter 留给换行 —— 不 Handle,
+    ///   交给 TextBox 自己插入换行符(它已 AcceptsReturn=true)。
+    /// </summary>
     private void OnDraftKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter) return;
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) return;
         e.Handled = true;
         if (Vm?.SendCommand.CanExecute(null) == true) Vm.SendCommand.Execute(null);
     }
