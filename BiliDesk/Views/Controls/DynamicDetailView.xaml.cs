@@ -276,6 +276,14 @@ public partial class DynamicDetailView : UserControl
     private void OnCancelReplyClick(object sender, RoutedEventArgs e)
         => Comments.CancelReply();
 
+    /// <summary>
+    /// Enter 发布, Shift+Enter 换行。
+    ///
+    /// ★ 必须挂 <b>PreviewKeyDown</b>(隧道)而不是 KeyDown: 输入框 AcceptsReturn=True,
+    ///   Enter 会在 TextBox 自己的 KeyDown 里先被吃掉并插入换行, 冒泡到 UserControl
+    ///   的处理器时已经晚了 —— 表现就是"按 Enter 只换行, 评论发不出去"。
+    ///   与播放器评论输入框(PlayerWindow.OnCommentDraftPreviewKeyDown)同一套做法。
+    /// </summary>
     private void OnComposerKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)

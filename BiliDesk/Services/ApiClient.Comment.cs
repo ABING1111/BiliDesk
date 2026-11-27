@@ -218,7 +218,11 @@ public partial class ApiClient
             ParentRpid = GetLongLoose(e, "parent"),
             LikeCount = GetIntSafe(e, "like"),
             IsLiked = myAction == 1,
-            IsDisliked = myAction == 2
+            IsDisliked = myAction == 2,
+            // 删除入口的判定依据: 当前登录用户 + 本条所在稿件/动态的作者。
+            // ★ 解析时快照, 见 CommentItem.SelfMid 的说明。
+            SelfMid = SessionManager.Instance.HasLogin ? ParseMid() : 0,
+            OwnerMid = upperMid
         };
 
         if (e.TryGetProperty("member", out var m))

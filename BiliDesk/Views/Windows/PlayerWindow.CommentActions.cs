@@ -19,6 +19,7 @@ using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
+using BiliDesk.Views.Windows;
 using LibVLCSharp.Shared;
 using LibVLCSharp.WPF;
 using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
@@ -137,7 +138,7 @@ public partial class PlayerWindow : FluentWindow
     {
         try
         {
-            var (_, _, list) = await Svc.Api.GetReplyRepliesAsync(_aid, root.Rpid, pn: 1, ps: 20);
+            var (_, _, list) = await Svc.Api.GetReplyRepliesAsync(_aid, root.Rpid, pn: 1, ps: 20, upperMid: _ownerMid);
             if (_closing || list.Count == 0) return;
             // 重拉只覆盖第一页: 页码复位, "展开更多"重新可用(已加载的第 2 页会被第一页取代)
             root.RepliesNextPage = 2;
@@ -195,7 +196,7 @@ public partial class PlayerWindow : FluentWindow
         item.IsLoadingReplies = true;
         try
         {
-            var (_, _, more) = await Svc.Api.GetReplyRepliesAsync(_aid, item.Rpid, pn: item.RepliesNextPage, ps: 20);
+            var (_, _, more) = await Svc.Api.GetReplyRepliesAsync(_aid, item.Rpid, pn: item.RepliesNextPage, ps: 20, upperMid: _ownerMid);
             item.RepliesNextPage++;
             if (_closing) return;
             // 详情页已经关了(或换了一条线程): 不能再往这条线程里加回复 ——
@@ -320,6 +321,130 @@ public partial class PlayerWindow : FluentWindow
         {
             item.LikeBusy = false;
         }
+    }
+
+    // ------------------------------------------------------------ 删除评论(2026-11-28)
+
+    /// <summary>
+    /// 点评论操作行里「回复」右侧的删除图标。
+    ///
+    /// 权限有两个来源(与 B 站 web 端一致):
+    ///   · 评论是**自己发的** —— 任何稿件下都能删;
+    ///   · 自己是**本视频的 UP 主** —— 能删自己视频下别人的评论(含楼中楼回复)。
+    /// 入口显隐由 <see cref="CommentItem.CanDelete"/> 决定; 这里再判一次, 因为
+    /// 模板可能被复用到别的数据上下文上, 不能只靠 XAML 的 Visibility。
+    ///
+    /// 删除是**不可恢复**的操作, 所以先弹确认框。成功后直接从本地集合里摘掉,
+    /// 不整页重拉: 服务端主键已经失效, 本地移除的语义与重拉完全一致,
+    /// 还不会打断用户的滚动位置。
+    /// </summary>
+    private async void OnCommentDeleteClick(object sender, RoutedEventArgs e)
+    {
+        if (_closing || _aid <= 0) return;
+        if ((sender as FrameworkElement)?.DataContext is not CommentItem item) return;
+        if (item.Rpid <= 0 || !item.CanDelete || item.DeleteBusy) return;
+        if (!Svc.Session.HasLogin)
+        {
+            Svc.Toast.Show("请先登录后再删除评论");
+            return;
+        }
+
+        var mine = item.SelfMid > 0 && item.Mid == item.SelfMid;
+        var body = mine
+            ? "确定删除这条评论吗？删除后无法恢复。"
+            : "你是本视频的 UP 主，确定删除这条评论吗？删除后无法恢复。";
+        if (!ConfirmDialog.Show(body, "删除评论", "删除", owner: this)) return;
+
+        var aidAtStart = _aid;
+        item.DeleteBusy = true;
+        try
+        {
+            var (ok, err) = await Svc.Api.DeleteCommentAsync(aidAtStart, item.Rpid);
+            if (_closing) return;
+            if (!ok)
+            {
+                Svc.Toast.Show(err ?? "删除评论失败");
+                return;
+            }
+            // 请求期间用户可能已经换片: 旧视频的删除结果不能套到新列表上
+            if (_aid != aidAtStart) return;
+            RemoveDeletedComment(item);
+            Svc.Toast.Show("评论已删除");
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            if (!_closing) Svc.Toast.Show("删除评论失败");
+        }
+        finally
+        {
+            item.DeleteBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 删除成功后把条目从**本地界面**摘掉(服务端已经删了, 这里只做同步)。
+    ///
+    /// 分两种情况:
+    ///   · 楼中楼回复: 只在详情页里能点删除 —— 从线程根的 Replies 里移除,
+    ///     同步预览、回复总数与详情卡片(删的正好是详情焦点时退回线程根);
+    ///   · 顶层评论: 从根列表移除; 如果正开着它的详情页, 先退出详情再移除。
+    ///
+    /// ★ 不调 LoadCommentsAsync(force:true): 那会重建整份集合、滚动位置跳回顶部,
+    ///   而删除的语义只是"少一条", 本地摘掉即可。
+    /// </summary>
+    private void RemoveDeletedComment(CommentItem item)
+    {
+        if (item == null || item.Rpid <= 0) return;
+
+        // ① 楼中楼回复(详情页): 线程根还在, 且这一条确实在它的回复集合里
+        var root = _detailThreadRoot;
+        if (root != null && !ReferenceEquals(root, item) && root.Replies.Remove(item))
+        {
+            if (root.ReplyCount > 0) root.ReplyCount--;
+            // 列表页的楼中楼预览方框只放前 3 条: 删掉的若是其中一条, 要从后面补一条上来
+            root.SyncPreviewReplies();
+            root.NotifyRepliesChanged();
+            // 删掉的正好是详情页上方那张焦点卡片 → 退回线程根, 别留一张已删评论的卡片
+            if (ReferenceEquals(_detailFocus, item))
+            {
+                _detailFocus = root;
+                CommentDetailCard.Content = root;
+            }
+            // 回复目标被删了 → 输入框退回"回复这层楼", 否则会继续 @ 一个不存在的人
+            if (ReferenceEquals(_replyTarget, item))
+                SetReplyTarget(root, focus: false);
+            return;
+        }
+
+        // ② 顶层评论: 正在看它的详情页时先退回列表(CloseCommentDetail 会正常收尾)
+        if (IsCommentDetailOpen && ReferenceEquals(_detailThreadRoot, item))
+            CloseCommentDetail();
+
+        if (!_commentItems.Remove(item)) return;
+        _commentSeenRpids.Remove(item.Rpid);
+        // 根评论总数减一。接口没给总数(0)时保持 0, 提示文案回落到当前实际条数。
+        if (_commentTotal > 0) _commentTotal--;
+
+        var shownTotal = _commentTotal > 0 ? _commentTotal : _commentItems.Count;
+        CommentHint.Text = shownTotal > 0
+            ? $"共 {VideoItem.FormatCount(shownTotal)} 条评论"
+            : "暂无评论";
+        // 排序入口只在"还有内容"时保留; 删到空列表就一起收起来
+        UpdateCommentSortUi(visible: _commentItems.Count > 0 || IsCommentDetailOpen);
+        UpdateCommentMoreUi();
+        // 删掉的若是缓冲里还没展示的评论, 清理一下, 免得下一批又把它放回来
+        if (_commentPending.Count > 0)
+        {
+            var kept = _commentPending.Where(c => c.Rpid != item.Rpid).ToList();
+            if (kept.Count != _commentPending.Count)
+            {
+                _commentPending.Clear();
+                foreach (var c in kept) _commentPending.Enqueue(c);
+            }
+        }
+        // 内容不足一屏时补放下一批(删除后可能更矮了)
+        ScheduleCommentAutoLoad();
     }
 
     // ------------------------------------------------------------ 发表评论

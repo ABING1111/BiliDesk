@@ -65,4 +65,46 @@ public class CommentItemTests
 
         Assert.Equal("共 5 条回复", root.ReplyBoxText);
     }
+
+    // ------------------------------------------------------------ 删除权限(2026-11-28)
+
+    [Fact]
+    public void 自己的评论可以删除()
+    {
+        var c = new CommentItem { Rpid = 10, Mid = 1001, SelfMid = 1001, OwnerMid = 2002 };
+        Assert.True(c.CanDelete);
+        Assert.True(c.CanDeleteNow);
+    }
+
+    [Fact]
+    public void 别人视频里别人的评论不能删除()
+    {
+        var c = new CommentItem { Rpid = 10, Mid = 3003, SelfMid = 1001, OwnerMid = 2002 };
+        Assert.False(c.CanDelete);
+    }
+
+    [Fact]
+    public void UP主可以删除自己视频下他人的评论()
+    {
+        var c = new CommentItem { Rpid = 10, Mid = 3003, SelfMid = 2002, OwnerMid = 2002 };
+        Assert.True(c.CanDelete);
+    }
+
+    [Fact]
+    public void 未登录时没有删除入口()
+    {
+        var c = new CommentItem { Rpid = 10, Mid = 1001, SelfMid = 0, OwnerMid = 1001 };
+        Assert.False(c.CanDelete);
+    }
+
+    [Fact]
+    public void 删除请求在途时不能再点()
+    {
+        var c = new CommentItem { Rpid = 10, Mid = 1001, SelfMid = 1001, OwnerMid = 2002 };
+        c.DeleteBusy = true;
+        Assert.True(c.CanDelete);      // 入口仍然显示
+        Assert.False(c.CanDeleteNow);  // 但暂时不可点
+        c.DeleteBusy = false;
+        Assert.True(c.CanDeleteNow);
+    }
 }

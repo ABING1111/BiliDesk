@@ -421,6 +421,69 @@ public class CommentSectionViewModel : ObservableObject
         }
     }
 
+    // ------------------------------------------------------------ 删除评论(2026-11-28)
+
+    /// <summary>
+    /// 删除一条评论(顶层评论或楼中楼回复)。
+    ///
+    /// 权限判定与视频评论区完全一致(见 <see cref="CommentItem.CanDelete"/>):
+    /// 自己的评论可以删; 当前用户是这条动态的作者时, 可以删动态下的他人评论。
+    /// 服务端才是最终权威, 这里只做入口显隐与本地同步。
+    ///
+    /// 成功后从本地集合摘掉, **不整页重拉**: 删除只是少一条, 重拉会让滚动位置跳回顶部。
+    /// </summary>
+    public async Task<(bool ok, string? err)> DeleteAsync(CommentItem item)
+    {
+        if (item == null || item.Rpid <= 0 || !item.CanDelete || item.DeleteBusy)
+            return (false, null);
+        if (_oid <= 0) return (false, "没拿到评论区 id, 暂时不能删除");
+
+        // 记下发起时的目标: 删除期间用户可能切到别的动态
+        var oidAtStart = _oid;
+        var typeAtStart = _commentType;
+
+        item.DeleteBusy = true;
+        try
+        {
+            var (ok, err) = await Svc.Api.DeleteCommentAsync(oidAtStart, item.Rpid, typeAtStart);
+            if (!ok) return (false, err ?? "删除评论失败");
+            // 已经切走了: 请求删的是旧动态的内容, 不要动新动态的列表
+            if (oidAtStart != _oid || typeAtStart != _commentType) return (true, null);
+
+            var root = DetailRoot;
+            // ① 楼中楼回复(详情态): 从线程根里摘掉, 同步预览/回复数/详情标题
+            if (root != null && !ReferenceEquals(root, item) && root.Replies.Remove(item))
+            {
+                if (root.ReplyCount > 0) root.ReplyCount--;
+                root.SyncPreviewReplies();
+                root.NotifyRepliesChanged();
+                if (ReferenceEquals(ReplyTarget, item)) ReplyTarget = root;
+                OnPropertyChanged(nameof(DetailHeaderText));
+                OnPropertyChanged(nameof(HasMoreReplies));
+                return (true, null);
+            }
+
+            // ② 顶层评论: 正在看它的详情时先退回列表
+            if (root != null && ReferenceEquals(root, item)) CloseThread();
+            if (Comments.Remove(item))
+            {
+                if (Total > 0) Total--;
+                // 删空时把计数归零, 避免界面还挂着"评论 1"却一条都没有
+                if (Comments.Count == 0) Total = 0;
+            }
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "删除评论失败: " + ex.Message);
+        }
+        finally
+        {
+            item.DeleteBusy = false;
+        }
+    }
+
     // ------------------------------------------------------------ 发评论 / 回复
 
     public async Task PostAsync()

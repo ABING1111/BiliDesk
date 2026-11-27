@@ -704,6 +704,19 @@
                                    FontSize="12" VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextTertiaryBrush}" />
                     </Button>
+                    <!-- ★ 删除评论(2026-11-28): 图标形式, 紧跟在**回复键右边**(IP 属地之前)。
+                         显隐由 CommentItem.CanDelete 决定: 自己发的评论, 或自己是本视频 UP 主
+                         (UP 主可以删自己视频下任何人的评论)。未登录时 SelfMid=0, 整块不显示。
+                         IsEnabled 绑 CanDeleteNow: 删除请求在途时暂时不可点, 防连点。 -->
+                    <Button Style="{StaticResource CommentActionButtonStyle}" Margin="4,0,0,0"
+                            Click="OnCommentDeleteClick"
+                            IsEnabled="{Binding CanDeleteNow}"
+                            ToolTip="删除这条评论"
+                            Visibility="{Binding CanDelete, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </Button>
                     <!-- ★ IP 属地摆在**回复键右边**(2026-11-12 用户要求)。
                          接口给的 Location 已自带 "IP属地：" 前缀, 直接显示即可;
                          没有就整块不显示(用户可在 B 站设置里关掉 / 未登录时接口不下发)。 -->

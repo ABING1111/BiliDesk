@@ -28,13 +28,13 @@ public partial class ConfirmDialog : FluentWindow
 
     private void OnCancelClick(object sender, RoutedEventArgs e) => DialogResult = false;
 
-    /// <summary>弹出确认框; owner 默认取主窗口。</summary>
+    /// <summary>弹出确认框; owner 默认取主窗口, 从独立窗口(播放器)调用时可显式传入。</summary>
     public static bool Show(string message, string title = "BiliDesk",
-        string okText = "确定", string cancelText = "取消")
+        string okText = "确定", string cancelText = "取消", Window? owner = null)
     {
         var dlg = new ConfirmDialog(message, title, okText, cancelText)
         {
-            Owner = SvcWindow.Main ?? Application.Current?.MainWindow
+            Owner = owner ?? SvcWindow.Main ?? Application.Current?.MainWindow
         };
         return dlg.ShowDialog() == true;
     }

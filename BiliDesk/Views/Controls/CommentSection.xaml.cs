@@ -7,6 +7,7 @@ using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
 using BiliDesk.ViewModels;
+using BiliDesk.Views.Windows;
 
 namespace BiliDesk.Views.Controls;
 
@@ -183,5 +184,33 @@ public partial class CommentSection : UserControl
     {
         if ((sender as FrameworkElement)?.DataContext is not CommentItem c) return;
         _ = _vm.DislikeCommentAsync(c, !c.IsDisliked);
+    }
+
+    /// <summary>
+    /// 点评论操作行里「回复」右侧的删除图标。
+    ///
+    /// 与视频评论区同一套规则: 自己的评论可以删; 当前用户是这条动态的作者时,
+    /// 可以删动态下他人的评论。删除不可恢复, 所以先弹确认框; 成功后由 VM
+    /// 从本地集合摘掉(不整页重拉, 保持滚动位置)。
+    /// </summary>
+    private async void OnCommentDeleteClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not CommentItem c) return;
+        if (c.Rpid <= 0 || !c.CanDelete || c.DeleteBusy) return;
+        if (!Svc.Session.HasLogin)
+        {
+            Svc.Toast.Show("请先登录后再删除评论");
+            return;
+        }
+
+        var mine = c.SelfMid > 0 && c.Mid == c.SelfMid;
+        var body = mine
+            ? "确定删除这条评论吗？删除后无法恢复。"
+            : "你是这条动态的发布者，确定删除这条评论吗？删除后无法恢复。";
+        if (!ConfirmDialog.Show(body, "删除评论", "删除", owner: Window.GetWindow(this))) return;
+
+        var (ok, err) = await _vm.DeleteAsync(c);
+        if (ok) Svc.Toast.Show("评论已删除");
+        else if (!string.IsNullOrEmpty(err)) Svc.Toast.Show(err);
     }
 }

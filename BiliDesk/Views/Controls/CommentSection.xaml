@@ -192,6 +192,15 @@
                                 <TextBlock Text="&#xE90A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                            FontSize="12" />
                             </Button>
+                            <!-- 删除评论(2026-11-28): 图标形式, 紧跟回复键右侧; 只对自己/自己动态下的评论显示 -->
+                            <Button Style="{StaticResource CommentActionButtonStyle}" Margin="4,0,0,0"
+                                    Click="OnCommentDeleteClick"
+                                    IsEnabled="{Binding CanDeleteNow}"
+                                    ToolTip="删除这条评论"
+                                    Visibility="{Binding CanDelete, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="12" />
+                            </Button>
                         </StackPanel>
                         <!-- 楼中楼预览: **整框可点** → 打开评论详情页(与视频评论区一致)
                              ★ 2026-11-14: 去掉 IsHitTestVisible=False, 让预览正文里的链接也能点。
@@ -367,6 +376,15 @@
                                 <TextBlock Text="&#xE90A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                            FontSize="12" />
                             </Button>
+                            <!-- 删除评论(2026-11-28): 图标形式, 紧跟回复键右侧; 只对自己/自己动态下的评论显示 -->
+                            <Button Style="{StaticResource CommentActionButtonStyle}" Margin="4,0,0,0"
+                                    Click="OnCommentDeleteClick"
+                                    IsEnabled="{Binding CanDeleteNow}"
+                                    ToolTip="删除这条评论"
+                                    Visibility="{Binding CanDelete, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="12" />
+                            </Button>
                         </StackPanel>
                     </StackPanel>
                 </Grid>
@@ -448,6 +466,15 @@
                             <Button Style="{StaticResource CommentActionButtonStyle}" Margin="4,0,0,0"
                                     Click="OnCommentReplyClick" ToolTip="回复这条回复">
                                 <TextBlock Text="&#xE90A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="11" />
+                            </Button>
+                            <!-- 删除回复(2026-11-28): 图标形式, 紧跟回复键右侧 -->
+                            <Button Style="{StaticResource CommentActionButtonStyle}" Margin="4,0,0,0"
+                                    Click="OnCommentDeleteClick"
+                                    IsEnabled="{Binding CanDeleteNow}"
+                                    ToolTip="删除这条回复"
+                                    Visibility="{Binding CanDelete, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                            FontSize="11" />
                             </Button>
                             <TextBlock Text="{Binding RcTime}" FontSize="10" Margin="8,0,0,0"

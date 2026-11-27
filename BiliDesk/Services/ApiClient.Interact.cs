@@ -218,6 +218,53 @@ public partial class ApiClient
     }
 
     /// <summary>
+    /// 删除一条评论(顶层评论或楼中楼回复)。
+    ///
+    /// 接口: `POST /x/v2/reply/del` —— `oid` 是视频 aid / 动态 id、`type` 与取评论时一致
+    /// (1 = 稿件, 17 = 动态)、`rpid` 是评论 id。要带 csrf(bili_jct), 所以必须登录。
+    ///
+    /// 权限由服务端判定: 自己的评论可以删; 稿件/动态作者可以删自己地盘里的**他人评论**。
+    /// 客户端只在入口显隐时做同样的判断(见 <see cref="CommentItem.CanDelete"/>),
+    /// 真正的权威仍是这里 —— 权限不足时服务端回错, 不能本地硬删。
+    /// </summary>
+    public async Task<(bool ok, string? err)> DeleteCommentAsync(
+        long aid, long rpid, int type = 1, string? referer = null)
+    {
+        if (aid <= 0 || rpid <= 0) return (false, "参数不完整");
+
+        var (code, msg) = await PostFormCodeAsync(
+            "https://api.bilibili.com/x/v2/reply/del",
+            new Dictionary<string, string>
+            {
+                ["oid"] = aid.ToString(),
+                ["type"] = type.ToString(),
+                ["rpid"] = rpid.ToString()
+            },
+            referer: referer ?? (type is 11 or 17 ? "https://t.bilibili.com/" : "https://www.bilibili.com/"));
+        if (code == 0) return (true, null);
+        // 已经被别人(或另一台设备)删掉了 —— 用户的目标状态已经达成, 按成功处理,
+        // 界面据此把这条从列表里摘掉, 而不是弹一个"删除失败"让人反复点。
+        if (code == 12022) return (true, null);
+
+        var friendly = code switch
+        {
+            -101 => "请先登录后再删除",
+            -102 => "账号被封停, 无法删除评论",
+            -111 => "登录状态已失效, 请重新登录",
+            -403 => "没有权限删除这条评论",
+            -400 => "评论不存在或已被删除",
+            -404 => "评论不存在或已被删除",
+            -509 => "操作太频繁, 稍后再试",
+            12002 => "该视频的评论区已关闭",
+            12006 => "评论不存在或已被删除",
+            12009 => "评论区类型不合法(这是客户端 bug, 请反馈)",
+            12022 => "评论已经被删除了",
+            _ => msg
+        };
+        return (false, friendly);
+    }
+
+    /// <summary>
     /// 查询当前用户是否已点赞该视频(aid)。
     ///
     /// ★ 2026-10-01 从 <c>Task&lt;bool?&gt;</c> 改为 (ok, err, value):

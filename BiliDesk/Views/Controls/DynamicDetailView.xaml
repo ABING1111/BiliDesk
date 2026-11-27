@@ -326,7 +326,7 @@
                                                 UpdateSourceTrigger=PropertyChanged}"
                                  IsEnabled="{Binding DataContext.IsNotLoggedIn, ElementName=Comments,
                                                      Converter={StaticResource InvBool}}"
-                                 KeyDown="OnComposerKeyDown" />
+                                 PreviewKeyDown="OnComposerKeyDown" />
                         <Button x:Name="PostCommentButton" Grid.Column="1"
                                 Content="{Binding DataContext.PostButtonText, ElementName=Comments}"
                                 Margin="8,0,0,0" Padding="16,8"

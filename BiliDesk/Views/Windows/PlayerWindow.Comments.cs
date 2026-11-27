@@ -452,7 +452,7 @@ public partial class PlayerWindow : FluentWindow
         try
         {
             var (cmtOk, cmtErr, list, total, nextCursor, isEnd) =
-                await Svc.Api.GetCommentsAsync(aidAtStart, 30, _commentSort);
+                await Svc.Api.GetCommentsAsync(aidAtStart, 30, _commentSort, upperMid: _ownerMid);
             // 实际拿到的列表按哪个顺序排(热门的"空列表回退"会把它改成 2)。
             // ★ 不回写 _commentSort: 那是用户跨视频记住的偏好, 不能因为一个视频热门为空
             //   就永久改成时间; 排序入口只按本次实际顺序点亮。
@@ -474,7 +474,7 @@ public partial class PlayerWindow : FluentWindow
             if (cmtOk && _commentSort == 3 && CommentWindow.ShouldFallbackHot(hotRootCount, total))
             {
                 var (fbOk, _, fbList, fbTotal, fbNext, fbEnd) =
-                    await Svc.Api.GetCommentsAsync(aidAtStart, 30, 2);
+                    await Svc.Api.GetCommentsAsync(aidAtStart, 30, 2, upperMid: _ownerMid);
                 if (fbOk && fbList.Count > list.Count && _commentSort == 3)
                 {
                     WriteLibVLCDebug(
@@ -715,7 +715,7 @@ public partial class PlayerWindow : FluentWindow
         try
         {
             var (ok, err, more, total, nextCursor, isEnd) =
-                await Svc.Api.GetCommentsAsync(aidAtStart, 30, _effectiveCommentSort, next);
+                await Svc.Api.GetCommentsAsync(aidAtStart, 30, _effectiveCommentSort, next, upperMid: _ownerMid);
             if (_closing || _aid != aidAtStart || _commentListVersion != versionAtStart) return;
             if (!ok)
             {
@@ -1552,7 +1552,7 @@ public partial class PlayerWindow : FluentWindow
             var guard = 0;
             while (!_closing && root.HasMoreReplies && guard++ < 3)
             {
-                var (_, _, more) = await Svc.Api.GetReplyRepliesAsync(aidAtStart, root.Rpid, pn: root.RepliesNextPage, ps: 20);
+                var (_, _, more) = await Svc.Api.GetReplyRepliesAsync(aidAtStart, root.Rpid, pn: root.RepliesNextPage, ps: 20, upperMid: _ownerMid);
                 if (_closing || _aid != aidAtStart) return;
                 // 用户已经关掉详情页(或换到别的线程): 不能再往 root 里塞回复 ——
                 // 关闭时已经把 Replies 收回到预览量(见 CommentItem.TrimRepliesToPreview),
