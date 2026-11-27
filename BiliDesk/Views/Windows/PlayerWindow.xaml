@@ -3874,10 +3874,13 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <!-- Height 由代码控制(普通 66 / 展开 200, 带动画); XAML 只给初值 -->
+                            <!-- ★ 2026-11-28 与私信输入框一致, 评论框改为**跟随内容自动长高**:
+                                 不设 Height, 由 MinHeight(66, 约两三行)撑住静止态, 写长评时
+                                 一行行长到 MaxHeight(200, 约九行), 再多就在框内滚动。
+                                 展开按钮随之退化为"固定展开"(见 PlayerWindow.CommentActions.ApplyComposerSize)。 -->
                             <TextBox x:Name="CommentDraft" Grid.Column="0"
                                      Style="{StaticResource FluentTextBoxStyle}"
-                                     Height="66" MaxLength="1000"
+                                     MinHeight="66" MaxHeight="200" MaxLength="1000"
                                      TextWrapping="Wrap" AcceptsReturn="True"
                                      VerticalScrollBarVisibility="Auto"
                                      TextChanged="OnCommentDraftChanged"

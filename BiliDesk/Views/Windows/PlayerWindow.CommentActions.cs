@@ -364,30 +364,35 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool _composerExpanded;
 
-    /// <summary>输入框普通高度(两三行, 与旧版内嵌输入框一致)</summary>
-    private const double ComposerNormalHeight = 66;
-
-    /// <summary>输入框展开高度(约 9 行, 1000 字长评能整篇通读)</summary>
+    /// <summary>输入框固定展开高度(约 9 行, 1000 字长评能整篇通读)。
+    /// 静止高度由 XAML 的 MinHeight=66 决定, 跟随内容长高见 <see cref="ApplyComposerSize"/>。</summary>
     private const double ComposerExpandedHeight = 200;
 
     /// <summary>
-    /// 展开/收回输入框高度。
-    /// ★ 直接赋值 Height, 不做动画: 试过 DoubleAnimation, 探针/真机上都出现过"动画时钟
-    ///   未推进、Height 弹回原值"的不稳(WPF 高度动画依赖渲染节拍, 在面板刚展开/布局
-    ///   未稳时不可靠)。这里是功能性切换不是装饰, 行为确定性优先 —— 高度瞬变虽不如
-    ///   动画顺滑, 但 66↔200 的变化只发生在用户主动点击的那一下, 视觉可接受。
+    /// 应用输入框高度。
+    ///
+    /// ★★ 2026-11-28 起输入框**跟随内容自动长高**(XAML MinHeight=66 / MaxHeight=200):
+    ///   普通态不再钉死 66, 而是 Height=Auto, 写多长就长多高, 到 200 后框内滚动。
+    ///   所以展开按钮改成"固定展开"开关: 点开后高度钉在 200(内容很短也能整篇通读),
+    ///   再点一次回到跟随内容 —— 否则旧的 66↔200 定高会把自动长高整个盖掉。
+    ///
+    /// ★ 固定展开仍直接赋值 Height, 不做动画: 试过 DoubleAnimation, 探针/真机上都出现过
+    ///   "动画时钟未推进、Height 弹回原值"的不稳(WPF 高度动画依赖渲染节拍, 在面板刚展开/
+    ///   布局未稳时不可靠)。这里是功能性切换不是装饰, 行为确定性优先。
     /// </summary>
     private void ApplyComposerSize()
     {
         if (_closing || CommentDraft == null || ComposerExpandIcon == null) return;
-        var target = _composerExpanded ? ComposerExpandedHeight : ComposerNormalHeight;
         ComposerExpandIcon.Text = _composerExpanded ? "\uE70D" : "\uE70E";  // 上箭头=展开(内容向上长)
         var btn = BtnComposerExpand;
-        if (btn != null) btn.ToolTip = _composerExpanded ? "收回输入框" : "展开输入框, 写长评时能通读全文";
+        if (btn != null) btn.ToolTip = _composerExpanded
+            ? "取消固定展开, 改为跟随内容长高"
+            : "固定展开输入框, 写长评时能通读全文";
 
         // 先摘掉可能残留的旧高度动画(历史遗留防御: 早期版本用过动画), 再落本地值
         CommentDraft.BeginAnimation(HeightProperty, null);
-        CommentDraft.Height = target;
+        if (_composerExpanded) CommentDraft.Height = ComposerExpandedHeight;
+        else CommentDraft.ClearValue(HeightProperty);   // Auto: 由 XAML 的 Min/MaxHeight 约束
     }
 
     /// <summary>面板头行的"展开/收回"按钮</summary>

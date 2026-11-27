@@ -313,9 +313,13 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
+                        <!-- ★ 2026-11-28 与私信输入框一致, 评论框改为**跟随内容自动长高**:
+                             不设 Height, 由 MinHeight(80)撑住静止态, 写长评时一行行长到
+                             MaxHeight(220), 再多就在框内滚动。展开按钮退化为"固定展开"
+                             (见 DynamicDetailView.ApplyComposerSize)。 -->
                         <TextBox x:Name="CommentDraft" Grid.Column="0"
                                  Style="{StaticResource FluentTextBoxStyle}"
-                                 Height="80" MaxLength="1000"
+                                 MinHeight="80" MaxHeight="220" MaxLength="1000"
                                  TextWrapping="Wrap" AcceptsReturn="True"
                                  VerticalScrollBarVisibility="Auto"
                                  Text="{Binding DataContext.ComposerText, ElementName=Comments,

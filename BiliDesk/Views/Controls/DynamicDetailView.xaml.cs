@@ -25,7 +25,8 @@ public partial class DynamicDetailView : UserControl
     private bool _composerExpanded;
     private int _composerAnimGen;
 
-    private const double ComposerNormalHeight = 80;
+    /// <summary>输入框固定展开高度。静止高度由 XAML 的 MinHeight=80 决定,
+    /// 跟随内容长高见 <see cref="ApplyComposerSize"/>。</summary>
     private const double ComposerExpandedHeight = 220;
 
     public DynamicDetailView()
@@ -256,15 +257,20 @@ public partial class DynamicDetailView : UserControl
         CommentDraft.Focus();
     }
 
-    /// <summary>输入框普通 80 / 展开 220, 与播放器评论输入面板同一套交互。</summary>
+    /// <summary>
+    /// 应用输入框高度。与播放器评论输入面板同一套交互:
+    /// 普通态跟随内容自动长高(XAML MinHeight=80 / MaxHeight=220),
+    /// 「展开」按钮退化为"固定展开"—— 点开钉在 220, 再点回到跟随内容。
+    /// </summary>
     private void ApplyComposerSize()
     {
         if (CommentDraft == null || BtnComposerExpand == null || ComposerExpandIcon == null) return;
         ComposerExpandIcon.Text = _composerExpanded ? "\uE70D" : "\uE70E";  // 与播放器同一套: 上箭头=展开
         BtnComposerExpand.ToolTip = _composerExpanded
-            ? "收回输入框"
-            : "展开输入框, 写长评时能通读全文";
-        CommentDraft.Height = _composerExpanded ? ComposerExpandedHeight : ComposerNormalHeight;
+            ? "取消固定展开, 改为跟随内容长高"
+            : "固定展开输入框, 写长评时能通读全文";
+        if (_composerExpanded) CommentDraft.Height = ComposerExpandedHeight;
+        else CommentDraft.ClearValue(HeightProperty);   // Auto: 由 XAML 的 Min/MaxHeight 约束
     }
 
     private void OnCancelReplyClick(object sender, RoutedEventArgs e)
