@@ -720,9 +720,9 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 本次长按实际要切到的倍速。
     ///
-    /// ★ 2026-11-21(用户指定): **固定从 2x 起步, 且不记忆上次选择** ——
-    ///   每次长按都重置成 2x, 与"正片当前倍速"无关, 与上一次长按里按过 ↑/↓ 也无关。
-    ///   (旧实现取 max(2.0, 当前倍速), 长按开始时的档位会随正片倍速漂移, 与"固定三档"矛盾。)
+    /// ★ 2026-11-27(用户要求): 起步档位取“当前视频上一次长按选中的档位”(1.5/2/3/智能),
+    ///   默认 2x; 换片时由 ResetForNewMedia 复位, 不跨视频、不跨播放窗口继承。
+    ///   与"正片当前倍速"无关。
     /// ★ 浮层与控制栏都读这个值, 保证"看到的倍速 = 实际切到的倍速"。
     /// </summary>
     private float _fastForwardTarget = FastForwardRate;
@@ -734,9 +734,18 @@ public partial class PlayerWindow : FluentWindow
     private bool _fastForwardSmart;
 
     /// <summary>
+    /// 长按档位索引: 0=1.5x, 1=2x, 2=3x, 3=智能。
+    /// ★ 只在当前视频窗口(当前这一条视频)里记忆; 换片由 ResetForNewMedia 复位到 2x。
+    /// </summary>
+    private int _fastForwardChoice = 1;
+
+    /// <summary>上一次长按最终选中的档位(“同一视频的下一次长按”从这里起步)。</summary>
+    private int _fastForwardRememberedChoice = 1;
+
+    /// <summary>
     /// 开始长按快进(改倍速)。见上方那段说明为什么用 SetRate 而不是 seek。
-    /// <paramref name="rate"/> 固定为 2x(<see cref="FastForwardRate"/>): 鼠标长按与键盘长按
-    /// 共用同一个默认档, 不再按"当前倍速"抬高。
+    /// <paramref name="rate"/> 仅为兼容旧调用保留; 实际档位取当前视频上次长按的选择
+    /// (默认 2x, 换片复位), 与"正片当前倍速"无关。
     /// </summary>
     private void StartFastForward(float rate = FastForwardRate)
     {
@@ -748,11 +757,13 @@ public partial class PlayerWindow : FluentWindow
         catch { _rateBeforeFastForward = 1.0f; }
         if (_rateBeforeFastForward <= 0) _rateBeforeFastForward = 1.0f;
 
-        // ★ 2026-11-21(用户指定): 固定 2x 起步, 不记忆上一次长按里选过的档位。
-        //   注意这意味着正片本身已经 >2x 时, 长按会先"降"到 2x(松手恢复原速) ——
-        //   用户明确要的是"固定三档 + 默认 2x", 而不是旧版的 max(2.0, 当前)。
-        _fastForwardTarget = rate;
-        _fastForwardSmart = false;
+        // ★ 2026-11-27: 同一视频内记住上一次长按选中的档位; 换片时由 ResetForNewMedia
+        //   复位成 2x(用户要求: 记忆不跨视频、不跨播放窗口)。
+        _fastForwardChoice = Math.Clamp(_fastForwardRememberedChoice, 0, 3);
+        _fastForwardSmart = _fastForwardChoice == 3;
+        _fastForwardTarget = _fastForwardSmart
+            ? Helpers.SmartRatePolicy.Resolve(_scriptPace)
+            : Helpers.FastForwardSpeedPolicy.Steps[_fastForwardChoice];
 
         // ★ 2026-11-21: 清掉滚轮累计余量 —— 长按期间滚轮改为切档(见 OnVideoAreaMouseWheel),
         //   把上一次调音量攒下的零头带进来, 会让"刚滚一下"立刻跳一档, 手感像误触。
@@ -782,7 +793,9 @@ public partial class PlayerWindow : FluentWindow
         // 同 StartFastForward: 先落定弹幕时钟, 再改速率
         SyncDanmakuClockRate(back);
         try { _mp.SetRate(back); } catch { /* 播放器已失效 */ }
-        // "不记忆"的另一半: 收尾把档位复位成默认 2x, 下次长按一定从 2x 起步
+        // "不记忆"的边界只到“当前视频”: 记住这一次选中的档位, 下一次长按从它起步;
+        // 换片时 ResetForNewMedia 会复位成 2x。
+        _fastForwardRememberedChoice = _fastForwardChoice;
         _fastForwardTarget = FastForwardRate;
         _fastForwardSmart = false;
         // 控制栏倍速指示跟着回到原值(与 StartFastForward 的临时提速对称)。

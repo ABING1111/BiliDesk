@@ -640,29 +640,26 @@ public partial class PlayerWindow : FluentWindow
         if (_closing || _mp == null || !_isFastForwarding) return false;
         if (direction == 0) return true;
 
-        float next;
-        if (_fastForwardSmart)
-        {
-            // 智能档在 3x 下面: 从智能再往上回到 1.5x, 往下回到 3x。
-            _fastForwardSmart = false;
-            next = direction > 0 ? 1.5f : 3.0f;
-        }
-        else if (direction > 0 && _fastForwardTarget >= 3.0f - 0.001f)
-        {
-            // 3x 再往上 = 智能(按本片 script_pace 选 2x/1.5x/3x)
-            _fastForwardSmart = true;
-            next = Helpers.SmartRatePolicy.Resolve(_scriptPace);
-        }
-        else if (direction < 0 && _fastForwardTarget <= 1.5f + 0.001f)
-        {
-            // 1.5x 再往下 = 智能(循环到 3x 下方那一档)
-            _fastForwardSmart = true;
-            next = Helpers.SmartRatePolicy.Resolve(_scriptPace);
-        }
-        else
-        {
-            next = Helpers.FastForwardSpeedPolicy.Step(_fastForwardTarget, direction);
-        }
+        // 循环档位: 1.5x → 2x → 3x → 智能 → 1.5x
+        var nextChoice = ((_fastForwardChoice + direction) % 4 + 4) % 4;
+        ApplyFastForwardChoice(nextChoice);
+        // 方向为 0 / 脏值时这一下仍然算"倍速键", 不能再落到音量
+        return true;
+    }
+
+    /// <summary>
+    /// 选中长按档位并立即生效。档位 3 为“智能”, 实际倍速由本片 script_pace 解析。
+    /// 同时把选择记到“当前视频”的偏好里(换片由 ResetForNewMedia 清)。
+    /// </summary>
+    private void ApplyFastForwardChoice(int choice)
+    {
+        _fastForwardChoice = Math.Clamp(choice, 0, 3);
+        _fastForwardRememberedChoice = _fastForwardChoice;
+        _fastForwardSmart = _fastForwardChoice == 3;
+
+        var next = _fastForwardSmart
+            ? Helpers.SmartRatePolicy.Resolve(_scriptPace)
+            : Helpers.FastForwardSpeedPolicy.Steps[_fastForwardChoice];
 
         if (Math.Abs(next - _fastForwardTarget) > 0.001f)
         {
@@ -673,10 +670,8 @@ public partial class PlayerWindow : FluentWindow
             // 控制栏倍速指示跟着临时档位走(见 StartFastForward 里那条修复)
             UpdateSpeedText();
         }
-        // 智能档可能算出来正好等于当前 2x: 没有改速率, 但高亮要从 2x 移到“智能”。
+        // 智能档算出来可能正好等于当前 2x: 没改速率也要把高亮从 2x 移到“智能”。
         SyncSpeedOsdChips();
-        // 方向为 0 / 脏值时 next 可能等于 current; 这一下仍然算"倍速键", 不能再落到音量
-        return true;
     }
 
     /// <summary>
@@ -689,24 +684,42 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void SyncSpeedOsdChips(bool animate = true)
     {
-        ApplySpeedOsdRow(SpeedOsdChip15Text,
-            !_fastForwardSmart && Math.Abs(_fastForwardTarget - 1.5f) <= 0.001f, animate);
-        ApplySpeedOsdRow(SpeedOsdChip20Text,
-            !_fastForwardSmart && Math.Abs(_fastForwardTarget - 2.0f) <= 0.001f, animate);
-        ApplySpeedOsdRow(SpeedOsdChip30Text,
-            !_fastForwardSmart && Math.Abs(_fastForwardTarget - 3.0f) <= 0.001f, animate);
-        ApplySpeedOsdRow(SpeedOsdChipSmartText, _fastForwardSmart, animate);
+        // 只显示三行: 上一档 / 当前档 / 下一档。列表本身仍按 1.5→2→3→智能 循环。
+        var center = _fastForwardChoice;
+        var top = (center + 3) % 4;
+        var bottom = (center + 1) % 4;
+        ApplySpeedOsdRow(SpeedOsdChipTopText, FastForwardChoiceLabel(top),
+            active: false, animate, dimOpacity: 0.55);
+        ApplySpeedOsdRow(SpeedOsdChipCenterText, FastForwardChoiceLabel(center),
+            active: true, animate, dimOpacity: 1.0);
+        ApplySpeedOsdRow(SpeedOsdChipBottomText, FastForwardChoiceLabel(bottom),
+            active: false, animate, dimOpacity: 0.30);
     }
 
-    private void ApplySpeedOsdRow(TextBlock? text, bool active, bool animate)
+    private static string FastForwardChoiceLabel(int choice) => choice switch
+    {
+        0 => "1.5x",
+        1 => "2x",
+        2 => "3x",
+        _ => "智能"
+    };
+
+    /// <summary>未选中的档位用灰色 + 更低的透明度, 形成从中间向上下“渐变变暗”的层叠感。</summary>
+    private static readonly Brush SpeedOsdDimBrush =
+        new SolidColorBrush(Color.FromRgb(0xB8, 0xB8, 0xB8));
+
+    private void ApplySpeedOsdRow(TextBlock? text, string label, bool active, bool animate,
+        double dimOpacity)
     {
         if (text == null) return;
 
+        text.Text = label;
         text.FontSize = active ? 14 : 10;
         text.FontWeight = active ? FontWeights.Bold : FontWeights.Normal;
         text.LineHeight = active ? 17 : 12;
+        text.Foreground = active ? Brushes.White : SpeedOsdDimBrush;
 
-        var target = active ? 1.0 : 0.35;
+        var target = active ? 1.0 : dimOpacity;
         if (!animate)
         {
             // 首次显示: 摘掉旧动画直接落位(避免从上次的 0.35/1.0 过渡出"闪一下")

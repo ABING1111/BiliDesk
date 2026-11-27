@@ -1681,25 +1681,20 @@
                                                 档位是固定选项, 与"控制栏那个当前倍速"不是同一套文案。
                                                 ★ 字号/行高/透明度由代码按当前档位设置(带过渡动画),
                                                  XAML 这里只是初值(默认 2x)。 -->
-                                            <TextBlock x:Name="SpeedOsdChip15Text" Text="1.5x"
+                                            <TextBlock x:Name="SpeedOsdChipTopText" Text="1.5x"
                                                        FontSize="10" LineHeight="12"
                                                        LineStackingStrategy="BlockLineHeight"
-                                                       Foreground="#FFFFFF" Opacity="0.35"
+                                                       Foreground="#B8B8B8" Opacity="0.55"
                                                        HorizontalAlignment="Center" />
-                                            <TextBlock x:Name="SpeedOsdChip20Text" Text="2x"
+                                            <TextBlock x:Name="SpeedOsdChipCenterText" Text="2x"
                                                        FontSize="14" FontWeight="Bold" LineHeight="17"
                                                        LineStackingStrategy="BlockLineHeight"
                                                        Foreground="#FFFFFF" Opacity="1"
                                                        HorizontalAlignment="Center" />
-                                            <TextBlock x:Name="SpeedOsdChip30Text" Text="3x"
+                                            <TextBlock x:Name="SpeedOsdChipBottomText" Text="3x"
                                                        FontSize="10" LineHeight="12"
                                                        LineStackingStrategy="BlockLineHeight"
-                                                       Foreground="#FFFFFF" Opacity="0.35"
-                                                       HorizontalAlignment="Center" />
-                                            <TextBlock x:Name="SpeedOsdChipSmartText" Text="智能"
-                                                       FontSize="10" LineHeight="12"
-                                                       LineStackingStrategy="BlockLineHeight"
-                                                       Foreground="#FFFFFF" Opacity="0.35"
+                                                       Foreground="#B8B8B8" Opacity="0.35"
                                                        HorizontalAlignment="Center" />
                                         </StackPanel>
                                     </StackPanel>
