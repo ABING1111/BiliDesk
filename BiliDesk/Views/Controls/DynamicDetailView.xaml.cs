@@ -260,7 +260,7 @@ public partial class DynamicDetailView : UserControl
     private void ApplyComposerSize()
     {
         if (CommentDraft == null || BtnComposerExpand == null || ComposerExpandIcon == null) return;
-        ComposerExpandIcon.Text = _composerExpanded ? "\uE70D" : "\uE70E";
+        ComposerExpandIcon.Text = _composerExpanded ? "\uE70D" : "\uE70E";  // 与播放器同一套: 上箭头=展开
         BtnComposerExpand.ToolTip = _composerExpanded
             ? "收回输入框"
             : "展开输入框, 写长评时能通读全文";

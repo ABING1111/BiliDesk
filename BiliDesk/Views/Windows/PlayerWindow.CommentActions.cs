@@ -381,7 +381,7 @@ public partial class PlayerWindow : FluentWindow
     {
         if (_closing || CommentDraft == null || ComposerExpandIcon == null) return;
         var target = _composerExpanded ? ComposerExpandedHeight : ComposerNormalHeight;
-        ComposerExpandIcon.Text = _composerExpanded ? "\uE70D" : "\uE70E";
+        ComposerExpandIcon.Text = _composerExpanded ? "\uE70D" : "\uE70E";  // 上箭头=展开(内容向上长)
         var btn = BtnComposerExpand;
         if (btn != null) btn.ToolTip = _composerExpanded ? "收回输入框" : "展开输入框, 写长评时能通读全文";
 
