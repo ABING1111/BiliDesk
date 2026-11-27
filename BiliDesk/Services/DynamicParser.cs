@@ -130,7 +130,10 @@ public static class DynamicParser
             dyn.ValueKind == JsonValueKind.Object)
         {
             if (dyn.TryGetProperty("desc", out var desc) && desc.ValueKind == JsonValueKind.Object)
-                item.ContentText = GetStr(desc, "text");
+            {
+                item.ContentText = ReadRichText(desc);
+                ReadEmotes(desc, item);
+            }
 
             if (dyn.TryGetProperty("major", out var m) && m.ValueKind == JsonValueKind.Object)
             {
@@ -260,7 +263,13 @@ public static class DynamicParser
                     item.JumpUrl = GetStr(opus, "jump_url");
                     if (string.IsNullOrWhiteSpace(item.ContentText) &&
                         opus.TryGetProperty("summary", out var sum) && sum.ValueKind == JsonValueKind.Object)
-                        item.ContentText = GetStr(sum, "text");
+                    {
+                        item.ContentText = ReadRichText(sum);
+                        ReadEmotes(sum, item);
+                    }
+                    // 个别形态把 rich_text_nodes 直接挂在 opus 上(不套 summary)。
+                    // 只在前面没收到表情时补一次, 不覆盖 summary 里同一份数据。
+                    if (item.Emotes.Count == 0) ReadEmotes(opus, item);
                     if (opus.TryGetProperty("pics", out var pics) && pics.ValueKind == JsonValueKind.Array)
                         ReadImages(pics, item.Images);
                 }
@@ -395,6 +404,76 @@ public static class DynamicParser
                 item.IsLiked = s.ValueKind == JsonValueKind.True ||
                                (s.ValueKind == JsonValueKind.Number && s.GetInt32() == 1);
             }
+        }
+    }
+
+    // ------------------------------------------------------------ 富文本(正文 + 表情)
+
+    /// <summary>
+    /// 读一段富文本的正文。
+    ///
+    /// ★ 正常情况 `text` 就是排好的纯文本(表情短代码原样留在里面);
+    ///   极少数形态只给 `rich_text_nodes`, 这时按节点顺序拼回来,
+    ///   否则整条动态会因为"没有正文"变成空卡。
+    /// </summary>
+    private static string ReadRichText(JsonElement container)
+    {
+        var text = GetStr(container, "text");
+        if (text.Length > 0) return text;
+
+        if (!container.TryGetProperty("rich_text_nodes", out var nodes) ||
+            nodes.ValueKind != JsonValueKind.Array)
+            return text;
+
+        var sb = new System.Text.StringBuilder();
+        foreach (var n in nodes.EnumerateArray())
+        {
+            if (n.ValueKind != JsonValueKind.Object) continue;
+            var t = GetStr(n, "text");
+            if (t.Length == 0) t = GetStr(n, "orig_text");
+            sb.Append(t);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// 从 `rich_text_nodes` 里收集表情: 短代码 → 图片地址。
+    ///
+    /// ★ 2026-11-28 修"图文动态正文不显示表情": 正文是纯文本, 表情只在节点里带
+    ///   `emoji.icon_url`(形如 `{"type":"RICH_TEXT_NODE_TYPE_EMOJI",
+    ///   "text":"[脱单doge]","emoji":{"icon_url":"//i0.hdslb.com/..."}}`)。
+    ///   之前只取 text, 界面就把 `[脱单doge]` 当普通文字画出来了。
+    /// ★ 短代码优先取节点 text(与正文里出现的字符完全一致), 其次 emoji.text。
+    ///   个别节点 text 是表情名而不是短代码, 这时用 emoji.text 才能对上正文。
+    /// </summary>
+    private static void ReadEmotes(JsonElement container, DynamicItem item)
+    {
+        if (!container.TryGetProperty("rich_text_nodes", out var nodes) ||
+            nodes.ValueKind != JsonValueKind.Array)
+            return;
+
+        foreach (var n in nodes.EnumerateArray())
+        {
+            if (n.ValueKind != JsonValueKind.Object) continue;
+            if (!n.TryGetProperty("emoji", out var emoji) || emoji.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var url = UrlUtil.Normalize(GetStr(emoji, "icon_url"));
+            if (url.Length == 0) continue;
+
+            var code = GetStr(n, "text");
+            if (!code.StartsWith("[", StringComparison.Ordinal)) code = GetStr(emoji, "text");
+            if (code.Length == 0) code = GetStr(n, "text");
+            if (code.Length == 0) continue;
+            if (item.Emotes.ContainsKey(code)) continue;
+
+            item.Emotes[code] = new MsgEmote
+            {
+                Text = code,
+                Url = url,
+                // 动态表情没有 `meta.size` 那套, 少数形态会带 size; 只有 2 才当大表情。
+                Size = GetIntSafe(emoji, "size") > 1 ? 2 : 1,
+            };
         }
     }
 

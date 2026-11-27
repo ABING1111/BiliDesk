@@ -268,6 +268,106 @@ public class DynamicParserTests
     }
 
     [Fact]
+    public void Modules_Draw_解析正文里的表情节点()
+    {
+        // 2026-11-28: 正文是纯文本(短代码原样保留), 表情图只在 rich_text_nodes 里。
+        // 之前只取 text, 卡片上就显示成 "[脱单doge]" 一串字。
+        var item = Parse("""
+        {
+          "id_str": "1001",
+          "type": "DYNAMIC_TYPE_DRAW",
+          "modules": {
+            "module_author": { "mid": 1, "name": "up", "pub_time": "刚刚" },
+            "module_dynamic": {
+              "desc": {
+                "text": "更新至P12 ~ [脱单doge] 劫抢使人快乐[大笑]",
+                "rich_text_nodes": [
+                  { "type": "RICH_TEXT_NODE_TYPE_TEXT", "text": "更新至P12 ~ " },
+                  { "type": "RICH_TEXT_NODE_TYPE_EMOJI", "text": "[脱单doge]",
+                    "emoji": { "icon_url": "//i0.hdslb.com/bfs/emote/doge.png" } },
+                  { "type": "RICH_TEXT_NODE_TYPE_TEXT", "text": " 劫抢使人快乐" },
+                  { "type": "RICH_TEXT_NODE_TYPE_EMOJI", "text": "[大笑]",
+                    "emoji": { "icon_url": "https://i0.hdslb.com/bfs/emote/laugh.png" } }
+                ]
+              },
+              "major": {
+                "type": "MAJOR_TYPE_DRAW",
+                "draw": { "items": [ { "src": "https://i0.hdslb.com/bfs/new_dyn/x.jpg" } ] }
+              }
+            }
+          }
+        }
+        """);
+
+        Assert.NotNull(item);
+        Assert.Equal("更新至P12 ~ [脱单doge] 劫抢使人快乐[大笑]", item!.ContentText);
+        Assert.Equal(2, item.Emotes.Count);
+        Assert.Equal("https://i0.hdslb.com/bfs/emote/doge.png", item.Emotes["[脱单doge]"].Url);
+        Assert.Equal("https://i0.hdslb.com/bfs/emote/laugh.png", item.Emotes["[大笑]"].Url);
+    }
+
+    [Fact]
+    public void Modules_Opus_解析summary里的表情节点()
+    {
+        var item = Parse("""
+        {
+          "id_str": "1002",
+          "type": "DYNAMIC_TYPE_DRAW",
+          "modules": {
+            "module_author": { "mid": 1, "name": "up", "pub_ts": 1724152653 },
+            "module_dynamic": {
+              "desc": null,
+              "major": {
+                "type": "MAJOR_TYPE_OPUS",
+                "opus": {
+                  "summary": {
+                    "text": "一起看[星星眼]",
+                    "rich_text_nodes": [
+                      { "type": "RICH_TEXT_NODE_TYPE_TEXT", "text": "一起看" },
+                      { "type": "RICH_TEXT_NODE_TYPE_EMOJI", "text": "[星星眼]",
+                        "emoji": { "text": "[星星眼]", "icon_url": "https://i0.hdslb.com/bfs/emote/star.png" } }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        Assert.NotNull(item);
+        Assert.Equal("一起看[星星眼]", item!.ContentText);
+        Assert.Single(item.Emotes);
+        Assert.Equal("https://i0.hdslb.com/bfs/emote/star.png", item.Emotes["[星星眼]"].Url);
+    }
+
+    [Fact]
+    public void Modules_Desc没有text时按富文本节点拼回正文()
+    {
+        var item = Parse("""
+        {
+          "id_str": "1003",
+          "type": "DYNAMIC_TYPE_WORD",
+          "modules": {
+            "module_author": { "mid": 1, "name": "up", "pub_time": "刚刚" },
+            "module_dynamic": {
+              "desc": {
+                "rich_text_nodes": [
+                  { "type": "RICH_TEXT_NODE_TYPE_TEXT", "text": "只有" },
+                  { "type": "RICH_TEXT_NODE_TYPE_TEXT", "text": "节点" }
+                ]
+              }
+            }
+          }
+        }
+        """);
+
+        Assert.NotNull(item);
+        Assert.Equal("只有节点", item!.ContentText);
+        Assert.True(item.HasText);
+    }
+
+    [Fact]
     public void Modules_Word_ParsesPureText()
     {
         var item = Parse("""

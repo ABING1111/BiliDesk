@@ -149,6 +149,18 @@ public class DynamicItem : INotifyPropertyChanged
     /// <summary>动态正文(desc.text / opus.summary.text)。视频动态通常为空。</summary>
     public string ContentText { get; set; } = "";
 
+    /// <summary>
+    /// 正文里出现的表情: 短代码(`[脱单doge]`) → 图片地址。
+    ///
+    /// ★ 2026-11-28 修"图文动态正文不显示表情": B 站动态的正文是**纯文本**,
+    ///   表情只在同级的 `rich_text_nodes` 里带 `emoji.icon_url`(见 DynamicParser.ReadEmotes)。
+    ///   之前只取 `text`, 于是界面把 `[脱单doge]` 原样当文字画出来。
+    /// ★ 复用 <see cref="MsgEmote"/> 而不是另造模型: 与私信表情的结构完全一致
+    ///   (短代码 / 图片地址 / 大小), 还能直接吃 <see cref="Helpers.MsgContentParser.Split"/>
+    ///   那套已经验证过的切分规则。
+    /// </summary>
+    public Dictionary<string, MsgEmote> Emotes { get; } = new();
+
     /// <summary>视频标题 / 专栏标题 / 图文标题(可为空)。</summary>
     public string Title { get; set; } = "";
 

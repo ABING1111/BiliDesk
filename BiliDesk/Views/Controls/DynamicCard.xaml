@@ -159,12 +159,14 @@
             <StackPanel Margin="0,10,0,0"
                         Visibility="{Binding HasText, Converter={StaticResource BoolToVis}}">
                 <controls:LinkTextBlock x:Name="ContentTextBlock" SourceText="{Binding ContentText}"
+                                        Emotes="{Binding Emotes}"
                                         FontSize="14" LineHeight="22" TextWrapping="Wrap"
                                         Foreground="{DynamicResource TextPrimaryBrush}"
                                         MaxHeight="176" TextTrimming="CharacterEllipsis" />
                 <!-- ★ 展开态的 RichTextBox 不带 Text 绑定: 卡片收起时(绝大多数时候)不建 FlowDocument,
                      点「全文」时由 OnExpandClick 再灌文本 —— 一屏十几张卡, 每张都提前建文档太浪费。 -->
                 <controls:LinkText x:Name="ContentRichText"
+                                   Emotes="{Binding Emotes}"
                                    FontSize="14"
                                    Foreground="{DynamicResource TextPrimaryBrush}"
                                    Visibility="Collapsed" />
@@ -257,6 +259,7 @@
                                    VerticalAlignment="Center" />
                     </StackPanel>
                     <controls:LinkText Text="{Binding ContentText}" FontSize="13"
+                                       Emotes="{Binding Emotes}"
                                        Margin="0,6,0,0"
                                        Foreground="{DynamicResource TextPrimaryBrush}"
                                        Visibility="{Binding HasText, Converter={StaticResource BoolToVis}}" />

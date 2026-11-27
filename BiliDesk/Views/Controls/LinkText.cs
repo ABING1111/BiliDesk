@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
@@ -6,6 +7,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using BiliDesk.Helpers;
+using BiliDesk.Models;
 using BiliDesk.Utils;
 
 namespace BiliDesk.Views.Controls;
@@ -30,6 +32,23 @@ public class LinkText : RichTextBox
     {
         get => (string)GetValue(TextProperty);
         set => SetValue(TextProperty, value);
+    }
+
+    /// <summary>
+    /// 正文里的表情: 短代码(`[脱单doge]`) → 图片。
+    ///
+    /// ★ 2026-11-28 修"图文动态正文不显示表情": 动态接口只给纯文本 + 表情表,
+    ///   这里在链接切分之后再扫短代码, 换成内联图片(见 RichTextBuilder.AppendTextWithEmotes)。
+    /// ★ 链接段不扫表情: URL 里的 `[xx]` 是查询参数, 不是表情。
+    /// </summary>
+    public static readonly DependencyProperty EmotesProperty = DependencyProperty.Register(
+        nameof(Emotes), typeof(IReadOnlyDictionary<string, MsgEmote>), typeof(LinkText),
+        new PropertyMetadata(null, OnTextChanged));
+
+    public IReadOnlyDictionary<string, MsgEmote>? Emotes
+    {
+        get => (IReadOnlyDictionary<string, MsgEmote>?)GetValue(EmotesProperty);
+        set => SetValue(EmotesProperty, value);
     }
 
     public LinkText()
@@ -118,16 +137,21 @@ public class LinkText : RichTextBox
         // 绝大多数正文没有链接: 先做一次便宜的判断, 再决定要不要逐段切
         if (!LinkParser.MightContainLink(text))
         {
-            RichTextBuilder.AppendText(p, text);
+            RichTextBuilder.AppendTextWithEmotes(p.Inlines, text, Emotes, FontSize);
             return;
         }
 
         foreach (var seg in LinkParser.Split(text))
         {
             if (seg.IsLink)
+            {
+                // 链接段不扫表情: URL 里的 [xx] 是查询参数, 不是表情
                 p.Inlines.Add(RichTextBuilder.CreateLink(seg.Text, seg.Url, this));
+            }
             else
-                RichTextBuilder.AppendText(p, seg.Text);
+            {
+                RichTextBuilder.AppendTextWithEmotes(p.Inlines, seg.Text, Emotes, FontSize);
+            }
         }
     }
 }

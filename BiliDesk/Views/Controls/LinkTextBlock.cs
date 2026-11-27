@@ -1,7 +1,9 @@
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using BiliDesk.Helpers;
+using BiliDesk.Models;
 using BiliDesk.Utils;
 
 namespace BiliDesk.Views.Controls;
@@ -31,6 +33,23 @@ public class LinkTextBlock : TextBlock
         set => SetValue(SourceTextProperty, value);
     }
 
+    /// <summary>
+    /// 正文里的表情: 短代码(`[脱单doge]`) → 图片。
+    ///
+    /// ★ 2026-11-28 修"图文动态正文不显示表情": 动态接口的正文是纯文本,
+    ///   表情短代码只有配上这张表才能换成图片(见 DynamicItem.Emotes)。
+    ///   为空就只当普通文字排版, 其它用途(签名/简介)不受影响。
+    /// </summary>
+    public static readonly DependencyProperty EmotesProperty = DependencyProperty.Register(
+        nameof(Emotes), typeof(IReadOnlyDictionary<string, MsgEmote>), typeof(LinkTextBlock),
+        new PropertyMetadata(null, OnSourceTextChanged));
+
+    public IReadOnlyDictionary<string, MsgEmote>? Emotes
+    {
+        get => (IReadOnlyDictionary<string, MsgEmote>?)GetValue(EmotesProperty);
+        set => SetValue(EmotesProperty, value);
+    }
+
     private static void OnSourceTextChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         => ((LinkTextBlock)d).Rebuild();
 
@@ -43,16 +62,21 @@ public class LinkTextBlock : TextBlock
         // 绝大多数正文没有链接: 一次便宜的判断先挡掉, 省掉切分的分配
         if (!LinkParser.MightContainLink(text))
         {
-            Inlines.Add(new Run(text));
+            RichTextBuilder.AppendTextWithEmotes(Inlines, text, Emotes, FontSize);
             return;
         }
 
         foreach (var seg in LinkParser.Split(text))
         {
             if (seg.IsLink)
+            {
+                // 链接段不扫表情: 地址里的 [xx] 是查询参数, 不是表情
                 Inlines.Add(RichTextBuilder.CreateLink(seg.Text, seg.Url, this));
+            }
             else
-                Inlines.Add(new Run(seg.Text));
+            {
+                RichTextBuilder.AppendTextWithEmotes(Inlines, seg.Text, Emotes, FontSize);
+            }
         }
     }
 }

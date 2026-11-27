@@ -1,9 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using BiliDesk.Models;
 using BiliDesk.Services;
 
 namespace BiliDesk.Helpers;
@@ -93,6 +97,66 @@ public static class RichTextBuilder
         }
         Flush(normal, false);
         Flush(emoji, true);
+    }
+
+    /// <summary>
+    /// 把一段**普通文字**写进内联集合, 途中遇到表情短代码就换成内联图片。
+    ///
+    /// ★ 2026-11-28 新增: 动态正文(/图文/转发原文)的表情走这一份, 与私信气泡
+    ///   (<see cref="Views.Controls.MessageText"/>)同一套切分规则 —— 短代码最长 40、
+    ///   只认表情表里真实存在的那些, 表里没有的 `[xxx]` 原样当文字, 不吞用户写的方括号。
+    /// ★ 表情是**自定义图片**(大会员/联动表情没有 Unicode 对应), 只能内联进文字流;
+    ///   普通文字仍交给 <see cref="AppendInlines"/>, 保留 emoji 字体回退的崩溃修复。
+    /// ★ 解析出来的链接段不要传进来: 地址里的 `[xx]` 是查询参数, 不是表情。
+    /// </summary>
+    public static void AppendTextWithEmotes(InlineCollection inlines, string text,
+        IReadOnlyDictionary<string, MsgEmote>? emotes, double fontSize)
+    {
+        if (text.Length == 0) return;
+
+        // 没有表情表 ⇒ 不扫、不建多余对象(动态正文多数没有表情)
+        if (emotes == null || emotes.Count == 0)
+        {
+            AppendInlines(inlines, text);
+            return;
+        }
+
+        foreach (var seg in MsgContentParser.Split(text, emotes))
+        {
+            if (seg.IsEmote && seg.Emote != null)
+                inlines.Add(BuildEmoteInline(seg.Emote, fontSize));
+            else
+                AppendInlines(inlines, seg.Text);
+        }
+    }
+
+    /// <summary>把一个表情做成内联图片(尺寸跟着字号走, 图片异步加载)。</summary>
+    private static InlineUIContainer BuildEmoteInline(MsgEmote emote, double fontSize)
+    {
+        // 与私信气泡同一档比例: 小表情约为一行文字高, 大表情(游戏联动那类)再大一档
+        var scale = emote.Size > 1 ? 2.4 : 1.55;
+        var side = Math.Round((fontSize > 0 ? fontSize : 12.5) * scale);
+
+        var image = new Image
+        {
+            Width = side,
+            Height = side,
+            Stretch = Stretch.Uniform,
+            // 行内图片的垂直对齐: 不写会贴着基线往上顶, 看起来像错行
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        // ★ 表情源图通常只有 20~40px, 按 40 解码就够 —— 走 CoverLoader 的量化档位,
+        //   一张十几 KB。**不要**用 Cover.ImageSource(它按 512 解码, 一张表情就 1MB)。
+        _ = LoadEmoteAsync(image, emote.Url);
+
+        return new InlineUIContainer(image) { BaselineAlignment = BaselineAlignment.Center };
+    }
+
+    private static async Task LoadEmoteAsync(Image image, string url)
+    {
+        var bmp = await CoverLoader.LoadAsync(url, 40);
+        if (bmp != null) image.Source = bmp;
     }
 
     /// <summary>

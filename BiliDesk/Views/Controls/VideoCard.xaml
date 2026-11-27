@@ -26,8 +26,9 @@
                      设在 Background 上, 子元素不圆角就会把四个角顶成直角(用户实测反馈)。 -->
                 <Border x:Name="CoverBox" CornerRadius="8" behaviors:Cover.Source="{Binding Cover}" />
 
-                <!-- 左下: 播放量 + 弹幕数(参考 B 站网页版卡片)。悬停放大封面时角标淡出,
-                     免得压在放大的画面上。弹幕数拿不到(空串)就整段藏起来。 -->
+                <!-- 左下: 播放量(参考 B 站网页版卡片)。悬停放大封面时角标淡出,
+                     免得压在放大的画面上。拿不到(空串)就整段藏起来。
+                     ★ 2026-11-28 用户要求去掉弹幕数角标, 卡片上只留播放量。 -->
                 <StackPanel x:Name="StatsBadge" Orientation="Horizontal"
                             HorizontalAlignment="Left" VerticalAlignment="Bottom"
                             Margin="8,0,0,8"
@@ -39,16 +40,6 @@
                             <TextBlock Text="&#xE768;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                        FontSize="10" Foreground="#F2FFFFFF" VerticalAlignment="Center" />
                             <TextBlock Text="{Binding ViewCountText, Mode=OneWay}" FontSize="11"
-                                       Foreground="#F2FFFFFF" Margin="3,0,0,0" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Border>
-                    <Border CornerRadius="4" Padding="6,2" Margin="4,0,0,0"
-                            Background="{DynamicResource DurationBadgeBackgroundBrush}"
-                            Visibility="{Binding DanmakuCountText, Converter={StaticResource StrToVis}}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE90A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                       FontSize="10" Foreground="#F2FFFFFF" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding DanmakuCountText, Mode=OneWay}" FontSize="11"
                                        Foreground="#F2FFFFFF" Margin="3,0,0,0" VerticalAlignment="Center" />
                         </StackPanel>
                     </Border>
