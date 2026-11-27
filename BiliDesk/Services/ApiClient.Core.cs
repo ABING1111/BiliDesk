@@ -19,7 +19,7 @@ namespace BiliDesk.Services;
 //     · 每个分片保留原文件的分区注释与全部历史说明, git blame 用 --follow 或逐分片查。
 //   分片清单(按业务域):
 //     Core        HttpClient / 基础请求(GetJsonAsync) / WBI 签名 / 设备指纹(buvid) / 风控预热
-//     Feed        热门 / 分区 / 排行榜 / 推荐 / 关注列表 / 视频详情
+//     Feed        热门 / 分区 / 推荐 / 关注列表 / 视频详情
 //     Season      视频合集(ugc_season)与相关视频
 //     Playurl     取流(DASH/durl) / 音轨候选 / CDN 测速样本 / 清晰度名
 //     Space       UP 主空间信息与投稿列表(含风控降级)
@@ -34,7 +34,7 @@ namespace BiliDesk.Services;
 //     Utils       JSON 解析辅助(GetStr/GetInt/GetLong 及宽松变体)
 //     History     云端观看历史(视频 + 直播游标分页)
 //     FavAndLater 删除/清空历史 + 收藏夹操作 + 稍后再看(含列表缓存)
-//     Download    视频下载地址 / 观看进度上报 / 番剧追番(PGC) / StripHtml 扩展
+//     Download    视频下载地址 / 观看进度上报 / 番剧追番(PGC) / 影视索引 / StripHtml 扩展
 
 /// <summary>
 /// 哔哩哔哩 API 客户端: 带浏览器 UA、Cookie、WBI 签名与风控降级逻辑。

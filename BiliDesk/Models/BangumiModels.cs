@@ -17,7 +17,10 @@ public sealed class BangumiItem
     public string Cover { get; set; } = "";
     public string Subtitle { get; set; } = "";
 
-    /// <summary>分类: 1 = 番剧(日漫), 4 = 国创(国产动画)。接口给的是 season_type。</summary>
+    /// <summary>
+    /// 分类: 1 = 番剧(日漫), 2 = 电影, 3 = 纪录片, 4 = 国创, 5 = 电视剧, 7 = 综艺。
+    /// 接口给的是 season_type。
+    /// </summary>
     public int SeasonType { get; set; }
 
     /// <summary>接口自带的分类名("番剧" / "国创"), 解析不到时由 <see cref="SeasonTypeText"/> 兜底。</summary>
@@ -26,14 +29,33 @@ public sealed class BangumiItem
     /// <summary>
     /// 分类的中文名。
     /// ★ 不直接用 <see cref="SeasonTypeName"/>: 推荐接口(index/result)那个字段是空的,
-    ///   只有"我的追番"接口才给 —— 两个列表显示的却是同一批东西, 所以一律走这里。
+    ///   只有"我的追番 / 我的追剧"接口才给 —— 几个列表显示的却是同一批东西, 所以一律走这里。
+    /// ★ 影视页要用到 2/3/5/7 这几个非番剧类型, 不能再只判"4 = 国创, 其余番剧"。
     /// </summary>
     public string SeasonTypeText => !string.IsNullOrEmpty(SeasonTypeName)
         ? SeasonTypeName
-        : SeasonType == 4 ? "国创" : "番剧";
+        : SeasonTypeNameOf(SeasonType);
+
+    /// <summary>按 season_type 给分类中文名(首页追番 / 影视共用)。</summary>
+    public static string SeasonTypeNameOf(int seasonType) => seasonType switch
+    {
+        2 => "电影",
+        3 => "纪录片",
+        4 => "国创",
+        5 => "电视剧",
+        7 => "综艺",
+        _ => "番剧",
+    };
 
     /// <summary>是否为国创(推荐列表按它把「番剧推荐」与「国创推荐」分成两栏)</summary>
     public bool IsGuochuang => SeasonType == 4;
+
+    /// <summary>
+    /// 是不是"追剧"类(电影 / 纪录片 / 电视剧 / 综艺)。
+    /// ★ 影视页与详情页的追剧按钮都靠它决定文案与追番缓存类型: 对电影说"追番"会很怪,
+    ///   而且「我的追剧」接口是 type=2, 用错类型永远查不到。
+    /// </summary>
+    public bool IsTeleplay => SeasonType is 2 or 3 or 5 or 7;
 
     /// <summary>角标: 大会员 / 独播 / 出品。空串表示没有角标, 界面上整个角标不显示。</summary>
     public string Badge { get; set; } = "";
@@ -59,11 +81,44 @@ public sealed class BangumiItem
 
     public long FollowCount { get; set; }
 
+    /// <summary>
+    /// 评分("9.6")。影视索引接口会给, 追番列表没有; 空串表示没有评分。
+    /// </summary>
+    public string Score { get; set; } = "";
+
     /// <summary>卡片副标题: 优先显示观看进度(用户更关心"我看到哪了"), 没有就显示更新进度。</summary>
     public string CardSubText => !string.IsNullOrWhiteSpace(Progress) ? Progress : IndexShow;
 
+    /// <summary>
+    /// 海报右下角那块小角标。
+    /// ★ 影视类优先显示评分(与 B 站影视页一致); 番剧保持原来的"看到第 N 话 / 更新至第 N 话",
+    ///   因为追番用户更关心更新进度而不是分数。
+    /// </summary>
+    public string CardBadgeText => IsTeleplay && !string.IsNullOrWhiteSpace(Score)
+        ? Score
+        : CardSubText;
+
     /// <summary>番剧主页(B 站网页版)</summary>
     public string Url { get; set; } = "";
+}
+
+/// <summary>
+/// 影视页的一个栏目(标题 + 一批 PGC 条目) —— 2026-11-28 新增。
+///
+/// ★ 为什么用一个栏目对象而不是在 ViewModel 里摆五份 ObservableCollection:
+///   影视页的栏目结构一样(标题 + 条数 + 海报墙), 只有数据不同。用一份
+///   <c>ItemsControl</c> 套栏目模板, 以后加/减栏目只改数据, 不用复制五段 XAML。
+/// ★ 条目在写进栏目之前就已经填好, 所以这里不需要变更通知; 刷新时整份替换集合即可。
+/// </summary>
+public sealed class MediaSection
+{
+    public string Title { get; init; } = "";
+
+    public IReadOnlyList<BangumiItem> Items { get; init; } = Array.Empty<BangumiItem>();
+
+    public bool HasItems => Items.Count > 0;
+
+    public string CountText => Items.Count > 0 ? $"({Items.Count})" : "";
 }
 
 /// <summary>番剧的一集(PGC 的分集, 不同于 UGC 合集)。</summary>
@@ -143,6 +198,12 @@ public sealed class BangumiDetail
 
     /// <summary>分类名("番剧" / "国创" / "电影"…)</summary>
     public string SeasonTypeName { get; set; } = "";
+
+    /// <summary>分类数字(1 番剧 / 2 电影 / 3 纪录片 / 4 国创 / 5 电视剧 / 7 综艺)</summary>
+    public int SeasonType { get; set; }
+
+    /// <summary>是不是追剧类(电影 / 纪录片 / 电视剧 / 综艺)。详情页按钮文案与追剧缓存都用它。</summary>
+    public bool IsTeleplay => SeasonType is 2 or 3 or 5 or 7;
 
     /// <summary>简介(pgc 的 evaluate)</summary>
     public string Evaluate { get; set; } = "";

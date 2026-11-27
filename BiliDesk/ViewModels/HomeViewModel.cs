@@ -10,41 +10,37 @@ using BiliDesk.Services;
 
 namespace BiliDesk.ViewModels;
 
-/// <summary>首页 ViewModel: 推荐 + 热门 + 排行榜 + 直播 + 追番 五个 tab</summary>
+/// <summary>首页 ViewModel: 推荐 + 热门 + 影视 + 直播 + 追番 五个 tab</summary>
 public class HomeViewModel : ObservableObject
 {
     // 默认 tab 是「推荐」, 五个可见性标志的初值必须与之一致 ——
     // 否则首帧会先把「热门」的空列表显示出来, 再被 RadioButton 的默认选中切走。
     private bool _isPopularTab;
     private bool _isRecommendTab = true;
-    private bool _isRankingTab;
+    private bool _isMovieTab;
     private bool _isLiveTab;
     private bool _isBangumiTab;
     private bool _loading;
     private bool _loadingMore;
-    private bool _rankingBlocked;
     private string _error = "";
     private int _popularPage = 1;
     private bool _popularHasMore = true;
 
     public ObservableCollection<VideoItem> PopularItems { get; } = new();
     public ObservableCollection<VideoItem> RecommendItems { get; } = new();
-    public ObservableCollection<VideoItem> RankingItems { get; } = new();
     public ObservableCollection<VideoItem> LiveItems { get; } = new();
 
     public bool IsPopularTab { get => _isPopularTab; set => SetProperty(ref _isPopularTab, value); }
     public bool IsRecommendTab { get => _isRecommendTab; set => SetProperty(ref _isRecommendTab, value); }
-    public bool IsRankingTab { get => _isRankingTab; set => SetProperty(ref _isRankingTab, value); }
+    public bool IsMovieTab { get => _isMovieTab; set => SetProperty(ref _isMovieTab, value); }
     public bool IsLiveTab { get => _isLiveTab; set => SetProperty(ref _isLiveTab, value); }
     public bool IsBangumiTab { get => _isBangumiTab; set => SetProperty(ref _isBangumiTab, value); }
     public bool Loading { get => _loading; private set => SetProperty(ref _loading, value); }
     public bool LoadingMore { get => _loadingMore; private set => SetProperty(ref _loadingMore, value); }
-    public bool RankingBlocked { get => _rankingBlocked; private set => SetProperty(ref _rankingBlocked, value); }
     public string Error { get => _error; private set => SetProperty(ref _error, value); }
     public bool PopularHasMore { get => _popularHasMore; private set => SetProperty(ref _popularHasMore, value); }
     public int PopularCount => PopularItems.Count;
     public int RecommendCount => RecommendItems.Count;
-    public int RankingCount => RankingItems.Count;
     public int LiveCount => LiveItems.Count;
 
     /// <summary>直播列表还能不能翻下一页(直播不做"到底了"提示, 但滚动加载要有个闸)</summary>
@@ -96,7 +92,6 @@ public class HomeViewModel : ObservableObject
 
     public ICommand RefreshCommand { get; }
     public ICommand LoadMoreCommand { get; }
-    public ICommand OpenRankingWebCommand { get; }
     public ICommand SelectLiveGroupCommand { get; }
     public ICommand SelectLiveAreaCommand { get; }
     public ICommand ToggleLiveSubExpandCommand { get; }
@@ -105,16 +100,14 @@ public class HomeViewModel : ObservableObject
     // ★ 原先这里有 OpenMyBangumiWebCommand / OpenBangumiWebCommand(跳 B 站网页版的
     //   「我的追番」「番剧分区」「国创分区」), 已按用户要求删除(2026-10-11):
     //   把用户从原生体验里拽出去, 影响观感。追番页三个区块改为纯标题 + 滚动加载,
-    //   不再需要"查看全部"这种出口。排行榜那个网页版回退入口**保留** ——
-    //   它是接口被风控拦掉(-352)时的**唯一**出路, 不是"锦上添花的跳转"。
+    //   不再需要"查看全部"这种出口。
+    // ★ 排行榜的「打开网页版排行榜」回退也已随排行榜一起删除(2026-11-28) ——
+    //   影视页用的是公开的 PGC 索引接口, 不需要网页兜底。
 
     public HomeViewModel()
     {
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
         LoadMoreCommand = new AsyncRelayCommand(LoadMoreAsync);
-        OpenRankingWebCommand = new RelayCommand(() =>
-            Svc.Navigate?.OpenWebViewWindow(
-                "https://www.bilibili.com/v/popular/rank/all", "排行榜 - 网页版"));
 
         // ---------------- 直播分区 / 关注主播(2026-11-08) ----------------
         SelectLiveGroupCommand = new RelayCommand(p =>
@@ -196,6 +189,19 @@ public class HomeViewModel : ObservableObject
         var loggedIn = Svc.Session.HasLogin;
         if (loggedIn == _lastRecommendLoggedIn) return;
         _lastRecommendLoggedIn = loggedIn;
+
+        // 「我的追剧」也是账号数据: 换账号/退出后不能还挂着上一个账号的列表。
+        // ★ 只清我的追剧, 公开的影视栏目(热播)不用重拉。
+        MyTeleplay.Clear();
+        _myTeleplayHint = "";
+        _movieLoaded = false;
+        _movieFollowVersion = BangumiFollowSignal.Version;
+        RaiseMyTeleplayState();
+        if (IsMovieTab)
+        {
+            _movieReloadPending = true;
+            _ = LoadMovieAsync();
+        }
 
         ResetRecommendAndReload();
     }
@@ -409,9 +415,9 @@ public class HomeViewModel : ObservableObject
             _popularHasMore = true;
             await LoadPopularAsync(reset: true);
         }
-        else if (IsRankingTab)
+        else if (IsMovieTab)
         {
-            await LoadRankingAsync();
+            await LoadMovieAsync();
         }
         else if (IsLiveTab)
         {
@@ -446,12 +452,231 @@ public class HomeViewModel : ObservableObject
         if (RecommendItems.Count == 0) await LoadRecommendAsync(reset: true);
     }
 
-    /// <summary>切到排行榜 tab</summary>
-    public async Task SwitchToRankingAsync()
+    // ----------------- 影视 -----------------
+
+    /// <summary>「我的追剧」—— 关注列表的 type=2(电影/电视剧/纪录片/综艺)。</summary>
+    public ObservableCollection<BangumiItem> MyTeleplay { get; } = new();
+
+    /// <summary>
+    /// 影视页的「正在热播 / 电影热播 / 电视剧热播 / 纪录片热播 / 综艺热播」栏目。
+    /// ★ 用栏目对象而不是五份 ObservableCollection: 版式完全一样, 一份模板就够。
+    /// </summary>
+    public ObservableCollection<MediaSection> MovieSections { get; } = new();
+
+    /// <summary>影视页每栏最多显示多少张(1920 宽下约两行)。</summary>
+    private const int MovieRowSize = 14;
+
+    /// <summary>「正在热播」每一类先取多少条, 再轮流合并。</summary>
+    private const int MovieNowPerType = 7;
+
+    /// <summary>「正在热播」要合并的分类: 电影 / 纪录片 / 电视剧 / 综艺。</summary>
+    private static readonly int[] MovieNowTypes = { 2, 3, 5, 7 };
+
+    /// <summary>四个"热播"栏目。顺序就是界面上的顺序。</summary>
+    private static readonly (string Title, int SeasonType)[] MovieHotRows =
     {
-        SetTab(PageTab.Ranking);
+        ("电影热播", 2),
+        ("电视剧热播", 5),
+        ("纪录片热播", 3),
+        ("综艺热播", 7),
+    };
+
+    private bool _movieLoading;
+    private bool _movieReloadPending;
+    private bool _movieLoaded;
+    private int _movieGen;
+    private int _movieFollowVersion;
+    private string _myTeleplayHint = "";
+
+    public bool HasMyTeleplay => MyTeleplay.Count > 0;
+
+    public string MyTeleplayCountText => MyTeleplay.Count > 0 ? $"({MyTeleplay.Count})" : "";
+
+    /// <summary>「我的追剧」那一栏自己的一句提示(未登录 / 空 / 拉取失败)。</summary>
+    public string MyTeleplayHint
+    {
+        get
+        {
+            if (!Svc.Session.HasLogin) return "登录 B 站账号即可查看「我的追剧」";
+            if (!string.IsNullOrEmpty(_myTeleplayHint)) return _myTeleplayHint;
+            if (!_movieLoaded) return "";
+            return MyTeleplay.Count > 0 ? "" : "还没有追剧，点开一部剧追起来吧";
+        }
+    }
+
+    private void RaiseMyTeleplayState()
+    {
+        OnPropertyChanged(nameof(HasMyTeleplay));
+        OnPropertyChanged(nameof(MyTeleplayCountText));
+        OnPropertyChanged(nameof(MyTeleplayHint));
+    }
+
+    /// <summary>切到影视 tab</summary>
+    public async Task SwitchToMovieAsync()
+    {
+        SetTab(PageTab.Movie);
         Error = "";
-        if (RankingItems.Count == 0 && !RankingBlocked) await LoadRankingAsync();
+
+        // 首次进来才拉; 之后切回来直接用已加载的内容(刷新走工具栏/F5)。
+        if (!_movieLoaded)
+        {
+            _movieFollowVersion = BangumiFollowSignal.Version;
+            await LoadMovieAsync();
+            return;
+        }
+
+        // 期间追过/取消过剧: 只补拉「我的追剧」, 公开栏目不重拉。
+        if (_movieFollowVersion != BangumiFollowSignal.Version)
+        {
+            _movieFollowVersion = BangumiFollowSignal.Version;
+            await ReloadMyTeleplayAsync();
+        }
+    }
+
+    /// <summary>
+    /// 拉影视页的全部内容: 我的追剧 + 正在热播 + 四个热播栏目。
+    ///
+    /// ★ 九个请求并发发出(PGC 索引接口很轻, 不需要 WBI):
+    ///   我的追剧 1 + 正在热播 4(每类按"最近更新") + 热播栏目 4(按播放数)。
+    /// ★ 代次 <see cref="_movieGen"/> 丢弃过期结果: 连点刷新 / 加载途中切走再回来,
+    ///   旧响应不能贴到新列表上。
+    /// ★ 某一类失败只少一个栏目, 不拖垮整页; 四栏全空才算整页失败。
+    /// </summary>
+    private async Task LoadMovieAsync()
+    {
+        if (_movieLoading) return;
+        _movieLoading = true;
+        _movieReloadPending = false;
+        var gen = ++_movieGen;
+        var followVersion = BangumiFollowSignal.Version;
+        Loading = true;
+        Error = "";
+        try
+        {
+            var myTask = FetchMyTeleplayAsync();
+
+            var nowTasks = new Task<(bool ok, string? err, List<BangumiItem>? items, bool hasNext)>[MovieNowTypes.Length];
+            for (var i = 0; i < MovieNowTypes.Length; i++)
+                nowTasks[i] = Svc.Api.GetPgcIndexAsync(MovieNowTypes[i], order: 0, pn: 1, ps: MovieNowPerType);
+
+            var hotTasks = new Task<(bool ok, string? err, List<BangumiItem>? items, bool hasNext)>[MovieHotRows.Length];
+            for (var i = 0; i < MovieHotRows.Length; i++)
+                hotTasks[i] = Svc.Api.GetPgcIndexAsync(MovieHotRows[i].SeasonType, order: 2, pn: 1, ps: MovieRowSize);
+
+            await Task.WhenAll(nowTasks.Cast<Task>().Concat(hotTasks).Append(myTask));
+
+            var my = myTask.Result;
+
+            var nowRows = new List<IReadOnlyList<BangumiItem>>();
+            foreach (var t in nowTasks)
+                if (t.Result.items is { Count: > 0 } list) nowRows.Add(list);
+
+            var nowHot = MediaMerge.Interleave(nowRows, MovieRowSize);
+
+            var sections = new List<MediaSection>();
+            if (nowHot.Count > 0)
+                sections.Add(new MediaSection { Title = "正在热播", Items = nowHot });
+
+            for (var i = 0; i < MovieHotRows.Length; i++)
+            {
+                var list = hotTasks[i].Result.items;
+                if (list is { Count: > 0 })
+                    sections.Add(new MediaSection { Title = MovieHotRows[i].Title, Items = list });
+            }
+
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (gen != _movieGen) return;
+                Loading = false;
+                _movieLoaded = true;
+                _movieFollowVersion = followVersion;
+
+                MyTeleplay.Clear();
+                if (my.items != null)
+                    foreach (var it in my.items) MyTeleplay.Add(it);
+                _myTeleplayHint = my.ok ? "" : (my.err ?? "加载我的追剧失败");
+                RaiseMyTeleplayState();
+
+                MovieSections.Clear();
+                foreach (var s in sections) MovieSections.Add(s);
+
+                if (sections.Count == 0) Error = "影视内容加载失败，请点刷新重试";
+            });
+
+            // 拉取途中用户追过/取消过剧: 这份「我的追剧」可能已经过时, 补一次。
+            if (followVersion != BangumiFollowSignal.Version)
+            {
+                _movieFollowVersion = BangumiFollowSignal.Version;
+                _ = ReloadMyTeleplayAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            if (gen == _movieGen)
+            {
+                Loading = false;
+                _movieLoaded = false;
+                Error = ex.Message;
+            }
+        }
+        finally
+        {
+            if (gen == _movieGen)
+            {
+                _movieLoading = false;
+
+                // 加载途中登录态变了(OnSessionChanged 置了 pending): 这份结果可能是
+                // 上一个账号/未登录的, 再补拉一次, 否则「我的追剧」会一直空着。
+                if (_movieReloadPending && IsMovieTab)
+                {
+                    _movieReloadPending = false;
+                    _ = LoadMovieAsync();
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 只重拉「我的追剧」, 不动公开的影视栏目。
+    /// ★ 追剧/取消追剧发生在内嵌详情页, 关掉详情页时影视页不会重新进入 ——
+    ///   靠 <see cref="RefreshBangumiIfFollowChanged"/> 的版本号比对补这一栏。
+    /// </summary>
+    private async Task ReloadMyTeleplayAsync()
+    {
+        var gen = _movieGen;
+        var (ok, err, items) = await FetchMyTeleplayAsync();
+        if (gen != _movieGen) return;   // 期间发生了整页重载, 那次会覆盖这一栏
+
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            if (gen != _movieGen) return;
+            MyTeleplay.Clear();
+            if (ok && items != null)
+                foreach (var it in items) MyTeleplay.Add(it);
+            _myTeleplayHint = ok ? "" : (err ?? "加载我的追剧失败");
+            RaiseMyTeleplayState();
+        });
+    }
+
+    /// <summary>取「我的追剧」(type=2)第一页。未登录返回空列表而不是错误。</summary>
+    private async Task<(bool ok, string? err, List<BangumiItem>? items)> FetchMyTeleplayAsync()
+    {
+        try
+        {
+            if (!Svc.Session.HasLogin) return (true, null, new List<BangumiItem>());
+
+            // 直接读登录态里的 uid(与「我的订阅」页同一套): 少打一次 nav 接口,
+            // 也不会因为用户状态接口临时失败就把「我的追剧」整栏判成错误。
+            if (!long.TryParse(Svc.Session.Current.DedeUserID, out var mid) || mid <= 0)
+                return (false, "登录状态异常, 请重新登录", null);
+
+            var (ok, err, items, _) = await Svc.Api.GetMyBangumiPageAsync(mid, type: 2, pn: 1, ps: 20);
+            return (ok, err, items);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null);
+        }
     }
 
     /// <summary>切到直播 tab</summary>
@@ -649,18 +874,28 @@ public class HomeViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 内嵌页(番剧详情)关掉、本页重新可见时调: 期间追过/取消过番就补拉「我的追番」。
+    /// 内嵌页(番剧详情)关掉、本页重新可见时调: 期间追过/取消过番/剧就补拉对应列表。
     ///
-    /// ★ 必须走这条: 内嵌页是盖在 PageLayer 上的, 关掉时**不会**触发追番 tab 的 Checked
-    ///   事件 —— SwitchToBangumiAsync 根本不会被调用, 只靠它的话列表永远不刷新
-    ///   (用户报的"追了番但我的追番里没有")。
+    /// ★ 必须走这条: 内嵌页是盖在 PageLayer 上的, 关掉时**不会**触发追番/影视 tab 的
+    ///   Checked 事件 —— SwitchToBangumiAsync / SwitchToMovieAsync 根本不会被调用,
+    ///   只靠它们的话列表永远不刷新(用户报的"追了番但我的追番里没有")。
+    /// ★ 2026-11-28: 追剧(type=2)走的是同一份信号, 但落在影视页的「我的追剧」上。
     /// </summary>
     public void RefreshBangumiIfFollowChanged()
     {
-        if (!IsBangumiTab) return;
-        if (_bangumiFollowVersion == Helpers.BangumiFollowSignal.Version) return;
-        _bangumiFollowVersion = Helpers.BangumiFollowSignal.Version;
-        _ = ReloadMyBangumiAsync();
+        var version = Helpers.BangumiFollowSignal.Version;
+
+        if (IsBangumiTab && _bangumiFollowVersion != version)
+        {
+            _bangumiFollowVersion = version;
+            _ = ReloadMyBangumiAsync();
+        }
+
+        if (IsMovieTab && _movieFollowVersion != version)
+        {
+            _movieFollowVersion = version;
+            _ = ReloadMyTeleplayAsync();
+        }
     }
 
     /// <summary>
@@ -731,13 +966,13 @@ public class HomeViewModel : ObservableObject
         return user is { IsLogin: true } ? user.Mid : 0;
     }
 
-    private enum PageTab { Recommend, Popular, Ranking, Live, Bangumi }
+    private enum PageTab { Recommend, Popular, Movie, Live, Bangumi }
 
     private void SetTab(PageTab tab)
     {
         IsRecommendTab = tab == PageTab.Recommend;
         IsPopularTab = tab == PageTab.Popular;
-        IsRankingTab = tab == PageTab.Ranking;
+        IsMovieTab = tab == PageTab.Movie;
         IsLiveTab = tab == PageTab.Live;
         IsBangumiTab = tab == PageTab.Bangumi;
     }
@@ -1215,6 +1450,9 @@ public class HomeViewModel : ObservableObject
     {
         if (LoadingMore || Loading) return;
 
+        // 影视页是固定栏目(一次给完), 没有"下一页"。
+        if (IsMovieTab) return;
+
         // 直播单独走: 它的"还有没有下一页"是 LiveHasMore, 而且重新拉取是整页替换语义
         if (IsLiveTab)
         {
@@ -1283,43 +1521,6 @@ public class HomeViewModel : ObservableObject
         catch (Exception ex)
         {
             LoadingMore = false;
-            Error = ex.Message;
-        }
-    }
-
-    // ----------------- 排行榜 -----------------
-
-    private async Task LoadRankingAsync()
-    {
-        Loading = true;
-        Error = "";
-        RankingBlocked = false;
-        try
-        {
-            var (ok, err, items) = await Svc.Api.GetRankingAsync();
-            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
-            {
-                Loading = false;
-                if (items != null)
-                {
-                    RankingItems.Clear();
-                    foreach (var it in items) RankingItems.Add(it);
-                    OnPropertyChanged(nameof(RankingCount));
-                }
-                else if (err != null && err.Contains("-352"))
-                {
-                    RankingBlocked = true;
-                    Error = "排行榜接口被风控拦截, 可改用网页版查看";
-                }
-                else
-                {
-                    Error = err ?? "加载失败";
-                }
-            });
-        }
-        catch (Exception ex)
-        {
-            Loading = false;
             Error = ex.Message;
         }
     }

@@ -106,7 +106,7 @@
                     <TextBlock Text="{Binding Badge}" FontSize="10" Foreground="White" />
                 </Border>
 
-                <!-- 左下: 分类(番剧 / 国创) -->
+                <!-- 左下: 分类(番剧 / 国创 / 电影 / 电视剧 / 纪录片 / 综艺) -->
                 <Border HorizontalAlignment="Left" VerticalAlignment="Bottom"
                         Margin="6,0,0,6" CornerRadius="4" Padding="5,2"
                         Background="#99000000"
@@ -114,13 +114,14 @@
                     <TextBlock Text="{Binding SeasonTypeText}" FontSize="10" Foreground="#F2FFFFFF" />
                 </Border>
 
-                <!-- 右下: 更新进度 -->
+                <!-- 右下: 影视显示评分, 番剧显示更新/观看进度(见 BangumiItem.CardBadgeText) -->
                 <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
                         Margin="0,0,6,6" CornerRadius="4" Padding="5,2"
                         Background="#66000000"
-                        Visibility="{Binding CardSubText, Converter={StaticResource StrToVis}}"
+                        Visibility="{Binding CardBadgeText, Converter={StaticResource StrToVis}}"
                         Style="{StaticResource PosterBadgeFade}">
-                    <TextBlock Text="{Binding CardSubText}" FontSize="10" Foreground="#F2FFFFFF" />
+                    <TextBlock Text="{Binding CardBadgeText}" FontSize="10" Foreground="#F2FFFFFF"
+                               MaxWidth="110" TextTrimming="CharacterEllipsis" />
                 </Border>
             </Grid>
         </Border>

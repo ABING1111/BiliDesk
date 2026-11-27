@@ -69,6 +69,8 @@ public class BangumiViewModel : ObservableObject
                 OnPropertyChanged(nameof(Evaluate));
                 OnPropertyChanged(nameof(MetaLine));
                 OnPropertyChanged(nameof(EpCountText));
+                OnPropertyChanged(nameof(IsTeleplay));
+                OnPropertyChanged(nameof(FollowButtonText));
             }
         }
     }
@@ -124,7 +126,15 @@ public class BangumiViewModel : ObservableObject
     }
 
     /// <summary>追番按钮上的字: 已追 / 未追。</summary>
-    public string FollowButtonText => IsFollowed ? "已追番" : "+ 追番";
+    public string FollowButtonText => IsTeleplay
+        ? (IsFollowed ? "已追剧" : "+ 追剧")
+        : (IsFollowed ? "已追番" : "+ 追番");
+
+    /// <summary>
+    /// 这一季是不是追剧类(电影 / 纪录片 / 电视剧 / 综艺)。
+    /// ★ 详情还没回来时用列表项自带的 season_type 兜底, 否则按钮会先闪一下"追番"。
+    /// </summary>
+    public bool IsTeleplay => Detail?.IsTeleplay ?? _seed.IsTeleplay;
 
     private bool _followBusy;
 
@@ -230,7 +240,7 @@ public class BangumiViewModel : ObservableObject
     private async Task RefreshFollowStateAsync(long seasonId)
     {
         if (seasonId <= 0) return;
-        var followed = await Svc.BangumiFollow.IsFollowedAsync(seasonId);
+        var followed = await Svc.BangumiFollow.IsFollowedAsync(seasonId, IsTeleplay);
         await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
         {
             if ((Detail?.SeasonId ?? _seed.SeasonId) != seasonId) return;
@@ -253,25 +263,27 @@ public class BangumiViewModel : ObservableObject
     public async Task ToggleFollowAsync()
     {
         if (FollowBusy) return;
-        if (!Svc.Session.HasLogin) { Svc.Toast.Show("追番需要先登录"); return; }
+        if (!Svc.Session.HasLogin) { Svc.Toast.Show(IsTeleplay ? "追剧需要先登录" : "追番需要先登录"); return; }
         if (Detail == null) return;
 
         var seasonId = Detail.SeasonId;
         var target = !IsFollowed;
+        var teleplay = IsTeleplay;
+        var verb = teleplay ? "追剧" : "追番";
         FollowBusy = true;
         try
         {
             var (ok, err) = await Svc.Api.SetBangumiFollowAsync(seasonId, target);
             if (!ok)
             {
-                Svc.Toast.Show((target ? "追番失败: " : "取消追番失败: ") + (err ?? "未知错误"));
+                Svc.Toast.Show((target ? verb + "失败: " : "取消" + verb + "失败: ") + (err ?? "未知错误"));
                 return;
             }
 
             IsFollowed = target;
-            Svc.BangumiFollow.SetFollowed(seasonId, target);
+            Svc.BangumiFollow.SetFollowed(seasonId, target, teleplay);
             BangumiFollowSignal.Bump();
-            Svc.Toast.Show(target ? "已追番" : "已取消追番");
+            Svc.Toast.Show(target ? "已" + verb : "已取消" + verb);
         }
         finally
         {

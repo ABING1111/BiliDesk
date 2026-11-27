@@ -469,6 +469,71 @@ public partial class ApiClient
     }
 
     /// <summary>
+    /// PGC 索引(影视页的热播栏目, 2026-11-28 新增)。
+    ///
+    /// 接口: /pgc/season/index/result —— 与番剧推荐同一个端点, 靠 <paramref name="seasonType"/>
+    /// 选电影 / 电视剧 / 纪录片 / 综艺, 靠 <paramref name="order"/> 选排序。
+    ///
+    /// ★ order 取值(实测 + bilibili-API-collect):
+    ///   0 = 最近更新, 1 = 弹幕数, 2 = 播放数, 3 = 追番人数, 4 = 最高评分, 5 = 开播时间。
+    ///   影视页「正在热播」用 0, 「电影/电视剧/纪录片/综艺热播」用 2。
+    /// ★ season_type: 2 电影 / 3 纪录片 / 5 电视剧 / 7 综艺。
+    ///   (1 与 4 在旧注释里实测返回同一批, 但影视页用不到这两类。)
+    /// ★ 不需要登录, 也不需要 WBI; Referer 必须是 www.bilibili.com。
+    /// </summary>
+    public async Task<(bool ok, string? err, List<BangumiItem>? items, bool hasNext)>
+        GetPgcIndexAsync(int seasonType, int order, int pn = 1, int ps = 14)
+    {
+        try
+        {
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/pgc/season/index/result",
+                new Dictionary<string, string>
+                {
+                    ["season_type"] = seasonType.ToString(),
+                    ["type"] = "0", // 0 = 综合热门(按 type 细分的分类不要)
+                    ["order"] = order.ToString(),
+                    ["sort"] = "0", // 0 = 降序
+                    ["page"] = Math.Max(1, pn).ToString(),
+                    ["ps"] = Math.Clamp(ps, 1, 50).ToString()
+                },
+                referer: "https://www.bilibili.com/");
+
+            if (code != 0 || data == null)
+                return (false, msg ?? $"加载影视内容失败({code})", null, false);
+            if (!data.Value.TryGetProperty("list", out var list) ||
+                list.ValueKind != JsonValueKind.Array)
+                return (true, null, new List<BangumiItem>(), false);
+
+            var items = new List<BangumiItem>();
+            var limit = Math.Clamp(ps, 1, 50);
+            foreach (var el in list.EnumerateArray())
+            {
+                if (el.ValueKind != JsonValueKind.Object) continue;
+                var item = ParseBangumiItem(el);
+                if (item == null) continue;
+                items.Add(item);
+                // ★ 实测这个接口会忽略 ps 一次给回 25 条(order=0/2 都一样)。
+                //   影视页每栏只要固定张数, 在这里就截断, 别把 25 张全铺到页面上。
+                if (items.Count >= limit) break;
+            }
+
+            // has_next 缺省时按"这一页是不是读满了"兜底(与番剧推荐同一套判据)
+            var hasNext = data.Value.TryGetProperty("has_next", out var hn)
+                && hn.ValueKind == JsonValueKind.Number
+                ? hn.GetInt32() == 1
+                : items.Count >= limit;
+
+            return (true, null, items, hasNext);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, "加载影视内容失败: " + ex.Message, null, false);
+        }
+    }
+
+    /// <summary>
     /// 番剧详情 + **选集列表**。
     ///
     /// 接口: /pgc/view/web/season —— 不需要登录(能拿到番剧的基本信息与分集表)。
@@ -508,11 +573,15 @@ public partial class ApiClient
 
             // 分类名在 show_season_type / type 上, 优先取能拿到名字的那个
             detail.SeasonTypeName = GetStr(res, "season_type_name").StripHtml();
+            detail.SeasonType = GetInt(res, "type");
+            if (detail.SeasonType <= 0) detail.SeasonType = GetInt(res, "show_season_type");
             if (string.IsNullOrEmpty(detail.SeasonTypeName))
             {
                 var st = TryObject(res, "show_season_type");
                 detail.SeasonTypeName = st is { } s ? GetStr(s, "name").StripHtml() : "";
             }
+            if (string.IsNullOrEmpty(detail.SeasonTypeName) && detail.SeasonType > 0)
+                detail.SeasonTypeName = BangumiItem.SeasonTypeNameOf(detail.SeasonType);
 
             if (TryObject(res, "rating") is { } rating)
             {
@@ -620,6 +689,16 @@ public partial class ApiClient
             Progress = GetStr(el, "progress").StripHtml(),
             Url = GetStr(el, "url")
         };
+
+        // ★ 影视索引接口把简介短句叫 subTitle(驼峰), 追番接口叫 subtitle(全小写)。
+        //   两个名字都认, 否则影视卡片标题下面永远是空的。
+        if (string.IsNullOrWhiteSpace(item.Subtitle))
+            item.Subtitle = GetStr(el, "subTitle").StripHtml();
+
+        // 评分: 影视索引会给 "9.6"; 追番列表通常没有。空串/0 都按"没有评分"处理。
+        var score = GetStr(el, "score").Trim();
+        if (score is "0" or "0.0") score = "";
+        item.Score = score;
 
         // total_count 缺失时退回 new_ep 的集号(番外/剧场版给的是 0)
         item.TotalCount = GetInt(el, "total_count");

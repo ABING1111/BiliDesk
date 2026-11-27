@@ -113,27 +113,6 @@ public partial class ApiClient
     public const int RegionPageSize = 20;
 
     /// <summary>
-    /// 全站排行榜(rid=0 = 全站, 与分区榜同一个接口)。
-    /// </summary>
-    public Task<(bool ok, string? err, List<VideoItem>? items)> GetRankingAsync() => GetRegionRankAsync(0);
-
-    /// <summary>
-    /// 排行榜。ranking/v2 的 rid 参数决定范围: 0 = 全站, 其余是**old tid**。
-    ///
-    /// ★ 首页「排行榜」tab 用它。注意 rid=0(全站)与分区是两套表现, 别拿分区 rid 来套:
-    ///   实测(2026-10-17) 这个接口对**v2 tid**(1005 动画 / 1020 美食 / 1009 资讯) 一律 -400,
-    ///   只有全站(0)与**旧 tid**(1/3/4/36/188…) 可用; 而旧 tid 那批返回的是约 564 天前的
-    ///   陈年榜单 —— 分区页**不要**再走这里, 用 <see cref="GetRegionFeedAsync"/>。
-    /// </summary>
-    public Task<(bool ok, string? err, List<VideoItem>? items)> GetRegionRankAsync(int rid)
-    {
-        return GetVideoListAsync(
-            "https://api.bilibili.com/x/web-interface/ranking/v2",
-            new Dictionary<string, string> { ["rid"] = rid.ToString(), ["type"] = "all" },
-            jsonProp: "list");
-    }
-
-    /// <summary>
     /// 首页个性化推荐。按设置里的「推荐来源」走两套**不同的服务端模型**:
     ///   · Web —— 浏览器网页版「为你推荐」(wbi/index/top/feed/rcmd), 单次最多 30 条;
     ///   · App —— B 站手机客户端首页推荐流(app.bilibili.com/x/v2/feed/index), 每次 10 条。

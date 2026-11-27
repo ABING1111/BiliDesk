@@ -5,11 +5,11 @@
              xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
              Background="{DynamicResource AppBackgroundBrush}">
     <!--
-        番剧详情 + 选集页。
+        番剧 / 影视详情 + 选集页。
 
         版式: 顶部一条横向"海报 + 标题/评分/简介", 下面是**选集墙**(按集号网格排布,
         而不是竖排长列表 —— 一季动辄上百集, 竖着排要点很久才够到第 80 话)。
-        这一页由追番页点卡片进来, 由 NavigationDispatcher 内嵌在主窗口内容区里
+        这一页由追番页 / 影视页点卡片进来, 由 NavigationDispatcher 内嵌在主窗口内容区里
         (与 UP 主主页同一套路), 所以自己**不带**返回按钮 —— 那是 MainWindow 的内嵌层负责的。
     -->
     <UserControl.Resources>
@@ -147,7 +147,7 @@
                                 Padding="16,8" VerticalAlignment="Top"
                                 IsEnabled="{Binding CanToggleFollow}"
                                 Click="OnFollowClick"
-                                ToolTip="追番 / 取消追番" />
+                                ToolTip="追番 / 追剧 / 取消" />
                         <Button Content="播放最新一集" Style="{StaticResource AccentButtonStyle}"
                                 Padding="16,8" VerticalAlignment="Top" Margin="10,0,0,0"
                                 Click="OnPlayLatestClick"
@@ -199,7 +199,7 @@
                 <!-- 一集都没有: 多半是这季还没上正片, 说清楚而不是留一片空白 -->
                 <StackPanel Margin="0,40,0,0" HorizontalAlignment="Center"
                             Visibility="{Binding NoEpisodes, Converter={StaticResource BoolToVis}}">
-                    <TextBlock Text="这部番暂时还没有可播放的选集"
+                    <TextBlock Text="这部作品暂时还没有可播放的选集"
                                HorizontalAlignment="Center"
                                Foreground="{DynamicResource TextTertiaryBrush}" />
                 </StackPanel>

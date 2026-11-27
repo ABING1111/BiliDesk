@@ -305,13 +305,11 @@
                              Content="推荐" />
                 <RadioButton x:Name="PopularTab" Style="{StaticResource UnderlineTabStyle}"
                              Content="热门" Margin="4,0,0,0" />
-                <RadioButton x:Name="RankingTab" Style="{StaticResource UnderlineTabStyle}"
-                             Content="排行榜" Margin="4,0,0,0" />
-                <!-- 直播放在排行榜右侧, 顺序就是需求要的"排行榜右侧" -->
                 <RadioButton x:Name="LiveTab" Style="{StaticResource UnderlineTabStyle}"
                              Content="直播" Margin="4,0,0,0" />
-                <!-- 追番放最后(与参考图里"直播 推荐 热门 追番 影视"把追番排在热门之后的次序一致;
-                     影视那栏需要影视(追剧)数据源, 本页只做了番剧, 没有占一个点不动的标签) -->
+                <RadioButton x:Name="MovieTab" Style="{StaticResource UnderlineTabStyle}"
+                             Content="影视" Margin="4,0,0,0" />
+                <!-- 追番放最后; 影视用独立的影视(追剧)数据源, 见下面 MovieScroll -->
                 <RadioButton x:Name="BangumiTab" Style="{StaticResource UnderlineTabStyle}"
                              Content="追番" Margin="4,0,0,0" />
             </StackPanel>
@@ -728,36 +726,87 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- ===== 排行榜 ===== -->
-            <ScrollViewer x:Name="RankingScroll" VerticalScrollBarVisibility="Auto"
-                          ScrollChanged="RankingScroll_OnScrollChanged"
-                          Visibility="{Binding IsRankingTab, Converter={StaticResource BoolToVis}}">
+            <!-- ===== 影视(2026-11-28, 替换原排行榜) =====
+                 版式对齐 B 站影视页: 我的追剧 + 正在热播 + 电影/电视剧/纪录片/综艺热播。
+                 全部用竖版海报卡(BangumiCard, 3:4), 所以每面墙都挂 Aspect="0.75"。
+                 ★ 「正在热播」是四个分类按"最近更新"轮流合并出来的, 见 MediaMerge。
+                 ★ 几栏共用一个栏目模板: 数据在 VM 的 MovieSections 里, 加减栏目不用改 XAML。 -->
+            <ScrollViewer x:Name="MovieScroll" VerticalScrollBarVisibility="Auto"
+                          ScrollChanged="MovieScroll_OnScrollChanged"
+                          Visibility="{Binding IsMovieTab, Converter={StaticResource BoolToVis}}">
                 <StackPanel Margin="0,0,0,300">
                     <Border Margin="20,4,20,0" Padding="14,10" CornerRadius="8"
                             Background="{DynamicResource InfoBarBackgroundBrush}"
                             BorderBrush="{DynamicResource AccentBorderFillBrush}" BorderThickness="1"
-                            Visibility="{Binding RankingBlocked, Converter={StaticResource BoolToVis}}">
+                            Visibility="{Binding Error, Converter={StaticResource StrToVis}}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE7BA;" Foreground="{DynamicResource AccentTextBrush}"
                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                        FontSize="14" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding Error}" Margin="10,0,0,0" VerticalAlignment="Center"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" />
-                            <Button Content="打开网页版排行榜" Style="{StaticResource AccentButtonStyle}"
-                                    Margin="16,0,0,0" Padding="12,5"
-                                    Command="{Binding OpenRankingWebCommand}" />
+                            <TextBlock Text="{Binding Error}" Margin="10,0,0,0"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Button Content="重试" Style="{StaticResource SubtleButtonStyle}"
+                                    Margin="16,0,0,0" Padding="10,4"
+                                    Click="OnRefreshClick" />
                         </StackPanel>
                     </Border>
 
-                    <ItemsControl x:Name="RankingList" ItemsSource="{Binding RankingItems}">
+                    <!-- ===== 我的追剧 ===== -->
+                    <StackPanel Orientation="Horizontal" Margin="20,18,20,0">
+                        <TextBlock Text="我的追剧" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock Text="{Binding MyTeleplayCountText}" Margin="8,0,0,0"
+                                   VerticalAlignment="Bottom" FontSize="13" Opacity="0.6"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </StackPanel>
+
+                    <!-- 未登录 / 没追剧 / 拉取失败: 说清楚为什么是空的, 而不是留一片白 -->
+                    <TextBlock Text="{Binding MyTeleplayHint}" Margin="20,12,0,0"
+                               FontSize="12" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               Visibility="{Binding MyTeleplayHint, Converter={StaticResource StrToVis}}" />
+
+                    <ItemsControl x:Name="MyTeleplayList" ItemsSource="{Binding MyTeleplay}"
+                                  Visibility="{Binding HasMyTeleplay, Converter={StaticResource BoolToVis}}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
-                                <helpers:CardWallPanel helpers:CardWall.Enable="True" />
+                                <helpers:CardWallPanel helpers:CardWall.Enable="True"
+                                                        helpers:CardWall.Aspect="0.75" />
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <controls:VideoCard />
+                                <controls:BangumiCard />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- ===== 正在热播 / 电影热播 / 电视剧热播 / 纪录片热播 / 综艺热播 =====
+                         ★ 外层 ItemsControl 的 DataContext 是 MediaSection, 里面的绑定都按栏目解析。 -->
+                    <ItemsControl ItemsSource="{Binding MovieSections}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Visibility="{Binding HasItems, Converter={StaticResource BoolToVis}}">
+                                    <StackPanel Orientation="Horizontal" Margin="20,28,20,0">
+                                        <TextBlock Text="{Binding Title}" Style="{StaticResource SectionTitleStyle}" />
+                                        <TextBlock Text="{Binding CountText}" Margin="8,0,0,0"
+                                                   VerticalAlignment="Bottom" FontSize="13" Opacity="0.6"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    </StackPanel>
+
+                                    <ItemsControl ItemsSource="{Binding Items}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <helpers:CardWallPanel helpers:CardWall.Enable="True"
+                                                                        helpers:CardWall.Aspect="0.75" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <controls:BangumiCard />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
