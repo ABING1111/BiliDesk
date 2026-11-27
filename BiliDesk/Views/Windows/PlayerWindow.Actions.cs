@@ -76,6 +76,8 @@ public partial class PlayerWindow : FluentWindow
         if (BtnFollow != null) BtnFollow.IsEnabled = canInteract && _ownerMid > 0;
         // 评论输入框的可用性跟着同一套前提走(已登录 + 在线点播)
         UpdateCommentComposer();
+        // 直播弹幕发送区同理: 登录态变化时立即刷新输入框/按钮
+        UpdateLiveDanmakuComposer();
     }
 
     /// <summary>查询当前视频是否已点赞, 用于按钮状态切换</summary>

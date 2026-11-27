@@ -563,6 +563,67 @@ public partial class ApiClient
         }
     }
 
+    // ------------------------------------------------------------ 发送直播弹幕(2026-11-28)
+
+    /// <summary>
+    /// 发送一条直播间文本弹幕。
+    ///
+    /// 接口: <c>POST https://api.live.bilibili.com/msg/send</c>(表单编码)
+    ///   · <c>roomid</c> 必须是**真实长号**; 短号在发送接口上可能被拒(页面里通常已经换成真实号)。
+    ///   · <c>msg</c> 是正文, 普通账号上限 20 字(见 <see cref="LiveDanmakuSendPolicy.NormalizeText"/>)。
+    ///   · <c>color</c> 基础版固定白色(16777215); <c>mode=1</c> 是滚动弹幕。
+    ///   · <c>rnd</c> 必带: 服务端用它判重/限频。用当前 Unix 秒即可(官方 web 端就是秒)。
+    ///   · <c>csrf</c> 由 <see cref="PostFormCodeAsync"/> 自动加; 这里再带一份
+    ///     <c>csrf_token</c> —— 直播这套接口新老校验都在用, 双写最稳(私信发送已有先例)。
+    ///
+    /// ★ 为什么走 HTTP 而不是现有的弹幕 WebSocket:
+    ///   WS 在 B 站直播里是**服务端推送**通道, 客户端只发鉴权/心跳; 发送弹幕一直走这个 HTTP 接口。
+    /// ★ 成功后不本地插假消息: 服务端会把这条弹幕原样推回 WS(带真实昵称/勋章/房管身份),
+    ///   播放器现有的聊天列表与滚动弹幕会自然显示, 本地再插一条只会重复。
+    ///
+    /// 失败不抛异常: 调用方(播放器)只需要一句能看懂的提示。
+    /// </summary>
+    public async Task<(bool ok, string? err)> SendLiveDanmakuAsync(
+        long roomId, string message, int color = 0xFFFFFF, int mode = 1, int fontSize = 25)
+    {
+        var text = LiveDanmakuSendPolicy.NormalizeText(message);
+        if (text.Length == 0) return (false, "弹幕内容不能为空");
+
+        return await SendLiveDanmakuCoreAsync(roomId, text, color, mode, fontSize);
+    }
+
+    /// <summary>直播弹幕发送的公共实现: 参数校验、表单字段与错误码转换只有这一份。</summary>
+    private async Task<(bool ok, string? err)> SendLiveDanmakuCoreAsync(
+        long roomId, string msg, int color, int mode, int fontSize)
+    {
+        if (roomId <= 0) return (false, "缺少直播间号");
+        if (!SessionManager.Instance.HasLogin) return (false, "请先登录后再发送弹幕");
+
+        // mode 只接受 1/4/5(滚动/底部/顶部); 其它值一律按滚动处理, 避免用户点了没反应。
+        var safeMode = mode is 4 or 5 ? mode : 1;
+
+        var (code, err) = await PostFormCodeAsync(
+            "https://api.live.bilibili.com/msg/send",
+            new Dictionary<string, string>
+            {
+                ["roomid"] = roomId.ToString(),
+                ["msg"] = msg,
+                ["color"] = Math.Clamp(color, 0, 0xFFFFFF).ToString(),
+                ["fontsize"] = Math.Clamp(fontSize, 12, 64).ToString(),
+                ["mode"] = safeMode.ToString(),
+                ["rnd"] = DateTimeOffset.Now.ToUnixTimeSeconds().ToString(),
+                ["bubble"] = "0",
+                ["reply_mid"] = "0",
+                // PostFormCodeAsync 已经塞了 csrf, 这里再补一份 csrf_token:
+                // 直播这条链路两套参数名都可能校验(与私信发送同一个历史坑)。
+                ["csrf_token"] = SessionManager.Instance.Current.BiliJct ?? ""
+            },
+            referer: $"https://live.bilibili.com/{roomId}");
+
+        if (code == 0) return (true, null);
+        return (false, LiveDanmakuSendPolicy.DescribeError(code, err));
+    }
+
     /// <summary>
     /// 取直播间概览(2026-11-13 新增): 主播昵称/头像、开播时间、看过人数/人气、分区、标题。
     ///

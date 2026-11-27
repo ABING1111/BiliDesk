@@ -932,6 +932,10 @@ public partial class PlayerWindow : FluentWindow
         // 表情墙也是"上一条视频"的状态: 换片后还挂着表情面板会让人以为输入框里已经有内容
         CommentEmoteWall?.Close();
         _postingComment = false;
+        // 直播弹幕草稿与发送闸同属"上一条片源"(2026-11-28): 换片/换直播间不能把
+        // 上一间没发出去的话带过去, 也不能让新房间继承一个永远不释放的"发送中"状态。
+        _sendingLiveDanmaku = false;
+        LiveDanmakuDraft?.Clear();
         // 进度上报的节流状态也要重置, 让新视频的第一条云端历史能立刻落地
         Svc.HistorySync.Reset();
         // 直播弹幕连接属于"上一条片源": 换片/换直播间必须立即停。
@@ -1199,6 +1203,8 @@ public partial class PlayerWindow : FluentWindow
         nameof(_lastLaneCalcHeight),
         // 直播聊天列表的"跟随底部"开关: 每次换片源/换直播间都重新开始跟随
         nameof(_liveChatAutoScroll),
+        // 直播弹幕发送的在途闸(2026-11-28): 换片必须放开, 否则新直播间会一直"发送中"。
+        nameof(_sendingLiveDanmaku),
         // 直播弹幕的时钟模式与聊天批次计数(2026-11-17): 都属于"这一路片源"——
         //   _dmClockLive 不清的话切回点播后弹幕时钟不再校准(见 StopLiveDanmaku);
         //   _liveChatTickCounter 不清会让新直播间从一个随机的批次相位开始。

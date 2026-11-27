@@ -3385,7 +3385,7 @@
                 </Border>
 
                 <!-- ============ 直播弹幕列表(2026-11-13) ============
-                     ★ 只做「看」: 礼物 / 大航海 / 发弹幕按需求不做。
+                     ★ 2026-11-28 起支持发送纯文本弹幕(右侧底部输入框); 礼物 / 大航海仍不做。
                      ★ 与滚动弹幕层是**两条独立通道**:
                        · 这里的聊天记录与「弹幕开关」无关, 关掉滚动弹幕也能看历史;
                        · 暂停/缓冲时也照常追加(直播没有"补播"语义, 但聊天记录不该断)。
@@ -3398,6 +3398,8 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
+                        <!-- 发送区(2026-11-28): 基础版只做纯文本弹幕 -->
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <!-- ===== 主播信息(2026-11-13): 头像/昵称可点进 UP 主主页 ===== -->
@@ -3511,6 +3513,41 @@
                                Foreground="{DynamicResource TextTertiaryBrush}" FontSize="12"
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                IsHitTestVisible="False" />
+
+                    <!-- ===== 发送区(2026-11-28) =====
+                         ★ 基础版只做纯文本: 颜色固定白色、位置固定滚动, 不弹颜色/位置选择器。
+                         ★ 未登录时输入框禁用, 占位提示直接说明原因 —— 不让用户敲完再点发送报错。
+                         ★ 用 FluentTextBoxStyle 但把高度/内边距压到单行尺寸; 占位提示是叠在
+                           输入框上的 TextBlock(TextBox 本身没有 Placeholder), 由代码控制显隐。 -->
+                    <Border Grid.Row="3" BorderBrush="{DynamicResource DividerBrush}"
+                            BorderThickness="0,1,0,0" Padding="12,10">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <Grid Grid.Column="0">
+                                <TextBox x:Name="LiveDanmakuDraft"
+                                         Style="{StaticResource FluentTextBoxStyle}"
+                                         Height="34" Padding="10,0" FontSize="12.5"
+                                         VerticalContentAlignment="Center"
+                                         MaxLength="20" TextWrapping="NoWrap"
+                                         TextChanged="OnLiveDanmakuDraftChanged"
+                                         PreviewKeyDown="OnLiveDanmakuDraftPreviewKeyDown" />
+                                <TextBlock x:Name="LiveDanmakuPlaceholder" Text="发个弹幕吧…"
+                                           Margin="11,0,0,0" VerticalAlignment="Center"
+                                           FontSize="12.5" IsHitTestVisible="False"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                            </Grid>
+
+                            <Button x:Name="BtnSendLiveDanmaku" Grid.Column="1" Content="发送"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Margin="8,0,0,0" Padding="16,0" Height="34"
+                                    Click="OnSendLiveDanmakuClick" ToolTip="发送弹幕 (Enter)"
+                                    IsEnabled="False" />
+                        </Grid>
+                    </Border>
                   </Grid>
                 </Border>
 

@@ -2,7 +2,10 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
@@ -43,6 +46,13 @@ public partial class PlayerWindow : FluentWindow
     /// ★ 这是"每次进入直播间"的瞬时态, 已登记在 PerMediaStateFields 里。
     /// </summary>
     private bool _liveChatAutoScroll = true;
+
+    /// <summary>
+    /// 发送弹幕的在途闸(2026-11-28)。
+    /// ★ 防止 Enter 连按 / 发送按钮连点把同一条弹幕发多次。
+    /// ★ 属于"这一路片源"的瞬时态: 换片/换直播间必须复位, 已登记在 PerMediaStateFields 里。
+    /// </summary>
+    private bool _sendingLiveDanmaku;
 
     /// <summary>聊天列表最多保留多少条(内存/布局保护)</summary>
     private const int LiveChatMaxEntries = 300;
@@ -485,6 +495,142 @@ public partial class PlayerWindow : FluentWindow
 
         // 合集面板是 VOD 的浮层, 直播里没有合集; 不收起会盖在聊天列表上。
         if (live) CloseSeasonPanel();
+
+        // 发送区的可用性(登录态 / 是否直播)跟着换片一起刷新。
+        UpdateLiveDanmakuComposer();
+    }
+
+    // ------------------------------------------------------------ 发送弹幕(2026-11-28)
+
+    /// <summary>
+    /// 发送区(输入框 / 占位提示 / 发送按钮)的可用状态。
+    ///
+    /// ★ 与评论输入框同一套前提: 已登录 + 当前是直播。
+    ///   未登录时直接禁用输入, 比让用户敲完一大段再点发送报错要好。
+    /// ★ 登录态变化会走 Svc.Session.Changed → UpdateButtonState → 这里, 不需要额外订阅。
+    /// </summary>
+    private void UpdateLiveDanmakuComposer()
+    {
+        if (_closing || LiveDanmakuDraft == null) return;
+
+        var canSend = _isLive && Svc.Session.HasLogin;
+        LiveDanmakuDraft.IsEnabled = canSend;
+        LiveDanmakuDraft.ToolTip = canSend ? null : "登录后才能发送弹幕";
+
+        if (LiveDanmakuPlaceholder != null)
+        {
+            LiveDanmakuPlaceholder.Text = canSend ? "发个弹幕吧…" : "登录后才能发送弹幕";
+            LiveDanmakuPlaceholder.Visibility = LiveDanmakuDraft.Text.Length == 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+
+        UpdateSendLiveDanmakuButton();
+    }
+
+    /// <summary>发送按钮: 有内容、已登录、且没有请求在途时才可点。</summary>
+    private void UpdateSendLiveDanmakuButton()
+    {
+        if (BtnSendLiveDanmaku == null || LiveDanmakuDraft == null) return;
+
+        BtnSendLiveDanmaku.IsEnabled = LiveDanmakuDraft.IsEnabled
+                                       && !_sendingLiveDanmaku
+                                       && !string.IsNullOrWhiteSpace(LiveDanmakuDraft.Text);
+    }
+
+    private void OnLiveDanmakuDraftChanged(object sender, TextChangedEventArgs e)
+    {
+        // TextBox 没有 Placeholder: 有内容时把叠在上面的提示藏掉。
+        if (LiveDanmakuPlaceholder != null)
+            LiveDanmakuPlaceholder.Visibility = LiveDanmakuDraft.Text.Length == 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
+        UpdateSendLiveDanmakuButton();
+    }
+
+    /// <summary>
+    /// Enter 发送。
+    /// ★ 用 Preview 阶段拦: 直播弹幕是单行, 不需要 Shift+Enter 换行;
+    ///   把 Enter 直接吃掉可以避免 TextBox 自己插入换行/发出提示音。
+    /// </summary>
+    private void OnLiveDanmakuDraftPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        _ = SendLiveDanmakuAsync();
+    }
+
+    private void OnSendLiveDanmakuClick(object sender, RoutedEventArgs e)
+        => _ = SendLiveDanmakuAsync();
+
+    /// <summary>
+    /// 发送一条直播文本弹幕。
+    ///
+    /// ★ 成功只清空输入, 不本地插假消息: 服务端会把这条弹幕原样回推 WS
+    ///   (带真实昵称/勋章/房管身份), 右侧聊天列表与滚动弹幕都会自然显示。
+    ///   本地再插一条只会在回显到达时变成两条。
+    /// ★ 失败**不清空**输入: 网络抖一下就把用户写的字抹掉是最让人恼火的行为。
+    /// ★ 请求返回时直播间可能已经换了: 用 _liveRoomId(片源标识, 不随 room_info 回填变化)
+    ///   做代次校验, 避免旧请求的 Toast/状态复位跑到新直播间里。
+    /// </summary>
+    private async Task SendLiveDanmakuAsync()
+    {
+        if (_closing || _sendingLiveDanmaku) return;
+        if (!_isLive || _liveRoomId <= 0) return;
+        if (!Svc.Session.HasLogin) { Svc.Toast.Show("请先登录后再发送弹幕"); return; }
+
+        var text = LiveDanmakuSendPolicy.NormalizeText(LiveDanmakuDraft?.Text);
+        if (text.Length == 0) return;
+
+        var liveRoom = _liveRoomId;
+        // 优先用真实长号: room_info 回来之前退回卡片上的房间号(绝大多数情况下也是长号)。
+        var sendRoomId = CurrentLiveSendRoomId();
+
+        _sendingLiveDanmaku = true;
+        UpdateSendLiveDanmakuButton();
+        try
+        {
+            var (ok, err) = await Svc.Api.SendLiveDanmakuAsync(sendRoomId, text);
+            if (_closing || !_isLive || liveRoom != _liveRoomId) return;
+
+            if (!ok)
+            {
+                Svc.Toast.Show(err ?? "弹幕发送失败");
+                return;
+            }
+
+            LiveDanmakuDraft?.Clear();
+            // 发完把聊天列表贴回底部: 用户可能正翻着历史, 自己的回显不该被埋在上面。
+            _liveChatAutoScroll = true;
+            // 连续发弹幕是常见操作, 把焦点留在输入框(不要丢给发送按钮)。
+            LiveDanmakuDraft?.Focus();
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            if (!_closing) Svc.Toast.Show("弹幕发送失败");
+        }
+        finally
+        {
+            // 只有还停在同一路直播时才复位; 换片路径已经把它清成 false 了。
+            if (!_closing && _isLive && liveRoom == _liveRoomId)
+            {
+                _sendingLiveDanmaku = false;
+                UpdateSendLiveDanmakuButton();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 发送时使用的直播间号。
+    /// ★ 直播发送接口按真实长号工作; room_info 回来后 <see cref="LiveRoomInfo.RoomId"/>
+    ///   就是真实号, 比卡片上的展示号可靠。拿不到时才回退 _liveRoomId。
+    /// </summary>
+    private long CurrentLiveSendRoomId()
+    {
+        var real = _liveRoomInfo?.RoomId ?? 0;
+        return real > 0 ? real : _liveRoomId;
     }
 
     /// <summary>
