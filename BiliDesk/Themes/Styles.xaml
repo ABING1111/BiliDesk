@@ -2616,6 +2616,25 @@
         <Setter Property="IsHitTestVisible" Value="False" />
     </Style>
 
+    <!-- 「UP主觉得很赞」小标签(2026-11-27, PR #132): 评论被 UP 主点赞时显示的一行小字。
+         ★ 形态: **淡强调色底 + 圆角方框**, 与项目里其它小徽章(置顶/UP/等级)同一套观感。
+         ★ 为什么文字色单独用 AccentTextOnSoftFillBrush:
+           底色 AccentSoftFillBrush 是**半透明强调色**, 合成后的实际底色比"纯卡片底"
+           更偏粉 —— 用 AccentTextBrush(原色)压上去只有 2.16:1, 读不清;
+           用 AccentTextOnSoftFillBrush 则浅色 5.91:1 / 深色 5.23:1, 两个主题都达标。
+         ★ 放应用级(这里)而不是各自的 XAML: 视频评论区(PlayerWindow)与动态评论区
+           (CommentSection)都要用, 抄两遍的话改一次颜色容易漏改一处。
+         ★ IsHitTestVisible=False: 纯展示, 不该截走点击(同 FollowedBadgeStyle 的理由)。 -->
+    <Style x:Key="UpLikedBadgeStyle" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource AccentSoftFillBrush}" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="5,1" />
+        <Setter Property="Margin" Value="0,4,0,0" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+    </Style>
+
     <!-- ============ 透明可点区块(2026-11-18, issue #90) ============
          「我的」页的头像/昵称/三个统计数字、UP 主主页的统计数字都用它:
          一块**看不出是按钮**的可点区域, 悬停时铺一层浅浅的底衬。

@@ -128,11 +128,14 @@
                         </ItemsControl>
                         <!-- UP 主觉得很赞: 正文/图片之后、点赞按钮之前; 与正文左对齐。
                              ★ 文案取自接口(card_label.text_content), 不写死。
-                             ★ 颜色用 AccentTextOnCardBrush 而不是 AccentTextBrush:
-                               后者压浅色页面底(#F3F3F3)只有 2.37:1, 读不清(见 ThemeService 的说明)。 -->
-                        <TextBlock Text="{Binding UpLikedText}" FontSize="12" Margin="0,4,0,0"
-                                   Foreground="{DynamicResource AccentTextOnCardBrush}"
-                                   Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
+                             ★ 淡强调色底的圆角方框(UpLikedBadgeStyle, 应用级共享样式);
+                               文字色用 AccentTextOnSoftFillBrush —— 原色强调色压这层底
+                               只有 2.16:1, 读不清(见 Styles.xaml 的说明)。 -->
+                        <Border Style="{StaticResource UpLikedBadgeStyle}"
+                                Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                                       Foreground="{DynamicResource AccentTextOnSoftFillBrush}" />
+                        </Border>
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                             <Button Style="{StaticResource CommentActionButtonStyle}"
                                     Click="OnCommentLikeClick" ToolTip="点赞 / 取消点赞">
@@ -298,11 +301,15 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                         <!-- UP 主觉得很赞: 正文/图片之后、点赞按钮之前; 与正文左对齐。
-                             ★ 文案取自接口(card_label.text_content), 不写死;
-                               颜色用 AccentTextOnCardBrush(浅色下原色读不清, 见 ThemeService)。 -->
-                        <TextBlock Text="{Binding UpLikedText}" FontSize="12" Margin="0,4,0,0"
-                                   Foreground="{DynamicResource AccentTextOnCardBrush}"
-                                   Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
+                             ★ 文案取自接口(card_label.text_content), 不写死。
+                             ★ 淡强调色底的圆角方框(UpLikedBadgeStyle, 应用级共享样式);
+                               文字色用 AccentTextOnSoftFillBrush —— 原色强调色压这层底
+                               只有 2.16:1, 读不清(见 Styles.xaml 的说明)。 -->
+                        <Border Style="{StaticResource UpLikedBadgeStyle}"
+                                Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                                       Foreground="{DynamicResource AccentTextOnSoftFillBrush}" />
+                        </Border>
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                             <Button Style="{StaticResource CommentActionButtonStyle}"
                                     Click="OnCommentLikeClick" ToolTip="点赞 / 取消点赞">
@@ -406,11 +413,15 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                         <!-- UP 主觉得很赞: 正文/图片之后、点赞按钮之前; 与正文左对齐。
-                             ★ 文案取自接口(card_label.text_content), 不写死;
-                               颜色用 AccentTextOnCardBrush(浅色下原色读不清, 见 ThemeService)。 -->
-                        <TextBlock Text="{Binding UpLikedText}" FontSize="12" Margin="0,4,0,0"
-                                   Foreground="{DynamicResource AccentTextOnCardBrush}"
-                                   Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
+                             ★ 文案取自接口(card_label.text_content), 不写死。
+                             ★ 淡强调色底的圆角方框(UpLikedBadgeStyle, 应用级共享样式);
+                               文字色用 AccentTextOnSoftFillBrush —— 原色强调色压这层底
+                               只有 2.16:1, 读不清(见 Styles.xaml 的说明)。 -->
+                        <Border Style="{StaticResource UpLikedBadgeStyle}"
+                                Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                                       Foreground="{DynamicResource AccentTextOnSoftFillBrush}" />
+                        </Border>
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                             <Button Style="{StaticResource CommentActionButtonStyle}"
                                     Click="OnCommentLikeClick" ToolTip="点赞 / 取消点赞">

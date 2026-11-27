@@ -645,6 +645,26 @@ public class ThemeService
             ? accent
             : Blend(accent, Colors.Black, 0.45));
 
+        // ★★ 压在**淡强调底**(AccentSoftFillBrush)上的文字色(2026-11-27,
+        //   评论区的「UP主觉得很赞」小标签用)。
+        //
+        //   ★ 为什么不能直接复用 AccentTextOnCardBrush: 那支是给"**纯色/卡片底**"
+        //     配的, 它假定底是不透明的浅色(白/页面浅灰)。而这里的底是
+        //     **半透明强调色**叠在页面底上 —— 合成后的实际底色比"纯页面底"更偏粉,
+        //     同一个文字色压上去的对比度会变。实测(默认粉):
+        //       浅色: AccentSoftFillBrush 合成后 #F4E5E9, 压 AccentTextOnCardBrush
+        //             (#8A3F54) → **5.91:1** 达标;
+        //       深色: AccentSoftFillBrush 合成后 #38292D, 压 AccentTextOnCardBrush
+        //             (#FB7299) → **5.23:1** 达标。
+        //     数值与 AccentTextOnCardBrush 一致 —— 因为 AccentTextOnCardBrush 本身
+        //     就是按"浅色压深 / 深色原色"设计的, 恰好与淡强调底的方向一致。
+        //   ★ 所以这支其实与 AccentTextOnCardBrush 同值, 但**单独立一支**:
+        //     两者的"前提"不同(一个假定卡片底、一个假定淡强调底), 将来谁要单独
+        //     调其中一支时不会连带改掉另一支的场景。
+        Set("AccentTextOnSoftFillBrush", IsDark
+            ? accent
+            : Blend(accent, Colors.Black, 0.45));
+
         Set("TextOnAccentBrush", onAccent);
         Set("TextOnAccentSecondaryBrush", onAccent);
     }

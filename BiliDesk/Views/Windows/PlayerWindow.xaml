@@ -859,11 +859,15 @@
                                 ContentTemplate="{StaticResource CommentPicturesTemplate}"
                                 Visibility="{Binding HasPictures, Converter={StaticResource BoolToVis}}" />
                 <!-- UP 主觉得很赞: 正文/图片之后、操作行之前; 与正文左对齐。
-                          ★ 文案取自接口(card_label.text_content), 不写死;
-                            颜色用 AccentTextOnCardBrush(浅色下原色读不清, 见 ThemeService)。 -->
-                <TextBlock Text="{Binding UpLikedText}" FontSize="12" Margin="0,4,0,0"
-                           Foreground="{DynamicResource AccentTextOnCardBrush}"
-                           Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
+                          ★ 文案取自接口(card_label.text_content), 不写死。
+                          ★ 淡强调色底的圆角方框(UpLikedBadgeStyle, 应用级共享样式);
+                            文字色用 AccentTextOnSoftFillBrush —— 原色强调色压这层底
+                            只有 2.16:1, 读不清(见 Styles.xaml 的说明)。 -->
+                <Border Style="{StaticResource UpLikedBadgeStyle}"
+                        Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                               Foreground="{DynamicResource AccentTextOnSoftFillBrush}" />
+                </Border>
                 <!-- 评论操作行(赞 / 踩 / 回复): 统一走 CommentActionBarTemplate, 别在这里另写一份 -->
                 <ContentControl Content="{Binding}" HorizontalAlignment="Left" Margin="0,4,0,0"
                                 ContentTemplate="{StaticResource CommentActionBarTemplate}" />
@@ -3247,10 +3251,12 @@
                                                                 <ContentControl Content="{Binding}" Margin="0,6,0,0" HorizontalAlignment="Left"
                                                                                 ContentTemplate="{StaticResource CommentPicturesTemplate}"
                                                                                 Visibility="{Binding HasPictures, Converter={StaticResource BoolToVis}}" />
-                                                                <!-- UP 主觉得很赞: 文案取自接口(card_label.text_content), 不写死 -->
-                                                                <TextBlock Text="{Binding UpLikedText}" FontSize="12" Margin="0,3,0,0"
-                                                                           Foreground="{DynamicResource AccentTextOnCardBrush}"
-                                                                           Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
+                                                                <!-- UP 主觉得很赞: 淡强调色底的圆角方框(共享样式) -->
+                                                                <Border Style="{StaticResource UpLikedBadgeStyle}" Margin="0,3,0,0"
+                                                                        Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
+                                                                    <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                                                                               Foreground="{DynamicResource AccentTextOnSoftFillBrush}" />
+                                                                </Border>
                                                                 <ContentControl Content="{Binding}"
                                                                                 HorizontalAlignment="Left" Margin="0,6,0,0"
                                                                                 ContentTemplate="{StaticResource CommentActionBarTemplate}" />
@@ -3318,10 +3324,12 @@
                                                                     <ContentControl Content="{Binding}" Margin="0,4,0,0" HorizontalAlignment="Left"
                                                                                     ContentTemplate="{StaticResource CommentPicturesTemplate}"
                                                                                     Visibility="{Binding HasPictures, Converter={StaticResource BoolToVis}}" />
-                                                                    <!-- UP 主觉得很赞: 文案取自接口(card_label.text_content), 不写死 -->
-                                                                    <TextBlock Text="{Binding UpLikedText}" FontSize="12" Margin="0,2,0,0"
-                                                                               Foreground="{DynamicResource AccentTextOnCardBrush}"
-                                                                               Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
+                                                                    <!-- UP 主觉得很赞: 淡强调色底的圆角方框(共享样式) -->
+                                                                    <Border Style="{StaticResource UpLikedBadgeStyle}" Margin="0,2,0,0"
+                                                                            Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
+                                                                        <TextBlock Text="{Binding UpLikedText}" FontSize="12"
+                                                                                   Foreground="{DynamicResource AccentTextOnSoftFillBrush}" />
+                                                                    </Border>
                                                                     <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
                                                                         <ContentControl Content="{Binding}"
                                                                                         ContentTemplate="{StaticResource CommentActionBarTemplate}" />
