@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -14,6 +15,7 @@ using BiliDesk.Models;
 using BiliDesk.Services;
 using BiliDesk.ViewModels;
 using BiliDesk.Views;
+using BiliDesk.Views.Controls;
 using BiliDesk.Views.Pages;
 
 namespace BiliDesk;
@@ -127,10 +129,21 @@ public partial class MainWindow : FluentWindow
     /// "滚回顶部、短内容补页"等视图动作, 必须复用它们原来那条路径;
     /// 只绑了命令的页面(历史/收藏/稍后再看/缓存/消息/UP 主页)退化为执行刷新命令。
     /// 内嵌页(UP 主主页等)盖在 PageLayer 上时, 先刷它。
+    ///
+    /// ★ 2026-11-28: 快捷键可配置后, 这里不再写死 Key.F5, 而是查 ShortcutService 的映射。
     /// </summary>
     private void OnRefreshKey(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.F5) return;
+        // 设置页正在录制新快捷键时, 不能把这次按键当成"刷新"用掉 ——
+        // 用户完全可能把某个播放器动作改成 F5(主窗口的处理器比捕获框先收到隧道事件)。
+        if (ShortcutBox.IsAnyCapturing) return;
+
+        if (Svc.Shortcuts.Match(e) != ShortcutAction.Refresh) return;
+
+        // 用户把刷新改成字母键后, 输入框里的正常打字不能被抢走。
+        // 默认的 F5 是功能键, 保持"任何焦点下都能刷新"的原有手感。
+        if (ShortcutService.RealKey(e) != Key.F5 && IsEditingText()) return;
+
         e.Handled = true;
 
         if (EmbeddedHost.Visibility == Visibility.Visible)
@@ -151,6 +164,10 @@ public partial class MainWindow : FluentWindow
         }
         TryRefreshByCommand(_currentPage);
     }
+
+    /// <summary>焦点是否在可编辑文本里(把刷新改成字母键后, 不能抢走正常打字)</summary>
+    private static bool IsEditingText()
+        => Keyboard.FocusedElement is TextBoxBase or PasswordBox;
 
     /// <summary>页面没有实现 <see cref="IRefreshable"/> 时: 直接执行 ViewModel 上的刷新命令。</summary>
     private static void TryRefreshByCommand(FrameworkElement? page)
@@ -917,6 +934,8 @@ public partial class MainWindow : FluentWindow
 
     private void OnDynamicDetailKeyDown(object sender, KeyEventArgs e)
     {
+        // 设置页录制快捷键时, Esc 用于取消录制, 不能顺手把动态详情关掉
+        if (ShortcutBox.IsAnyCapturing) return;
         if (e.Key != Key.Escape || !_dynamicDetailOpen) return;
         if (DynamicDetailHost.IsComposerOpen)
         {

@@ -428,6 +428,20 @@ public class AppSettings
     public string UiFontFamily { get; set; } = "";
 
     /// <summary>
+    /// 快捷键覆盖项(2026-11-28 新增): key = 操作 id(如 "player.mute"), value = 组合键
+    /// (规范格式 "Ctrl+Shift+K")。
+    ///
+    /// ★ **只存改过的项**: 没出现的 id 一律用 Models/ShortcutCatalog 里的默认键 ——
+    ///   这样以后新增快捷键、或调整默认键时, 老配置不会被莫名其妙地改写。
+    /// ★ 空串 = 用户主动"清空绑定"(该操作不响应键盘), 与"没出现过"(使用默认键)是两件事,
+    ///   所以清空必须留下这条记录, 不能直接删除。
+    /// ★ 读取时的清洗见 Helpers.ShortcutMap.Build: 未知 id / 非法键 / 系统保留组合 /
+    ///   互相冲突的项都会被丢掉, 脏配置不会变成"设置页显示 A、实际按出来是 B"。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public Dictionary<string, string>? Shortcuts { get; set; }
+
+    /// <summary>
     /// 关闭主窗口时最小化到托盘(默认 true)。
     /// 关掉之后点右上角关闭键就是真的退出程序, 不再收到托盘里。
     /// 属性初始化就是 true —— 老配置缺这个字段时会保持初始化值, 于是"默认打开"自动成立。

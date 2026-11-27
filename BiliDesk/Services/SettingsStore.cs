@@ -258,6 +258,15 @@ public class SettingsStore
     /// </summary>
     public string UiFontFamily { get; set; } = "";
 
+    /// <summary>
+    /// 快捷键覆盖项(2026-11-28 新增): 操作 id → 规范组合键; 空串 = 主动清空绑定。
+    /// 未出现的 id = 使用 ShortcutCatalog 的默认键。
+    /// ★ 读盘时由 <see cref="Helpers.ShortcutMap.Build"/> 清洗(未知 id / 非法键 /
+    ///   系统保留组合 / 冲突项一律丢弃), 所以这里的键值永远是"能直接拿去匹配"的。
+    /// ★ 与 <see cref="Models.AppSettings.Shortcuts"/> 是读写契约, 两处必须一致。
+    /// </summary>
+    public Dictionary<string, string> Shortcuts { get; set; } = new();
+
     /// <summary>关闭主窗口时是否最小化到托盘。
     ///
     /// 默认 **true**: 点右上角关闭键只是把窗口收进托盘(进程继续跑, 双击托盘图标恢复),
@@ -886,6 +895,11 @@ public class SettingsStore
         //   与 DownloadDir 非法路径回落同一思路(不让脏值流到下游)。
         UiFontFamily = Helpers.UiFont.SanitizeStored(s.UiFontFamily);
 
+        // 快捷键(2026-11-28): 只认当前目录里的操作 id, 组合键必须是白名单里的键且不与
+        // 系统/其它操作冲突 —— 规范化后的字典写回内存, 让设置页显示与运行时匹配共用一份。
+        _ = Helpers.ShortcutMap.Build(s.Shortcuts, out var cleanedShortcuts);
+        Shortcuts = cleanedShortcuts;
+
         // 类别串要 Sanitize: 配置里可能留着本应用不做的 interaction, 或被手改坏 ——
         // 不清掉就会出现"界面上一个都没勾、后台却还在按旧类别跳"的矛盾。
         SponsorBlockEnabled = s.SponsorBlockEnabled;
@@ -1175,6 +1189,7 @@ public class SettingsStore
         RecommendSource = RecommendSource,
         AccentColor = AccentColor,
         UiFontFamily = UiFontFamily,
+        Shortcuts = new Dictionary<string, string>(Shortcuts),
         SponsorBlockEnabled = SponsorBlockEnabled,
         SponsorBlockCategories = SponsorBlockCategories,
         CloseToTray = CloseToTray,

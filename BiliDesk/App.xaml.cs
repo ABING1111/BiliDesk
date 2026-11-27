@@ -115,6 +115,9 @@ public partial class App : Application
         // 初始化数据目录与各项服务
         AppPaths.Init();
         Svc.Settings.Load();
+        // 快捷键覆盖项存在 settings.json 里, 读盘后要立刻建好生效映射 ——
+        // 漏了这一步的表现是"设置里明明改过键, 重启后又全变回默认"。
+        Svc.Shortcuts.Reload();
         // 列表屏蔽条件存在 settings.json 里, 必须在 Load 之后同步一次。
         // (FilterService 构造时也读, 这行是兜住"更早被 XAML 的 x:Static 提前实例化"的顺序意外)
         FilterService.Instance.Reload();

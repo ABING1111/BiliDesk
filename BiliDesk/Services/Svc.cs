@@ -8,6 +8,8 @@ public static class Svc
 {
     public static ThemeService Theme => ThemeService.Instance;
     public static SettingsStore Settings => SettingsStore.Instance;
+    /// <summary>快捷键映射与改绑(设置页「快捷键」Tab / 播放器 / 主界面共用)</summary>
+    public static ShortcutService Shortcuts => ShortcutService.Instance;
     public static SessionManager Session => SessionManager.Instance;
     public static SearchHistoryService SearchHistory => SearchHistoryService.Instance;
     public static ToastService Toast => ToastService.Instance;

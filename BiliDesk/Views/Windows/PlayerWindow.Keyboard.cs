@@ -34,94 +34,119 @@ public partial class PlayerWindow : FluentWindow
     {
         // 只在焦点位于"可编辑"输入框时让按键走默认路径; 只读展示框不拦截空格
         if (Keyboard.FocusedElement is TextBox { IsReadOnly: false }) return;
-        // ★ 上/下一个视频(2026-11-25): Alt+←/→ 退回上一条 / 回到刚才那条 —— 与浏览器
-        //   "后退/前进"的快捷键一致。裸的 ←/→ 早已被快退/快进占用(见下面的 case), 只能带 Alt。
-        //   ★ Alt 按住时 WPF 把 e.Key 报成 Key.System, 真正的键在 e.SystemKey 里;
-        //   ★ 带 Ctrl 的组合(Ctrl+Alt+← 之类)不接管, 仍按下面那条"放行给系统"处理。
-        if ((Keyboard.Modifiers & ModifierKeys.Alt) != 0 &&
-            (Keyboard.Modifiers & ModifierKeys.Control) == 0)
+
+        // ★ 2026-11-28: 快捷键改为可配置(设置 → 快捷键)。这里不再按 e.Key 写死 switch,
+        //   而是交给 ShortcutService 匹配当前生效映射。
+        //   · 精确匹配修饰键 ⇒ 默认绑定里没有 Ctrl, Ctrl+C/V/X/A/Z 继续放行给文本复制
+        //     (2026-11-16 修过的那个坑不能因为可配置而复发);
+        //   · Alt+←/→ 是"上一个/下一个视频"两条独立绑定, 不再需要上面那段 Alt 特判;
+        //   · RealKey() 仍负责 IME(Key.ImeProcessed)与 Alt(Key.System)的还原。
+        var key = ShortcutService.RealKey(e);
+        var action = Svc.Shortcuts.Match(key, Keyboard.Modifiers);
+        if (action == null) return;
+
+        // ★ 同一个**物理键**可能带着不同修饰键绑给了别的动作(例如 Alt+→ = 下一个视频,
+        //   而裸 → = 快进)。这类 KeyDown 一来就把"快进键还按着"作废 —— 否则随后的 KeyUp
+        //   会把它当成短按, 视频莫名多跳 5 秒。
+        if (action != ShortcutAction.SeekForward &&
+            key != Key.None &&
+            key == ShortcutService.KeyOf(Svc.Shortcuts.GestureOf(ShortcutAction.SeekForward)))
         {
-            var altKey = e.Key == Key.System ? e.SystemKey : e.Key;
-            if (altKey == Key.Left)
-            {
-                _ = GoHistoryAsync(back: true);
-                e.Handled = true;
-                return;
-            }
-            if (altKey == Key.Right)
-            {
-                // ★ 吞掉随后的 KeyUp: 用户常先松 Alt 再松 →, 那时修饰键已经没了,
-                //   OnPreviewKeyUp 会把它当成"短按 → 跳 5 秒"。复用 _rightKeyDiscardUp
-                //   那套"这一次松手作废"的机制(下一次按 → 会自己清掉它)。
-                _rightKeyDiscardUp = true;
-                _ = GoHistoryAsync(back: false);
-                e.Handled = true;
-                return;
-            }
+            _forwardKeyArmed = false;
+            _forwardKeyTimer?.Stop();
         }
-        // ★★★ 2026-11-16 修"对着视频选中文字按 Ctrl+C 复制失败, 右上角还弹'正在获取字幕轨…'":
-        //   下面是**一批裸字母**快捷键(C 字幕 / D 弹幕 / M 静音 / L 点赞 / U UP主), 以前不看修饰键,
-        //   于是 Ctrl+C 在**窗口级隧道事件**里就被 case Key.C 吃掉并 e.Handled = true ——
-        //   只读文本控件(LinkText / CommentText / SelectableText)根本收不到那次按键, 复制永远不生效;
-        //   而且顺手调了 ToggleSubtitleByKey(), 字幕轨还没拉回来就弹了那句提示。
-        //   ⇒ 带 Ctrl / Alt 的组合键**一律放行**给系统与文本控件(Ctrl+C/V/A/X/Z 全部恢复);
-        //   裸 C 仍然开关字幕, Shift 组合(方向键 30s 快进)不受影响。
-        if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) != 0) return;
-        switch (RealKey(e))
-        {
-            // ★ 直播的暂停只留控制栏那颗按钮(2026-11-20, issue #98): 空格/点画面太容易误触,
-            //   而直播暂停是低频操作。这里只是不放行**键盘**入口, 按钮本身仍走 OnPlayPauseClick。
-            case Key.Space: if (!_isLive) OnPlayPauseClick(this, new RoutedEventArgs()); e.Handled = true; return;
-            // ★ 2026-10-31 长视频快进体验: 普通方向键 ±5s(原样), **Shift+方向键 ±30s** ——
-            //   长视频里 5s 一跳要按十几下才够用, Shift 档一下抵六下。走同一条 SeekRelative,
-            //   所有 seek 防护(看门狗/静音/进度钉制)自动继承。
-            case Key.Left: SeekRelative(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? -30 : -5); e.Handled = true; return;
-            case Key.Right:
-                // ★ 2026-11-12 用户要求: 长按 → 应该是倍速播放(与 B 站一致), 不是连续快进。
-                //   短按仍然立即跳 5 秒(Shift 30 秒); 继续按住由计时器进入倍速播放
-                //   (2026-11-21 起默认 2x, 期间 ↑/↓ 切 1.5x / 2x / 3x), 松开恢复。
-                //   系统的自动重复 KeyDown(e.IsRepeat)一律忽略 —— 否则又会变成连续快进。
-                if (e.IsRepeat) { e.Handled = true; return; }
-                OnRightKeyPressed();
-                e.Handled = true;
-                return;
-            // 音量: ↑↓ 走统一入口(顺带弹音量提示), M 在静音与 80 之间切换
-            // 基数用 _volumeCache: aout 未就绪时 _mp.Volume 原生读回是 -1/旧值(见 _volumeCache 的说明)
-            // ★★★ 2026-11-21: 长按倍速期间 ↑↓ 改为"切换 1.5x / 2x / 3x", 不再调音量 ——
-            //   这是用户明确要求处理的快捷键争用。判据是 _isFastForwarding(手势态),
-            //   不是"OSD 可见": 淡出动画期间 OSD 还亮着, 那时按 ↑↓ 必须已经回到音量。
-            case Key.Up:
-                if (TryStepFastForwardSpeed(+1)) { e.Handled = true; return; }
-                SetVolume(_volumeCache + VolumeStep); e.Handled = true; return;
-            case Key.Down:
-                if (TryStepFastForwardSpeed(-1)) { e.Handled = true; return; }
-                SetVolume(_volumeCache - VolumeStep); e.Handled = true; return;
-            case Key.M: SetVolume(_volumeCache == 0 ? 80 : 0); e.Handled = true; return;
-            case Key.F: ToggleFullscreen(); e.Handled = true; return;
-            case Key.L: OnLikeClick(this, new RoutedEventArgs()); e.Handled = true; return;
-            case Key.U: OnUpPageClick(this, new RoutedEventArgs()); e.Handled = true; return;
-            case Key.D: ToggleDanmaku(); e.Handled = true; return;
-            // 字幕开关(2026-11-15): 与 B 站 web 端一致用 C。关→开走"上次语言/自动选轨";
-            // 开→关只关显示(轨道数据留着, 再按一下 C 就回来)。
-            case Key.C: ToggleSubtitleByKey(); e.Handled = true; return;
-            case Key.Escape: HandleBackRequest(); e.Handled = true; return;
-        }
+
+        if (ExecuteShortcut(action.Value, e)) e.Handled = true;
     }
 
     /// <summary>
-    /// 这一次按键的**真实键**。
-    ///
-    /// ★★★ 输入法在处理按键时, WPF 报上来的 e.Key 是 <see cref="Key.ImeProcessed"/>, 真正按下的键
-    ///   放在 <see cref="KeyEventArgs.ImeProcessedKey"/> 里。中文输入法处于激活状态时, **不在输入框里**
-    ///   的按键也会整批变成 ImeProcessed(2026-11-25 探针 bd-probe-miniwindow 实测: 小窗里按 F 和 Esc,
-    ///   到达时 e.Key 都是 ImeProcessed) —— 直接按 e.Key 匹配的话, 这时所有快捷键一起哑掉。
-    /// ★ 这里还原是安全的: 能走到下面的开关, 焦点一定**不在可编辑输入框里**(上面已经放行),
-    ///   不存在"正在打拼音、字母键其实是要输入的字符"这种情况。
-    /// ★ KeyUp(OnPreviewKeyUp)也必须用同一个换算: 长按 → 是"KeyDown 起步、KeyUp 收尾",
-    ///   两边判据不一致的话, 快进一旦起速就永远停不下来。
+    /// 执行一个快捷键动作。返回 true = 已处理(调用方设 e.Handled)。
+    /// ★ 这里只放"动作本身"; 匹配、输入框放行、IME/Alt 还原都在上面与 ShortcutService 里。
     /// </summary>
-    private static Key RealKey(KeyEventArgs e) =>
-        e.Key == Key.ImeProcessed && e.ImeProcessedKey != Key.None ? e.ImeProcessedKey : e.Key;
+    private bool ExecuteShortcut(ShortcutAction action, KeyEventArgs e)
+    {
+        switch (action)
+        {
+            // ★ 直播的暂停只留控制栏那颗按钮(2026-11-20, issue #98): 空格/点画面太容易误触,
+            //   而直播暂停是低频操作。这里只是不放行**键盘**入口, 按钮本身仍走 OnPlayPauseClick。
+            case ShortcutAction.PlayPause:
+                if (!_isLive) OnPlayPauseClick(this, new RoutedEventArgs());
+                return true;
+
+            // ★ 长视频快进体验: 普通方向键 ±5s, **Shift+方向键 ±30s** —— 长视频里 5s 一跳
+            //   要按十几下才够用, Shift 档一下抵六下。走同一条 SeekRelative, 所有 seek 防护
+            //   (看门狗/静音/进度钉制)自动继承。
+            case ShortcutAction.SeekBackward:
+                SeekRelative(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? -30 : -5);
+                return true;
+
+            // ★ 长按 → 是倍速播放(与 B 站一致), 不是连续快进: 短按在松开时跳 5 秒
+            //   (Shift 30 秒), 继续按住由计时器进入倍速播放, 松开恢复原速。
+            //   系统的自动重复 KeyDown(e.IsRepeat)一律忽略 —— 否则又会变成连续快进。
+            case ShortcutAction.SeekForward:
+                if (e.IsRepeat) return true;
+                _forwardKeyArmed = true;
+                OnForwardKeyPressed();
+                return true;
+
+            // 音量: ↑↓ 走统一入口(顺带弹音量提示), M 在静音与 80 之间切换
+            // 基数用 _volumeCache: aout 未就绪时 _mp.Volume 原生读回是 -1/旧值(见 _volumeCache 的说明)
+            // ★ 2026-11-21: 长按倍速期间 ↑↓ 改为"切换 1.5x / 2x / 3x", 不再调音量 ——
+            //   这是用户明确要求处理的快捷键争用。判据是 _isFastForwarding(手势态),
+            //   不是"OSD 可见": 淡出动画期间 OSD 还亮着, 那时按 ↑↓ 必须已经回到音量。
+            case ShortcutAction.VolumeUp:
+                if (TryStepFastForwardSpeed(+1)) return true;
+                SetVolume(_volumeCache + VolumeStep);
+                return true;
+
+            case ShortcutAction.VolumeDown:
+                if (TryStepFastForwardSpeed(-1)) return true;
+                SetVolume(_volumeCache - VolumeStep);
+                return true;
+
+            case ShortcutAction.Mute:
+                SetVolume(_volumeCache == 0 ? 80 : 0);
+                return true;
+
+            case ShortcutAction.Fullscreen:
+                ToggleFullscreen();
+                return true;
+
+            case ShortcutAction.Like:
+                OnLikeClick(this, new RoutedEventArgs());
+                return true;
+
+            case ShortcutAction.OpenUpSpace:
+                OnUpPageClick(this, new RoutedEventArgs());
+                return true;
+
+            case ShortcutAction.ToggleDanmaku:
+                ToggleDanmaku();
+                return true;
+
+            // 字幕开关(2026-11-15): 与 B 站 web 端一致用 C。关→开走"上次语言/自动选轨";
+            // 开→关只关显示(轨道数据留着, 再按一下 C 就回来)。
+            case ShortcutAction.ToggleSubtitle:
+                ToggleSubtitleByKey();
+                return true;
+
+            case ShortcutAction.Back:
+                HandleBackRequest();
+                return true;
+
+            case ShortcutAction.PreviousVideo:
+                _ = GoHistoryAsync(back: true);
+                return true;
+
+            case ShortcutAction.NextVideo:
+                _ = GoHistoryAsync(back: false);
+                return true;
+
+            // 「刷新当前页面」只属于主界面(MainWindow.OnRefreshKey); 播放器不处理。
+            default:
+                return false;
+        }
+    }
 
     /// <summary>
     /// "返回上一层"的统一处理(键盘 Esc / 鼠标侧键共用)。
@@ -192,86 +217,87 @@ public partial class PlayerWindow : FluentWindow
         HandleBackRequest();
     }
 
-    // ------------------------------------------------------------ 方向键 → 长按 = 倍速播放
+    // ------------------------------------------------------------ 快进键长按 = 倍速播放
 
-    /// <summary>长按 → 的判定阈值(ms): 超过就进入倍速播放, 而不是连续快进。</summary>
-    private const int RightKeyLongPressMs = 250;
+    /// <summary>长按"快进"键的判定阈值(ms): 超过就进入倍速播放, 而不是连续快进。</summary>
+    private const int ForwardKeyLongPressMs = 250;
 
     /// <summary>
-    /// 长按 → 进入倍速播放时的默认倍速(2026-11-21 由 3x 改为 2x, 用户指定)。
+    /// 长按快进键进入倍速播放时的默认倍速(2026-11-21 由 3x 改为 2x, 用户指定)。
     /// ★ 长按期间 ↑/↓ 在 1.5x / 2x / 3x 之间切换(见 FastForwardSpeedPolicy),
     ///   默认值同时也是 OSD 里高亮的那一档。
     /// </summary>
-    private const float RightKeyFastRate = FastForwardSpeedPolicy.Default;
+    private const float ForwardKeyFastRate = FastForwardSpeedPolicy.Default;
 
-    private DispatcherTimer? _rightKeyTimer;
+    private DispatcherTimer? _forwardKeyTimer;
 
-    /// <summary>当前是否处于"键盘长按 →"触发的加速态 —— KeyUp 只停自己这一条, 不动鼠标长按的快进。</summary>
-    private bool _rightKeyFast;
+    /// <summary>当前是否处于"键盘长按快进"触发的加速态 —— KeyUp 只停自己这一条, 不动鼠标长按的快进。</summary>
+    private bool _forwardKeyFast;
 
     /// <summary>
-    /// 这一次 → 的 KeyUp 要丢掉(2026-11-21)。
-    /// 失焦时按压被当作作废(见 <see cref="OnPlayerDeactivated"/>), 但按键本身可能还按着:
-    /// 切回来才松手的话, 那个 KeyUp 会被当成"短按"再跳 5 秒 —— 用这个标记把配对的那次
-    /// 松手吞掉。下一次 KeyDown 会清掉它, 所以不会误伤后面的短按。
+    /// 这一次"快进键"的 KeyDown 是否仍归快进行为管(2026-11-28 快捷键可配置后新增)。
+    ///
+    /// ★ 为什么不能只看 KeyUp 的物理键: 同一个键可以带着不同修饰键绑给别的动作
+    ///   (默认就有 Alt+→ = 下一个视频)。如果用户先按 Alt 再按 →, 这次 KeyDown 走的是
+    ///   "下一个视频"; 松手时若照旧把 → 当短按处理, 视频会莫名再快进 5 秒。
+    /// ★ 失焦/换片时也把它清掉: 配对的那次松手可能永远不会回来, 回来时也不该再生效。
     /// </summary>
-    private bool _rightKeyDiscardUp;
+    private bool _forwardKeyArmed;
 
     /// <summary>
-    /// → 键按下(非自动重复):
-    ///   短按(不到 <see cref="RightKeyLongPressMs"/> 毫秒) = 松开时跳 5 秒(Shift 30 秒), 保持原来的即时手感;
+    /// 快进键按下(非自动重复):
+    ///   短按(不到 <see cref="ForwardKeyLongPressMs"/> 毫秒) = 松开时跳 5 秒(Shift 30 秒), 保持原来的即时手感;
     ///   继续按住超过阈值 = 进入倍速播放(默认 2x), 松开恢复按下前的倍速。
     ///   长按期间 ↑/↓ 在 1.5x / 2x / 3x 之间切换(<see cref="TryStepFastForwardSpeed"/>)。
     /// </summary>
-    private void OnRightKeyPressed()
+    private void OnForwardKeyPressed()
     {
         // ★ 按下时**不跳**: 用户实测"长按会先触发一次快进" —— 长按应当只加速、不改变播放位置。
         //   短按的跳放在 KeyUp 里(没到长按阈值就松开 = 短按), 按下与松开之间的延迟只有按住的那一小段。
-        _rightKeyTimer?.Stop();
-        _rightKeyDiscardUp = false;   // 新的一次按下: 上一次失焦留下的"吞掉松手"作废
+        _forwardKeyTimer?.Stop();
         if (_closing || _isLive || _ended) return;
 
-        _rightKeyTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(RightKeyLongPressMs) };
-        _rightKeyTimer.Tick -= OnRightKeyLongPressTick;
-        _rightKeyTimer.Tick += OnRightKeyLongPressTick;
-        _rightKeyTimer.Start();
+        _forwardKeyTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ForwardKeyLongPressMs) };
+        _forwardKeyTimer.Tick -= OnForwardKeyLongPressTick;
+        _forwardKeyTimer.Tick += OnForwardKeyLongPressTick;
+        _forwardKeyTimer.Start();
     }
 
-    /// <summary>按住 → 超过阈值: 进入倍速播放(复用鼠标长按那条 StartFastForward, 只是入口不同)。</summary>
-    private void OnRightKeyLongPressTick(object? sender, EventArgs e)
+    /// <summary>按住快进键超过阈值: 进入倍速播放(复用鼠标长按那条 StartFastForward, 只是入口不同)。</summary>
+    private void OnForwardKeyLongPressTick(object? sender, EventArgs e)
     {
-        _rightKeyTimer?.Stop();
+        _forwardKeyTimer?.Stop();
         if (_closing || _mp == null || _isLive || _ended) return;
         if (_isFastForwarding) return;   // 鼠标长按快进中, 不叠加
 
-        _rightKeyFast = true;
-        StartFastForward(RightKeyFastRate);
+        _forwardKeyFast = true;
+        StartFastForward(ForwardKeyFastRate);
         ShowSpeedHint("倍速播放中", hold: true);
     }
 
-    /// <summary>→ 键松开: 若是键盘长按触发的 3x, 恢复按下前的速率。</summary>
+    /// <summary>快进键松开: 若是键盘长按触发的倍速, 恢复按下前的速率; 否则按短处理跳 5/30 秒。</summary>
     private void OnPreviewKeyUp(object sender, KeyEventArgs e)
     {
         // ★ 必须与 OnPreviewKeyDown 用同一条输入框判据: 焦点在可编辑 TextBox 里时,
         //   KeyDown 被放行(不启计时器), 而 KeyUp 若照常走到 "短按 → 跳 5 秒",
         //   就会变成"在弹幕/评论输入框里按 → 视频往前跳" —— 按住方向键移光标更是一路狂跳。
         if (Keyboard.FocusedElement is TextBox { IsReadOnly: false }) return;
-        if (RealKey(e) != Key.Right) return;
-        _rightKeyTimer?.Stop();
 
-        // 这一次按下已经被"失焦作废"处理过了(见 _rightKeyDiscardUp): 松开只清标记,
-        // 不再按短处理跳 5 秒 —— 否则切回来一松手画面就莫名前进。
-        if (_rightKeyDiscardUp)
-        {
-            _rightKeyDiscardUp = false;
-            e.Handled = true;
-            return;
-        }
+        // ★ 键位可配置: 这里比较"当前绑定的快进键", 而不是写死的 Key.Right。
+        var forwardKey = ShortcutService.KeyOf(Svc.Shortcuts.GestureOf(ShortcutAction.SeekForward));
+        if (forwardKey == Key.None || ShortcutService.RealKey(e) != forwardKey) return;
 
-        if (_rightKeyFast)
+        _forwardKeyTimer?.Stop();
+
+        // 这一次按下没有进入快进语义(被 Alt+→ 之类的组合抢走 / 失焦作废 / 换片复位):
+        // 松手只清标记, 不要退化成"短按跳 5 秒"。
+        if (!_forwardKeyArmed) return;
+        _forwardKeyArmed = false;
+
+        if (_forwardKeyFast)
         {
             // 长按结束: 恢复按下前的速率
-            _rightKeyFast = false;
+            _forwardKeyFast = false;
             StopFastForward();
             ShowSpeedHint(RestoredSpeedText(), hold: false);
             e.Handled = true;
@@ -285,7 +311,7 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 窗口失去激活(Alt+Tab / 点了别的窗口): 结束所有"按住才成立"的加速态。
-    /// ★ 按住 → 时切走窗口, KeyUp 会送到新窗口, 播放器永远收不到 —— 不在这里兜底,
+    /// ★ 按住快进键时切走窗口, KeyUp 会送到新窗口, 播放器永远收不到 —— 不在这里兜底,
     ///   切回来画面会一直停在 3x("3.0x 快进中"不消失)。鼠标长按快进同理(Up 丢失)。
     /// ★★★ 必须延迟一拍再判定: 点视频区/控制栏时焦点会交给播放器自己的**覆盖层窗口**
     ///   (见 HookOverlayKeyboard), 本窗口同样会收到 Deactivated —— 若在这里同步收尾,
@@ -310,10 +336,10 @@ public partial class PlayerWindow : FluentWindow
             _videoGestureActive = false;
             // 激活点击补偿的轮询也要停: 它同样会在失焦期间把长按倍速点起来(见 OnOverlayActivated)
             StopActivationClickCompensation();
-            _rightKeyTimer?.Stop();
-            _rightKeyFast = false;
-            // 按键可能还按着: 让下一次松手被吞掉, 不要退化成"短按 → 跳 5 秒"
-            _rightKeyDiscardUp = true;
+            _forwardKeyTimer?.Stop();
+            _forwardKeyFast = false;
+            // 按键可能还按着: 这一次按下整体作废, 回来松手不再跳 5 秒
+            _forwardKeyArmed = false;
             CancelFastForward();
         }), DispatcherPriority.Input);
     }

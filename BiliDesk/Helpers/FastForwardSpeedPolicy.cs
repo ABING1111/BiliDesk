@@ -7,7 +7,7 @@ namespace BiliDesk.Helpers;
 ///
 /// ★ 档位只给 1.5x / 2x / 3x 三档: 这是"临时加速"能接受的区间 ——
 ///   低于 1.5 没有快进意义, 高于 3 在长按这种短时手势里画面已经跟不上。
-///   默认 2x(见 PlayerWindow.RightKeyFastRate / FastForwardRate)。
+///   默认 2x(见 PlayerWindow.ForwardKeyFastRate / FastForwardRate)。
 ///
 /// ★ 列表是**循环**的(用户指定): 3x 再按 ↑ 回到 1.5x, 1.5x 再按 ↓ 回到 3x。
 ///   长按手势里没人愿意"按到头没反应", 循环也省掉"是不是到头了"的判断。

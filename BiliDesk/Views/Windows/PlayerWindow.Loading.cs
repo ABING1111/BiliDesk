@@ -1001,10 +1001,10 @@ public partial class PlayerWindow : FluentWindow
         //   两个标记都设成"丢弃配对的松手"; 下一次按下(KeyDown / MouseDown)会自动复位。
         _videoGestureActive = false;
         _suppressSingleClick = false;
-        // 键盘长按 → 的 3x 与计时器同属"这一次手势": 换片必须停掉并复位
-        _rightKeyTimer?.Stop();
-        _rightKeyFast = false;
-        _rightKeyDiscardUp = true;
+        // 键盘长按快进的倍速与计时器同属"这一次手势": 换片必须停掉并复位
+        _forwardKeyTimer?.Stop();
+        _forwardKeyFast = false;
+        _forwardKeyArmed = false;
         // 长按点赞三连的"抑制窗口"与在途闸属于上一片: 不清的话换片后 1.5 秒内的第一次
         // 点赞会被 OnLikeClick 当成"长按三连松手那次 Click"吞掉(见 OnLikeClick)。
         _tripleComboAt = 0;
@@ -1214,11 +1214,12 @@ public partial class PlayerWindow : FluentWindow
         nameof(_isFastForwarding), nameof(_rateBeforeFastForward),
         // 长按快进的目标倍速(2026-11-03): 同属"这一次长按"的瞬时态, 换片必须复位。
         nameof(_fastForwardTarget),
-        // 键盘长按 → 的倍速标记(2026-11-12): 属于"这一次按键", 换片必须复位。
-        nameof(_rightKeyFast),
-        // 失焦作废后"吞掉这一次松手"的标记(2026-11-21): 同属这一次按键的瞬时态,
-        //   换片必须清 —— 否则新片的第一次 → 松手会被误吞(短按不跳)。
-        nameof(_rightKeyDiscardUp),
+        // 键盘长按"快进"键的倍速标记(2026-11-12; 2026-11-28 快捷键可配置后改名):
+        // 属于"这一次按键", 换片必须复位。
+        nameof(_forwardKeyFast),
+        // "这一次按下仍归快进管"的标记: 同属这一次按键的瞬时态, 换片必须清 ——
+        // 否则新片的第一次快进键松手会被误判成短按(或反过来吞掉应有的跳转)。
+        nameof(_forwardKeyArmed),
         nameof(_commentTotal),
         // 评论翻页(2026-11-08, issue #55): 游标/是否还有下一页/在途闸/失败标记都属于"这一片"
         nameof(_commentNext), nameof(_commentHasMore),

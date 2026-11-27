@@ -5,7 +5,7 @@
              Background="{DynamicResource AppBackgroundBrush}">
     <!--
         设置页 2026-10-03 重做(参考外部应用设置页截图), 2026-11-14 改进折叠吸顶:
-          · 顶部: 页面大标题「应用设置」+ 居中悬浮的胶囊 Tab(通用 / 播放 / 数据管理 / 关于),
+          · 顶部: 页面大标题「应用设置」+ 居中悬浮的胶囊 Tab(通用 / 播放 / 快捷键 / 数据管理 / 关于),
             选中的 Tab 由柔和强调色胶囊铺底(SettingsTabStyle)。
           · ★ 折叠吸顶(2026-11-14 用户要求"只折叠吸顶胶囊, 不要改变胶囊大小"):
             只有那颗 Tab 胶囊吸顶 —— 它先跟着内容一起上滑, 碰到视口顶部后钉住;
@@ -18,7 +18,7 @@
             行间用更淡的分隔线。布尔项用 SettingsToggleStyle 开关,
             枚举项用 SettingsComboStyle 下拉。
         功能一个不少: 旧页的每一项绑定都原样搬进新布局, VM 只加了 Tab 投影属性。
-        四个 Tab 的内容在 Settings/SettingsTabs.xaml(独立 ResourceDictionary,
+        五个 Tab 的内容在 Settings/SettingsTabs.xaml(独立 ResourceDictionary,
         模板里不能挂事件, 关于页的 GitHub 仓库 / 反馈外链因此改走命令)。
     -->
     <Grid>
@@ -51,7 +51,7 @@
                          Tab 切换 = ContentControl + DataTriggers 换 ContentTemplate。
                          ★ Content 必须保持是 **VM 本身**({Binding}): 模板里所有 Command / 属性绑定
                            都以 Content 为数据源 —— 之前把它设成 "{Binding TabIndex}"(一个 int),
-                           所有按钮的绑定就全落空了(真机症状: 四个 Tab 的功能全没反应)。
+                           所有按钮的绑定就全落空了(真机症状: 五个 Tab 的功能全没反应)。
                            Triggers 只负责读 TabIndex 换模板, 不动 Content。 -->
                     <ContentControl Margin="0,4,0,0" HorizontalAlignment="Stretch"
                                     Focusable="False"
@@ -71,9 +71,12 @@
                                         <Setter Property="ContentTemplate" Value="{StaticResource PlaybackTabTemplate}" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding TabIndex}" Value="2">
-                                        <Setter Property="ContentTemplate" Value="{StaticResource DataTabTemplate}" />
+                                        <Setter Property="ContentTemplate" Value="{StaticResource ShortcutTabTemplate}" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding TabIndex}" Value="3">
+                                        <Setter Property="ContentTemplate" Value="{StaticResource DataTabTemplate}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding TabIndex}" Value="4">
                                         <Setter Property="ContentTemplate" Value="{StaticResource AboutTabTemplate}" />
                                     </DataTrigger>
                                 </Style.Triggers>
@@ -112,6 +115,9 @@
                         <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
                                      Content="播放" Margin="2,0,0,0"
                                      IsChecked="{Binding IsPlaybackTab, Mode=TwoWay}" />
+                        <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
+                                     Content="快捷键" Margin="2,0,0,0"
+                                     IsChecked="{Binding IsShortcutTab, Mode=TwoWay}" />
                         <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
                                      Content="数据管理" Margin="2,0,0,0"
                                      IsChecked="{Binding IsDataTab, Mode=TwoWay}" />

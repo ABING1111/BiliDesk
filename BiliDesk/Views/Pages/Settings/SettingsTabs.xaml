@@ -2,7 +2,7 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:controls="clr-namespace:BiliDesk.Views.Controls">
     <!--
-        设置页四个 Tab 的内容模板(2026-10-03 重做)。
+        设置页五个 Tab 的内容模板(2026-10-03 重做; 2026-11-28 新增「快捷键」)。
         由 SettingsPage.xaml 的 ContentControl 按 TabIndex 切换。
 
         行的写法约定(全部页面保持一致):
@@ -31,7 +31,7 @@
           · 删掉了「按类型过滤」后面那条**重复的分隔线**(原来连着两条)。
     -->
 
-    <!-- 区块标题: 竖条 + 加粗文字。四个模板都用 -->
+    <!-- 区块标题: 竖条 + 加粗文字。五个模板都用 -->
     <DataTemplate x:Key="SectionHeaderTemplate">
         <StackPanel Style="{StaticResource SettingsSectionHeaderStyle}">
             <Border Width="3.5" Height="15" CornerRadius="2"
@@ -42,6 +42,60 @@
                        Foreground="{DynamicResource TextPrimaryBrush}" />
         </StackPanel>
     </DataTemplate>
+
+    <!-- 快捷键录制框(2026-11-28): 常态是带边框的按键键帽, 录制中变成强调色边框 + 提示文字。
+         ★ 为什么模板写成本地资源而不是进 Themes/Styles.xaml: 只有设置页用得到;
+           控件本身在 Views/Controls/ShortcutBox.cs, 录制逻辑与样式各自独立维护。 -->
+    <Style x:Key="ShortcutBoxStyle" TargetType="{x:Type controls:ShortcutBox}">
+        <Setter Property="MinWidth" Value="118" />
+        <Setter Property="Padding" Value="12,6" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="Background" Value="{DynamicResource InputBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource InputBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type controls:ShortcutBox}">
+                    <Border x:Name="Bd" CornerRadius="7"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          TextElement.Foreground="{TemplateBinding Foreground}">
+                            <!-- 全局隐式 TextBlock 样式带 Foreground setter, 会吃掉这里下去的前景色
+                                 (录制态的强调色就看不出来了)。与 SettingsTabStyle 同一段补丁。 -->
+                            <ContentPresenter.Resources>
+                                <Style TargetType="TextBlock" BasedOn="{x:Null}">
+                                    <Setter Property="Foreground"
+                                            Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=controls:ShortcutBox}}" />
+                                    <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+                                </Style>
+                            </ContentPresenter.Resources>
+                        </ContentPresenter>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background"
+                                    Value="{DynamicResource ControlFillHoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsCapturing" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush"
+                                    Value="{DynamicResource AccentBrush}" />
+                            <Setter Property="Foreground"
+                                    Value="{DynamicResource AccentTextBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.5" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 
     <!-- 行标题+描述的公共 StackPanel 写法, 只是为了少重复; 控件列各处不同 -->
     <!-- ==================== 通用 ==================== -->
@@ -1431,6 +1485,100 @@
                             Command="{Binding ShowDisclaimerCommand}" />
                 </Grid>
             </Border>
+        </StackPanel>
+    </DataTemplate>
+    <!-- ==================== 快捷键(2026-11-28) ==================== -->
+    <!-- 数据来自 Models/ShortcutCatalog + ViewModels/SettingsViewModel.ShortcutGroups。
+         ★ 本模板只负责"怎么显示": 改绑逻辑在 Services/ShortcutService,
+           录制交互在 Views/Controls/ShortcutBox。 -->
+    <DataTemplate x:Key="ShortcutTabTemplate">
+        <StackPanel>
+
+            <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
+                            Content="快捷键" />
+
+            <Border Style="{StaticResource SettingsCardStyle}">
+                <Grid Style="{StaticResource SettingsRowStyle}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                        <TextBlock Text="自定义按键" Style="{StaticResource SettingsRowTitleStyle}" />
+                        <TextBlock Text="点击右侧按键框后按下新的组合键; Esc 取消, Backspace / Delete 清空绑定"
+                                   Style="{StaticResource SettingsRowDescStyle}" />
+                        <TextBlock Text="长按快进、Shift 加速等手势会跟随新按键; 鼠标手势(中键自动滚动、侧键返回等)保持固定"
+                                   Style="{StaticResource SettingsRowDescStyle}"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="全部恢复默认"
+                            Style="{StaticResource SubtleButtonStyle}"
+                            Padding="12,5" VerticalAlignment="Center"
+                            Command="{Binding ResetAllShortcutsCommand}" />
+                </Grid>
+            </Border>
+
+            <ItemsControl ItemsSource="{Binding ShortcutGroups}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel>
+                            <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
+                                            Content="{Binding Title}" />
+
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <ItemsControl ItemsSource="{Binding Items}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel>
+                                                <!-- 组内第一行不画顶部线: 卡片 Padding 已经留了留白 -->
+                                                <Border Style="{StaticResource SettingsRowDivider}"
+                                                        Visibility="{Binding IsFirst, Converter={StaticResource InvBoolToVis}}" />
+
+                                                <Grid Style="{StaticResource SettingsRowStyle}">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                                                        <TextBlock Text="{Binding Title}"
+                                                                   Style="{StaticResource SettingsRowTitleStyle}" />
+                                                        <TextBlock Text="{Binding Description}"
+                                                                   Style="{StaticResource SettingsRowDescStyle}"
+                                                                   TextWrapping="Wrap" />
+                                                    </StackPanel>
+
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                                VerticalAlignment="Center">
+                                                        <!-- 改过的行才有"恢复默认"; 默认行不显示, 免得满屏小按钮 -->
+                                                        <Button Style="{StaticResource BareIconButtonStyle}"
+                                                                Width="30" Height="30" Margin="0,0,4,0"
+                                                                Command="{Binding ResetCommand}"
+                                                                Visibility="{Binding IsDefault, Converter={StaticResource InvBoolToVis}}"
+                                                                ToolTip="恢复这一项的默认按键"
+                                                                AutomationProperties.Name="恢复默认按键">
+                                                            <Path Data="{StaticResource RefreshIconGeometry}"
+                                                                  Width="14" Height="14" Stretch="Uniform"
+                                                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                                  StrokeThickness="1.4"
+                                                                  StrokeLineJoin="Round"
+                                                                  StrokeStartLineCap="Round"
+                                                                  StrokeEndLineCap="Round" />
+                                                        </Button>
+
+                                                        <controls:ShortcutBox Style="{StaticResource ShortcutBoxStyle}"
+                                                                              Gesture="{Binding Gesture, Mode=TwoWay}"
+                                                                              ToolTip="点击后按下新的组合键; Backspace / Delete 清空" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Border>
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
         </StackPanel>
     </DataTemplate>
 </ResourceDictionary>
