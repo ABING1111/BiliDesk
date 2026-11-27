@@ -860,13 +860,13 @@
                                 Visibility="{Binding HasPictures, Converter={StaticResource BoolToVis}}" />
                 <!-- UP 主觉得很赞: 正文/图片之后、操作行之前; 与正文左对齐。
                           ★ 文案取自接口(card_label.text_content), 不写死。
-                          ★ 淡强调色底的圆角方框(UpLikedBadgeStyle, 应用级共享样式);
-                            文字色用 AccentTextOnSoftFillBrush —— 原色强调色压这层底
-                            只有 2.16:1, 读不清(见 Styles.xaml 的说明)。 -->
+                          ★ 实心强调色底 + 白字的圆角方框(UpLikedBadgeStyle, 应用级共享样式);
+                            文字色用 TextOnAccentBrush —— 淡底白字只有 1.22:1 看不见,
+                            且它按底色亮度自动取黑/白(见 Styles.xaml 的说明)。 -->
                 <Border Style="{StaticResource UpLikedBadgeStyle}"
                         Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
                     <TextBlock Text="{Binding UpLikedText}" FontSize="12"
-                               Foreground="{DynamicResource AccentTextOnSoftFillBrush}" />
+                               Foreground="{DynamicResource TextOnAccentBrush}" />
                 </Border>
                 <!-- 评论操作行(赞 / 踩 / 回复): 统一走 CommentActionBarTemplate, 别在这里另写一份 -->
                 <ContentControl Content="{Binding}" HorizontalAlignment="Left" Margin="0,4,0,0"
@@ -3255,7 +3255,7 @@
                                                                 <Border Style="{StaticResource UpLikedBadgeStyle}" Margin="0,3,0,0"
                                                                         Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
                                                                     <TextBlock Text="{Binding UpLikedText}" FontSize="12"
-                                                                               Foreground="{DynamicResource AccentTextOnSoftFillBrush}" />
+                                                                               Foreground="{DynamicResource TextOnAccentBrush}" />
                                                                 </Border>
                                                                 <ContentControl Content="{Binding}"
                                                                                 HorizontalAlignment="Left" Margin="0,6,0,0"
@@ -3328,7 +3328,7 @@
                                                                     <Border Style="{StaticResource UpLikedBadgeStyle}" Margin="0,2,0,0"
                                                                             Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}">
                                                                         <TextBlock Text="{Binding UpLikedText}" FontSize="12"
-                                                                                   Foreground="{DynamicResource AccentTextOnSoftFillBrush}" />
+                                                                                   Foreground="{DynamicResource TextOnAccentBrush}" />
                                                                     </Border>
                                                                     <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
                                                                         <ContentControl Content="{Binding}"

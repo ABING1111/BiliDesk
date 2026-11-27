@@ -2617,16 +2617,20 @@
     </Style>
 
     <!-- 「UP主觉得很赞」小标签(2026-11-27, PR #132): 评论被 UP 主点赞时显示的一行小字。
-         ★ 形态: **淡强调色底 + 圆角方框**, 与项目里其它小徽章(置顶/UP/等级)同一套观感。
-         ★ 为什么文字色单独用 AccentTextOnSoftFillBrush:
-           底色 AccentSoftFillBrush 是**半透明强调色**, 合成后的实际底色比"纯卡片底"
-           更偏粉 —— 用 AccentTextBrush(原色)压上去只有 2.16:1, 读不清;
-           用 AccentTextOnSoftFillBrush 则浅色 5.91:1 / 深色 5.23:1, 两个主题都达标。
+         ★ 形态: **实心强调色底 + 圆角方框 + 白字**, 与项目里其它小徽章(置顶/UP/等级)
+           同一套观感 —— 那几个也是"实底 + 白/深色字"。
+         ★ 为什么底色是**实心**而不是淡强调色(2026-11-27 改, 用户要求白字):
+           淡强调底(AccentSoftFillBrush)合成后是 #F4E5E9 这种很浅的粉,
+           **白字压上去只有 1.22:1** —— 浅色主题下等于看不见。
+           换成实心底后白字压 #FB7299 是 2.64:1, 与 B 站官方「UP」标同一配法。
+         ★ 文字用 TextOnAccentBrush 而不是写死白色: 它由 ThemeService 的 OnAccentFor
+           按**底色亮度**自动取黑/白(浅色主题色上白字会糊成一片)。默认粉底 → 白字,
+           用户把主题色调成浅黄/浅绿时自动变黑字, 任何主题色下都读得清。
          ★ 放应用级(这里)而不是各自的 XAML: 视频评论区(PlayerWindow)与动态评论区
            (CommentSection)都要用, 抄两遍的话改一次颜色容易漏改一处。
          ★ IsHitTestVisible=False: 纯展示, 不该截走点击(同 FollowedBadgeStyle 的理由)。 -->
     <Style x:Key="UpLikedBadgeStyle" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource AccentSoftFillBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
         <Setter Property="CornerRadius" Value="4" />
         <Setter Property="Padding" Value="5,1" />
         <Setter Property="Margin" Value="0,4,0,0" />

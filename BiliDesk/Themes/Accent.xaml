@@ -34,8 +34,4 @@
          与 ThemeService 的算法保持一致, 万一注入失败也不会退成"粉字压白底读不清"。 -->
     <SolidColorBrush x:Key="AccentTextOnCardBrush" Color="#8A3F54" />
 
-    <!-- 压在**淡强调底**(AccentSoftFillBrush)上的文字色(评论区「UP主觉得很赞」小标签)。
-         兜底值同样取压深后的粉, 与 ThemeService 的算法一致(深浅两色主题由运行时重算)。 -->
-    <SolidColorBrush x:Key="AccentTextOnSoftFillBrush" Color="#8A3F54" />
-
 </ResourceDictionary>
