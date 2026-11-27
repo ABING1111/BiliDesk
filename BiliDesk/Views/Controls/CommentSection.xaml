@@ -126,9 +126,12 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <!-- UP 主觉得很赞: 正文/图片之后、点赞按钮之前; 与正文左对齐 -->
-                        <TextBlock Text="UP 主觉得很赞" FontSize="12" Margin="0,4,0,0"
-                                   Foreground="{DynamicResource AccentTextBrush}"
+                        <!-- UP 主觉得很赞: 正文/图片之后、点赞按钮之前; 与正文左对齐。
+                             ★ 文案取自接口(card_label.text_content), 不写死。
+                             ★ 颜色用 AccentTextOnCardBrush 而不是 AccentTextBrush:
+                               后者压浅色页面底(#F3F3F3)只有 2.37:1, 读不清(见 ThemeService 的说明)。 -->
+                        <TextBlock Text="{Binding UpLikedText}" FontSize="12" Margin="0,4,0,0"
+                                   Foreground="{DynamicResource AccentTextOnCardBrush}"
                                    Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                             <Button Style="{StaticResource CommentActionButtonStyle}"
@@ -294,9 +297,11 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <!-- UP 主觉得很赞: 正文/图片之后、点赞按钮之前; 与正文左对齐 -->
-                        <TextBlock Text="UP 主觉得很赞" FontSize="12" Margin="0,4,0,0"
-                                   Foreground="{DynamicResource AccentTextBrush}"
+                        <!-- UP 主觉得很赞: 正文/图片之后、点赞按钮之前; 与正文左对齐。
+                             ★ 文案取自接口(card_label.text_content), 不写死;
+                               颜色用 AccentTextOnCardBrush(浅色下原色读不清, 见 ThemeService)。 -->
+                        <TextBlock Text="{Binding UpLikedText}" FontSize="12" Margin="0,4,0,0"
+                                   Foreground="{DynamicResource AccentTextOnCardBrush}"
                                    Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                             <Button Style="{StaticResource CommentActionButtonStyle}"
@@ -400,9 +405,11 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <!-- UP 主觉得很赞: 正文/图片之后、点赞按钮之前; 与正文左对齐 -->
-                        <TextBlock Text="UP 主觉得很赞" FontSize="12" Margin="0,4,0,0"
-                                   Foreground="{DynamicResource AccentTextBrush}"
+                        <!-- UP 主觉得很赞: 正文/图片之后、点赞按钮之前; 与正文左对齐。
+                             ★ 文案取自接口(card_label.text_content), 不写死;
+                               颜色用 AccentTextOnCardBrush(浅色下原色读不清, 见 ThemeService)。 -->
+                        <TextBlock Text="{Binding UpLikedText}" FontSize="12" Margin="0,4,0,0"
+                                   Foreground="{DynamicResource AccentTextOnCardBrush}"
                                    Visibility="{Binding IsUpLiked, Converter={StaticResource BoolToVis}}" />
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                             <Button Style="{StaticResource CommentActionButtonStyle}"

@@ -234,14 +234,37 @@ public partial class ApiClient
         // UP 标: 评论者就是本稿件 UP 主本人
         item.IsUp = upperMid > 0 && item.Mid == upperMid;
 
-        // UP 主觉得很赞: up_action.like。接口正常下发 bool，也兼容 0/1 数字。
+        // UP 主觉得很赞: up_action.like。
+        // ★ 接口实测(2026-11-27 抓 /x/v2/reply/main, 333 条样本):
+        //   up_action 在**评论条目顶层**, 且**从不为 null**(333/333 条都带这个键);
+        //   里面的 like 是**真 bool**(true/false), 不是 0/1 数字。
+        //   所以下面的数字分支只是防御性兜底 —— 但它必须用 GetDouble 取,
+        //   因为 JsonElement.TryGetInt32 遇到 "1.0" 这种小数会直接返回 false
+        //   (实测确认), 写成 TryGetInt32 等于这条兜底路径永远走不通。
         if (e.TryGetProperty("up_action", out var upAction) &&
             upAction.ValueKind == JsonValueKind.Object &&
             upAction.TryGetProperty("like", out var upLiked))
         {
             item.IsUpLiked = upLiked.ValueKind == JsonValueKind.True ||
-                (upLiked.ValueKind == JsonValueKind.Number &&
-                 upLiked.TryGetInt32(out var upLikeNum) && upLikeNum != 0);
+                (upLiked.ValueKind == JsonValueKind.Number && upLiked.GetDouble() != 0);
+        }
+
+        // "UP主觉得很赞"这段**文案从接口取**(card_label[].text_content),
+        // 官方改了文案我们跟着改, 不用等发版。取不到才回落到写死的默认文案。
+        // ★ card_label 是**通用角标数组**(带 text_color / label_color 等一堆字段),
+        //   将来 B 站可能往里塞别的角标 —— 所以只认 type 显式等于 0 的那一个。
+        //   (不能用"没 type 就当 0": 缺字段时 GetIntSafe 返回 0, 将来会误认。)
+        if (item.IsUpLiked &&
+            e.TryGetProperty("card_label", out var labels) && labels.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var label in labels.EnumerateArray())
+            {
+                if (label.ValueKind != JsonValueKind.Object) continue;
+                if (!label.TryGetProperty("type", out var labelType)) continue;
+                if (labelType.ValueKind != JsonValueKind.Number || labelType.GetDouble() != 0) continue;
+                var text = GetStr(label, "text_content").Trim();
+                if (text.Length > 0) { item.UpLikedText = text; break; }
+            }
         }
 
         // IP 属地。接口给的是 `reply_control.location`, 形如 "IP属地：上海";

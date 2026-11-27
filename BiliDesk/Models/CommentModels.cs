@@ -75,11 +75,24 @@ public class CommentItem : System.ComponentModel.INotifyPropertyChanged
     /// </summary>
     public bool IsUp { get; set; }
 
+    /// <summary>取不到接口文案时的兜底文案(与 B 站现网一致, 无空格)</summary>
+    public const string DefaultUpLikedText = "UP主觉得很赞";
+
     /// <summary>
-    /// 这条评论是否被 UP 主点过赞（接口 <c>up_action.like</c>）。
-    /// 界面在正文和点赞按钮之间挂一行小字"UP 主觉得很赞"。
+    /// 这条评论是否被 UP 主点过赞(接口 <c>up_action.like</c>)。
+    /// 界面在正文和点赞按钮之间挂一行小字"UP主觉得很赞"。
     /// </summary>
     public bool IsUpLiked { get; set; }
+
+    /// <summary>
+    /// "UP主觉得很赞"这行小字的**文案**。
+    ///
+    /// ★ 为什么从接口取而不是写死: B 站在评论条目的 <c>card_label</c> 数组里
+    ///   下了这段文字(实测 text_content = "UP主觉得很赞", 2026-11-27 抓取)。
+    ///   官方改了文案我们跟着改, 不用等发版。取不到时回落到
+    ///   <see cref="DefaultUpLikedText"/>。
+    /// </summary>
+    public string UpLikedText { get; set; } = DefaultUpLikedText;
 
     /// <summary>
     /// 这条是不是**置顶评论**(UP 主置顶 / 管理员置顶)。
