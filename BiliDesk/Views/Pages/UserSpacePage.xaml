@@ -236,9 +236,18 @@
         <!-- ======== Tab: 投稿 / 图文 / 合集和系列 ========
              ★ 2026-11-28: 下划线改成一条共享的 TabIndicator, 切 Tab 时滑过去
                (见 code-behind 的 MoveTabIndicator)。静止时它与原来各按钮自带的
-               2px 下划线完全同款: 左右各内缩 6px、贴齐 Tab 行底部。 -->
+               2px 下划线完全同款: 左右各内缩 6px、贴齐 Tab 行底部。
+             ★ 2026-11-28: 右侧加「搜索当前 Tab」的常驻搜索框(投稿 = 服务端关键词搜索,
+               图文 = 对已加载动态本地筛选, 合集不参与 ⇒ 整块收起)。
+               它单独占一列, 展开时从右往左长, 不会压住左边的 Tab; 下划线仍在第 0 列,
+               位置算法不受影响。 -->
         <Grid Margin="36,6,36,0">
-            <StackPanel x:Name="TabRow" Orientation="Horizontal"
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel x:Name="TabRow" Grid.Column="0" Orientation="Horizontal"
                         Loaded="OnTabRowLoaded" IsVisibleChanged="OnTabRowIsVisibleChanged"
                         SizeChanged="OnTabRowSizeChanged">
                 <Button x:Name="TabVideos" Content="投稿" Style="{StaticResource SpaceTabStyle}"
@@ -248,6 +257,23 @@
                 <Button x:Name="TabCollections" Content="合集和系列" Style="{StaticResource SpaceTabStyle}"
                         Margin="18,0,0,0" Click="OnCollectionsTabClick" />
             </StackPanel>
+
+            <!-- 搜索当前 Tab 的内容(常驻展开, 不收起)。
+                 ★ 2026-11-28 用户要求「常驻展开」: 不再用折叠胶囊, 直接给固定宽度
+                   (与折叠态展开后的 240 一致), 放 Auto 列里 Tab 行由 * 列吸收。
+                 ★ 文字清空不清框; Esc 先清词。 -->
+            <controls:SearchBox x:Name="SpaceSearchBox" Grid.Column="1"
+                                Width="240" VerticalAlignment="Center"
+                                Margin="12,0,0,0"
+                                PlaceholderText="{Binding SearchPlaceholder}"
+                                Text="{Binding SearchText, Mode=TwoWay}"
+                                Visibility="{Binding ShowSearchBox, Converter={StaticResource BoolToVis}}">
+                <!-- 视觉上比 Tab 行中心略高 2px(用户要求): 用 TranslateTransform 而不是
+                     Margin —— 只挪画面, 不参与布局, 不会把 Tab 行/下划线一起顶动。 -->
+                <controls:SearchBox.RenderTransform>
+                    <TranslateTransform Y="-2" />
+                </controls:SearchBox.RenderTransform>
+            </controls:SearchBox>
 
             <!-- 共享下划线: 宽度/位置全由代码按标签实测几何写入。
                  IsHitTestVisible=False —— 它只是指示器, 不能挡住标签的点击。 -->
@@ -354,6 +380,28 @@
                     <Button Content="重试" Style="{StaticResource AccentButtonStyle}"
                             HorizontalAlignment="Center" Margin="0,14,0,0" Padding="22,7"
                             Click="OnImagesRetryClick" />
+                </StackPanel>
+
+                <!-- 图文搜索空态(2026-11-28): 动态接口没有关键词参数, 只能对已加载的
+                     图文本地筛选。一条没命中时给一句解释 + 一个「继续查找」——
+                     否则用户看着空列表会以为这个 UP 真没发过相关内容。 -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Panel.ZIndex="5"
+                            Visibility="{Binding ShowImageSearchEmpty, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="26" HorizontalAlignment="Center"
+                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                    <TextBlock Text="已加载的图文里没有匹配的动态" FontSize="13" Margin="0,10,0,0"
+                               HorizontalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <TextBlock Text="继续往后加载更早的动态可能会找到" FontSize="11.5"
+                               Margin="0,6,0,0" HorizontalAlignment="Center"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               Visibility="{Binding ImagesHasMore, Converter={StaticResource BoolToVis}}" />
+                    <Button Content="继续查找" Style="{StaticResource AccentButtonStyle}"
+                            HorizontalAlignment="Center" Margin="0,14,0,0" Padding="22,7"
+                            Click="OnImageSearchLoadMoreClick"
+                            Visibility="{Binding ImagesHasMore, Converter={StaticResource BoolToVis}}" />
                 </StackPanel>
 
                 <!-- 自动续载的轻量反馈: 浮在列表底部, **不占一行、不带背景板**

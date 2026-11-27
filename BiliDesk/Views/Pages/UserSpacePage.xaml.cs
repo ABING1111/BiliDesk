@@ -59,12 +59,19 @@ public partial class UserSpacePage : UserControl
     private void AttachVm(UserSpaceViewModel? vm)
     {
         if (_vm == vm) return;
-        if (_vm != null) _vm.ScrollToTopRequested -= OnScrollToTopRequested;
+        if (_vm != null)
+        {
+            _vm.ScrollToTopRequested -= OnScrollToTopRequested;
+            _vm.ImageSearchChanged -= OnImageSearchChanged;
+        }
         _vm = vm;
         if (vm == null) return;
         vm.ScrollToTopRequested += OnScrollToTopRequested;
+        vm.ImageSearchChanged += OnImageSearchChanged;
         FilterService.Instance.Attach(vm.Videos, isActive: () => IsVisible);
-        FilterService.Instance.Attach(vm.ImageDynamics, isActive: () => IsVisible);
+        // 图文的搜索是页内筛选: 与全局屏蔽取"与", 谓词读的是 VM 里实时的词条
+        FilterService.Instance.Attach(vm.ImageDynamics, extra: vm.MatchesImageSearch,
+            isActive: () => IsVisible);
         UpdateTabs(vm);
         ResetHeaderState();
     }
@@ -279,7 +286,10 @@ public partial class UserSpacePage : UserControl
         // 内容还不够一屏: 没有滚动条, 也就不会再有 ScrollChanged —— 主动补
         if (sv.ScrollableHeight <= 0)
         {
-            if (_imagesAutoFillGuard >= 6) return;
+            // ★ 搜索态把自动补页额度收紧: 没命中时一路扫下去代价不小,
+            //   补 3 轮还没结果就交给空态里的「继续查找」让用户自己决定。
+            var cap = vm.HasSearch ? 3 : 6;
+            if (_imagesAutoFillGuard >= cap) return;
             _imagesAutoFillGuard++;
             _ = LoadMoreImagesAndRecheckAsync(vm);
             return;
@@ -295,6 +305,25 @@ public partial class UserSpacePage : UserControl
     {
         await vm.LoadMoreImagesAsync();
         ScheduleImagesAutoLoad();
+    }
+
+    /// <summary>
+    /// 图文搜索词变了: 重算补页额度并继续往后翻。
+    /// ★ 搜索是本地筛选, 命中太少时列表可能"不满一屏"甚至空掉 —— 没有滚动条就不会有
+    ///   ScrollChanged, 必须主动补(与首次进 Tab 同一条路)。
+    /// </summary>
+    private void OnImageSearchChanged()
+    {
+        _imagesAutoFillGuard = 0;
+        ScheduleImagesAutoLoad();
+    }
+
+    /// <summary>图文搜索空态里的「继续查找」: 清掉自动补页额度, 再往后加载一页。</summary>
+    private void OnImageSearchLoadMoreClick(object sender, RoutedEventArgs e)
+    {
+        if (_vm == null) return;
+        _imagesAutoFillGuard = 0;
+        _ = LoadMoreImagesAndRecheckAsync(_vm);
     }
 
     private static ScrollViewer? FindScrollViewer(DependencyObject root)

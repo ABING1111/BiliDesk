@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
 using BiliDesk.Services;
@@ -77,6 +79,23 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
     private int _collectionsTotal;
     private int _collectionsGen;
 
+    // ---------------- 页内搜索(2026-11-28) ----------------
+    // 一个搜索框管当前 Tab:
+    //   · 投稿 → 服务端 arc/search 的 keyword(支持翻页, page.count 是命中数);
+    //   · 图文 → 动态接口没有 keyword, 只能对**已加载**的图文做本地筛选,
+    //            筛空时页面会继续向后加载(与 FeedSearchPolicy 的说明同一口径);
+    //   · 合集和系列 → 不参与搜索, 搜索框直接隐藏。
+    private string _searchText = "";
+    private string[] _searchTerms = Array.Empty<string>();
+
+    /// <summary>真正发给服务端的投稿搜索词(输入防抖后才更新; 图文筛选读 _searchTerms)。</summary>
+    private string _appliedKeyword = "";
+
+    private DispatcherTimer? _searchDebounce;
+
+    /// <summary>图文筛选条件变了(需要页面继续自动补页 / 重算空态时抛)。</summary>
+    public event Action? ImageSearchChanged;
+
     /// <summary>底部页码栏的条目(数字页或省略号)</summary>
     public ObservableCollection<PageItem> PageItems { get; } = new();
 
@@ -138,10 +157,20 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
     public string VideoCountText => VideoItem.FormatCount(VideoCount);
     public string LikeText => VideoItem.FormatCount(LikeCount);
 
-    /// <summary>投稿区标题: 带上总数, 页码栏的页数才有对照</summary>
-    public string PageSummary => TotalVideos > 0
-        ? $"投稿 · 共 {VideoItem.FormatCount(TotalVideos)} 个视频"
-        : "投稿";
+    /// <summary>投稿区标题: 带上总数, 页码栏的页数才有对照。搜索时说明这是命中数。</summary>
+    public string PageSummary
+    {
+        get
+        {
+            if (_appliedKeyword.Length > 0)
+                return TotalVideos > 0
+                    ? $"搜索「{_appliedKeyword}」· 共 {VideoItem.FormatCount(TotalVideos)} 个视频"
+                    : $"搜索「{_appliedKeyword}」";
+            return TotalVideos > 0
+                ? $"投稿 · 共 {VideoItem.FormatCount(TotalVideos)} 个视频"
+                : "投稿";
+        }
+    }
 
     // ---------------- Tab 切换 ----------------
     public SpaceTab CurrentTab => _tab;
@@ -149,6 +178,17 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
     public bool IsVideosTab => _tab == SpaceTab.Videos;
     public bool IsImagesTab => _tab == SpaceTab.Images;
     public bool IsCollectionsTab => _tab == SpaceTab.Collections;
+
+    /// <summary>搜索框占位文案(跟着当前 Tab 走)。</summary>
+    public string SearchPlaceholder => _tab switch
+    {
+        SpaceTab.Images => "搜索 TA 的图文",
+        SpaceTab.Collections => "",
+        _ => "搜索 TA 的视频"
+    };
+
+    /// <summary>合集和系列没有搜索(也不该给用户一个搜不动的框), 搜索框整块收起。</summary>
+    public bool ShowSearchBox => _tab != SpaceTab.Collections;
 
     /// <summary>切 Tab: 三个派生布尔量一起通知, 界面不会出现"两个 Tab 同时亮"的中间态。</summary>
     private void SetTab(SpaceTab tab)
@@ -159,12 +199,18 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         OnPropertyChanged(nameof(IsVideosTab));
         OnPropertyChanged(nameof(IsImagesTab));
         OnPropertyChanged(nameof(IsCollectionsTab));
+        OnPropertyChanged(nameof(SearchPlaceholder));
+        OnPropertyChanged(nameof(ShowSearchBox));
     }
 
     public bool ImagesLoading
     {
         get => _imagesLoading;
-        private set => SetProperty(ref _imagesLoading, value);
+        private set
+        {
+            if (!SetProperty(ref _imagesLoading, value)) return;
+            OnPropertyChanged(nameof(ShowImageSearchEmpty));
+        }
     }
 
     public bool ImagesLoadingMore
@@ -186,15 +232,46 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         {
             if (!SetProperty(ref _imagesError, value)) return;
             OnPropertyChanged(nameof(ShowImagesErrorOverlay));
+            OnPropertyChanged(nameof(ShowImageSearchEmpty));
         }
     }
 
     /// <summary>只有列表为空时才用整块错误/空态提示盖住列表, 加载更多失败不影响已加载内容。</summary>
     public bool ShowImagesErrorOverlay => ImagesError.Length > 0 && ImageDynamics.Count == 0;
 
-    public string ImageSummary => ImageDynamics.Count > 0
-        ? $"图文 · 已加载 {ImageDynamics.Count} 条"
-        : "图文";
+    public string ImageSummary
+    {
+        get
+        {
+            if (HasSearch)
+                return $"图文 · 搜索「{_searchText.Trim()}」· 命中 {MatchedImageCount()} 条";
+            return ImageDynamics.Count > 0
+                ? $"图文 · 已加载 {ImageDynamics.Count} 条"
+                : "图文";
+        }
+    }
+
+    /// <summary>
+    /// 图文搜索一条都没命中(且没在加载、也没被错误浮层盖住)。
+    /// ★ 文案与页面里的「继续查找」按钮配套: 动态接口不支持关键词, 只能顺着游标
+    ///   继续往后翻, 翻完了就真的没有了 —— 这一点必须让用户看得见。
+    /// </summary>
+    public bool ShowImageSearchEmpty =>
+        HasSearch && !ImagesLoading && MatchedImageCount() == 0 && !ShowImagesErrorOverlay;
+
+    /// <summary>已加载图文里命中当前搜索词的条数(不受全局屏蔽影响, 只是给标题/空态用)。</summary>
+    private int MatchedImageCount()
+    {
+        if (_searchTerms.Length == 0) return ImageDynamics.Count;
+        var count = 0;
+        foreach (var item in ImageDynamics)
+            if (FeedSearchPolicy.Matches(item, _searchTerms))
+                count++;
+        return count;
+    }
+
+    /// <summary>传给 FilterService.Attach 的额外条件(和全局屏蔽取"与")。</summary>
+    public bool MatchesImageSearch(object? item) => FeedSearchPolicy.Matches(item, _searchTerms);
 
     // ---------------- 合集和系列 Tab ----------------
     public ObservableCollection<SpaceCollectionItem> Collections { get; } = new();
@@ -247,6 +324,85 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
     public bool CanExpandSign => Sign.Length > 40;
 
     public string SignDetailText => IsSignExpanded ? "收起" : "详情";
+
+    // ---------------- 页内搜索 ----------------
+
+    /// <summary>
+    /// 搜索框文本(双向)。输入后 260ms 防抖再真正查/筛, 避免每敲一个字打一次接口。
+    /// ★ 词条在 setter 里立刻拆好: 图文筛选谓词读的就是它; 视图刷新放在防抖之后。
+    /// </summary>
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (!SetProperty(ref _searchText, value)) return;
+            _searchTerms = FilterKeywords.Split(value);
+            QueueSearchApply();
+        }
+    }
+
+    /// <summary>当前是否有搜索词(标题/空态文案用)。</summary>
+    public bool HasSearch => _searchTerms.Length > 0;
+
+    private void QueueSearchApply()
+    {
+        _searchDebounce ??= new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(260),
+        };
+        _searchDebounce.Tick -= OnSearchDebounceTick;
+        _searchDebounce.Tick += OnSearchDebounceTick;
+        _searchDebounce.Stop();
+        _searchDebounce.Start();
+    }
+
+    private void OnSearchDebounceTick(object? sender, EventArgs e)
+    {
+        _searchDebounce?.Stop();
+        _ = ApplySearchAsync();
+    }
+
+    /// <summary>
+    /// 把搜索框里的词应用到当前 Tab。
+    /// ★ 投稿走服务端: 关键词变了就回第 1 页重查(直接调 LoadPageAsync ——
+    ///   GoToPageAsync 在"目标页 == 当前页"时会提前返回, 同一个词改一个字就查不动)。
+    /// ★ 图文只能本地筛: 刷新默认视图让 FilterService 的谓词重新跑一遍, 再通知页面补页。
+    /// </summary>
+    private async Task ApplySearchAsync()
+    {
+        if (_mid <= 0) return;
+        if (IsCollectionsTab) return;
+
+        if (IsImagesTab)
+        {
+            RefreshImageSearchView();
+            return;
+        }
+
+        var keyword = _searchText.Trim();
+        if (keyword == _appliedKeyword) return;
+
+        _appliedKeyword = keyword;
+        OnPropertyChanged(nameof(PageSummary));
+        CurrentPage = 1;
+        await LoadPageAsync(1);
+        ScrollToTopRequested?.Invoke();
+    }
+
+    /// <summary>把当前词条应用到图文列表: 刷新视图、重算标题/空态、让页面继续自动补页。</summary>
+    private void RefreshImageSearchView()
+    {
+        var view = CollectionViewSource.GetDefaultView(ImageDynamics);
+        var app = System.Windows.Application.Current;
+        if (view != null && app != null) app.Dispatcher.Invoke(new Action(view.Refresh));
+
+        OnPropertyChanged(nameof(HasSearch));
+        OnPropertyChanged(nameof(ImageSummary));
+        OnPropertyChanged(nameof(ShowImageSearchEmpty));
+        // 加载失败时不要再让页面自动补页(否则会对着同一个错误连打几次接口)
+        if (ImagesError.Length == 0) ImageSearchChanged?.Invoke();
+    }
 
     // ---------------- 分页公开属性 ----------------
     public int CurrentPage
@@ -391,17 +547,27 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         LoadMoreImagesCommand = new AsyncRelayCommand(LoadMoreImagesAsync);
     }
 
-    /// <summary>切到「投稿」Tab(视频列表已有, 不重新加载)</summary>
-    public void ShowVideosTab() => SetTab(SpaceTab.Videos);
+    /// <summary>切到「投稿」Tab(视频列表已有, 不重新加载)。</summary>
+    public void ShowVideosTab()
+    {
+        SetTab(SpaceTab.Videos);
+        // ★ 在图文 Tab 上输入的关键词只做了本地筛选, 不会更新 _appliedKeyword;
+        //   切回投稿时需要补一次服务端查询, 否则标题/列表还是切换前的样子。
+        if (_searchText.Trim() != _appliedKeyword) _ = ApplySearchAsync();
+    }
 
     /// <summary>切到「图文」Tab: 首次进入才拉数据</summary>
     public async Task ShowImagesTabAsync()
     {
         SetTab(SpaceTab.Images);
-        if (_imagesLoaded) return;
-        _imagesLoaded = true;
-        await LoadImagesPageAsync(reset: true);
-        if (ImageDynamics.Count == 0 && ImagesError.Length > 0) _imagesLoaded = false;
+        if (!_imagesLoaded)
+        {
+            _imagesLoaded = true;
+            await LoadImagesPageAsync(reset: true);
+            if (ImageDynamics.Count == 0 && ImagesError.Length > 0) _imagesLoaded = false;
+        }
+        // 图文搜索是本地筛选: 切进来时按当前关键词重新过滤, 并让页面继续自动补页
+        if (HasSearch && ImagesError.Length == 0) RefreshImageSearchView();
     }
 
     /// <summary>切到「合集和系列」Tab: 首次进入才拉数据</summary>
@@ -489,6 +655,7 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
                 ImagesError = "该 UP 主暂时没有图文动态";
             OnPropertyChanged(nameof(ImageSummary));
             OnPropertyChanged(nameof(ShowImagesErrorOverlay));
+            OnPropertyChanged(nameof(ShowImageSearchEmpty));
         }
         catch (Exception ex)
         {
@@ -638,7 +805,9 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
                     //   ★★ 只补 TotalVideos 是不够的: TotalPages 是在 LoadPageAsync 里按
                     //     "本页是否满 30 条"猜的(降级接口会按 17/22 这种零头分页), 不重算
                     //     会一直停在 1~2 页 —— 页数够多的 UP 就永远看不到页码栏。
-                    if (TotalVideos <= 0 && VideoCount > 0)
+                    // ★ 搜索时不能补: page.count 是命中数, VideoCount 是全部投稿数,
+                    //   补进去会让页码栏凭空多出几十页。
+                    if (TotalVideos <= 0 && VideoCount > 0 && _appliedKeyword.Length == 0)
                     {
                         TotalVideos = VideoCount;
                         TotalPages = Math.Max(1, (int)Math.Ceiling(VideoCount / (double)PageSize));
@@ -665,6 +834,7 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         {
             _imagesLoaded = true;
             await LoadImagesPageAsync(reset: true);
+            if (HasSearch && ImagesError.Length == 0) RefreshImageSearchView();
         }
         else
         {
@@ -694,6 +864,7 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         if (TotalPages > 0 && page > TotalPages) page = TotalPages;
 
         var gen = ++_loadGen;
+        var keyword = _appliedKeyword;
         _loadingPage = true;
         OnPropertyChanged(nameof(CanGoPrev));
         OnPropertyChanged(nameof(CanGoNext));
@@ -701,7 +872,7 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         OnPropertyChanged(nameof(CanChangePage));
         try
         {
-            var (ok, err, items, total) = await Svc.Api.GetSpaceVideosAsync(_mid, page, PageSize);
+            var (ok, err, items, total) = await Svc.Api.GetSpaceVideosAsync(_mid, page, PageSize, keyword);
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 if (gen != _loadGen) return;
@@ -715,8 +886,9 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
                 foreach (var it in items) Videos.Add(it);
                 CurrentPage = page;
 
-                // 总条数: 优先接口 page.count; 降级路径(0)用名片里的投稿数。
-                var known = total > 0 ? total : VideoCount;
+                // 总条数: 优先接口 page.count(搜索时是命中数); 降级路径(0)才用名片里的投稿数。
+                // ★ 搜索态绝不能拿 VideoCount 兜底 —— 那是全部投稿数, 页码会凭空多出几十页。
+                var known = total > 0 ? total : (keyword.Length > 0 ? 0 : VideoCount);
                 TotalVideos = known;
                 if (known > 0)
                 {
@@ -729,7 +901,8 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
                     TotalPages = items.Count >= PageSize ? page + 1 : page;
                 }
 
-                if (Videos.Count == 0) Error = err ?? "该 UP 主暂无投稿视频";
+                if (Videos.Count == 0)
+                    Error = err ?? (keyword.Length > 0 ? "没有找到匹配的视频" : "该 UP 主暂无投稿视频");
                 else Error = "";
 
                 RecalcPages(page);

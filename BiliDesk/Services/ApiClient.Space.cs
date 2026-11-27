@@ -186,10 +186,17 @@ public partial class ApiClient
     ///      被丢掉后本页条数不足 30, 同样误判。
     ///   ⇒ 用接口给的 page.count(总投稿数)当权威值, 调用方按 "已加载数 &lt; total" 判断到底。
     ///   total 取不到时(降级路径)返回 0, 调用方退回原来的启发式。
+    ///
+    /// ★ 2026-11-28 新增 <paramref name="keyword"/>: UP 主页「搜索 TA 的视频」。
+    ///   arc/search 原生支持 `keyword`(B 站空间页的搜索框走的就是它), 搜索时
+    ///   `page.count` 是**命中条数**而不是总投稿数, 所以调用方可以沿用同一套页码逻辑。
+    ///   降级接口 recArchivesByKeywords 的 `keywords` 本来就是关键词, 顺带把它传进去,
+    ///   风控时搜索也还能用(只是 total 依旧拿不到, 页码退回启发式)。
     /// </summary>
     public async Task<(bool ok, string? err, List<VideoItem>? items, int total)>
-        GetSpaceVideosAsync(long mid, int pn = 1, int ps = 30)
+        GetSpaceVideosAsync(long mid, int pn = 1, int ps = 30, string? keyword = null)
     {
+        keyword ??= "";
         try
         {
             await EnsureBuvidAsync();
@@ -198,6 +205,8 @@ public partial class ApiClient
                 ["mid"] = mid.ToString(),
                 ["pn"] = pn.ToString(),
                 ["ps"] = Math.Min(ps, 50).ToString(),
+                // 空闲时也照发空串: 与 B 站网页的请求保持一致, 少一份"有没有这个参数"的分支
+                ["keyword"] = keyword,
                 ["order"] = "pubdate",
                 ["platform"] = "web",
                 ["web_location"] = "1550101"
@@ -208,7 +217,7 @@ public partial class ApiClient
             if (code != 0 || data == null)
             {
                 // 风控降级: 公开的合集推荐接口, 不需要签名, 返回完整 archive 对象
-                var fb = await GetSpaceVideosFallbackAsync(mid, pn, ps);
+                var fb = await GetSpaceVideosFallbackAsync(mid, pn, ps, keyword);
                 return (fb.ok, fb.err, fb.items, 0);
             }
 
@@ -224,11 +233,26 @@ public partial class ApiClient
             }
             if (items.Count == 0)
             {
-                var fb = await GetSpaceVideosFallbackAsync(mid, pn, ps);
-                return (fb.ok, fb.err, fb.items, 0);
+                // page.count = 权威总数 / 搜索命中数(见方法头注释)
+                var knownTotal = 0;
+                if (data.Value.TryGetProperty("page", out var pageEl) && pageEl.ValueKind == JsonValueKind.Object)
+                    knownTotal = GetInt(pageEl, "count");
+
+                // ★ 搜索态下"0 条 + count 也是 0"是**真的没搜到**, 不能拿去降级 ——
+                //   降级接口若没按 keywords 过滤, 会把一堆不相关的投稿当成搜索结果。
+                //   只有 count>0(说明这一页本该有内容, 是解析失败)或无关键词时才降级。
+                if (keyword.Length == 0 || knownTotal > 0)
+                {
+                    // 风控 / 解析失败降级: 公开的合集推荐接口, 不需要签名, 返回完整 archive 对象
+                    var fb = await GetSpaceVideosFallbackAsync(mid, pn, ps, keyword);
+                    // 降级也一条没拿到时不要报 total(否则页码栏会显示"共 N 条"却空空如也)
+                    var fbTotal = fb.items is { Count: > 0 } ? knownTotal : 0;
+                    return (fb.ok, fb.err, fb.items, fbTotal);
+                }
+                return (true, null, items, knownTotal);
             }
 
-            // page.count = 该 UP 的总投稿数(权威的"到底"判据)
+            // page.count = 该 UP 的总投稿数 / 搜索命中数(权威的"到底"判据)
             var total = 0;
             if (data.Value.TryGetProperty("page", out var page) && page.ValueKind == JsonValueKind.Object)
                 total = GetInt(page, "count");
@@ -238,9 +262,10 @@ public partial class ApiClient
     }
 
     /// <summary>空间视频列表降级接口(series/recArchivesByKeywords, 公开无签名)。
-    /// 返回 data.archives 数组, 字段与 arc/search 的 vlist 略有不同</summary>
+    /// 返回 data.archives 数组, 字段与 arc/search 的 vlist 略有不同。
+    /// ★ 2026-11-28: 搜索时把关键词传给 <c>keywords</c>(该接口本身就按关键词推荐)。</summary>
     private async Task<(bool ok, string? err, List<VideoItem>? items)>
-        GetSpaceVideosFallbackAsync(long mid, int pn, int ps)
+        GetSpaceVideosFallbackAsync(long mid, int pn, int ps, string keyword = "")
     {
         try
         {
@@ -249,7 +274,7 @@ public partial class ApiClient
                 new Dictionary<string, string>
                 {
                     ["mid"] = mid.ToString(),
-                    ["keywords"] = "",
+                    ["keywords"] = keyword,
                     ["pn"] = pn.ToString(),
                     ["ps"] = Math.Min(ps, 50).ToString()
                 },
