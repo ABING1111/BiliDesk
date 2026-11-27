@@ -4,6 +4,38 @@
              xmlns:helpers="clr-namespace:BiliDesk.Helpers"
              xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
              Background="{DynamicResource AppBackgroundBrush}">
+    <UserControl.Resources>
+        <!-- 「我的订阅」的 Tab 样式: 视觉参数全部继承全局 ContentTabStyle(字号 15 / Padding 4,6 /
+             悬停变主文字色), **只去掉模板里自带的下划线**。
+             ★ 2026-11-28 用户要求"tab 切换底下的横线加上动画": 每个 Tab 自带的下划线是
+               由 IsChecked 驱动、瞬间换位的(硬切); 改成整行共享一条 TabIndicator,
+               由 code-behind 在切换时缓动滑过去(与首页 / 播放器简介评论 Tab 同一套观感)。
+             ★ 为什么不能留着自带下划线: 点新 Tab 的同一帧目的地就亮了一条, 再叠一条
+               正从旧 Tab 滑过来的横条, 会同时看到两条, 像闪了一下。 -->
+        <Style x:Key="SubscriptionTabStyle" TargetType="RadioButton"
+               BasedOn="{StaticResource ContentTabStyle}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <ContentPresenter x:Name="Cp"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                          Margin="{TemplateBinding Padding}"
+                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
     <!--
         「我的订阅」页(2026-11-27 新增, 版式对齐 B 站空间的「追番追剧」页 + 订阅合集)。
 
@@ -37,22 +69,39 @@
         </Grid>
 
         <!-- ===== Tab 行: 合集 / 追番 / 追剧(合集排第一, 也是默认页) =====
-             条数由 VM 给, 未加载时只显示名字。 -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="36,14,36,12"
-                    Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}}">
-            <RadioButton x:Name="TabCollections" GroupName="SubscriptionTab"
-                         Style="{StaticResource ContentTabStyle}"
-                         Content="{Binding CollectionsTabText}"
-                         Checked="OnTabCollectionsChecked" />
-            <RadioButton x:Name="TabBangumi" GroupName="SubscriptionTab"
-                         Style="{StaticResource ContentTabStyle}"
-                         Content="{Binding BangumiTabText}"
-                         Checked="OnTabBangumiChecked" />
-            <RadioButton x:Name="TabTeleplay" GroupName="SubscriptionTab"
-                         Style="{StaticResource ContentTabStyle}"
-                         Content="{Binding TeleplayTabText}"
-                         Checked="OnTabTeleplayChecked" />
-        </StackPanel>
+             条数由 VM 给, 未加载时只显示名字。
+             ★ 下划线是整行共享的一条 TabIndicator, 切 Tab 时滑到新位置(见 code-behind)。 -->
+        <Grid Grid.Row="1" Margin="36,14,36,12"
+              Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}}">
+            <StackPanel x:Name="TabRow" Orientation="Horizontal"
+                        Loaded="OnTabRowLoaded" IsVisibleChanged="OnTabRowIsVisibleChanged"
+                        SizeChanged="OnTabRowSizeChanged">
+                <RadioButton x:Name="TabCollections" GroupName="SubscriptionTab"
+                             Style="{StaticResource SubscriptionTabStyle}"
+                             Content="{Binding CollectionsTabText}"
+                             Checked="OnTabCollectionsChecked" />
+                <RadioButton x:Name="TabBangumi" GroupName="SubscriptionTab"
+                             Style="{StaticResource SubscriptionTabStyle}"
+                             Content="{Binding BangumiTabText}"
+                             Checked="OnTabBangumiChecked" />
+                <RadioButton x:Name="TabTeleplay" GroupName="SubscriptionTab"
+                             Style="{StaticResource SubscriptionTabStyle}"
+                             Content="{Binding TeleplayTabText}"
+                             Checked="OnTabTeleplayChecked" />
+            </StackPanel>
+
+            <!-- 共享下划线: 宽度/位置由代码按选中 Tab 的实测几何写入。
+                 Margin 0,0,0,-1 与原来 ContentTabStyle 里的下划线同款。
+                 IsHitTestVisible=False: 只是指示器, 不能挡住 Tab 的点击。 -->
+            <Border x:Name="TabIndicator" Height="2" Margin="0,0,0,-1"
+                    Background="{DynamicResource AccentBrush}"
+                    HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                    IsHitTestVisible="False">
+                <Border.RenderTransform>
+                    <TranslateTransform x:Name="TabIndicatorShift" />
+                </Border.RenderTransform>
+            </Border>
+        </Grid>
 
         <!-- ===== 内容区 ===== -->
         <Grid Grid.Row="2">

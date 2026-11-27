@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Models;
@@ -73,6 +74,90 @@ public partial class UserSpacePage : UserControl
         TabVideos.Tag = vm.IsVideosTab ? "on" : "off";
         TabImages.Tag = vm.IsImagesTab ? "on" : "off";
         TabCollections.Tag = vm.IsCollectionsTab ? "on" : "off";
+        QueueTabIndicatorUpdate(animate: true);
+    }
+
+    // ------------------------------------------------------------ Tab 共享下划线
+    //
+    // 2026-11-28 用户要求"tab 切换底下的横线加上动画"。
+    // 与首页 / 播放器简介评论 Tab 同一套做法: 线上只有**一条**共享 Border,
+    // 切 Tab 时把它的 X 与 Width 一起缓动到新标签 —— 而不是每个按钮各画一条、
+    // 由 Tag 驱动瞬间换位(那样是硬切, 没有"滑过去"的观感)。
+
+    /// <summary>下划线滑动时长: 与首页 / 播放器一致。</summary>
+    private const int TabIndicatorMs = 220;
+
+    /// <summary>下划线还没有按真实布局摆过位。</summary>
+    private bool _tabIndicatorPlaced;
+
+    private void OnTabRowLoaded(object sender, RoutedEventArgs e)
+        => QueueTabIndicatorUpdate(animate: false);
+
+    private void OnTabRowIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true) QueueTabIndicatorUpdate(animate: false);
+    }
+
+    /// <summary>
+    /// 标签文字宽度变了(如订阅数从无到有、选中态加粗): 下划线要跟着对齐。
+    /// 用动画而不是硬切 —— 与切换 Tab 的观感一致。
+    /// </summary>
+    private void OnTabRowSizeChanged(object sender, SizeChangedEventArgs e)
+        => QueueTabIndicatorUpdate(animate: true);
+
+    /// <summary>
+    /// 把更新排到本轮布局之后: 选中态会把字号改成 SemiBold, 事件触发时量到的还是旧宽度,
+    /// 立刻摆线会短一截(与播放器 UpdateContentTabIndicator 同一条经验)。
+    /// </summary>
+    private void QueueTabIndicatorUpdate(bool animate)
+    {
+        if (!IsLoaded || !TabRow.IsLoaded)
+        {
+            _tabIndicatorPlaced = false;
+            return;
+        }
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded,
+            new Action(() => MoveTabIndicator(animate)));
+    }
+
+    /// <summary>
+    /// 把共享下划线挪到当前 Tab 下面。
+    /// ★ 位置取标签的实测坐标(TransformPoint): 三个标签文字长短不同, 靠固定间距推不出来。
+    /// ★ 左右各内缩 6px, 与原来模板里的 Margin="6,2,6,0" 对齐, 静止时观感不变。
+    /// </summary>
+    private void MoveTabIndicator(bool animate)
+    {
+        var target = TabCollections.Tag as string == "on" ? TabCollections
+                   : TabImages.Tag as string == "on" ? TabImages
+                   : TabVideos;
+        if (target == null || target.ActualWidth <= 0 || TabRow.ActualWidth <= 0)
+        {
+            _tabIndicatorPlaced = false;
+            return;
+        }
+
+        const double inset = 6;
+        var to = target.TranslatePoint(new Point(0, 0), TabRow).X + inset;
+        var width = Math.Max(0, target.ActualWidth - inset * 2);
+
+        if (!animate || !_tabIndicatorPlaced)
+        {
+            // 先清动画再写基础值: 残留的 HoldEnd 动画会让直接赋值不生效
+            TabIndicatorShift.BeginAnimation(TranslateTransform.XProperty, null);
+            TabIndicator.BeginAnimation(WidthProperty, null);
+            TabIndicatorShift.X = to;
+            TabIndicator.Width = width;
+            _tabIndicatorPlaced = true;
+            return;
+        }
+
+        // 起点取横条**当前**值: 动画没跑完就连点另一项时, 从半路接着滑, 不会先跳回旧位置。
+        var duration = new Duration(TimeSpan.FromMilliseconds(TabIndicatorMs));
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        TabIndicatorShift.BeginAnimation(TranslateTransform.XProperty,
+            new DoubleAnimation(TabIndicatorShift.X, to, duration) { EasingFunction = ease });
+        TabIndicator.BeginAnimation(WidthProperty,
+            new DoubleAnimation(TabIndicator.ActualWidth, width, duration) { EasingFunction = ease });
     }
 
     private void OnVideosTabClick(object sender, RoutedEventArgs e)

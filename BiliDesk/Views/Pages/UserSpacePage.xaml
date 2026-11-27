@@ -27,7 +27,12 @@
                一起搬到了应用级 —— 样式进 Themes/Styles.xaml, 控件是 Views/Controls/PagerBar。
                收藏页现在用同一套页码栏, 这里再保留一份局部样式就会变成两份会走歪的副本。 -->
 
-        <!-- 空间页 Tab(投稿 / 图文): 底部强调色下划线, 选中态由 code-behind 写 Tag="on" 驱动。 -->
+        <!-- 空间页 Tab(投稿 / 图文): 选中态由 code-behind 写 Tag="on" 驱动。
+             ★ 2026-11-28 用户要求"tab 切换底下的横线加上动画":
+               下划线不再由每个按钮模板各画一条(那是瞬间换位的, 会硬切),
+               改成 TabRow 里一条共享的 Border(TabIndicator), 由 code-behind 从旧位置
+               滑到新位置 —— 与首页 / 播放器简介评论 Tab 同一套观感。
+               所以这里的模板**不再带 Underline**, 只保留文字与悬停/选中颜色。 -->
         <Style x:Key="SpaceTabStyle" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
@@ -37,20 +42,14 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <StackPanel>
-                            <Border Padding="6,8" Background="{TemplateBinding Background}">
-                                <ContentPresenter HorizontalAlignment="Center"
-                                                  TextElement.Foreground="{TemplateBinding Foreground}" />
-                            </Border>
-                            <Border x:Name="Underline" Height="2" CornerRadius="1" Margin="6,2,6,0"
-                                    Background="Transparent" />
-                        </StackPanel>
+                        <Border Padding="6,8" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="Tag" Value="on">
                                 <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
                                 <Setter Property="FontWeight" Value="SemiBold" />
-                                <Setter TargetName="Underline" Property="Background"
-                                        Value="{DynamicResource AccentBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -234,9 +233,14 @@
             </Grid>
         </Border>
 
-        <!-- ======== Tab: 投稿 / 图文 / 合集和系列 ======== -->
+        <!-- ======== Tab: 投稿 / 图文 / 合集和系列 ========
+             ★ 2026-11-28: 下划线改成一条共享的 TabIndicator, 切 Tab 时滑过去
+               (见 code-behind 的 MoveTabIndicator)。静止时它与原来各按钮自带的
+               2px 下划线完全同款: 左右各内缩 6px、贴齐 Tab 行底部。 -->
         <Grid Margin="36,6,36,0">
-            <StackPanel Orientation="Horizontal">
+            <StackPanel x:Name="TabRow" Orientation="Horizontal"
+                        Loaded="OnTabRowLoaded" IsVisibleChanged="OnTabRowIsVisibleChanged"
+                        SizeChanged="OnTabRowSizeChanged">
                 <Button x:Name="TabVideos" Content="投稿" Style="{StaticResource SpaceTabStyle}"
                         Click="OnVideosTabClick" />
                 <Button x:Name="TabImages" Content="图文" Style="{StaticResource SpaceTabStyle}"
@@ -244,6 +248,17 @@
                 <Button x:Name="TabCollections" Content="合集和系列" Style="{StaticResource SpaceTabStyle}"
                         Margin="18,0,0,0" Click="OnCollectionsTabClick" />
             </StackPanel>
+
+            <!-- 共享下划线: 宽度/位置全由代码按标签实测几何写入。
+                 IsHitTestVisible=False —— 它只是指示器, 不能挡住标签的点击。 -->
+            <Border x:Name="TabIndicator" Height="2" CornerRadius="1"
+                    Background="{DynamicResource AccentBrush}"
+                    HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                    IsHitTestVisible="False">
+                <Border.RenderTransform>
+                    <TranslateTransform x:Name="TabIndicatorShift" />
+                </Border.RenderTransform>
+            </Border>
         </Grid>
             </StackPanel>
         </Border>
