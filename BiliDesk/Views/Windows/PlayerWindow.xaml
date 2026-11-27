@@ -1696,6 +1696,11 @@
                                                        LineStackingStrategy="BlockLineHeight"
                                                        Foreground="#FFFFFF" Opacity="0.35"
                                                        HorizontalAlignment="Center" />
+                                            <TextBlock x:Name="SpeedOsdChipSmartText" Text="智能"
+                                                       FontSize="10" LineHeight="12"
+                                                       LineStackingStrategy="BlockLineHeight"
+                                                       Foreground="#FFFFFF" Opacity="0.35"
+                                                       HorizontalAlignment="Center" />
                                         </StackPanel>
                                     </StackPanel>
                                 </StackPanel>

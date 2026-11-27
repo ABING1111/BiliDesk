@@ -638,8 +638,32 @@ public partial class PlayerWindow : FluentWindow
     private bool TryStepFastForwardSpeed(int direction)
     {
         if (_closing || _mp == null || !_isFastForwarding) return false;
+        if (direction == 0) return true;
 
-        var next = Helpers.FastForwardSpeedPolicy.Step(_fastForwardTarget, direction);
+        float next;
+        if (_fastForwardSmart)
+        {
+            // 智能档在 3x 下面: 从智能再往上回到 1.5x, 往下回到 3x。
+            _fastForwardSmart = false;
+            next = direction > 0 ? 1.5f : 3.0f;
+        }
+        else if (direction > 0 && _fastForwardTarget >= 3.0f - 0.001f)
+        {
+            // 3x 再往上 = 智能(按本片 script_pace 选 2x/1.5x/3x)
+            _fastForwardSmart = true;
+            next = Helpers.SmartRatePolicy.Resolve(_scriptPace);
+        }
+        else if (direction < 0 && _fastForwardTarget <= 1.5f + 0.001f)
+        {
+            // 1.5x 再往下 = 智能(循环到 3x 下方那一档)
+            _fastForwardSmart = true;
+            next = Helpers.SmartRatePolicy.Resolve(_scriptPace);
+        }
+        else
+        {
+            next = Helpers.FastForwardSpeedPolicy.Step(_fastForwardTarget, direction);
+        }
+
         if (Math.Abs(next - _fastForwardTarget) > 0.001f)
         {
             _fastForwardTarget = next;
@@ -648,14 +672,15 @@ public partial class PlayerWindow : FluentWindow
             try { _mp.SetRate(next); } catch { /* 播放器可能刚好失效 */ }
             // 控制栏倍速指示跟着临时档位走(见 StartFastForward 里那条修复)
             UpdateSpeedText();
-            SyncSpeedOsdChips();
         }
+        // 智能档可能算出来正好等于当前 2x: 没有改速率, 但高亮要从 2x 移到“智能”。
+        SyncSpeedOsdChips();
         // 方向为 0 / 脏值时 next 可能等于 current; 这一下仍然算"倍速键", 不能再落到音量
         return true;
     }
 
     /// <summary>
-    /// 按当前加速倍速刷新 OSD 的三行档位(2026-11-21 第二版)。
+    /// 按当前加速倍速刷新 OSD 的四行档位(2026-11-21 第二版; 2026-11-27 加智能)。
     ///
     /// 视觉: 当前档 14px 粗体全亮; 上下两档 10px、透明度 0.35 —— 参考图那种
     ///   "中间亮、上下淡"的轮盘感, 同时把浮层高度从 ~90px 收到 ~50px(用户反馈太高)。
@@ -664,15 +689,18 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void SyncSpeedOsdChips(bool animate = true)
     {
-        ApplySpeedOsdRow(SpeedOsdChip15Text, 1.5f, animate);
-        ApplySpeedOsdRow(SpeedOsdChip20Text, 2.0f, animate);
-        ApplySpeedOsdRow(SpeedOsdChip30Text, 3.0f, animate);
+        ApplySpeedOsdRow(SpeedOsdChip15Text,
+            !_fastForwardSmart && Math.Abs(_fastForwardTarget - 1.5f) <= 0.001f, animate);
+        ApplySpeedOsdRow(SpeedOsdChip20Text,
+            !_fastForwardSmart && Math.Abs(_fastForwardTarget - 2.0f) <= 0.001f, animate);
+        ApplySpeedOsdRow(SpeedOsdChip30Text,
+            !_fastForwardSmart && Math.Abs(_fastForwardTarget - 3.0f) <= 0.001f, animate);
+        ApplySpeedOsdRow(SpeedOsdChipSmartText, _fastForwardSmart, animate);
     }
 
-    private void ApplySpeedOsdRow(TextBlock? text, float rate, bool animate)
+    private void ApplySpeedOsdRow(TextBlock? text, bool active, bool animate)
     {
         if (text == null) return;
-        var active = Math.Abs(_fastForwardTarget - rate) <= 0.001f;
 
         text.FontSize = active ? 14 : 10;
         text.FontWeight = active ? FontWeights.Bold : FontWeights.Normal;

@@ -727,6 +727,12 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private float _fastForwardTarget = FastForwardRate;
 
+    /// <summary>本片接口下发的 script_pace(长按“智能”档用); null = 接口没给。</summary>
+    private double? _scriptPace;
+
+    /// <summary>本次长按是否选中了“智能”档(选中时 OSD 高亮智能, 实际倍速由 script_pace 决定)。</summary>
+    private bool _fastForwardSmart;
+
     /// <summary>
     /// 开始长按快进(改倍速)。见上方那段说明为什么用 SetRate 而不是 seek。
     /// <paramref name="rate"/> 固定为 2x(<see cref="FastForwardRate"/>): 鼠标长按与键盘长按
@@ -746,6 +752,7 @@ public partial class PlayerWindow : FluentWindow
         //   注意这意味着正片本身已经 >2x 时, 长按会先"降"到 2x(松手恢复原速) ——
         //   用户明确要的是"固定三档 + 默认 2x", 而不是旧版的 max(2.0, 当前)。
         _fastForwardTarget = rate;
+        _fastForwardSmart = false;
 
         // ★ 2026-11-21: 清掉滚轮累计余量 —— 长按期间滚轮改为切档(见 OnVideoAreaMouseWheel),
         //   把上一次调音量攒下的零头带进来, 会让"刚滚一下"立刻跳一档, 手感像误触。
@@ -777,6 +784,7 @@ public partial class PlayerWindow : FluentWindow
         try { _mp.SetRate(back); } catch { /* 播放器已失效 */ }
         // "不记忆"的另一半: 收尾把档位复位成默认 2x, 下次长按一定从 2x 起步
         _fastForwardTarget = FastForwardRate;
+        _fastForwardSmart = false;
         // 控制栏倍速指示跟着回到原值(与 StartFastForward 的临时提速对称)。
         // ★ 不传参数: 读播放器**实际**速率, 万一上面 SetRate 失败(片源切换中)也不会显示成
         //   "已经恢复了"而实际还在临时倍速上。

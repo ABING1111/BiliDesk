@@ -1162,6 +1162,7 @@ public partial class PlayerWindow : FluentWindow
         nameof(_subtitleNeedsLogin), nameof(_fillingSubtitleMenu), nameof(_subtitleError),
         nameof(_subtitleLan), nameof(_subtitleDelayMs), nameof(_subtitleLastText),
         nameof(_subtitleFontSliderSyncing),
+        nameof(_scriptPace), nameof(_fastForwardSmart),
         // 进度 / 时长 / EOF 自救
         nameof(_totalMs), nameof(_lastKnownMs), nameof(_eofResumeCount), nameof(_lastEofResumeMs),
         nameof(_resumeAfterSwitchMs), nameof(_ended), nameof(_eofBlackActive), nameof(_anchorMs), nameof(_anchorWall),

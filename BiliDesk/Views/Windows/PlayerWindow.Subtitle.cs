@@ -105,9 +105,10 @@ public partial class PlayerWindow : FluentWindow
 
         try
         {
-            var (_, _, tracks, needLogin, chapters) = await Svc.Api.GetPlayerInfoAsync(
+            var (_, _, tracks, needLogin, chapters, scriptPace) = await Svc.Api.GetPlayerInfoAsync(
                 _currentBvid, _currentCid, _subtitleCts?.Token ?? CancellationToken.None);
             if (_closing || gen != _loadGen) return;
+            _scriptPace = scriptPace;
             _subtitleLoadingTracks = false;
             _subtitleNeedsLogin = needLogin;
             _subtitleTracks.AddRange(tracks);
