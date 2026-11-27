@@ -74,7 +74,21 @@ public class MineViewModel : ObservableObject
     public string Error { get => _error; private set => SetProperty(ref _error, value); }
     public string Name { get => _name; private set => SetProperty(ref _name, value); }
     public string Face { get => _face; private set => SetProperty(ref _face, value); }
-    public int Level { get => _level; private set => SetProperty(ref _level, value); }
+    /// <summary>
+    /// 等级。
+    /// ★ 2026-11-28: 必须顺带通知 LevelText —— 徽章的 Text/Visibility 都绑在 LevelText 上,
+    ///   只通知 Level 的话, 资料在页面 Loaded 之后才到, 徽章会一直是初始的空串:
+    ///   用户看到的就是"昵称右边一个空的粉色小方块"(和 UserSpaceViewModel 当年那个坑同源)。
+    /// </summary>
+    public int Level
+    {
+        get => _level;
+        private set
+        {
+            if (SetProperty(ref _level, value))
+                OnPropertyChanged(nameof(LevelText));
+        }
+    }
 
     /// <summary>
     /// 当前登录用户的 UID。
@@ -91,22 +105,25 @@ public class MineViewModel : ObservableObject
     /// <summary>"经验 25181/28800" 那一行的文本; 没拿到经验时为空串(整行隐藏)</summary>
     public string ExpText { get => _expText; private set => SetProperty(ref _expText, value); }
 
-    /// <summary>经验进度条 0~1(Lv6 时 next_exp=0, 直接拉满)</summary>
+    /// <summary>经验进度 0~1(Lv6 时 next_exp=0, 直接拉满)。绑给进度条 Value(Maximum=1)</summary>
     public double ExpProgress
     {
         get => _expProgress;
         private set
         {
             if (SetProperty(ref _expProgress, value))
-                OnPropertyChanged(nameof(ExpBarWidth));
+                OnPropertyChanged(nameof(ExpPercentText));
         }
     }
 
     /// <summary>
-    /// 经验进度条的实心段宽度(px)。直接给换算好的值而不是绑 0~1:
-    /// XAML 里没有现成的乘法转换器, 与其在转换器上多一个文件, 不如让 VM 算完。
+    /// 进度条右端的百分比文案("94%")。
+    /// ★ 2026-11-28: 进度条从"120px 写死宽"改成"跟上面那行文字等宽", 像素宽度由
+    ///   ProgressBar 自己按轨道实际宽度算(XAML 侧见 MinePage 的 ExpBarStyle),
+    ///   原来的 ExpBarWidth(= 120 × 进度)随之删除。
     /// </summary>
-    public double ExpBarWidth => 120 * _expProgress;
+    public string ExpPercentText =>
+        _expText.Length == 0 ? "" : $"{Math.Round(_expProgress * 100)}%";
 
     public string DynamicText { get => _dynamicText; private set => SetProperty(ref _dynamicText, value); }
     public string FollowingText { get => _followingText; private set => SetProperty(ref _followingText, value); }

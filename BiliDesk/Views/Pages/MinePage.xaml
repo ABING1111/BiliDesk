@@ -6,7 +6,10 @@
              Background="{DynamicResource AppBackgroundBrush}">
     <!--
         「我的」页(2026-09-26 新增, 版式对齐 B 站网页版 space 首页):
-        资料头一行(从左到右: 头像/昵称/等级/硬币/经验 → 动态/关注/粉丝) → 快捷入口 → 我的收藏夹卡片。
+        页首卡片(资料 + 统计 + 快捷入口) → 我的收藏夹卡片。
+        ★ 2026-11-28: 页首卡片化 —— 资料/统计/快捷入口收进一张圆角卡片,
+          中间原本近 460px 的空白变成卡片内留白; 资料与统计之间加竖分隔线;
+          经验条改成跟随元信息行宽度, 快捷入口胶囊整体收小一档。
         ★ 2026-11-27: 「动态/关注/粉丝」从资料头下面单独一行搬进资料头这一行,
           紧跟在昵称块后面(整条从左连续排开) —— 中途试过"靠右对齐",
           结果头像块与三项分居页面两端、中间空 1100px, 视觉上头重脚轻, 用户退回。
@@ -59,6 +62,34 @@
                 </MultiDataTrigger>
             </Style.Triggers>
         </Style>
+
+        <!--
+            经验进度条(2026-11-28 重做)。
+            ★ 宽度不再写死: 轨道由资料头里那一行文字(Auto 列)撑开, 指示段 = 轨道宽 × 百分比,
+              交给 ProgressBar 自己算 —— VM 原来的 ExpBarWidth(= 120 × 进度)已经删掉。
+            ★ 轨道色用 ControlFillPressedBrush 而不是 DividerBrush: 深色卡片底(#2E2E2E)上
+              Divider(8% 白)几乎看不见, 13% 白才读得出"这里有一条轨道"; 浅色下同理(6% → 12% 黑)。
+            ★ IsHitTestVisible=False: 它只是装饰, 不该抢走资料头 Button 的点击。
+        -->
+        <Style x:Key="ExpBarStyle" TargetType="ProgressBar">
+            <Setter Property="Height" Value="4" />
+            <Setter Property="IsTabStop" Value="False" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="IsHitTestVisible" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ProgressBar">
+                        <Grid>
+                            <Border x:Name="PART_Track" CornerRadius="2"
+                                    Background="{DynamicResource ControlFillPressedBrush}" />
+                            <Border x:Name="PART_Indicator" CornerRadius="2"
+                                    HorizontalAlignment="Left"
+                                    Background="{DynamicResource AccentBrush}" />
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
     <Grid helpers:Responsive.Enable="True">
 
@@ -87,6 +118,11 @@
                         <ThicknessAnimation Storyboard.TargetName="PageBody"
                                             Storyboard.TargetProperty="Margin"
                                             To="20,6,20,28" Duration="0" />
+                        <!-- 页首卡片的内边距也跟着收一档(24,20 → 16,16):
+                             窄窗口下内容线正好仍是 20 + 16 = 36, 与旧版落点一致。 -->
+                        <ThicknessAnimation Storyboard.TargetName="HeaderCard"
+                                            Storyboard.TargetProperty="Padding"
+                                            To="16,16" Duration="0" />
                     </Storyboard>
                 </VisualState>
             </VisualStateGroup>
@@ -129,265 +165,276 @@
                       Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}}">
             <StackPanel x:Name="PageBody" Margin="36,6,36,28">
 
-                <!-- == 资料头 ==
-                     ★ 2026-11-18(issue #90): 头像 / 昵称 / 等级徽章变成可点的入口 ——
-                       点进去进「我的个人主页」(复用 UP 主主页页)。
-                       ★ 用 Button 包一层(ClickableAreaButtonStyle)而不是 Border + 鼠标事件:
-                         · Button.Click 是**冒泡**事件, 点在里面的头像/昵称上照样触发;
-                         · 按下-抬起必须落在同一元素 —— 自带配对判定, 不用自己维护标记;
-                         · 键盘 Tab + 空格/回车也能进, 无障碍直接到位;
-                         · Command 绑定 VM 的命令, 页面不用写 click 处理。
-                         ★★ 反面教材: WPF 的 UIElement.MouseLeftButtonUp 是 **Direct(直达)路由**,
-                            只发给"正好被点中的那个元素" —— 挂在父级 Border 上时,
-                            点在里面的头像上**永远不会触发**。
-                            (探针 bd-probe-mine 实测: avatar=1 header=0 page=0。)
-                     ★ 2026-11-18(用户反馈"框与头像圆相切"):
-                       ① 悬停底衬: 内边距 10,8。底衬的左边框原来正好切在圆形头像的最左点上,
-                          看着像"框没包住头像"; 现在左右各让出 10px、上下 8px。
-                          水平方向用负外边距(-10)抵消, 头像的左边线与页面对齐线一分不动。
-                          ★ 竖直方向**不能**用负外边距(-8 会把底衬顶到 ScrollViewer 视口外,
-                            滚到最顶时上边被切掉 2px), 改成把里面 StackPanel 的上外边距
-                            从 10 减到 2: 8(内边距) + 2 = 10, 头像落点与改动前完全一致。
-                       ② 提示气泡: Placement=Bottom + 8px 间距。默认是跟随鼠标,
-                          指针停在头像下沿时气泡就从那儿冒出来, 上边缘正好贴着圆底。
-                          钉在整块下方并留 8px 空隙, 无论指针在哪都不会再贴着头像。 -->
-                <!-- ★ 2026-11-27(用户要求): 「动态 / 关注 / 粉丝」搬进资料头**这一行**。
-                     ★★ 2026-11-27 二次返工(用户反馈"视觉上很不平衡"):
-                       上一版让三项**靠右对齐**, 结果头像块与三项分居页面两端,
-                       中间空出近 1100px 空白 —— 而下面的快捷入口又是均匀铺满整宽的,
-                       两行的节奏完全对不上, 看着头重脚轻。
-                       ⇒ 改成**整条从左连续排开**: 头像 | 昵称/等级/硬币/经验 | 动态/关注/粉丝。
-                       页首收成一行两半: 左半 = 资料 + 统计, 右半 = 四枚快捷入口(Col2), 中间 Col1 是弹性空隙。
-                     ★★ 2026-11-27 三次返工(用户反馈"右侧大面积空白"):
-                       上面聚到左边之后快捷入口也跟着靠左, 结果整个页首的右半边全空。
-                     ★ 为什么用平级控件而不是把三个 Button 塞进头像那个 Button 里:
-                       Button 套 Button 会打架 ——
-                         · 外层的悬停底衬(ControlFillHoverBrush)会被内层的点亮态盖住/叠加;
-                         · 键盘焦点与空格触发也会互相干扰。
-                       所以两块**平级**: 头像块(整体可点进个人主页) + 统计块。
-                     ★ 头像那一块的负外边距(-10)照旧: 头像的左边线仍与页面对齐线一分不动。
-                     ★ 快捷入口的落位(四次返工, 用户要求"变窄时先折成两行, 实在没位置再放底下"):
-                       右侧放得下一行 → 一行; 放不下一行但放得下两行 → 折成两行仍留在右侧;
-                       连两行都放不下 → 落到资料头下方靠左。这是按**实际剩余宽度**算的,
-                       不是按窗口档位 —— 见 code-behind 的 UpdateQuickEntryPlacement。 -->
-                <Grid x:Name="HeaderGrid" SizeChanged="OnHeaderSizeChanged">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <!-- 右列用 * 而不是 Auto: Auto 列里的流式面板拿到的是无限宽, 永远不折行。 -->
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <!-- 第 1 行 = 资料头; 第 2 行 = 快捷入口落到下方时它与资料头的间距(平时高 0);
-                         第 3 行 = 快捷入口(平时不用) -->
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
+                <!-- == 资料头(2026-11-28 卡片化) ==
+                     把「资料 + 统计 + 快捷入口」收进一张圆角卡片: 中间原本近 460px 的空白
+                     从"页面上的洞"变成"卡片内的呼吸感", 页首也终于读作一个整体。
 
-                    <StackPanel x:Name="ProfileBlock" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Style="{StaticResource ClickableAreaButtonStyle}"
-                                HorizontalAlignment="Left"
-                                Padding="10,8" Margin="-10,0,-10,0"
-                                Command="{Binding OpenSelfSpaceCommand}"
-                                ToolTip="查看我的个人主页"
-                                ToolTipService.Placement="Bottom"
-                                ToolTipService.VerticalOffset="8">
-                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                                <Border x:Name="AvatarBox" Width="64" Height="64" CornerRadius="32"
-                                        Background="{DynamicResource AccentSoftFillBrush}"
-                                        helpers:Cover.Source="{Binding Face}">
-                                    <!-- 兜底人形: Cover.Source 把头像画在 Border 的 Background 上, 子元素会叠在图上,
-                                         所以 Face 有 URL 就把图标藏掉(和侧栏头像当年的处理一致) -->
-                                    <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                               FontSize="26" Foreground="{DynamicResource AccentTextBrush}"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                                               Visibility="{Binding Face, Converter={StaticResource InvStrToVis}}" />
-                                </Border>
-                                <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
-                                    <StackPanel Orientation="Horizontal">
-                                        <!-- MaxWidth + 省略号: 昵称过长时会把右边的统计入口挤出可视区
-                                             (资料头是 StackPanel 里的 Grid, 超宽不会换行, 只会裁掉右边) -->
-                                        <TextBlock Text="{Binding Name}" FontSize="20" FontWeight="SemiBold"
-                                                   VerticalAlignment="Center" MaxWidth="240"
-                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"
-                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
-                                        <!-- 等级徽章: 空串(Lv0)时整块隐藏 -->
-                                        <Border CornerRadius="4" Padding="5,1.5" Margin="8,0,0,0"
-                                                VerticalAlignment="Center"
-                                                Background="{DynamicResource AccentSoftFillBrush}"
-                                                Visibility="{Binding LevelText, Converter={StaticResource StrToVis}}">
-                                            <TextBlock Text="{Binding LevelText}" FontSize="10.5" FontWeight="SemiBold"
-                                                       Foreground="{DynamicResource AccentTextBrush}" />
-                                        </Border>
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                        <TextBlock Text="硬币" FontSize="12"
-                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
-                                        <TextBlock Text="{Binding CoinsText}" FontSize="12" Margin="4,0,0,0"
-                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
-                                        <!-- 经验: 没拿到(ExpText 为空)时整段隐藏 -->
-                                        <StackPanel Orientation="Horizontal" Margin="18,0,0,0"
-                                                    Visibility="{Binding ExpText, Converter={StaticResource StrToVis}}">
-                                            <TextBlock Text="经验" FontSize="12"
-                                                       Foreground="{DynamicResource TextTertiaryBrush}" />
-                                            <TextBlock Text="{Binding ExpText}" FontSize="12" Margin="4,0,0,0"
-                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                     ★ 对齐规则: 卡片左边缘落在页面对齐线(36)上, 与「我的」标题、
+                       下方「我的收藏」同一条线; 卡片内容再统一内缩 24。
+                       对齐看容器边, 内容自己缩一档 —— 不要把内容也顶到 36。
+                     ★ 底色必须用 CardBackgroundBrush: 亚克力模式下 ThemeService 会把它
+                       连同面板一起按材质重算(比面板再实一档), 写死 #2E2E2E 会穿帮。
+                     ★ 资料头 / 三个数字仍是 Button(ClickableAreaButtonStyle):
+                       WPF 的 MouseLeftButtonUp 是 **Direct(直达)路由**, 挂在父级 Border 上时
+                       点在子元素(头像/数字)上永远不会触发; Button.Click 才是冒泡的。
+                       (探针 bd-probe-mine 实测: avatar=1 header=0 page=0。)
+                     ★ 悬停底衬内边距 10,8 + 负外边距 -10: 底衬比圆形头像各让出 10px,
+                       看着才是"框包住了头像"; 负外边距把头像的左边线拉回页面对齐线。 -->
+                <Border x:Name="HeaderCard"
+                        Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource CardBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="16"
+                        Padding="24,20">
+                    <Grid x:Name="HeaderGrid" SizeChanged="OnHeaderSizeChanged">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <!-- 右列用 * 而不是 Auto: Auto 列里的流式面板拿到的是无限宽, 永远不折行。 -->
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <!-- 第 1 行 = 资料头; 第 2 行 = 快捷入口落到下方时它与资料头的间距(平时高 0);
+                             第 3 行 = 快捷入口(平时不用) -->
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <StackPanel x:Name="ProfileBlock" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Style="{StaticResource ClickableAreaButtonStyle}"
+                                    HorizontalAlignment="Left"
+                                    Padding="10,8" Margin="-10,0,-10,0"
+                                    Command="{Binding OpenSelfSpaceCommand}"
+                                    ToolTip="查看我的个人主页"
+                                    ToolTipService.Placement="Bottom"
+                                    ToolTipService.VerticalOffset="8">
+                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                    <Border x:Name="AvatarBox" Width="72" Height="72" CornerRadius="36"
+                                            VerticalAlignment="Center"
+                                            Background="{DynamicResource AccentSoftFillBrush}"
+                                            helpers:Cover.Source="{Binding Face}">
+                                        <!-- 兜底人形: Cover.Source 把头像画在 Border 的 Background 上, 子元素会叠在图上,
+                                             所以 Face 有 URL 就把图标藏掉(和侧栏头像当年的处理一致) -->
+                                        <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                   FontSize="28" Foreground="{DynamicResource AccentTextBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Visibility="{Binding Face, Converter={StaticResource InvStrToVis}}" />
+                                    </Border>
+                                    <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal">
+                                            <!-- MaxWidth + 省略号: 昵称过长时会把右边的统计入口挤出可视区
+                                                 (资料头是 StackPanel 里的 Grid, 超宽不会换行, 只会裁掉右边) -->
+                                            <TextBlock Text="{Binding Name}" FontSize="22" FontWeight="SemiBold"
+                                                       VerticalAlignment="Center" MaxWidth="240"
+                                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"
+                                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                                            <!-- 等级徽章: 空串(Lv0)时整块隐藏 -->
+                                            <Border CornerRadius="4" Padding="6,2" Margin="8,0,0,0"
+                                                    VerticalAlignment="Center"
+                                                    Background="{DynamicResource AccentSoftFillBrush}"
+                                                    Visibility="{Binding LevelText, Converter={StaticResource StrToVis}}">
+                                                <TextBlock Text="{Binding LevelText}" FontSize="11" FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource AccentTextBrush}" />
+                                            </Border>
                                         </StackPanel>
+
+                                        <!-- 元信息 + 经验条同处一个 Auto 宽的 Grid ——
+                                             ★ 轨道宽度因此自动等于上一行文字的宽度(不再写死 120px)。
+                                               只剩一行元信息时 Grid 的宽度由它决定, 进度条再跟着铺满,
+                                               "120px 的条只压住半行字"那种断线感就没了。 -->
+                                        <Grid HorizontalAlignment="Left">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,6,0,0">
+                                                <TextBlock Text="硬币" FontSize="12"
+                                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                <TextBlock Text="{Binding CoinsText}" FontSize="12" Margin="4,0,0,0"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                <!-- 经验: 没拿到(ExpText 为空)时整段隐藏 -->
+                                                <StackPanel Orientation="Horizontal" Margin="20,0,0,0"
+                                                            Visibility="{Binding ExpText, Converter={StaticResource StrToVis}}">
+                                                    <TextBlock Text="经验" FontSize="12"
+                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                    <TextBlock Text="{Binding ExpText}" FontSize="12" Margin="4,0,0,0"
+                                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                </StackPanel>
+                                            </StackPanel>
+
+                                            <!-- 经验进度条(2026-11-28 重做): 轨道 = 上行文字宽, 4px 高, 右端百分比。
+                                                 ★ 用 ProgressBar 而不是 Border + 绑定像素宽度: VM 里原来是
+                                                   "120 × 进度"的换算, 换成满宽后就失效了; ProgressBar 自己按
+                                                   "轨道实际宽度 × 百分比"算指示段, 窗口缩放/125% 下都不会错位。 -->
+                                            <Grid Grid.Row="1" Margin="0,7,0,0"
+                                                  Visibility="{Binding ExpText, Converter={StaticResource StrToVis}}">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <!-- ★ Mode=OneWay 必须写: RangeBase.Value 默认 TwoWay,
+                                                     而 ExpProgress 只有私有 setter —— 不写会在运行时抛
+                                                     "无法对只读属性进行 TwoWay 绑定"(探针实测)。 -->
+                                                <ProgressBar Grid.Column="0" Style="{StaticResource ExpBarStyle}"
+                                                             Maximum="1" Value="{Binding ExpProgress, Mode=OneWay}"
+                                                             VerticalAlignment="Center" />
+                                                <TextBlock Grid.Column="1" Margin="8,0,0,0"
+                                                           Text="{Binding ExpPercentText}" FontSize="11"
+                                                           VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                                            </Grid>
+                                        </Grid>
                                     </StackPanel>
-                                    <!-- 经验进度条: 120px 轨道, 实心段宽度由 VM 算好(ExpBarWidth) -->
-                                    <Grid Width="120" Height="3" Margin="0,6,0,0" HorizontalAlignment="Left"
-                                          Visibility="{Binding ExpText, Converter={StaticResource StrToVis}}">
-                                        <Border CornerRadius="1.5" Background="{DynamicResource DividerBrush}" />
-                                        <Border CornerRadius="1.5" HorizontalAlignment="Left"
-                                                Background="{DynamicResource AccentBrush}"
-                                                Width="{Binding ExpBarWidth}" />
-                                    </Grid>
                                 </StackPanel>
+                            </Button>
+
+                            <!-- == 资料 | 统计 之间的竖分隔(2026-11-28) ==
+                                 距离上统计原来离快捷入口(24)比离资料(36)更近, 视觉分组和语义分组是反的;
+                                 加一根 36 高的竖线 + 两侧 32 / 28, "人"和"数据"的关系一眼就读出来了。 -->
+                            <Border Width="1" Height="36" VerticalAlignment="Center"
+                                    Margin="32,0,28,0"
+                                    Background="{DynamicResource DividerBrush}" />
+
+                            <!-- == 动态 / 关注 / 粉丝(数字在上、标签在下) ==
+                                 ★ 2026-11-18(issue #90): 三个数字都是可点入口, 点进「我的空间」对应 Tab。
+                                 ★ 用 Button(ClickableAreaButtonStyle) 而不是 Border + 鼠标事件:
+                                   Click 冒泡、按下-抬起自带配对判定、键盘 Tab + 空格/回车可用。
+                                 ★ MinWidth=72: 三项等宽, 数字位数不同(11 / 229 / 737)时也不会左右跳动。
+                                 ★ 2026-11-28: 数字 18 → 20、标签 12 → 11, 把"人名"与"数据"拉开一档;
+                                   与资料之间改由上面那根竖线分组, 不再靠 36px 的空隙。 -->
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="DynamicEntry" Style="{StaticResource ClickableAreaButtonStyle}"
+                                        MinWidth="72" Padding="0,6" Command="{Binding OpenDynamicsCommand}"
+                                        ToolTip="查看我的动态">
+                                    <StackPanel HorizontalAlignment="Center">
+                                        <TextBlock Text="{Binding DynamicText}" FontSize="20" FontWeight="SemiBold"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="动态" FontSize="11" Margin="0,4,0,0" HorizontalAlignment="Center"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="FollowingEntry" Style="{StaticResource ClickableAreaButtonStyle}"
+                                        MinWidth="72" Padding="0,6" Command="{Binding OpenFollowingsCommand}"
+                                        ToolTip="查看我关注的 UP 主">
+                                    <StackPanel HorizontalAlignment="Center">
+                                        <TextBlock Text="{Binding FollowingText}" FontSize="20" FontWeight="SemiBold"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="关注" FontSize="11" Margin="0,4,0,0" HorizontalAlignment="Center"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="FollowerEntry" Style="{StaticResource ClickableAreaButtonStyle}"
+                                        MinWidth="72" Padding="0,6" Command="{Binding OpenFollowersCommand}"
+                                        ToolTip="查看我的粉丝">
+                                    <StackPanel HorizontalAlignment="Center">
+                                        <TextBlock Text="{Binding FollowerText}" FontSize="20" FontWeight="SemiBold"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="粉丝" FontSize="11" Margin="0,4,0,0" HorizontalAlignment="Center"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    </StackPanel>
+                                </Button>
                             </StackPanel>
-                        </Button>
-    
-                        <!-- == 动态 / 关注 / 粉丝(紧跟在昵称块后面, 数字在上、标签在下) ==
-                             ★ 2026-11-18(issue #90): 三个数字变成可点的入口 ——
-                               点进去进「我的空间」的对应 Tab。
-                             ★ 用 Button(ClickableAreaButtonStyle) 而不是 Border + 鼠标事件:
-                               Click 是**冒泡**事件, 点在里面的数字/文字上也照样触发;
-                               按下-抬起必须落在同一元素 —— 自带配对判定;
-                               键盘 Tab + 空格/回车也能用。
-                               (WPF 的 MouseLeftButtonUp 是 Direct 路由, 挂在父级上收不到子元素的点击。)
-                             ★ MinWidth=72: 三项等宽, 数字位数不同(11 / 229 / 737)时也不会左右跳动。
-                             ★ 与昵称块之间留 36: 头像块的悬停底衬向右多出 10px(负外边距抵消的内边距),
-                               再留一段明显的空隙, 三项才读作"跟着资料的一组数据"而不是贴在硬币数字后面。 -->
-                        <StackPanel Orientation="Horizontal"
-                                    VerticalAlignment="Center"
-                                    Margin="36,0,0,0">
-                            <Button x:Name="DynamicEntry" Style="{StaticResource ClickableAreaButtonStyle}"
-                                    MinWidth="72" Padding="0,6" Command="{Binding OpenDynamicsCommand}"
-                                    ToolTip="查看我的动态">
-                                <StackPanel HorizontalAlignment="Center">
-                                    <TextBlock Text="{Binding DynamicText}" FontSize="18" FontWeight="SemiBold"
-                                               HorizontalAlignment="Center"
-                                               Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    <TextBlock Text="动态" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
-                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </StackPanel>
+
+                        <!-- 快捷入口落到下方时它与资料头的间距; 留在右侧时高度 0(由 code-behind 切换) -->
+                        <Border Grid.Row="1"
+                                x:Name="HeaderGap" Height="0" />
+
+                        <!-- == 快捷入口(四个: 离线缓存 / 观看记录 / 我的订阅 / 稍后再看) ==
+                             ★ 2026-11-27 改成「横向胶囊 + 从左依次排开」(用户反馈排版不自然):
+                               原来是 UniformGrid 把四块均匀撒满整行(图标在上、文字在下, 112×66)。
+                             ★ 2026-11-28: 46 → 40 高、图标 18 → 16、内边距 18 → 16、项间距 12 → 10。
+                               四枚加起来原来比左边的统计还"重", 压得页首往右倒; 收一档后
+                               胶囊是"轻量快捷入口", 视觉重量让回给资料与数字。
+                             ★ 常态给一层很淡的底(ControlFillDefaultBrush)+ 1px 描边:
+                               光秃秃的"图标 + 字"靠左排会像浮在页面上, 有底才成其为"一枚按钮"; 悬停加深。
+                             ★ 底块必须自带背景: 没有背景 = 不参与命中测试(这里的 MouseLeftButtonUp 就收不到)。
+                             ★ 折行/落位: 面板是 RightWrapPanel(每一行都靠右; 自带 WrapPanel 折行后第二行会贴左)。
+                               ① 右侧放得下一行 → 一行, 贴在资料头同一行的最右;
+                               ② 放不下一行但放得下两行 → 折成两行, 仍在右侧、两行右对齐;
+                               ③ 连两行都放不下 → 落到资料头下方, 从头像的起始线向右排。
+                               三种状态由 code-behind 的 UpdateQuickEntryPlacement 按**实际宽度**切换。
+                             ★ 胶囊 Margin 上下各留 4: 折成两行时两行之间才有缝; 只有一行时整体仍垂直居中。
+                             ★ 右边的 -10 抵掉最后一枚的 10px 右外边距, 让胶囊右缘贴住卡片内容线。 -->
+                        <helpers:RightWrapPanel x:Name="QuickGrid" SizeChanged="OnQuickGridSizeChanged"
+                                                BalanceLines="True"
+                                                VerticalAlignment="Center" Margin="32,0,-10,0">
+                            <helpers:RightWrapPanel.Resources>
+                                <Style x:Key="QuickEntry" TargetType="Border">
+                                    <Setter Property="Height" Value="40" />
+                                    <Setter Property="CornerRadius" Value="10" />
+                                    <Setter Property="Padding" Value="16,0" />
+                                    <Setter Property="Margin" Value="0,4,10,4" />
+                                    <Setter Property="Background" Value="{DynamicResource ControlFillDefaultBrush}" />
+                                    <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+                                    <Setter Property="BorderThickness" Value="1" />
+                                    <Setter Property="Cursor" Value="Hand" />
+                                    <Style.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource ControlFillHoverBrush}" />
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                                <!-- 胶囊里的图标: 与文字同一基线带(各自 VerticalAlignment=Center) -->
+                                <Style x:Key="QuickEntryIcon" TargetType="TextBlock">
+                                    <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                                    <Setter Property="FontSize" Value="16" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                    <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+                                </Style>
+                                <Style x:Key="QuickEntryText" TargetType="TextBlock">
+                                    <Setter Property="FontSize" Value="13" />
+                                    <Setter Property="Margin" Value="8,0,0,0" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                </Style>
+                            </helpers:RightWrapPanel.Resources>
+                            <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenCacheClick"
+                                    ToolTip="打开离线缓存">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE896;" Style="{StaticResource QuickEntryIcon}" />
+                                    <TextBlock Text="离线缓存" Style="{StaticResource QuickEntryText}" />
                                 </StackPanel>
-                            </Button>
-                            <Button x:Name="FollowingEntry" Style="{StaticResource ClickableAreaButtonStyle}"
-                                    MinWidth="72" Padding="0,6" Command="{Binding OpenFollowingsCommand}"
-                                    ToolTip="查看我关注的 UP 主">
-                                <StackPanel HorizontalAlignment="Center">
-                                    <TextBlock Text="{Binding FollowingText}" FontSize="18" FontWeight="SemiBold"
-                                               HorizontalAlignment="Center"
-                                               Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    <TextBlock Text="关注" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
-                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                            </Border>
+                            <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenHistoryClick"
+                                    ToolTip="打开观看记录">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE81C;" Style="{StaticResource QuickEntryIcon}" />
+                                    <TextBlock Text="观看记录" Style="{StaticResource QuickEntryText}" />
                                 </StackPanel>
-                            </Button>
-                            <Button x:Name="FollowerEntry" Style="{StaticResource ClickableAreaButtonStyle}"
-                                    MinWidth="72" Padding="0,6" Command="{Binding OpenFollowersCommand}"
-                                    ToolTip="查看我的粉丝">
-                                <StackPanel HorizontalAlignment="Center">
-                                    <TextBlock Text="{Binding FollowerText}" FontSize="18" FontWeight="SemiBold"
-                                               HorizontalAlignment="Center"
-                                               Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    <TextBlock Text="粉丝" FontSize="12" Margin="0,3,0,0" HorizontalAlignment="Center"
-                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                            </Border>
+                            <!-- 我的订阅(2026-11-27): 追番 / 追剧 / 订阅的合集。
+                                 ★ 原来的「我的收藏」胶囊已去掉 —— 收藏页入口交给下方收藏夹区块。 -->
+                            <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenSubscriptionClick"
+                                    ToolTip="打开我的订阅">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE006;" Style="{StaticResource QuickEntryIcon}" />
+                                    <TextBlock Text="我的订阅" Style="{StaticResource QuickEntryText}" />
                                 </StackPanel>
-                            </Button>
-                        </StackPanel>
-                    </StackPanel>
+                            </Border>
+                            <!-- 稍后再看(2026-09-28 新增) -->
+                            <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenWatchLaterClick"
+                                    ToolTip="打开稍后再看">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE7C1;" Style="{StaticResource QuickEntryIcon}" />
+                                    <TextBlock Text="稍后再看" Style="{StaticResource QuickEntryText}" />
+                                </StackPanel>
+                            </Border>
+                        </helpers:RightWrapPanel>
+                    </Grid>
+                </Border>
 
-                    <!-- 快捷入口落到下方时它与资料头的间距; 留在右侧时高度 0(由 code-behind 切换) -->
-                    <Border Grid.Row="1"
-                            x:Name="HeaderGap" Height="0" />
-
-                <!-- == 快捷入口(四个: 离线缓存 / 观看记录 / 我的订阅 / 稍后再看) ==
-                     ★ 2026-11-27 改成「横向胶囊 + 从左依次排开」(用户反馈排版不自然):
-                       原来是 UniformGrid 把四块**均匀撒满整行**(图标在上、文字在下, 112×66)。
-                       资料头聚到左边 ~640px 之后, 两行的疏密正好相反 —— 上面紧、下面散,
-                       看着不像同一张页面。现在四枚胶囊与资料头同一条起始线, 图标在左、文字在右。
-                     ★ 常态给一层很淡的底(ControlFillDefaultBrush)+ 1px 描边:
-                       光秃秃的"图标 + 字"靠左排会像浮在页面上, 有底才成其为"一枚按钮"; 悬停加深。
-                     ★ 底块必须自带背景: 没有背景 = 不参与命中测试(这里的 MouseLeftButtonUp 就收不到)。
-                     ★ 折行/落位: 面板是 RightWrapPanel(每一行都靠右; 自带 WrapPanel 折行后第二行会贴左)。
-                       ① 右侧放得下一行 → 一行, 贴在资料头同一行的最右;
-                       ② 放不下一行但放得下两行 → 折成两行, 仍在右侧、两行右对齐;
-                       ③ 连两行都放不下 → 落到资料头下方, 从头像的起始线向右排。
-                       三种状态由 code-behind 的 UpdateQuickEntryPlacement 按**实际宽度**切换
-                       (曾经用档位绑定驱动, 但档位只有三档、还是按窗口宽度算的:
-                        125% 缩放下一台 1565px 的窗口只有 1252 DIP, 明明放得下却落到下方)。
-                     ★ 胶囊 Margin 上下各留 4: 折成两行时两行之间才有缝; 只有一行时整体仍垂直居中。 -->
-                <helpers:RightWrapPanel x:Name="QuickGrid" SizeChanged="OnQuickGridSizeChanged"
-                           BalanceLines="True"
-                                           VerticalAlignment="Center" Margin="24,0,-12,0">
-                    <helpers:RightWrapPanel.Resources>
-                        <Style x:Key="QuickEntry" TargetType="Border">
-                            <Setter Property="Height" Value="46" />
-                            <Setter Property="CornerRadius" Value="10" />
-                            <Setter Property="Padding" Value="18,0" />
-                            <Setter Property="Margin" Value="0,4,12,4" />
-                            <Setter Property="Background" Value="{DynamicResource ControlFillDefaultBrush}" />
-                            <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
-                            <Setter Property="BorderThickness" Value="1" />
-                            <Setter Property="Cursor" Value="Hand" />
-                            <Style.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="{DynamicResource ControlFillHoverBrush}" />
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                        <!-- 胶囊里的图标: 与文字同一基线带(各自 VerticalAlignment=Center) -->
-                        <Style x:Key="QuickEntryIcon" TargetType="TextBlock">
-                            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
-                            <Setter Property="FontSize" Value="18" />
-                            <Setter Property="VerticalAlignment" Value="Center" />
-                            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-                        </Style>
-                        <Style x:Key="QuickEntryText" TargetType="TextBlock">
-                            <Setter Property="FontSize" Value="13" />
-                            <Setter Property="Margin" Value="10,0,0,0" />
-                            <Setter Property="VerticalAlignment" Value="Center" />
-                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-                        </Style>
-                    </helpers:RightWrapPanel.Resources>
-                    <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenCacheClick"
-                            ToolTip="打开离线缓存">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE896;" Style="{StaticResource QuickEntryIcon}" />
-                            <TextBlock Text="离线缓存" Style="{StaticResource QuickEntryText}" />
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenHistoryClick"
-                            ToolTip="打开观看记录">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE81C;" Style="{StaticResource QuickEntryIcon}" />
-                            <TextBlock Text="观看记录" Style="{StaticResource QuickEntryText}" />
-                        </StackPanel>
-                    </Border>
-                    <!-- 我的订阅(2026-11-27): 追番 / 追剧 / 订阅的合集。
-                         ★ 原来的「我的收藏」胶囊已去掉 —— 收藏页入口交给下方收藏夹区块。 -->
-                    <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenSubscriptionClick"
-                            ToolTip="打开我的订阅">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE006;" Style="{StaticResource QuickEntryIcon}" />
-                            <TextBlock Text="我的订阅" Style="{StaticResource QuickEntryText}" />
-                        </StackPanel>
-                    </Border>
-                    <!-- 稍后再看(2026-09-28 新增) -->
-                    <Border Style="{StaticResource QuickEntry}" MouseLeftButtonUp="OnOpenWatchLaterClick"
-                            ToolTip="打开稍后再看">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE7C1;" Style="{StaticResource QuickEntryIcon}" />
-                            <TextBlock Text="稍后再看" Style="{StaticResource QuickEntryText}" />
-                        </StackPanel>
-                    </Border>
-                </helpers:RightWrapPanel>
-                </Grid>
-
-                <!-- == 分隔线 + 我的收藏 == -->
-                <Border Height="1" Margin="0,24,0,0"
-                        Background="{DynamicResource DividerBrush}" />
-
-                <Grid Margin="0,20,0,0">
+                <!-- == 我的收藏 ==
+                     ★ 2026-11-28: 页首改成卡片后, 原来的 1px 分隔线是多余的 ——
+                       卡片下边缘已经是一条明确的分区线, 再叠一条线两行会显得密。 -->
+                <Grid Margin="0,28,0,0">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <TextBlock Text="我的收藏" FontSize="15" FontWeight="SemiBold"
                                    VerticalAlignment="Center"

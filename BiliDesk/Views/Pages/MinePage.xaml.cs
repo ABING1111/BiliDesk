@@ -31,7 +31,7 @@ public partial class MinePage : UserControl, IRefreshable
     // ---- 快捷入口的落位: 一行 / 两行 / 落到资料头下方 ----
 
     /// <summary>快捷入口与资料块之间的最小水平间距(= 面板的左外边距)</summary>
-    private const double QuickEntryGap = 24;
+    private const double QuickEntryGap = 32;
 
     /// <summary>快捷入口落到资料头下方时, 与资料头的间距</summary>
     private const double QuickEntryDropGap = 22;
@@ -87,8 +87,8 @@ public partial class MinePage : UserControl, IRefreshable
         var newAlign = stayRight ? HorizontalAlignment.Right : HorizontalAlignment.Left;
         if (QuickGrid.HorizontalAlignment != newAlign) QuickGrid.HorizontalAlignment = newAlign;
 
-        // 落到下方时从头像的起始线起排(去掉左间距); 留在右侧时补回左间距, 右边的 -12 抵掉最后一枚的右间距
-        var newMargin = stayRight ? new Thickness(QuickEntryGap, 0, -12, 0) : new Thickness(0);
+        // 落到下方时从头像的起始线起排(去掉左间距); 留在右侧时补回左间距, 右边的 -10 抵掉最后一枚的右间距
+        var newMargin = stayRight ? new Thickness(QuickEntryGap, 0, -10, 0) : new Thickness(0);
         if (QuickGrid.Margin != newMargin) QuickGrid.Margin = newMargin;
 
         // 落到下方时限宽 = 页首宽度: 它在 Auto 列里, 不限宽就拿到无限宽、永远不折行
