@@ -741,6 +741,50 @@ public static class Cover
     public static string? GetSource(DependencyObject d) => (string?)d.GetValue(SourceProperty);
     public static void SetSource(DependencyObject d, string? value) => d.SetValue(SourceProperty, value);
 
+    /// <summary>
+    /// 图片适配方式: Fill(默认) = UniformToFill 裁切铺满, Contain = Uniform 完整显示。
+    ///
+    /// ★ 默认必须是 Fill: `Cover.Source` 被头像/收藏夹/卡片墙等十几处共用,
+    ///   全局改成 Contain 会让头像两侧留白。
+    /// ★ 动态图片网格的**单图**用 Contain: 专栏封面 / 竖图 / 长图不再被格子裁掉一部分
+    ///   (见 DynamicImageGrid.LayoutSingle)。多图九宫格仍然 Fill —— 网格要墙面齐整。
+    /// </summary>
+    public enum CoverFit
+    {
+        Fill,
+        Contain,
+    }
+
+    public static readonly DependencyProperty FitProperty = DependencyProperty.RegisterAttached(
+        "Fit", typeof(CoverFit), typeof(Cover), new PropertyMetadata(CoverFit.Fill));
+
+    public static CoverFit GetFit(DependencyObject d) => (CoverFit)d.GetValue(FitProperty);
+    public static void SetFit(DependencyObject d, CoverFit value) => d.SetValue(FitProperty, value);
+
+    /// <summary>Contain 下仍允许的裁切比例(3%), 避免"格子 1.788 / 真 16:9 1.778"这种
+    /// 亚像素差异被严格 Uniform 留出一条缝。</summary>
+    public const double CropTolerance = 0.03;
+
+    /// <summary>纯函数(有单测): UniformToFill 铺满时被裁掉的比例是否 ≤ <see cref="CropTolerance"/>。</summary>
+    public static bool IsNearlySameAspect(double boxW, double boxH, int pxW, int pxH)
+    {
+        if (boxW <= 0 || boxH <= 0 || pxW <= 0 || pxH <= 0) return false;
+        var box = boxW / boxH;
+        var img = (double)pxW / pxH;
+        var crop = 1.0 - Math.Min(box / img, img / box);
+        return crop <= CropTolerance;
+    }
+
+    /// <summary>
+    /// Contain 模式的模糊铺底(与主图**共用同一份位图**, 不额外解码)。
+    /// 动态单图在比例对不上时, 两侧/上下用同一张图的模糊版填满, 不留生硬的占位底色。
+    /// </summary>
+    public static readonly DependencyProperty BackdropProperty = DependencyProperty.RegisterAttached(
+        "Backdrop", typeof(Border), typeof(Cover), new PropertyMetadata(null));
+
+    public static Border? GetBackdrop(DependencyObject d) => (Border?)d.GetValue(BackdropProperty);
+    public static void SetBackdrop(DependencyObject d, Border? value) => d.SetValue(BackdropProperty, value);
+
     /// <summary>最近一次实际解码出的像素宽(应用成功后记录), 供"变宽了就重解码"判断。</summary>
     private static readonly DependencyProperty DecodedPixelWidthProperty =
         DependencyProperty.RegisterAttached("DecodedPixelWidth", typeof(int), typeof(Cover),
@@ -922,6 +966,7 @@ public static class Cover
         if (hadImage)
         {
             border.Background = GetPlaceholderBrush(border);
+            ClearBackdrop(border);
             if (border.Child != null) border.Child.Visibility = Visibility.Visible;
             border.SetValue(DecodedPixelWidthProperty, 0);
             // 淡入动画可能还挂着: 清掉, 免得恢复时被旧的动画值接管
@@ -992,6 +1037,16 @@ public static class Cover
     private static void SetPlaceholderBrush(DependencyObject d, Brush? v) =>
         d.SetValue(PlaceholderBrushProperty, v);
 
+    /// <summary>清掉 Contain 模糊铺底上残留的位图(换源/释放时用), 否则旧图会从主图背后透出来。</summary>
+    private static void ClearBackdrop(DependencyObject d)
+    {
+        var backdrop = GetBackdrop(d);
+        if (backdrop == null) return;
+        backdrop.Background = null;
+        backdrop.BeginAnimation(UIElement.OpacityProperty, null);
+        backdrop.Opacity = 0.9;
+    }
+
     /// <summary>显示需求(物理像素)超过已解码宽度这么多倍才重解码 —— 量化档位本身有 0~40% 富余,
     /// 阈值太小会在档位内反复重解码。</summary>
     public const double RedecodeFactor = 1.12;
@@ -1031,6 +1086,7 @@ public static class Cover
         if (border.Background is ImageBrush)
         {
             border.Background = GetPlaceholderBrush(border);
+            ClearBackdrop(border);
             if (border.Child != null) border.Child.Visibility = Visibility.Visible;
         }
         // ★ 换源同样要**解钉**: 这张卡马上就不显示旧图了, 再钉着它等于让旧图永不淘汰。
@@ -1253,7 +1309,13 @@ public static class Cover
 
             var brush = new ImageBrush(img)
             {
-                Stretch = Stretch.UniformToFill,
+                // Contain = 完整显示(单图/专栏封面), 其余默认 Fill = 裁切铺满;
+                // "几乎同比例"的图仍铺满, 免得严格 Uniform 留出一条亚像素缝隙。
+                Stretch = GetFit(border) == CoverFit.Contain &&
+                          !IsNearlySameAspect(border.ActualWidth, border.ActualHeight,
+                                              img.PixelWidth, img.PixelHeight)
+                    ? Stretch.Uniform
+                    : Stretch.UniformToFill,
                 AlignmentX = AlignmentX.Center,
                 AlignmentY = AlignmentY.Center
             };
@@ -1265,6 +1327,22 @@ public static class Cover
             if (GetPlaceholderBrush(border) == null && border.Background is not ImageBrush)
                 SetPlaceholderBrush(border, border.Background);
             border.Background = brush;
+
+            // 模糊铺底: 同一张位图铺满整格(不额外解码), 只负责填 Contain 留出的空档。
+            // 缩放模式用 Linear 就够 —— 它反正要被糊掉, Fant 在这里是纯浪费。
+            var backdrop = GetBackdrop(border);
+            if (backdrop != null)
+            {
+                var fill = new ImageBrush(img)
+                {
+                    Stretch = Stretch.UniformToFill,
+                    AlignmentX = AlignmentX.Center,
+                    AlignmentY = AlignmentY.Center
+                };
+                fill.Freeze();
+                backdrop.SetValue(RenderOptions.BitmapScalingModeProperty, BitmapScalingMode.Linear);
+                backdrop.Background = fill;
+            }
 
             // ★ 换图先解旧钉再钉新键(引用计数必须成对, 否则钉子只增不减, 缓存再也不会淘汰)。
             //   钉住 = "屏幕上正显示着它", 让 LRU 别把它挤掉 —— 这样离屏释放后再滚回来能同步命中,
@@ -1296,12 +1374,24 @@ public static class Cover
                 border.BeginAnimation(UIElement.OpacityProperty,
                     new System.Windows.Media.Animation.DoubleAnimation(0, 1,
                         TimeSpan.FromMilliseconds(240)));
+                if (backdrop != null)
+                {
+                    backdrop.Opacity = 1.0;
+                    backdrop.BeginAnimation(UIElement.OpacityProperty,
+                        new System.Windows.Media.Animation.DoubleAnimation(0, 1,
+                            TimeSpan.FromMilliseconds(240)));
+                }
             }
             else
             {
                 // 清掉可能残留的淡入动画, 保证不透明度稳定在 1
                 border.BeginAnimation(UIElement.OpacityProperty, null);
                 border.Opacity = 1.0;
+                if (backdrop != null)
+                {
+                    backdrop.BeginAnimation(UIElement.OpacityProperty, null);
+                    backdrop.Opacity = 1.0;
+                }
             }
 
             // 解码期间卡片又变宽了(渐进重排/最大化): 立刻补一轮, 别等下一次 SizeChanged。

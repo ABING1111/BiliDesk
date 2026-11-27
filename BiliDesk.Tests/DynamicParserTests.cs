@@ -703,4 +703,136 @@ public class DynamicParserTests
         Assert.Contains(kept, x => x.AuthorName == "已关注");
         Assert.Contains(kept, x => x.AuthorName == "我自己");
     }
+
+    // ------------------------------------------------------------ 专栏正文
+
+    [Fact]
+    public void Article_FeedMajor_SetsArticleId()
+    {
+        var item = Parse("""
+        {
+          "id_str": "1274933717254537256",
+          "type": "DYNAMIC_TYPE_ARTICLE",
+          "basic": { "comment_id_str": "54097546", "comment_type": 12, "rid_str": "54097546" },
+          "modules": {
+            "module_author": { "mid": 1, "name": "up" },
+            "module_dynamic": {
+              "major": {
+                "type": "MAJOR_TYPE_ARTICLE",
+                "article": {
+                  "id": "54097546",
+                  "title": "壁纸分享",
+                  "desc": "共36张。[图片][图片]",
+                  "covers": [ "http://i0.hdslb.com/bfs/new_dyn/cover.png" ]
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        Assert.NotNull(item);
+        Assert.Equal(DynamicKind.Article, item!.Kind);
+        Assert.Equal("54097546", item.ArticleId);
+        Assert.True(item.IsArticle);
+        Assert.Single(item.Images);
+        // 有图时 `[图片]` 占位符不应再当正文文字画出来
+        Assert.DoesNotContain("[图片]", item.ContentText);
+    }
+
+    [Fact]
+    public void Article_DetailOpusMajor_TakesArticleIdFromBasic()
+    {
+        // 详情接口把专栏的 major 换成 OPUS(只剩封面), 只有 type/basic 还能认出来
+        var item = Parse("""
+        {
+          "id_str": "1274933717254537256",
+          "type": "DYNAMIC_TYPE_ARTICLE",
+          "basic": { "comment_id_str": "54097546", "comment_type": 12, "rid_str": "54097546" },
+          "modules": {
+            "module_author": { "mid": 1, "name": "up" },
+            "module_dynamic": {
+              "major": {
+                "type": "MAJOR_TYPE_OPUS",
+                "opus": {
+                  "title": "壁纸分享",
+                  "jump_url": "//www.bilibili.com/opus/1274933717254537256",
+                  "summary": { "text": "共36张。[图片][图片]", "rich_text_nodes": [] },
+                  "pics": [ { "url": "http://i0.hdslb.com/bfs/new_dyn/cover.png", "width": 3003, "height": 1689 } ]
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        Assert.NotNull(item);
+        Assert.Equal(DynamicKind.Article, item!.Kind);
+        Assert.Equal("54097546", item.ArticleId);
+        Assert.True(item.IsArticle);
+        Assert.Single(item.Images);
+    }
+
+    [Fact]
+    public void ArticleContent_ParsesParagraphsTextImageAndLinkCard()
+    {
+        using var doc = JsonDocument.Parse("""
+        {
+          "opus": {
+            "content": {
+              "paragraphs": [
+                { "para_type": 1,
+                  "text": { "nodes": [
+                    { "node_type": 1, "word": { "words": "第一段" } },
+                    { "node_type": 1, "word": { "words": "正文" } }
+                  ] } },
+                { "para_type": 2,
+                  "pic": { "pics": [
+                    { "url": "http://i0.hdslb.com/bfs/new_dyn/a.png", "width": 1549, "height": 2048 }
+                  ] } },
+                { "para_type": 7,
+                  "link_card": { "card": { "show_text": "往期文章" }, "default_text": "默认" } }
+              ]
+            }
+          }
+        }
+        """);
+
+        var article = DynamicParser.ParseArticleContent(doc.RootElement.Clone());
+
+        Assert.NotNull(article);
+        Assert.Equal("第一段正文\n往期文章", article!.Text);
+        var img = Assert.Single(article.Images);
+        Assert.Equal("https://i0.hdslb.com/bfs/new_dyn/a.png", img.Url);
+        Assert.Equal(1549, img.Width);
+        Assert.Equal(2048, img.Height);
+        Assert.EndsWith("@480w.jpg", img.ThumbUrl);
+        Assert.EndsWith("@720w.jpg", img.DetailUrl);
+    }
+
+    [Fact]
+    public void ArticleContent_HtmlFallback_StripsTagsAndExtractsImages()
+    {
+        using var doc = JsonDocument.Parse("""
+        {
+          "content": "<p>hello &amp; bye</p><img src=\"//i0.hdslb.com/bfs/new_dyn/b.jpg\">",
+          "image_urls": [ "http://i0.hdslb.com/bfs/new_dyn/cover.png" ]
+        }
+        """);
+
+        var article = DynamicParser.ParseArticleContent(doc.RootElement.Clone());
+
+        Assert.NotNull(article);
+        Assert.Equal("hello & bye", article!.Text);
+        var img = Assert.Single(article.Images);
+        Assert.Equal("https://i0.hdslb.com/bfs/new_dyn/b.jpg", img.Url);
+    }
+
+    [Fact]
+    public void StripImagePlaceholders_RemovesTokensAndExtraBlankLines()
+    {
+        var text = "第一行\n[图片]\n[图片]\n\n\n第二行[图片]";
+        var stripped = DynamicParser.StripImagePlaceholders(text);
+        Assert.Equal("第一行\n\n第二行", stripped);
+    }
 }

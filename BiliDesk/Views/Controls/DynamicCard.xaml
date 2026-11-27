@@ -218,9 +218,12 @@
                        Cursor="Hand" MouseLeftButtonUp="OnArticleClick"
                        Visibility="{Binding ShowArticleTitle, Converter={StaticResource BoolToVis}}" />
 
-            <!-- ===== 图片网格(图文/专栏) ===== -->
+            <!-- ===== 图片网格(图文/专栏) =====
+                 ★ 专栏卡片点封面 = 进详情看全文; 图文卡片点图 = 大图预览(与 B 站一致)。 -->
             <controls:DynamicImageGrid Margin="0,12,0,0"
                                        ItemsSource="{Binding Images}"
+                                       ClickOpensDetail="{Binding IsArticle}"
+                                       DetailRequested="OnImageDetailRequested"
                                        Visibility="{Binding HasImages, Converter={StaticResource BoolToVis}}" />
 
             <!-- ===== 直播块 ===== -->

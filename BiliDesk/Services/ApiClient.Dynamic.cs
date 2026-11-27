@@ -23,6 +23,17 @@ public partial class ApiClient
         "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,decorationCard,onlyfansAssetsV2,forwardListHidden,ugcDelete";
 
     /// <summary>
+    /// 专栏正文缓存(article id → 正文)。只存在内存里, 上限 <see cref="ArticleCacheMax"/> 条。
+    ///
+    /// ★ 为什么要缓存: 详情窗每次打开都会补一次专栏正文, 而 `x/article/view` 有频率限制
+    ///   (`-509`)。用户反复点开/关闭同一条专栏时不该重复打接口; 缓存对象只有文字和 URL,
+    ///   体积很小。
+    /// </summary>
+    private readonly Dictionary<string, DynamicArticle> _articleCache = new();
+    private readonly object _articleCacheLock = new();
+    private const int ArticleCacheMax = 20;
+
+    /// <summary>
     /// 关注 UP 的综合动态时间线(「动态」页的"全部动态")。
     /// 返回 DynamicItem 列表, 视频/图文/文字/专栏/转发都在里面。
     ///
@@ -218,6 +229,60 @@ public partial class ApiClient
 
             var item = DynamicParser.ParseItem(itemEl);
             return item == null ? (false, "动态详情解析失败", null) : (true, null, item);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            return (false, ex.Message, null);
+        }
+    }
+
+    /// <summary>
+    /// 专栏正文(文字 + 正文里的全部图片)。
+    /// 接口: GET /x/article/view?id=...
+    ///
+    /// ★ 动态接口对专栏只给 `major.article.covers[0]`(1 张封面), 36 张正文图要到这里拿
+    ///   (`data.opus.content.paragraphs`)。详情窗打开专栏动态时调用。
+    /// ★ 结果按 article id 缓存: 接口有频率限制, 反复打开同一条不该重复请求。
+    /// </summary>
+    public async Task<(bool ok, string? err, DynamicArticle? article)>
+        GetArticleContentAsync(string articleId)
+    {
+        if (string.IsNullOrEmpty(articleId)) return (false, "缺少专栏 id", null);
+
+        lock (_articleCacheLock)
+        {
+            if (_articleCache.TryGetValue(articleId, out var cached))
+                return (true, null, cached);
+        }
+
+        try
+        {
+            await EnsureBuvidAsync();
+            var ps = new Dictionary<string, string> { ["id"] = articleId };
+            var (code, msg, data) = await GetJsonAsync(
+                "https://api.bilibili.com/x/article/view", ps,
+                referer: "https://www.bilibili.com/read/cv" + articleId + "/");
+
+            if (code != 0 || data == null)
+            {
+                var detail = code switch
+                {
+                    -509 => "专栏正文加载过于频繁, 请稍后再试",
+                    _ => msg ?? $"获取专栏正文失败 (code {code})",
+                };
+                return (false, detail, null);
+            }
+
+            var article = DynamicParser.ParseArticleContent(data.Value);
+            if (article == null) return (false, "专栏正文结构异常", null);
+
+            lock (_articleCacheLock)
+            {
+                if (_articleCache.Count >= ArticleCacheMax) _articleCache.Clear();
+                _articleCache[articleId] = article;
+            }
+            return (true, null, article);
         }
         catch (Exception ex)
         {

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using BiliDesk.Models;
 
 namespace BiliDesk.Services;
@@ -125,7 +127,6 @@ public static class DynamicParser
             ReadPubTime(author, item);
         }
 
-        JsonElement? major = null;
         if (mods.TryGetProperty("module_dynamic", out var dyn) &&
             dyn.ValueKind == JsonValueKind.Object)
         {
@@ -137,13 +138,28 @@ public static class DynamicParser
 
             if (dyn.TryGetProperty("major", out var m) && m.ValueKind == JsonValueKind.Object)
             {
-                major = m;
                 var majorType = GetStr(m, "type");
                 var kind = KindFromType(typeText, typeNum, majorType);
                 if (kind != DynamicKind.Unknown) item.Kind = kind;
                 ReadMajor(m, item);
             }
         }
+
+        // ★★★ 2026-11-28 修"图文动态图片显示不全":
+        //   专栏动态在详情接口里 major 会变成 MAJOR_TYPE_OPUS(只剩封面), 但 type 仍是
+        //   DYNAMIC_TYPE_ARTICLE。KindFromType 优先认 major, 于是详情窗把专栏当成普通图文,
+        //   既不显示专栏标题、也不会去补正文图。这里按 type 掰回 Article。
+        if (typeText.Equals("DYNAMIC_TYPE_ARTICLE", StringComparison.Ordinal))
+        {
+            item.Kind = DynamicKind.Article;
+            if (item.ArticleId.Length == 0 && item.CommentType == 12 && item.CommentOid > 0)
+                item.ArticleId = item.CommentOid.ToString(CultureInfo.InvariantCulture);
+        }
+
+        // 专栏摘要/图文正文里会用 `[图片]` 代表内嵌图片。图片已经单独收进 Images,
+        // 再把占位符当普通文字画出来就是用户看到的"一堆 [图片]"。
+        if (item.Images.Count > 0 && item.ContentText.Contains("[图片]", StringComparison.Ordinal))
+            item.ContentText = StripImagePlaceholders(item.ContentText);
 
         // 转发: 原动态递归解析。外层保留转发者自己的正文/统计。
         if ((item.Kind == DynamicKind.Forward || typeNum == 1 ||
@@ -174,6 +190,16 @@ public static class DynamicParser
         item.CommentOid = GetLongLoose(basic, "comment_id_str");
         var ct = GetIntSafe(basic, "comment_type");
         if (ct > 0) item.CommentType = ct;
+
+        // ★ 专栏动态的评论挂在专栏 id 上(comment_type=12), 这个 rid 也正是
+        //   x/article/view 需要的 article id。详情接口会把 major 变成 OPUS,
+        //   只有这里还能稳定拿到专栏 id(见 DynamicItem.ArticleId)。
+        if (ct == 12)
+        {
+            var rid = GetStr(basic, "rid_str");
+            if (rid.Length == 0) rid = GetStr(basic, "comment_id_str");
+            if (rid.Length > 0) item.ArticleId = rid;
+        }
     }
 
     /// <summary>接口没给 basic 时按内容兜底: 视频评论挂 aid(type=1), 其余挂动态 id(type=17)。</summary>
@@ -279,6 +305,7 @@ public static class DynamicParser
                 if (major.TryGetProperty("article", out var art) && art.ValueKind == JsonValueKind.Object)
                 {
                     item.Kind = DynamicKind.Article;
+                    item.ArticleId = GetStr(art, "id");
                     item.Title = GetStr(art, "title");
                     item.JumpUrl = GetStr(art, "jump_url");
                     if (string.IsNullOrWhiteSpace(item.ContentText))
@@ -387,6 +414,206 @@ public static class DynamicParser
                 Height = GetIntSafe(p, "height"),
             });
         }
+    }
+
+    // ------------------------------------------------------------ 专栏正文
+
+    /// <summary>
+    /// 解析 `x/article/view` 的 `data`: 专栏正文文字 + 正文里的全部图片。
+    ///
+    /// ★ 为什么需要: 动态接口对专栏只给 `major.article.covers[0]`(1 张封面),
+    ///   正文里的几十张图全在文章的 opus content 里。详情窗必须再请求一次
+    ///   `x/article/view` 才能把"只显示 1 张"补成完整图集。
+    ///
+    /// 兼容三种形态:
+    ///   ① 新版专栏/图文 —— `data.opus.content.paragraphs`, `para_type=1` 文字 / `2` 图片 / `7` 链接卡;
+    ///   ② 旧版专栏 —— `data.content` 是 HTML;
+    ///   ③ 兜底 —— `data.image_urls`(通常只有封面)。
+    ///
+    /// ★ 图片按出现顺序收集, 文字按段落换行拼接; 详情窗是"正文在前、图集在后",
+    ///   不做严格的段落图文交错(这个帖子是壁纸合集, 视觉上没有区别)。
+    /// </summary>
+    public static DynamicArticle? ParseArticleContent(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object) return null;
+
+        var article = new DynamicArticle();
+        var text = new StringBuilder();
+
+        // ① 新版: opus.content.paragraphs
+        if (data.TryGetProperty("opus", out var opus) && opus.ValueKind == JsonValueKind.Object &&
+            opus.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object &&
+            content.TryGetProperty("paragraphs", out var paragraphs) &&
+            paragraphs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var p in paragraphs.EnumerateArray())
+            {
+                if (p.ValueKind != JsonValueKind.Object) continue;
+                switch (GetIntSafe(p, "para_type"))
+                {
+                    case 1:
+                        AppendArticleText(text, ReadArticleText(p));
+                        break;
+
+                    case 2:
+                        if (!p.TryGetProperty("pic", out var pic) || pic.ValueKind != JsonValueKind.Object)
+                            break;
+                        if (!pic.TryGetProperty("pics", out var pics) || pics.ValueKind != JsonValueKind.Array)
+                            break;
+                        ReadImages(pics, article.Images);
+                        break;
+
+                    // 段落里嵌入的站内卡片(通常是"我的其他文章"): 至少把标题保留下来
+                    case 7:
+                        if (p.TryGetProperty("link_card", out var linkCard) &&
+                            linkCard.ValueKind == JsonValueKind.Object &&
+                            linkCard.TryGetProperty("card", out var card) &&
+                            card.ValueKind == JsonValueKind.Object)
+                        {
+                            var title = GetStr(card, "show_text");
+                            if (title.Length == 0) title = GetStr(linkCard, "default_text");
+                            AppendArticleText(text, title);
+                        }
+                        break;
+                }
+            }
+        }
+
+        // ② 旧版: content 是 HTML。新版也可能只给 content 文字(图片在 opus 里),
+        //    所以这里按缺什么补什么, 避免把同一段文字拼两遍。
+        if (data.TryGetProperty("content", out var html) && html.ValueKind == JsonValueKind.String)
+        {
+            var raw = html.GetString() ?? "";
+            if (raw.Length > 0)
+            {
+                if (text.Length == 0) AppendArticleText(text, StripHtml(raw));
+                if (article.Images.Count == 0)
+                {
+                    foreach (Match m in ImgSrcRegex.Matches(raw))
+                    {
+                        var url = UrlUtil.Normalize(m.Groups[1].Value);
+                        if (url.Length > 0) AddArticleImage(url, 0, 0, article.Images);
+                    }
+                }
+            }
+        }
+
+        // ③ 兜底: 至少把 image_urls 收进来
+        if (article.Images.Count == 0 &&
+            data.TryGetProperty("image_urls", out var urls) && urls.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var u in urls.EnumerateArray())
+            {
+                if (u.ValueKind != JsonValueKind.String) continue;
+                var url = UrlUtil.Normalize(u.GetString());
+                if (url.Length > 0) AddArticleImage(url, 0, 0, article.Images);
+            }
+        }
+
+        article.Text = text.ToString().Trim();
+        return article.Images.Count > 0 || article.HasText ? article : null;
+    }
+
+    /// <summary>读一段专栏正文: `text.nodes[].word.words`(旧形态直接给 `text.text`)。</summary>
+    private static string ReadArticleText(JsonElement paragraph)
+    {
+        if (!paragraph.TryGetProperty("text", out var text) || text.ValueKind != JsonValueKind.Object)
+            return "";
+
+        if (text.TryGetProperty("nodes", out var nodes) && nodes.ValueKind == JsonValueKind.Array)
+        {
+            var sb = new StringBuilder();
+            foreach (var n in nodes.EnumerateArray())
+            {
+                if (n.ValueKind != JsonValueKind.Object) continue;
+                if (n.TryGetProperty("word", out var word) && word.ValueKind == JsonValueKind.Object)
+                {
+                    var w = GetStr(word, "words");
+                    if (w.Length == 0) w = GetStr(word, "text");
+                    sb.Append(w);
+                }
+                else
+                {
+                    sb.Append(GetStr(n, "text"));
+                }
+            }
+            return sb.ToString().Trim();
+        }
+
+        return GetStr(text, "text").Trim();
+    }
+
+    private static void AppendArticleText(StringBuilder sb, string text)
+    {
+        text = text.Trim();
+        if (text.Length == 0) return;
+        if (sb.Length > 0) sb.Append('\n');
+        sb.Append(text);
+    }
+
+    private static void AddArticleImage(string url, int width, int height, List<DynamicImage> images)
+    {
+        images.Add(new DynamicImage
+        {
+            Url = url,
+            ThumbUrl = MakeThumb(url, 480),
+            DetailUrl = MakeThumb(url, 720),
+            Width = width,
+            Height = height,
+        });
+    }
+
+    private static readonly Regex ImgSrcRegex = new(
+        "(?is)<img[^>]+src\\s*=\\s*[\"']([^\"']+)", RegexOptions.Compiled);
+
+    /// <summary>旧版专栏 content 是 HTML: 去标签只留文字, 图片由 <see cref="ImgSrcRegex"/> 单独抽。</summary>
+    private static string StripHtml(string html)
+    {
+        var s = Regex.Replace(html, "(?i)<br\\s*/?>", "\n");
+        s = Regex.Replace(s, "(?i)</p\\s*>", "\n");
+        s = Regex.Replace(s, "<[^>]+>", "");
+        s = s.Replace("&nbsp;", " ", StringComparison.Ordinal)
+             .Replace("&amp;", "&", StringComparison.Ordinal)
+             .Replace("&lt;", "<", StringComparison.Ordinal)
+             .Replace("&gt;", ">", StringComparison.Ordinal)
+             .Replace("&quot;", "\"", StringComparison.Ordinal)
+             .Replace("&#39;", "'", StringComparison.Ordinal);
+        s = Regex.Replace(s, "\\n{3,}", "\n\n");
+        return s.Trim();
+    }
+
+    /// <summary>
+    /// 去掉正文里的 `[图片]` 占位符。
+    ///
+    /// ★ B 站把内嵌图片在纯文本里表示成 `[图片]`, 图片本身在另一组字段里。
+    ///   图片已经单独展示时, 再把这些占位符当普通文字画出来就是满屏 `[图片]`。
+    /// ★ 只在动态确实有图时调用(见 ParseModulesItem), 纯文字动态里作者真写了
+    ///   `[图片]` 三个字的情况不会被误删。
+    /// </summary>
+    public static string StripImagePlaceholders(string text)
+    {
+        if (string.IsNullOrEmpty(text) || !text.Contains("[图片]", StringComparison.Ordinal))
+            return text;
+
+        var s = text.Replace("[图片]", "", StringComparison.Ordinal)
+                    .Replace("\r\n", "\n", StringComparison.Ordinal);
+        var sb = new StringBuilder();
+        var blank = 0;
+        foreach (var raw in s.Split('\n'))
+        {
+            var line = raw.TrimEnd();
+            if (line.Length == 0)
+            {
+                if (++blank > 1) continue;
+            }
+            else
+            {
+                blank = 0;
+            }
+            if (sb.Length > 0) sb.Append('\n');
+            sb.Append(line);
+        }
+        return sb.ToString().Trim();
     }
 
     private static void ReadStat(JsonElement stat, DynamicItem item)

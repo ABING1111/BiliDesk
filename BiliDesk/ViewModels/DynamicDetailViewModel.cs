@@ -50,12 +50,51 @@ public class DynamicDetailViewModel : ObservableObject
         LoadingDetail = true;
         try
         {
+            // 专栏正文和动态详情可以并行: 卡片解析时就已经存了 ArticleId。
+            var articleTask = Item.IsArticle
+                ? Svc.Api.GetArticleContentAsync(Item.ArticleId)
+                : null;
+
             var (ok, err, detail) = await Svc.Api.GetDynamicDetailAsync(Item.Id);
             if (!ok || detail == null)
             {
                 Error = err ?? "";
                 return;
             }
+
+            // 详情接口会把专栏的 major 换成 OPUS, ArticleId 由解析器从 type/basic 补回。
+            // 这里把正文文字和全部图片补上, 否则详情窗永远只有那一张封面。
+            if (detail.IsArticle)
+            {
+                var (aok, aerr, article) = articleTask != null
+                    ? await articleTask
+                    : await Svc.Api.GetArticleContentAsync(detail.ArticleId);
+                if (aok) ApplyArticle(detail, article);
+                else if (Error.Length == 0 && !string.IsNullOrEmpty(aerr)) Error = aerr;
+            }
+            else if (articleTask != null)
+            {
+                // 卡片认成专栏、详情没认出来: 也把正文补上, 避免退回到"只显示封面"
+                var (aok, aerr, article) = await articleTask;
+                if (aok && article != null)
+                {
+                    detail.Kind = DynamicKind.Article;
+                    detail.ArticleId = Item.ArticleId;
+                    ApplyArticle(detail, article);
+                }
+                else if (Error.Length == 0 && !string.IsNullOrEmpty(aerr))
+                {
+                    Error = aerr;
+                }
+            }
+
+            // 转发原文是专栏时也补全(转发不常见, 顺序请求即可)
+            if (detail.Orig is { IsArticle: true } orig)
+            {
+                var (_, _, origArticle) = await Svc.Api.GetArticleContentAsync(orig.ArticleId);
+                ApplyArticle(orig, origArticle);
+            }
+
             // 保留本地已点赞状态(详情接口也会给, 但以本地最新操作为准)
             var liked = Item.IsLiked;
             var likeCount = Item.LikeCount;
@@ -70,6 +109,19 @@ public class DynamicDetailViewModel : ObservableObject
         {
             LoadingDetail = false;
         }
+    }
+
+    /// <summary>
+    /// 把专栏正文套到动态上: 正文换成文章原文(不再带 `[图片]` 占位符),
+    /// 图片列表换成正文里的全部图片(原来那张封面会被替换)。
+    /// </summary>
+    private static void ApplyArticle(DynamicItem item, DynamicArticle? article)
+    {
+        if (article == null) return;
+        if (article.HasText) item.ContentText = article.Text;
+        if (article.Images.Count == 0) return;
+        item.Images.Clear();
+        item.Images.AddRange(article.Images);
     }
 
     private void CopyLink()

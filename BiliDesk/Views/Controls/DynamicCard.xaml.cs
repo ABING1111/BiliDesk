@@ -175,6 +175,17 @@ public partial class DynamicCard : UserControl
         e.Handled = true;
     }
 
+    /// <summary>
+    /// 专栏封面点击: 直接进详情, 详情里会把文章正文的几十张图全部补出来。
+    /// (图文动态仍然保持"点图 → 大图预览", 见 DynamicImageGrid.ClickOpensDetail。)
+    /// </summary>
+    private void OnImageDetailRequested(object? sender, EventArgs e)
+    {
+        if (!TakePress()) return;
+        if (Current is not { } item) return;
+        RequestDetail(item);
+    }
+
     private void OnLiveClick(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;

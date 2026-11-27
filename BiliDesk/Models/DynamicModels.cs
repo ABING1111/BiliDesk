@@ -40,6 +40,24 @@ public sealed class DynamicImage
     public int Height { get; set; }
 }
 
+/// <summary>
+/// 专栏动态的正文(文字 + 全部图片)。
+///
+/// ★ 为什么专栏要单独拉: 动态接口的 `major.article` 只给 1 张封面,
+///   正文里的几十张图在 `x/article/view` 的 `data.opus.content.paragraphs` 里 ——
+///   不额外请求就只能显示封面, 用户看到的就是"图文动态图片显示不全"。
+/// </summary>
+public sealed class DynamicArticle
+{
+    /// <summary>正文纯文本(段落之间用换行拼接, 不含 `[图片]` 占位符)。</summary>
+    public string Text { get; set; } = "";
+
+    /// <summary>正文里按出现顺序收集的全部图片。</summary>
+    public List<DynamicImage> Images { get; } = new();
+
+    public bool HasText => !string.IsNullOrWhiteSpace(Text);
+}
+
 /// <summary>动态详情窗「转发」页里的一条转发记录。</summary>
 public sealed class DynamicRepostItem
 {
@@ -73,6 +91,14 @@ public class DynamicItem : INotifyPropertyChanged
 
     /// <summary>接口原文类型(DYNAMIC_TYPE_AV / 数字 8 等), 仅供排查与兜底判断。</summary>
     public string TypeText { get; set; } = "";
+
+    /// <summary>
+    /// 专栏 id(article.id / basic.rid_str)。只有专栏动态才有。
+    /// ★ 详情窗要靠它去 `x/article/view` 补全正文图片 —— 动态接口本身只给 1 张封面。
+    /// ★ 详情接口会把 major 从 `MAJOR_TYPE_ARTICLE` 换成 `MAJOR_TYPE_OPUS`,
+    ///   所以 `ArticleId` 不能只看 major, 还要从 `basic.comment_type == 12` 的 rid_str 取。
+    /// </summary>
+    public string ArticleId { get; set; } = "";
 
     public DynamicKind Kind { get; set; } = DynamicKind.Unknown;
 
@@ -260,6 +286,9 @@ public class DynamicItem : INotifyPropertyChanged
 
     /// <summary>直播动态(左栏已有直播看板, 这里只给一张可点的直播卡)。</summary>
     public bool IsLive => Kind == DynamicKind.Live && RoomId > 0;
+
+    /// <summary>是不是专栏动态(正文需要额外拉 article/view 才能补全图片)。</summary>
+    public bool IsArticle => Kind == DynamicKind.Article && !string.IsNullOrEmpty(ArticleId);
 
     /// <summary>专栏标题行(视频标题在视频块里单独显示, 不重复)。</summary>
     public bool ShowArticleTitle => Kind == DynamicKind.Article && HasTitle;
