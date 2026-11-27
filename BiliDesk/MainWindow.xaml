@@ -464,10 +464,22 @@
                         <TextBlock Text="动态详情" FontSize="15" FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextPrimaryBrush}"
                                    VerticalAlignment="Center" />
+                        <!-- 关闭按钮的 ✕ 用矢量图标(2026-11-28 用户报"X 不在按钮正中间"):
+                             E711 字形在 ContentPresenter 里居中的是**行框**, 墨迹在 em 框里
+                             天然偏左上(125% 缩放下实测约 0.4~0.5 DIP, 96 DPI 下两轴都偏 0.5)。
+                             换成就地对称的 CloseIconGeometry 后, 墨迹中心与按钮中心严格重合,
+                             也不再依赖系统图标字体是否齐全。 -->
                         <Button HorizontalAlignment="Right" Style="{StaticResource IconButtonStyle}"
-                                Content="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                FontSize="12" Width="32" Height="32"
-                                Click="OnDynamicDetailCloseClick" ToolTip="关闭 (Esc)" />
+                                Width="32" Height="32"
+                                Click="OnDynamicDetailCloseClick" ToolTip="关闭 (Esc)">
+                            <Viewbox Width="18" Height="18" Stretch="Uniform">
+                                <Path Data="{StaticResource CloseIconGeometry}"
+                                      Width="20" Height="20" Stretch="None"
+                                      StrokeThickness="1.6"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                            </Viewbox>
+                        </Button>
                     </Grid>
                     <controls:DynamicDetailView x:Name="DynamicDetailHost" Grid.Row="1" />
                 </Grid>

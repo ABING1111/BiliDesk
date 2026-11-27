@@ -86,6 +86,14 @@ public partial class PlayerWindow : FluentWindow
             if (prop?.GetValue(VideoView) is not Window fw) return;
             if (ReferenceEquals(fw, _overlayKeyboardWindow)) return;
             _overlayKeyboardWindow = fw;
+            // ★★★ 覆盖层窗口不是 FluentWindow, 不会自动跟随 UiFont(2026-11-28 修
+            //   "部分视频字幕弹层仍有空白选项"):
+            //   控制栏与它里面的弹层(Popup)都被搬进这层顶层窗口, 字体继承也跟着改到它身上 ——
+            //   它的 FontFamily 是系统默认的 "Segoe UI" 栈, 既没有用户选的字体, 也没有
+            //   UiFont.ScriptFallback(Tahoma)。阿拉伯/希伯来等脚本在 WPF 里**不会**自动回退,
+            //   于是 lan_doc 为「العربية」的轨道只剩拼在后面的「 · AI」, 看着就是一个空白项。
+            //   (同一视频其它语言正常, 所以表现成"部分视频"才复现。)
+            fw.FontFamily = UiFont.Current;
             fw.PreviewKeyDown += OnPreviewKeyDown;
             // ★ 长按 → 的"松开"也挂上来: 键盘焦点压在视频区时, KeyDown/KeyUp 都属于这层
             //   浮动窗口(WPF 跨 HWND 不会把 KeyUp 送到播放器主窗口)。漏了这条, 长按会一直

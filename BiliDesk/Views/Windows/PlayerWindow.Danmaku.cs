@@ -1759,6 +1759,9 @@ public partial class PlayerWindow : FluentWindow
     private void OnUiFontChanged()
     {
         if (_closing) return;
+        // 视频区覆盖层(ForegroundWindow)不是 FluentWindow, 不跟窗口字体继承走;
+        // 不在这里同步, 换字体后控制栏弹层里的 RTL 字幕名会重新变成空白项。
+        if (_overlayKeyboardWindow != null) _overlayKeyboardWindow.FontFamily = UiFont.Current;
         ApplyDanmakuLook();
     }
 }
