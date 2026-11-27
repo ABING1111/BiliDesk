@@ -65,8 +65,11 @@
     </UserControl.Resources>
 
     <Grid>
+        <!-- 悬浮滚动条: 评论区换排序时列表会先被清空, 滚动条消失不能把上方作者/正文撑宽
+             (与播放器信息栏同一个问题, 见 Styles.xaml 的 OverlayScrollViewerStyle)。 -->
         <ScrollViewer x:Name="ContentScroll" VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Disabled">
+                      HorizontalScrollBarVisibility="Disabled"
+                      Style="{StaticResource OverlayScrollViewerStyle}">
             <StackPanel Margin="20,16,20,80">
             <!-- ===== 动态内容 ===== -->
             <Grid>

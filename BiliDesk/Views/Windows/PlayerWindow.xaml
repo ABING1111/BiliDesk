@@ -2370,7 +2370,11 @@
             <!-- x:Name 供全屏退出时做淡入用(400px 的一大块"啪"地出现很跳) -->
             <Grid x:Name="InfoPanel" Grid.Column="1" Background="{DynamicResource AppBackgroundBrush}">
                 <Border x:Name="InfoContentHost" BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1,0,0,0">
+                    <!-- ★ 悬浮滚动条(OverlayScrollViewerStyle): 评论加载中列表变短时,
+                         滚动条消失不该把内容区撑宽 18px(用户报"标题/UP 主整块横向抖一下")。
+                         见 Styles.xaml 该样式的说明。 -->
                     <ScrollViewer x:Name="InfoScroll" VerticalScrollBarVisibility="Auto"
+                                  Style="{StaticResource OverlayScrollViewerStyle}"
                                   ScrollChanged="OnInfoScrollChanged">
                         <StackPanel Margin="20,18,20,24">
                             <!-- 标题 + 数据 -->
