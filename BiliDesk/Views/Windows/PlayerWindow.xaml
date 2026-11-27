@@ -888,7 +888,6 @@
                         Cursor="Hand"
                         PreviewMouseLeftButtonDown="OnReplyBoxPress"
                         PreviewMouseLeftButtonUp="OnReplyBoxClick"
-                        ToolTip="查看这条评论的全部回复"
                         Visibility="{Binding HasReplies, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
                         <ItemsControl ItemsSource="{Binding PreviewReplies}">

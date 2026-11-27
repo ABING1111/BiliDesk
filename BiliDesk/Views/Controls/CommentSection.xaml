@@ -202,7 +202,7 @@
                         <Border Margin="0,8,0,0" Padding="8,6" CornerRadius="6"
                                 Background="{DynamicResource ControlFillDefaultBrush}"
                                 BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1"
-                                Cursor="Hand" ToolTip="查看这条评论的全部回复"
+                                Cursor="Hand"
                                 PreviewMouseLeftButtonDown="OnReplyBoxPress"
                                 PreviewMouseLeftButtonUp="OnReplyBoxClick"
                                 Visibility="{Binding HasReplies, Converter={StaticResource BoolToVis}}">
