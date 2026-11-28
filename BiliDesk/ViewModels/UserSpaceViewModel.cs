@@ -248,6 +248,18 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         _ => "搜索 TA 的视频"
     };
 
+    /// <summary>
+    /// 这一组「搜索 + 排序」入口是否显示。
+    ///
+    /// ★ 2026-11-28(用户要求"四个功能按钮与投稿/图文 Tab 齐平"): 这组从内容区
+    ///   搬回 Tab 行右侧, 于是又需要按 Tab 决定显隐 —— 合集和系列不支持搜索也不支持排序,
+    ///   留在那儿会是一排点了没反应的按钮。
+    /// </summary>
+    public bool ShowTabTools => !IsCollectionsTab;
+
+    /// <summary>排序 chip 只对投稿有意义(图文 Tab 没有服务端排序), 单独给个开关。</summary>
+    public bool ShowSortChips => IsVideosTab;
+
     /// <summary>切 Tab: 三个派生布尔量一起通知, 界面不会出现"两个 Tab 同时亮"的中间态。</summary>
     private void SetTab(SpaceTab tab)
     {
@@ -258,6 +270,8 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         OnPropertyChanged(nameof(IsImagesTab));
         OnPropertyChanged(nameof(IsCollectionsTab));
         OnPropertyChanged(nameof(SearchPlaceholder));
+        OnPropertyChanged(nameof(ShowTabTools));
+        OnPropertyChanged(nameof(ShowSortChips));
     }
 
     public bool ImagesLoading

@@ -97,14 +97,28 @@
              2026-11-14 用户要求"往下滑自动隐藏 UP 信息, 往顶上滑再显示":
              把信息区和 Tab 一起放进 HeaderHost, 由 code-behind 按滚动方向动画它的 Height
              (0 ↔ 自然高度), 这样列表能真正多出一块显示空间, 而不只是把内容淡掉。 -->
-        <Border x:Name="HeaderHost" Grid.Row="0" ClipToBounds="True"
-                Background="{DynamicResource PanelBackgroundBrush}">
+        <Border x:Name="HeaderHost" Grid.Row="0" ClipToBounds="True">
             <StackPanel>
                 <!-- ======== 顶部 UP 主信息区(2026-11-08 按参考图重排) ========
-                     从左到右: 头像(带 LV) / 昵称 + 大会员 + UID + 简介 / 关注·粉丝·获赞 / 关注按钮 -->
-                <Border Background="{DynamicResource PanelBackgroundBrush}"
-                        BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1">
-                    <Grid Margin="36,22,36,16">
+                     从左到右: 头像(带 LV) / 昵称 + 大会员 + UID + 简介 / 关注·粉丝·获赞 / 关注按钮
+                     ★ 2026-11-28(用户要求"信息栏背景改为圆角矩形"): 卡片化 ——
+                       圆角 16 + CardBackgroundBrush + 1px CardBorderBrush, 与「我的」页的
+                       HeaderCard 同一套基准: 卡片左缘落在页面对齐线 36(外边距 36),
+                       内容再统一内缩 24, 内容线落在 60。
+                       ★ Tab 行**不进卡片**(用户确认只要信息区), 留在卡片外坐页面底上。
+                       ★ 原来的 0,0,0,1 分隔线已删: 圆角描边本身就把这块与下方 Tab 分开了,
+                         两条线并存会显脏。
+                       ★ 底色用 CardBackgroundBrush 而不是 PanelBackgroundBrush:
+                         亚克力下卡片要比面板再实一档(ThemeService 的 alpha+38),
+                         那是"内容主体"该有的档; 写死颜色也会穿帮。
+                       ★ HeaderHost 的底色已去掉: 浅色主题下它与卡片底同为 #FFFFFF,
+                         通栏白底会把圆角吃掉, 只剩一条描边可辨。 -->
+                <Border Margin="36,20,36,0"
+                        Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource CardBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="16">
+                    <Grid Margin="24,20,24,16">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
@@ -233,21 +247,33 @@
             </Grid>
         </Border>
 
-        <!-- ======== Tab: 投稿 / 图文 / 合集和系列 ========
+        <!-- ======== Tab: 投稿 / 图文 / 合集和系列 + 右侧工具组 ========
              ★ 2026-11-28: 下划线改成一条共享的 TabIndicator, 切 Tab 时滑过去
                (见 code-behind 的 MoveTabIndicator)。静止时它与原来各按钮自带的
                2px 下划线完全同款: 左右各内缩 6px、贴齐 Tab 行底部。
-             ★★ 2026-11-28(用户要求): 「搜索当前 Tab」的输入框**从这一行移走**了 ——
-               它现在跟着各自 Tab 的内容标题走, 位置在排序 chip 左边(投稿) / 标题右边(图文),
-               默认收成一枚圆形放大镜。所以 Tab 行重新只占一列, 下划线的位置算法不受影响。
-               移走的理由: 搜索与排序都是"对眼前这份列表的操作", 放在一起才顺;
-               留在 Tab 行上会让人误以为它搜的是 Tab 名。 -->
-        <Grid Margin="36,6,36,0">
+             ★★ 2026-11-28(用户要求"搜索 + 三枚排序按钮与投稿/图文 Tab 齐平"):
+               这一组(放大镜 + 最新发布/最多播放/最多收藏)**搬回 Tab 行右侧**,
+               与 Tab 文字同一条水平线、右对齐。所以这一行是两列: 左 * 放 Tab,
+               右 Auto 放工具组。
+               ★ Tab 按钮高 35(Padding 6,8 + 14px 文字), 工具组高 34 —— 差 1px,
+                 两者都 VerticalAlignment=Center 落在同一中线上, 视觉就是齐平的。
+               ★ 工具组按 Tab 显隐(ShowTabTools / ShowSortChips): 合集和系列既不支持
+                 搜索也不支持排序, 整组收起; 图文只保留搜索, 三枚排序 chip 收起 ——
+                 排序是服务端 order 参数, 图文走的是动态接口, 点了没有反应。
+               ★ 下划线仍在第 0 列、按 TabRow 内的实测坐标算, 右边多一列不影响它。
+               ★★ 2026-11-28(用户要求"下边缘再延长一点点, 不要让按钮与底边相切"):
+                 这一行补了 8px 下外边距。原来 Grid 的下外边距是 0, 工具组(34 高)几乎
+                 贴住 HeaderHost 的底缘 —— 收起/展开后就是"按钮与底边相切"的观感。
+                 补出来的 8px 属于 HeaderHost, 所以卡片底 → Tab → 卡片外底缘的间距
+                 与上方 8px 对称; 下划线仍贴 Tab 文字, 只是离下方视频卡片多了一口气。 -->
+        <Grid Margin="36,8,36,8">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
             <StackPanel x:Name="TabRow" Grid.Column="0" Orientation="Horizontal"
+                        VerticalAlignment="Center"
                         Loaded="OnTabRowLoaded" IsVisibleChanged="OnTabRowIsVisibleChanged"
                         SizeChanged="OnTabRowSizeChanged">
                 <Button x:Name="TabVideos" Content="投稿" Style="{StaticResource SpaceTabStyle}"
@@ -256,6 +282,39 @@
                         Margin="18,0,0,0" Click="OnImagesTabClick" />
                 <Button x:Name="TabCollections" Content="合集和系列" Style="{StaticResource SpaceTabStyle}"
                         Margin="18,0,0,0" Click="OnCollectionsTabClick" />
+            </StackPanel>
+
+            <!-- 右侧工具组: 页内搜索 + 排序 chip(2026-11-28 从内容区搬回来)。
+                 ★ 搜索框与 chip 同一视觉: 高 34、圆角 8(圆角矩形)。
+                 ★ 搜索框 Collapsible: 默认一枚 34×34 的圆角方块, 点击向左展开成 240;
+                   右边是 Auto 列, 所以展开时**向左生长**, 不会把 Tab 行挤动。
+                 ★ ChipShape.Radius 是 Inherits 的附加属性: 设在 StackPanel 上,
+                   里面三枚 chip 自动继承到(见 Helpers/ChipShape.cs)。 -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                        VerticalAlignment="Center"
+                        Visibility="{Binding ShowTabTools, Converter={StaticResource BoolToVis}}">
+                <controls:SearchBox x:Name="SpaceSearchBox"
+                                    Collapsible="True" Margin="0,0,10,0"
+                                    VerticalAlignment="Center"
+                                    ShapeRadius="8"
+                                    PlaceholderText="{Binding SearchPlaceholder}"
+                                    Text="{Binding SearchText, Mode=TwoWay}" />
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                            helpers:ChipShape.Radius="8"
+                            Visibility="{Binding ShowSortChips, Converter={StaticResource BoolToVis}}">
+                    <Button x:Name="BtnSortLatest" Content="最新发布"
+                            Style="{StaticResource SortChipStyle}"
+                            Height="34" Padding="14,0"
+                            Click="OnSortLatestClick" ToolTip="按发布时间排序" />
+                    <Button x:Name="BtnSortPlayed" Content="最多播放"
+                            Style="{StaticResource SortChipStyle}" Margin="8,0,0,0"
+                            Height="34" Padding="14,0"
+                            Click="OnSortPlayedClick" ToolTip="按播放量排序" />
+                    <Button x:Name="BtnSortFavorited" Content="最多收藏"
+                            Style="{StaticResource SortChipStyle}" Margin="8,0,0,0"
+                            Height="34" Padding="14,0"
+                            Click="OnSortFavoritedClick" ToolTip="按收藏数排序" />
+                </StackPanel>
             </StackPanel>
 
             <!-- 共享下划线: 宽度/位置全由代码按标签实测几何写入。
@@ -298,61 +357,18 @@
             <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto"
                           ScrollChanged="OnListScrollChanged">
                 <StackPanel Margin="36,16,36,24">
-                    <!-- 投稿区标题 + 页内搜索 + 排序入口(2026-11-28, issue #131)
-                         ★ 排序必须走服务端(order=pubdate/click/stow): 投稿是分页的,
+                    <!-- 投稿区标题(2026-11-28 调整)
+                         ★ 搜索框与三枚排序 chip 已按用户要求搬到 Tab 行右侧与 Tab 齐平,
+                           所以这里只剩「共 N 个视频 / 搜索命中 N 个」这行标题。
+                         ★ 排序仍走服务端(order=pubdate/click/stow): 投稿是分页的,
                            本地排序只能排到当前这一页的 30 条, 翻页顺序就崩了。
                            风控降级时(接口没有 order 参数)才对当前页本地兜底, 并显示下面的提示。
                          ★ 三枚 chip 的选中态由 code-behind 按 VM.SortOrder 写 Tag="on"/"off"
-                           (与播放页评论排序、关注页排版切换同一套约定)。
-                         ★ 2026-11-28(用户要求): 搜索框从 Tab 行移到**排序 chip 左边**,
-                           默认收成一枚圆形放大镜, 点击展开成 240 的胶囊 ——
-                           与动态页右栏「搜索动态里的视频」同一套控件与收纳规则(SearchBox.Collapsible)。
-                           展开只改自己的 Width, 由左侧 * 列(标题)让位: 右缘被三枚 chip 锚定,
-                           所以视觉上是**向左生长**, 排序 chip 不会被推走。
-                         ★ 左边一列是 * 而不是 Auto: 标题会随"共 N 个视频 / 搜索命中"变长,
-                           用 Auto 会把右侧的搜索框与 chip 推着左右跳。 -->
-                    <Grid Margin="8,0,0,2">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="{Binding PageSummary}"
-                                   FontSize="15" FontWeight="SemiBold"
-                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                        <!-- 页内搜索: 投稿走服务端 keyword(支持翻页, page.count 是命中数)。
-                             ★ 2026-11-28(用户要求"胶囊改成圆角矩形"): ShapeRadius=8 ——
-                               与右侧排序 chip 及设置页输入类控件同一个圆角基准。
-                               收起态因此是"34×34 的圆角方块", 不再是正圆。 -->
-                        <controls:SearchBox x:Name="SpaceSearchBox" Grid.Column="1"
-                                            Collapsible="True" Margin="0,0,10,0"
-                                            VerticalAlignment="Center"
-                                            ShapeRadius="8"
-                                            PlaceholderText="{Binding SearchPlaceholder}"
-                                            Text="{Binding SearchText, Mode=TwoWay}" />
-                        <!-- 排序 chip 行: 与左边的搜索框**同一视觉**(2026-11-28 用户要求)。
-                             ★ 高度 34 = 搜索框高度(SearchBox 的 Height), 圆角 8 = 圆角矩形
-                               (与搜索框、设置页下拉框同一基准), 左右内边距加到 14 让文字不显局促。
-                             ★ ChipShape.Radius 是 Inherits 的附加属性: 设在 StackPanel 上,
-                               里面三枚 chip 自动继承到, 不必逐个设(见 Helpers/ChipShape.cs)。
-                               不设时默认 6 —— 播放器评论区 / 动态页那两处仍是原来的行内小词观感。 -->
-                        <StackPanel Grid.Column="2" Orientation="Horizontal"
-                                    VerticalAlignment="Center"
-                                    helpers:ChipShape.Radius="8">
-                            <Button x:Name="BtnSortLatest" Content="最新发布"
-                                    Style="{StaticResource SortChipStyle}"
-                                    Height="34" Padding="14,0"
-                                    Click="OnSortLatestClick" ToolTip="按发布时间排序" />
-                            <Button x:Name="BtnSortPlayed" Content="最多播放"
-                                    Style="{StaticResource SortChipStyle}" Margin="8,0,0,0"
-                                    Height="34" Padding="14,0"
-                                    Click="OnSortPlayedClick" ToolTip="按播放量排序" />
-                            <Button x:Name="BtnSortFavorited" Content="最多收藏"
-                                    Style="{StaticResource SortChipStyle}" Margin="8,0,0,0"
-                                    Height="34" Padding="14,0"
-                                    Click="OnSortFavoritedClick" ToolTip="按收藏数排序" />
-                        </StackPanel>
-                    </Grid>
+                           (与播放页评论排序、关注页排版切换同一套约定)。 -->
+                    <TextBlock Text="{Binding PageSummary}"
+                               FontSize="15" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis"
+                               Margin="8,0,0,2" VerticalAlignment="Center" />
 
                     <!-- 降级排序提示: 只在风控降级时出现(详见 SpaceVideoSort 的说明) -->
                     <TextBlock x:Name="SortFallbackNoticeText"
@@ -392,26 +408,15 @@
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <!-- 图文 Tab 的标题行 + 页内搜索(2026-11-28)
-                 ★ 搜索框原本挂在 Tab 行上, 现在跟着投稿那边的改动一起挪到内容区,
-                   否则切到图文 Tab 就找不到入口了。
+            <!-- 图文 Tab 的标题行(2026-11-28)
+                 ★ 搜索框已按用户要求随「四个功能按钮」一起搬回 Tab 行右侧 ——
+                   那里一个框管当前 Tab(投稿/图文共用同一个 SearchText, 占位文案跟着 Tab 走),
+                   所以这里不再放第二个框, 否则同屏出现两个入口。
                  ★ 图文的搜索是**本地筛选**(动态接口不支持关键词): 只筛已加载的图文,
-                   筛空时页面会继续往后加载(见 VM 的 ShowImageSearchEmpty / 「继续查找」)。
-                 ★ 同样用 Collapsible: 默认一枚圆, 点击向左展开, 标题由 * 列让位。 -->
-            <Grid Grid.Row="0" Margin="36,16,36,8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="{Binding ImageSummary}" FontSize="15" FontWeight="SemiBold"
-                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                <controls:SearchBox x:Name="ImageSearchBox" Grid.Column="1"
-                                    Collapsible="True" Margin="12,0,0,0"
-                                    VerticalAlignment="Center"
-                                    ShapeRadius="8"
-                                    PlaceholderText="{Binding SearchPlaceholder}"
-                                    Text="{Binding SearchText, Mode=TwoWay}" />
-            </Grid>
+                   筛空时页面会继续往后加载(见 VM 的 ShowImageSearchEmpty / 「继续查找」)。 -->
+            <TextBlock Grid.Row="0" Margin="36,16,36,8"
+                       Text="{Binding ImageSummary}" FontSize="15" FontWeight="SemiBold"
+                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
 
             <Grid Grid.Row="1">
                 <ListBox x:Name="ImageList" Style="{StaticResource SpaceDynamicListStyle}"

@@ -121,10 +121,9 @@ public partial class UserSpacePage : UserControl
         TabVideos.Tag = vm.IsVideosTab ? "on" : "off";
         TabImages.Tag = vm.IsImagesTab ? "on" : "off";
         TabCollections.Tag = vm.IsCollectionsTab ? "on" : "off";
-        // ★ 投稿与图文两个搜索框共用同一个 SearchText: 在一边输入会把另一边也带成展开态,
-        //   清空后它又不会自己收回。切 Tab 时统一收敛 —— 空的收起, 有词的留着展开。
+        // ★ 投稿与图文共用同一个搜索框(现在挂在 Tab 行右侧), 切 Tab 时把空的收起来 ——
+        //   在一边输入过词的话它保持展开, 因为 SearchText 是共用的。
         SpaceSearchBox?.CollapseIfEmpty();
-        ImageSearchBox?.CollapseIfEmpty();
         QueueTabIndicatorUpdate(animate: true);
     }
 
