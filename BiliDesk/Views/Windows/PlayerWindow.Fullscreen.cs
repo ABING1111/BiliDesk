@@ -203,6 +203,148 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private bool _isFillWindow;
 
+    // ------------------------------------------------------------ 详情栏展开(2026-11-28)
+
+    /// <summary>
+    /// 「详情栏展开」是否开着: 右侧详情栏(标题/UP 主/操作栏/简介或评论)铺满整个窗口,
+    /// 把视频画面整个盖住。
+    ///
+    /// ★ 与「铺满窗口」(_isFillWindow)是**相反方向**的同一个位置: 那个把详情栏收成 0 让视频
+    ///   铺满, 这个把视频收成 0 让详情栏铺满。两者互斥(同时成立窗口里什么都没有), 所以
+    ///   打开一个必须关掉另一个 —— 见 <see cref="ToggleInfoExpand"/>。
+    /// ★ 与全屏/小窗也互斥: 那两种状态下详情栏本来就被整个 Collapsed 掉了
+    ///   (见 ApplyInfoPanelState), 没有"展开"可言。
+    /// ★ 登记在 <see cref="PersistentFields"/>: 它是**窗口级显示模式**(同 _isFillWindow),
+    ///   连看几集时用户就是不想看画面只听/只看评论, 换片不该把它弹回去。
+    /// </summary>
+    private bool _isInfoExpand;
+
+    /// <summary>
+    /// 详情栏展开时视频列的宽度。
+    ///
+    /// ★ 为什么必须是 **0 且 MinWidth 也必须是 0**(2026-11-28 探针实测):
+    ///   只把 Width 设成 0 的话, XAML 里 `VideoColumn.MinWidth="320"` 会把它顶在 320,
+    ///   视频宿主窗口(HwndHost 的原生 HWND)仍然是 320 宽 —— 它画在所有 WPF 元素**之上**
+    ///   (airspace), 于是左侧 320px 会是一块盖在详情栏上的视频画面。
+    ///   实测(`.probes/bd-probe-infoexpand`): Width=0 但 MinWidth=320 时
+    ///   `Static` 仍是 400×895、命中测试打到浮层窗口; 两样都归 0 之后 `Static` 是 0×895,
+    ///   点击全部落到主窗口(详情栏), 画面/音频继续正常推进。
+    /// </summary>
+    private const double InfoExpandVideoColumnWidth = 0;
+
+    /// <summary>详情栏展开时窗口的最小尺寸(此时窗口里只剩详情栏, 840×600 的下限没有意义)。</summary>
+    private const double InfoExpandMinWindowWidth = 480;
+    private const double InfoExpandMinWindowHeight = 400;
+
+    /// <summary>
+    /// 上一次 <see cref="ApplyInfoPanelState"/> 实际套用的"详情栏展开"状态。
+    /// 用来判断这次调用是不是真的改变了布局(见该方法末尾的刷新条件)。
+    /// </summary>
+    private bool _infoExpandApplied;
+
+    /// <summary>
+    /// 展开态下把手距离窗口左边缘的内缩量(DIP)。
+    ///
+    /// ★ 2026-11-28 第二轮改成 **-1**(也就是真的贴边): 第一版为了躲开系统缩放带内缩了 8,
+    ///   用户立刻发现"把手与最左端有一条空隙"。
+    ///   现在不再靠内缩躲, 而是在 <see cref="OnNonClientHitTest"/> 里把把手那一块
+    ///   判回 `HTCLIENT` —— 视觉贴边、点击照常。
+    /// </summary>
+    private const double InfoExpandGripEdgeInset = -1;
+
+    private void OnInfoExpandClick(object sender, RoutedEventArgs e) => ToggleInfoExpand();
+
+    /// <summary>
+    /// 展开 / 还原详情栏。
+    ///
+    /// ★ 顺序: 先退掉互斥的模式, 再翻开关, 最后统一交给 <see cref="ApplyInfoPanelState"/> 落布局。
+    ///   与「铺满窗口」那套完全同构, 好处是"哪个开关该收栏/该铺满"永远只有一处判断。
+    /// ★ 展开前**必须**退掉全屏/小窗/铺满: 前两者会把 InfoPanel 整个 Collapsed 掉,
+    ///   后者会把 RightColumn 设成 0 —— 带着它们进展开态, 用户点了看不到任何变化。
+    /// </summary>
+    private void ToggleInfoExpand()
+    {
+        if (_closing) return;
+        if (!_isInfoExpand)
+        {
+            if (_isFullscreen)
+            {
+                BeginPlacementTransition();
+                _isFullscreen = false;
+                ApplyFullscreen(false);
+            }
+            if (_isMiniWindow) ExitMiniWindow();
+            if (_isFillWindow)
+            {
+                _isFillWindow = false;
+                UpdateFillWindowButton();
+            }
+        }
+
+        // 与全屏/铺满同理: 展开态的几何也不该记进设置(见 IsNormalStateForPlacement),
+        // 切之前先把常规几何存好。
+        if (!_isInfoExpand)
+        {
+            CaptureNormalPlacement();
+            PersistNormalPlacement();
+        }
+        BeginPlacementTransition();
+        _isInfoExpand = !_isInfoExpand;
+        ApplyInfoPanelState();
+        UpdateInfoExpandButton();
+    }
+
+    /// <summary>
+    /// 同步把手的方向、位置与提示。
+    /// ★ 箭头指"点下去会往哪边动": 折叠态(详情栏 400)箭头朝左 = 面板将向左铺开;
+    ///   展开态箭头朝右 = 面板将缩回右侧。用 ScaleX=-1 翻转同一个几何, 不换 Data ——
+    ///   两个字形分别画的话粗细/位置很容易对不上。
+    /// ★ 两种状态的左边距都是 -1(压住那条 1px 分隔线/窗口左缘), **不需要为展开态内缩**:
+    ///   第一版内缩 8 DIP 躲系统缩放带, 结果用户一眼看出"把手与最左端有空隙"。
+    ///   现在改成由 <see cref="OnNonClientHitTest"/> 把把手矩形判回 `HTCLIENT` ——
+    ///   视觉贴边, 点击照常(见那个方法的说明)。
+    /// </summary>
+    private void UpdateInfoExpandButton()
+    {
+        if (BtnInfoExpand == null) return;
+        if (InfoExpandGlyph?.RenderTransform is ScaleTransform st) st.ScaleX = _isInfoExpand ? -1 : 1;
+        BtnInfoExpand.ToolTip = _isInfoExpand ? "还原详情栏（回到视频）" : "展开详情栏（铺满窗口）";
+        // 贴边: 折叠态压信息栏的分隔线, 展开态压窗口左缘 —— 两者都是 -1。
+        BtnInfoExpand.Margin = new Thickness(InfoExpandGripEdgeInset, 0, 0, 0);
+        // 显隐跟着设置开关走(见 UpdateInfoExpandGripVisibility)。
+        UpdateInfoExpandGripVisibility();
+    }
+
+    /// <summary>
+    /// 设置页动了「详情栏展开把手」开关(见 SettingsStore.InfoExpandGripChanged)。
+    ///
+    /// ★ 只重算把手显隐, 不动布局: 开关不影响"展开态"本身 ——
+    ///   关掉开关时如果用户正处在展开态, 窗口保持铺满(靠 Esc 收回),
+    ///   否则会出现"面板铺满整窗、把手又消失、用户找不到回视频的入口"。
+    /// </summary>
+    private void OnInfoExpandGripSettingChanged()
+    {
+        if (_closing) return;
+        UpdateInfoExpandGripVisibility();
+    }
+
+    /// <summary>
+    /// 按设置项与当前布局同步把手的显隐。
+    ///
+    /// ★ 三条判据缺一不可:
+    ///   ① 设置里开着(ShowInfoExpandGrip), **或者**当前正处在展开态;
+    ///   ② 不是全屏/铺满/小窗(那三种状态详情栏整个 Collapsed, 把手自然不该出现)。
+    /// ★ 展开态**必须保留**把手: 它是除了 Esc 之外唯一的还原入口。用户把设置关掉时
+    ///   若正处于展开态, 我们仍然显示它, 直到用户还原 —— 否则就是"铺满整窗又找不到出口"。
+    /// </summary>
+    private void UpdateInfoExpandGripVisibility()
+    {
+        if (BtnInfoExpand == null) return;
+        var hide = _isFullscreen || _isFillWindow || _isMiniWindow;
+        var show = Svc.Settings.ShowInfoExpandGrip || _isInfoExpand;
+        BtnInfoExpand.Visibility = hide || !show ? Visibility.Collapsed : Visibility.Visible;
+    }
+
     /// <summary>
     /// 右上角「铺满窗口」按钮的点击入口。
     /// Esc 的处理见 <see cref="HandleBackRequest"/> —— 它按"由内到外"退: 全屏 → 铺满窗口 → 关窗。
@@ -212,6 +354,14 @@ public partial class PlayerWindow : FluentWindow
     private void ToggleFillWindow()
     {
         if (_closing) return;
+        // ★ 与「详情栏展开」互斥(2026-11-28): 两者是同一个位置的两个方向 ——
+        //   一个把详情栏收成 0, 一个把视频收成 0。同时开着窗口里就只剩两条 0 宽的列。
+        //   点「铺满窗口」的意图是"我要看画面", 所以直接关掉详情栏展开。
+        if (!_isFillWindow && _isInfoExpand)
+        {
+            _isInfoExpand = false;
+            UpdateInfoExpandButton();
+        }
         // 与全屏同理: 铺满模式下的几何不记(见 IsNormalStateForPlacement), 切之前先把常规几何存好。
         if (!_isFillWindow)
         {
@@ -243,7 +393,8 @@ public partial class PlayerWindow : FluentWindow
     private const double FillWindowMinHeight = 200;
 
     /// <summary>
-    /// 按全屏 / 铺满窗口 / 小窗三个开关把右侧信息栏设成"该收"或"该展"。**唯一改 InfoPanel / RightColumn 的地方。**
+    /// 按全屏 / 铺满窗口 / 小窗 / 详情栏展开四个开关把右侧信息栏与视频列设成"该收"或"该展"。
+    /// **唯一改 InfoPanel / RightColumn / VideoColumn 的地方。**
     ///
     /// ★ 为什么信息栏必须**整个 Collapsed**, 不能只把列宽设成 0:
     ///   宽度为 0 的面板仍然参与 measure/arrange/render —— 里面挂着几百张评论卡
@@ -253,17 +404,52 @@ public partial class PlayerWindow : FluentWindow
     /// ★ 为什么必须收敛到一个入口: 收信息栏的现在有三个开关(全屏 / 铺满窗口 / 小窗), 各自改一遍
     ///   会立刻出现"退出全屏把铺满窗口的状态也顶掉"这种互相打架 ——
     ///   两个开关叠加时, 谁先谁后都不能让信息栏闪一下或者卡在错误状态。
+    ///   ★ 2026-11-28 又加了第四个开关「详情栏展开」, 但它方向相反(收视频、展信息栏),
+    ///     所以只在这里参与"该给谁宽度"的判断, 不与 hide 合并。
     /// </summary>
     private void ApplyInfoPanelState()
     {
         if (_closing) return;
+        // ★ 详情栏展开(_isInfoExpand)与另外三个开关的方向**相反**: 那三个把信息栏收成 0,
+        //   这个把视频列收成 0 让信息栏铺满。所以不能简单地把它并进下面的 hide 里。
         var hide = _isFullscreen || _isFillWindow || _isMiniWindow;
+        var expand = _isInfoExpand && !hide;
+
         if (InfoPanel != null)
             InfoPanel.Visibility = hide ? Visibility.Collapsed : Visibility.Visible;
+        // ★★★ 展开态必须把视频的**浮层窗口**藏掉(2026-11-28 实测):
+        //   弹幕层/控制栏住在 LibVLCSharp 的 ForegroundWindow 里 —— 那是一个**独立的顶层窗口**,
+        //   不随 VideoView 的布局尺寸走。视频列收成 0 之后它仍然有约 2px 可见宽度,
+        //   正好压在详情栏最左边那条边上; 弹幕在里面横向平移, 于是用户看到
+        //   "左上角漏出播放器、边缘一闪一闪"。
+        //   ★ 试过只折叠 VideoAreaRoot(浮层里的 WPF 内容): **无效** ——
+        //     探针实测 overlayVis 仍是 True, 那条边照闪。必须藏窗口本身。
+        //   ★ 也不能用 VideoView.Visibility=Collapsed: 那会把 HwndHost 一起拆掉,
+        //     还原时 vout 要重建(白闪 + 起播延迟), 而只藏浮层窗口完全不动播放链路
+        //     (实测时钟/画面统计照常推进, 还原后画面立刻回来)。
+        //   ★ 只在 expand 时藏: 全屏/铺满窗口是"视频铺满整窗", 那时控制栏与弹幕必须可见,
+        //     藏掉等于把控制栏弄没了。
+        ApplyVideoOverlayVisibility(expand);
+        // ★ 把手在两种布局里都留着: 展开态它就贴在**整窗最左边**(面板铺满了整窗),
+        //   箭头翻成朝右表示"点一下缩回右侧"。收起它的话用户就只能靠 Esc 退出,
+        //   而这条把手正是这次需求给的入口。
+        //   ★ 显隐统一交给 UpdateInfoExpandGripVisibility(它还看设置开关);
+        //     全屏/铺满/小窗时 InfoPanel 整个 Collapsed, 那里也会一并收起。
+        UpdateInfoExpandGripVisibility();
         // ★ 列宽必须跟着一起给回去: 只把 Visibility 改回 Visible 而列宽还停在 0,
         //   面板会量成 0 宽(用户看到的是"信息栏没回来")。
         if (RightColumn != null)
-            RightColumn.Width = new GridLength(hide ? 0 : 400);
+            RightColumn.Width = expand ? new GridLength(1, GridUnitType.Star)
+                            : new GridLength(hide ? 0 : 400);
+        // ★★ 视频列收 0 时 MinWidth **也必须**归 0 —— 否则 XAML 里 320 的下限会把列顶住,
+        //   视频宿主窗口(HwndHost 的原生 HWND)仍然是 320 宽, 一块原生画面就压在详情栏上面
+        //   (airspace, 详见 InfoExpandVideoColumnWidth 的实测说明)。
+        if (VideoColumn != null)
+        {
+            VideoColumn.Width = new GridLength(expand ? InfoExpandVideoColumnWidth : 1,
+                expand ? GridUnitType.Pixel : GridUnitType.Star);
+            VideoColumn.MinWidth = (hide || expand) ? 0 : VideoColumnNormalMinWidth;
+        }
 
         // ★ 最小尺寸必须跟着状态走(2026-10-05 修"铺满窗口后缩到某个程度就被卡住"):
         //   常规的 840×600 是按"视频列 320 + 信息栏 400"的布局定的下限(2026-11-03 从
@@ -272,14 +458,97 @@ public partial class PlayerWindow : FluentWindow
         //   窗口缩到 320 以下时列宽比窗口还宽, 画面会被裁偏。
         //   (FluentWindow 的 WM_GETMINMAXINFO 在每次拖动时重读 MinWidth/MinHeight, 改属性即可。)
         //   小窗(2026-11-25)把下限再收到 320×180: 它本来就是一颗"缩到角落"的窗口。
-        if (VideoColumn != null)
-            VideoColumn.MinWidth = hide ? 0 : VideoColumnNormalMinWidth;
+        //   ★ 详情栏展开(2026-11-28): 窗口里只剩详情栏, 840×600 也没有意义 ——
+        //     放到 480×400, 窄屏上仍能把它缩成一块"只看评论"的窄条。
         MinWidth = _isMiniWindow ? MiniWindowMinWidth
                : hide ? FillWindowMinWidth
+               : expand ? InfoExpandMinWindowWidth
                : NormalWindowMinWidth;
         MinHeight = _isMiniWindow ? MiniWindowMinHeight
                 : hide ? FillWindowMinHeight
+                : expand ? InfoExpandMinWindowHeight
                 : NormalWindowMinHeight;
+
+        // ★ 展开/还原之后详情栏的宽度整个变了: 简介折叠阈值、tab 下划线位置、
+        //   评论内容窗口(按视口高度算的)都依赖新宽度/高度, 必须重新算一次,
+        //   否则会出现"简介明明没超却冒出展开按钮""下划线停在旧位置""评论区一片空白"。
+        //   ★ 只在"展开态真的变了"时做: ApplyInfoPanelState 每次换片/起播都会被调用,
+        //     每次都跑一遍 UpdateDescFold + 恢复评论卡片是白费功夫(那些动作本身不便宜)。
+        if (expand != _infoExpandApplied)
+        {
+            _infoExpandApplied = expand;
+            if (!hide) QueueInfoPanelLayoutRefresh();
+        }
+    }
+
+    /// <summary>
+    /// 显示/隐藏视频区那层**浮层窗口**(LibVLCSharp 的 ForegroundWindow: 弹幕层 + 控制栏 + 各种遮罩)。
+    ///
+    /// ★★★ 为什么需要它(2026-11-28 用户报"展开详情栏后左上角漏出播放器, 边缘一闪一闪"):
+    ///   那层窗口是 LibVLCSharp 自己建的**独立顶层窗口**, 尺寸跟着 VideoView 的 ActualWidth/Height
+    ///   走, 但**不是** WPF 可视树里的一棵子树 —— 折叠 VideoAreaRoot 或把 InfoPanel 盖上去
+    ///   都影响不到它。视频列收成 0 之后它仍有约 2px 宽, 正好压在详情栏最左边那条边上,
+    ///   弹幕在里面横向平移 ⇒ 用户看到的就是"一条一闪一闪的播放器边缘"。
+    ///   探针实测(`.probes/bd-probe-infoexpand`): 折叠 VideoAreaRoot 后 overlayVis 仍是 True;
+    ///   改成 Hide() 那层窗口后 overlayVis=False, 且时钟/画面统计照常推进。
+    ///
+    /// ★ 为什么用 Window.Hide()/Show() 而不是 Visibility:
+    ///   WPF 的 Window.Visibility=Hidden 同样会隐藏窗口, 但 Hide() 语义更明确(它就是
+    ///   ShowWindow(SW_HIDE)), 而且 Show() 会顺带恢复激活状态, 与库自己管理该窗口的方式一致。
+    ///
+    /// ★ 字段 <c>_overlayKeyboardWindow</c> 是 HookOverlayKeyboard 里缓存的那同一个窗口,
+    ///   直接复用即可 —— 但它在构造早期可能还没拿到, 所以这里再按反射取一次兜底。
+    /// ★ 失败一律静默: 顶多还是那条 2px 的边, 绝不能因为"修外观"影响播放。
+    /// </summary>
+    private void ApplyVideoOverlayVisibility(bool hide)
+    {
+        if (_closing) return;
+        try
+        {
+            var fw = _overlayKeyboardWindow;
+            if (fw == null)
+            {
+                var prop = typeof(VideoView).GetProperty("ForegroundWindow",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                fw = prop?.GetValue(VideoView) as Window;
+            }
+            if (fw == null) return;
+
+            if (hide)
+            {
+                if (fw.IsVisible) fw.Hide();
+            }
+            else
+            {
+                // ★ 只在"该显示但当前是隐藏的"时 Show(): 无脑 Show() 会把一个本来就正常的
+                //   窗口再显示一次, 在视频区上可能闪一下(与 AllocConsole 那类重复显示同款坑)。
+                if (!fw.IsVisible) fw.Show();
+            }
+        }
+        catch { /* 外观修复失败不影响播放 */ }
+    }
+
+    /// <summary>
+    /// 详情栏宽度/高度变化之后重算那些"按尺寸算一次就存着"的 UI 状态。
+    ///
+    /// ★ 必须排到布局之后(DispatcherPriority.Loaded): 列宽刚改完时 ActualWidth 还是旧值,
+    ///   当场算会把新结论写进旧尺寸里(与 QueueContentTabIndicatorUpdate 同一个理由)。
+    /// ★ 只做**幂等**的同步动作, 不碰滚动位置/选中项 —— 用户展开详情栏是想接着看当前这页,
+    ///   不能把他滚到一半的评论列表弹回顶部。
+    /// </summary>
+    private void QueueInfoPanelLayoutRefresh()
+    {
+        if (_closing) return;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (_closing) return;
+            UpdateDescFold();
+            QueueContentTabIndicatorUpdate(animate: false);
+            // 评论卡片的"内容窗口"是按 InfoScroll 的视口算的: 面板变宽变高后
+            // 视口里能装下的卡片数变了, 已释放的卡片要按新视口补回来。
+            RestoreVisibleCommentCardsNow(forceLayout: true);
+            QueueCommentContentWindow();
+        }));
     }
 
     // ------------------------------------------------------------ 播放器窗口大小/位置记忆
@@ -491,6 +760,8 @@ public partial class PlayerWindow : FluentWindow
     /// 记录的是屏幕尺寸, 带进下一次启动就会"一打开就铺满" —— 所以按窗口状态过滤。
     /// ★ 铺满模式(_isFillWindow)也不记: 那个布局里窗口下限是 320×200, 用户拖出来的小窗
     ///   下次按**常规布局**打开时会被 840×600 的最小尺寸顶回去, 记了等于没记。
+    /// ★ 详情栏展开(_isInfoExpand)同理不记(2026-11-28): 那个布局的下限是 480×400,
+    ///   而且窗口里根本没有视频 —— 记下来会让下次打开停在"只看详情栏"的尺寸上。
     /// ★ 位置(LocationChanged)与尺寸(SizeChanged)走同一套过滤, 两个事件都汇到这里,
     ///   保证拖尺寸和拖位置总是成对更新(拖边缘时 WPF 两个事件都会发)。
     /// ★ 稳定期内一律不采: 那是在系统的还原动画里(见本节开头)。
@@ -498,6 +769,7 @@ public partial class PlayerWindow : FluentWindow
     private bool IsNormalStateForPlacement()
     {
         return IsLoaded && !_closing && !_isFullscreen && !_isFillWindow && !_isMiniWindow
+            && !_isInfoExpand
             && !_placementSettling
             && WindowState == WindowState.Normal
             && ActualWidth >= 100 && ActualHeight >= 100;
@@ -569,8 +841,9 @@ public partial class PlayerWindow : FluentWindow
         _placementSettleTimer?.Stop();
         if (_closing) return;
 
-        // 全屏/最大化/铺满/小窗态没有"常规几何"可采: 退出这些状态时会重新进稳定期。
-        if (WindowState != WindowState.Normal || _isFullscreen || _isFillWindow || _isMiniWindow)
+        // 全屏/最大化/铺满/小窗/详情栏展开态没有"常规几何"可采: 退出这些状态时会重新进稳定期。
+        if (WindowState != WindowState.Normal || _isFullscreen || _isFillWindow || _isMiniWindow
+            || _isInfoExpand)
         {
             _placementSettling = false;
             _hasPlacementSettleSample = false;
@@ -791,6 +1064,11 @@ public partial class PlayerWindow : FluentWindow
         // ★ 阈值(820)比这里收弹幕区域/音量滑杆的 520 高 —— 章节胶囊是最"软"的一项,
         //   该在它们之前先让位; 但它**只换形态不收入口**(600px 的窗口里照样要能跳章)。
         SetChapterCompact(e.NewSize.Width > 0 && e.NewSize.Width < ChapterCompactWidth);
+        // ★ 展开态兜底(2026-11-28): 视频区尺寸一变, LibVLCSharp 就会把浮层窗口重新摆位
+        //   甚至重新 Show 出来 —— 那层正是用户看到"左上角漏出一条闪动播放器边"的来源。
+        //   排到布局之后(Loaded)再藏一次: 当场藏的话库的摆位可能紧接着又把它显示出来。
+        if (_isInfoExpand)
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(RehideVideoOverlayIfExpanded));
     }
 
     /// <summary>
@@ -823,6 +1101,101 @@ public partial class PlayerWindow : FluentWindow
     {
         if (FullscreenGlyph != null) FullscreenGlyph.Text = _isFullscreen ? "\uE73F" : "\uE740";
         if (BtnFullscreen2 != null) BtnFullscreen2.ToolTip = _isFullscreen ? "退出全屏 (F)" : "全屏 (F)";
+    }
+
+    /// <summary>
+    /// 展开态下把手**真的贴边**, 由这里把它的矩形从系统缩放带里要回来。
+    ///
+    /// ★★★ 为什么必须这么做(2026-11-28, 用户连着报了两轮):
+    ///   第一轮: 把手贴 x=0 ⇒ 整条落在 `ResizeBorderThickness` 的缩放带里,
+    ///           `WM_NCHITTEST` 先返回 `HTLEFT`, 按下变成拖窗口边缘, **点击永远不生效**。
+    ///   第二轮: 改成内缩 8 DIP 躲开 ⇒ 点击好了, 但用户一眼看出"把手与最左端有空隙"。
+    ///   第三轮(现在): 视觉贴边(-1), 命中测试在这里判回 `HTCLIENT`。
+    ///
+    /// ★★★ 钩子必须**自己挂一个**, 不能塞进 FluentWindow.WndProc —— 实测踩到:
+    ///   `HwndSource` 的钩子是**后加的先执行**(倒序), 而 WindowChromeWorker 是在窗口
+    ///   初始化早期挂的, 所以 FluentWindow 里那个钩子跑在它**之后**, 返回 HTCLIENT 会被
+    ///   WindowChromeWorker 的 HTLEFT 覆盖(探针里表现成"钩子返回 1, 但 SendMessage 仍是 HTLEFT")。
+    ///   在 Loaded 里再挂一个 = 比 WindowChromeWorker 更晚 ⇒ 真的抢先。
+    ///   `.probes/bd-probe-infoexpand` 实测: 这样挂之后贴边点得到, 且窗口其它边缘仍是缩放带。
+    ///
+    /// ★ 只在**展开态**拦: 折叠态把手在视频/信息栏的分界线上, 离窗口边缘很远,
+    ///   不该为了它去动窗口边缘的缩放带(那会让人拖不动窗口左边)。
+    /// ★ 判据用屏幕物理像素(与 lParam 同单位), 并且**只认把手自己的矩形** ——
+    ///   放宽一点点(四周各 1px)是为了容忍 DPI 取整误差, 不能再大,
+    ///   否则窗口左边缘那条缩放带会被咬掉一块。
+    /// </summary>
+    private void HookNonClientHitTest()
+    {
+        if (_closing || _nonClientHookSource != null) return;
+        try
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero) return;
+            var src = HwndSource.FromHwnd(hwnd);
+            if (src == null) return;
+            src.AddHook(NonClientHitTestHook);
+            _nonClientHookSource = src;
+        }
+        catch { /* 挂不上就退回"把手内缩"的旧行为(见 UpdateInfoExpandButton 的兜底) */ }
+    }
+
+    /// <summary>见 <see cref="HookNonClientHitTest"/>。</summary>
+    private IntPtr NonClientHitTestHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg != WmNcHitTest) return IntPtr.Zero;
+        if (!_isInfoExpand || _closing) return IntPtr.Zero;
+        if (BtnInfoExpand == null || !BtnInfoExpand.IsVisible) return IntPtr.Zero;
+        if (BtnInfoExpand.ActualWidth <= 0 || BtnInfoExpand.ActualHeight <= 0) return IntPtr.Zero;
+
+        // lParam 低 16 位 = x, 高 16 位 = y; 都是**屏幕物理像素**(有符号, 多屏时可能是负的)。
+        var value = lParam.ToInt64();
+        var x = (short)(value & 0xFFFF);
+        var y = (short)((value >> 16) & 0xFFFF);
+
+        try
+        {
+            var topLeft = BtnInfoExpand.PointToScreen(new Point(0, 0));
+            var dpi = VisualTreeHelper.GetDpi(this);
+            var left = (int)Math.Floor(topLeft.X) - 1;
+            var top = (int)Math.Floor(topLeft.Y) - 1;
+            var right = (int)Math.Ceiling(topLeft.X + BtnInfoExpand.ActualWidth * dpi.DpiScaleX) + 1;
+            var bottom = (int)Math.Ceiling(topLeft.Y + BtnInfoExpand.ActualHeight * dpi.DpiScaleY) + 1;
+
+            if (x >= left && x <= right && y >= top && y <= bottom)
+            {
+                handled = true;
+                return new IntPtr(HtClient);   // 1 = HTCLIENT
+            }
+        }
+        catch { /* 取不到几何就交回默认判定 */ }
+
+        return IntPtr.Zero;
+    }
+
+    /// <summary>我们挂的 WM_NCHITTEST 钩子所在的 HwndSource(挂过就不再挂)。</summary>
+    private HwndSource? _nonClientHookSource;
+
+    /// <summary>Win32 `HTCLIENT`(客户端区, 鼠标消息正常派发给 WPF)。</summary>
+    private const int HtClient = 1;
+
+    /// <summary>Win32 `WM_NCHITTEST`。</summary>
+    private const int WmNcHitTest = 0x0084;
+
+    /// <summary>
+    /// 展开态下浮层窗口的**兜底重藏**。
+    ///
+    /// ★ 为什么需要兜底(2026-11-28): LibVLCSharp 的 ForegroundWindow 是按 VideoView 的
+    ///   ActualWidth/Height 摆位的, 视频区尺寸一变(进出展开/窗口缩放/vout 重建)它就会
+    ///   重新 Show 一次自己 —— 我们 Hide 过的那一层会"又回来", 用户看到左上角那条边
+    ///   又开始闪。所以凡是"视频区尺寸刚变过"的时机都再藏一次。
+    /// ★ 只在展开态做(其余状态它本来就该可见), 由 ApplyVideoOverlayVisibility 内部判定,
+    ///   这里只负责"多调一次", 幂等。
+    /// </summary>
+    private void RehideVideoOverlayIfExpanded()
+    {
+        if (_closing || !_isInfoExpand) return;
+        ApplyVideoOverlayVisibility(true);
     }
 
 }

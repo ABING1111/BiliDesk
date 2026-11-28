@@ -366,6 +366,48 @@
             </Setter>
         </Style>
 
+        <!-- ============ 详情栏展开把手(2026-11-28) ============
+             贴在信息栏左缘正中的一条窄"拉手": 常态一层极淡的底, 悬停/按下加深。
+             ★ 为什么常态要给底(而不是全透明): 全透明的话用户根本不知道这里有个入口 ——
+               它是这次需求新增的可点击区域, 必须"看得见"。底取 ControlFillDefaultBrush
+               (10% 黑白), 在信息栏底色上只是一层很淡的灰, 不抢内容。
+             ★ 为什么放在信息栏**里面**、而不是压在视频区上: 视频是 LibVLC 的 HwndHost,
+               任何 WPF 元素压在它上面都会被原生窗口盖住(airspace)。用负边距让它"骑"在
+               视频与信息栏的交界上, 左半截会直接消失。贴在信息栏内侧则整条都在 WPF 里。
+             ★ 颜色跟主题走(ControlFill*): 它坐在信息栏底色上, 不是压在视频画面上 ——
+               与字幕/控制栏那种"必须写死深色"的浮层不是一类。
+             ★ 圆角只给右边两角(0,8,8,0): 左边贴着信息栏那条 1px 分隔线, 做成拉手的形状。 -->
+        <Style x:Key="InfoExpandGripStyle" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource ControlFillDefaultBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                CornerRadius="0,8,8,0">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ControlFillHoverBrush}" />
+                                <!-- 悬停时图标也提亮一档: 只有一个箭头, 颜色变化是最直接的反馈 -->
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ControlFillPressedBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- 播放进度条(2026-11-14): 3px 细线, 悬停整条加粗到 5px 并浮出白色圆点。
              ★ 为什么不复用 PlayerSlider: 那个还被音量条 + 弹层里的三条滑杆共用,
                把它改细会连弹层里的滑杆一起变样 —— 进度条单独一份, 互不影响。
@@ -2350,6 +2392,51 @@
             <!-- ============ 右: 信息面板 ============ -->
             <!-- x:Name 供全屏退出时做淡入用(400px 的一大块"啪"地出现很跳) -->
             <Grid x:Name="InfoPanel" Grid.Column="1" Background="{DynamicResource AppBackgroundBrush}">
+                <!-- ============ 展开把手(2026-11-28 新增) ============
+                     贴在信息栏**左缘正中**的一条竖窄按钮, 点了把整块详情栏(含评论区)铺满
+                     整个窗口、盖住视频; 再点一次(或 Esc)还原。
+                     ★ 为什么挂在 InfoPanel 这一层(与合集面板/评论 FAB 同级): 它是信息栏的
+                       附属控件, 要跟着信息栏一起被全屏/小窗/铺满窗口收起 —— 那三个模式都由
+                       ApplyInfoPanelState 把 InfoPanel 整个 Collapsed 掉, 挂外面就会留在屏幕上。
+                     ★ 为什么用 Button 而不是 Thumb/GridSplitter: 需求是"点一下切换整个布局",
+                       不是拖拽调整宽度。拖拽语义还会与"视频区拖边缘改窗口大小"打架。
+                     ★ 命中区比视觉宽: 模板里 Border 铺满整个按钮矩形, 透明部分也参与
+                       命中测试, 用户不必精准压在箭头那几像素上。
+                     ★ 尺寸 14×88(2026-11-28 用户要求"适当调长跳大一些"):
+                       原先是 12×64 —— 高度只有 64 时, 它比一次滑动的幅度还短,
+                       鼠标要"找"一下才点得中。88 高 ≈ 常见的滚动条滑块长度, 一眼能看到、
+                       随手能点到; 宽度 14 给箭头留出居中余量, 同时不至于压住左侧内容。
+                     ★ Margin 左 -1: 正好压住信息栏那条 1px 分隔线, 视觉上像从分隔线上长出来的。
+                     ★ Panel.ZIndex=1: 必须**高于** InfoContentHost(默认 0) —— 否则它会被
+                       里面那层 ScrollViewer(透明底但会吃掉命中测试)盖住, 点不到;
+                       又必须**低于**合集面板(2) —— 那是个铺满整栏的不透明浮层,
+                       把手浮在选集列表上只会让人困惑。 -->
+                <Button x:Name="BtnInfoExpand" Style="{StaticResource InfoExpandGripStyle}"
+                        Width="14" Height="88"
+                        HorizontalAlignment="Left" VerticalAlignment="Center"
+                        Margin="-1,0,0,0" Panel.ZIndex="1"
+                        Click="OnInfoExpandClick"
+                        ToolTip="展开详情栏（铺满窗口）">
+                    <!-- 箭头用矢量(不依赖字体): 折叠态朝左(面板往左铺开), 展开态由代码翻成朝右。
+                         ★★★ RenderTransformOrigin 必须是 0.5,0.5(2026-11-28 实测踩到):
+                           默认原点是**左上角(0,0)**, `ScaleX=-1` 会把整条墨迹镜像到 x 为负的
+                           一侧 —— 箭头直接从按钮里跑出去(实测墨迹从 [2.7,27.3] 变成 [-8.3,27.3],
+                           而按钮只有 12 宽), 用户看到的就是"箭头和按钮错位"。
+                           以元素中心为原点翻转, 墨迹才会留在原位、只改朝向。 -->
+                    <Path x:Name="InfoExpandGlyph"
+                          Width="12" Height="12" Stretch="None"
+                          RenderTransformOrigin="0.5,0.5"
+                          Data="M 7.5,2.5 L 3.5,6 L 7.5,9.5"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.6" StrokeLineJoin="Round"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          IsHitTestVisible="False">
+                        <Path.RenderTransform>
+                            <ScaleTransform ScaleX="1" ScaleY="1" />
+                        </Path.RenderTransform>
+                    </Path>
+                </Button>
+
                 <Border x:Name="InfoContentHost" BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1,0,0,0">
                     <!-- ★ 悬浮滚动条(OverlayScrollViewerStyle): 评论加载中列表变短时,
                          滚动条消失不该把内容区撑宽 18px(用户报"标题/UP 主整块横向抖一下")。

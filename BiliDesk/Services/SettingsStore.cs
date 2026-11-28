@@ -401,6 +401,18 @@ public class SettingsStore
     public bool ShowRelatedVideos { get; set; } = true;
 
     /// <summary>
+    /// 播放器右侧详情栏左缘那条「展开/收起」把手是否显示(默认**开**)。
+    ///
+    /// ★ 关掉之后那条 14×88 的窄条不再出现(详情栏仍是常规的 400 宽),
+    ///   给"从来不展开详情栏"的用户一个干净的右栏。
+    /// ★ 关闭只影响**入口**: 已经处于展开态的窗口保持原状, 由 Esc 或重新打开开关处理 ——
+    ///   否则用户会在"展开态 + 把手消失"的情况下找不到出口。
+    /// ★ 老配置缺这个字段 ⇒ 反序列化保留属性初始化值 true ⇒ 行为与改动前一致。
+    /// ★ 与 <see cref="Models.AppSettings.ShowInfoExpandGrip"/> 是读写契约。
+    /// </summary>
+    public bool ShowInfoExpandGrip { get; set; } = true;
+
+    /// <summary>
     /// 自动连播(2026-11-19 新增, 默认**开**)。
     ///
     /// ★ 播完后自动播下一条: 多P 视频先接下一个 P, 再接合集/番剧的下一集,
@@ -801,6 +813,12 @@ public class SettingsStore
     /// </summary>
     public event Action? AutoPlayNextChanged;
 
+    /// <summary>
+    /// 「详情栏展开把手」开关变更(2026-11-28)。已打开的播放器据此立即显示 / 隐藏那条把手 ——
+    /// 不广播的话用户改完设置得重开视频才生效, 看起来像开关没作用。
+    /// </summary>
+    public event Action? InfoExpandGripChanged;
+
     public void Load()
     {
         try
@@ -1004,6 +1022,9 @@ public class SettingsStore
 
         // 显示相关视频(2026-11-14): 老配置缺字段 ⇒ AppSettings 的初始化值 true(保持原有行为)。
         ShowRelatedVideos = s.ShowRelatedVideos;
+
+        // 详情栏展开把手(2026-11-28): 老配置缺字段 ⇒ AppSettings 的初始化值 true(默认开启)。
+        ShowInfoExpandGrip = s.ShowInfoExpandGrip;
 
         // 自动连播(2026-11-19): 老配置缺字段 ⇒ AppSettings 的初始化值 true(默认开启)。
         AutoPlayNext = s.AutoPlayNext;
@@ -1265,6 +1286,7 @@ public class SettingsStore
         AudioResamplerMode = AudioResamplerMode,
         AutoResume = AutoResume,
         ShowRelatedVideos = ShowRelatedVideos,
+        ShowInfoExpandGrip = ShowInfoExpandGrip,
         AutoPlayNext = AutoPlayNext,
         SubtitleEnabled = SubtitleEnabled,
         SubtitleLan = SubtitleLan,
@@ -1506,6 +1528,18 @@ public class SettingsStore
         AutoPlayNext = value;
         Save();
         AutoPlayNextChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// 改「详情栏展开把手」并落盘。
+    /// ★ 需要广播: 已经打开的播放器要立刻显示/隐藏那条把手, 不能等下一次换片。
+    /// </summary>
+    public void SetShowInfoExpandGrip(bool value)
+    {
+        if (ShowInfoExpandGrip == value) return;
+        ShowInfoExpandGrip = value;
+        Save();
+        InfoExpandGripChanged?.Invoke();
     }
 
     /// <summary>

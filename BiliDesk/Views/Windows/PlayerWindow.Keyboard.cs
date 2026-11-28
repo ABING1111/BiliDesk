@@ -188,6 +188,16 @@ public partial class PlayerWindow : FluentWindow
             ExitMiniWindow();
             return;
         }
+        // ★ 详情栏展开(2026-11-28): 它排在「铺满窗口」**之前** —— 两者是同一个位置的两个方向,
+        //   但展开态下窗口里只剩详情栏(视频整个被盖住), 用户的"返回"预期是先回到视频。
+        if (_isInfoExpand)
+        {
+            BeginPlacementTransition();
+            _isInfoExpand = false;
+            ApplyInfoPanelState();
+            UpdateInfoExpandButton();
+            return;
+        }
         if (_isFillWindow)
         {
             BeginPlacementTransition();

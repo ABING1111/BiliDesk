@@ -1332,6 +1332,8 @@ public partial class PlayerWindow : FluentWindow
         //   清了第二集就变成"普通视频", 选集面板与连播链一起消失。
         nameof(_bangumi),
         nameof(_isFillWindow),       // 「铺满窗口」是窗口级的显示模式(同 _isFullscreen), 换片不该把它弹回去
+        nameof(_isInfoExpand),       // 「详情栏展开」同理: 窗口级显示模式, 连看几集时用户就是只想看评论/简介
+        nameof(_infoExpandApplied),  // ApplyInfoPanelState 上一次套用的展开态(纯 UI 比对缓存, 换片会重算)
         nameof(_isMiniWindow),       // 「小窗」同理: 窗口级的显示模式, 换片/连播下一集仍留在小窗里
         nameof(_commentSort),        // 评论排序是用户看评论的习惯(同 _seasonOpen): 选过一次就一直是那个顺序
         nameof(_isListenMode),       // 「听视频」是窗口级的播放模式(同 _isFullscreen): 换片不该把它弹回视频
@@ -1575,6 +1577,8 @@ public partial class PlayerWindow : FluentWindow
         // 「铺满窗口」按钮的字形初值: XAML 里写的是"进入前"那个字形(E9A6), 这里按实际状态
         // 再同步一次 —— 窗口是复用的, 复用到一个"上次已铺满"的窗口时不能显示成未铺满。
         UpdateFillWindowButton();
+        // 「详情栏展开」把手同理(2026-11-28): 复用到"上次已展开"的窗口时箭头要朝右。
+        UpdateInfoExpandButton();
         // ★ 这条路径(带 bvid 直接 new 出窗口)**不走 ResetForNewMedia**(与 ApplyPreferredQuality
         //   当年踩的是同一个坑), 所以「听视频」按钮的可用性也要在这里同步一次。
         //   位置在 LoadVideoAsync **之前**: UpdateListenButtonState 依赖 _isLive/_isLocalPlayback,
@@ -1589,6 +1593,14 @@ public partial class PlayerWindow : FluentWindow
         // 覆盖层窗口(VideoView 的 ForegroundWindow)这时才建出来 —— 把键盘处理也挂上去,
         // 否则点过一次视频/控制栏之后快捷键就全哑了(见 HookOverlayKeyboard 的说明)
         HookOverlayKeyboard();
+        // ★ 覆盖层窗口建好之后要**补一次**显隐同步(2026-11-28):
+        //   上面那句 ApplyInfoPanelState 跑在 HookOverlayKeyboard 之前, 那时
+        //   ForegroundWindow 还没建出来(反射拿不到), "详情栏展开 ⇒ 藏浮层"那一步被静默跳过了。
+        //   不补的话, 复用一个"上次停在展开态"的窗口时会看到左上角那条闪动的播放器边缘。
+        ApplyVideoOverlayVisibility(_isInfoExpand);
+        // ★ WM_NCHITTEST 钩子(2026-11-28): 让展开态的贴边把手不被系统缩放带吃掉。
+        //   必须在这里(Loaded)挂 —— 详见 HookNonClientHitTest 的说明。
+        HookNonClientHitTest();
         // ★ 2026-11-03: 尽早把视频宿主窗口治成近黑底(不等第一帧/Vout)。
         //   放在 Loaded 优先级: 此时 VideoView 的模板与原生宿主窗口已经建好;
         //   拿不到句柄也没关系, Vout/Playing 还会再调(见 StartVideoBackdropFix)。

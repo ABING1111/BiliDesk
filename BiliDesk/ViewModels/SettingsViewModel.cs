@@ -1230,6 +1230,33 @@ public class SettingsViewModel : ObservableObject
         ? "播放器右侧简介下方显示相关推荐; 关闭后不再加载相关视频, 简介也不再折叠"
         : "已关闭, 播放器不再请求与显示相关视频, 简介整段展开";
 
+    // ----------------- 详情栏展开把手(2026-11-28) -----------------
+
+    /// <summary>
+    /// 播放器详情栏左缘那条「展开/收起」把手是否显示(默认开)。
+    /// 关掉之后那条窄条不再出现, 右栏保持常规的 400 宽。
+    /// </summary>
+    public bool ShowInfoExpandGrip
+    {
+        get => Svc.Settings.ShowInfoExpandGrip;
+        set
+        {
+            if (value == Svc.Settings.ShowInfoExpandGrip) return;
+            Svc.Settings.SetShowInfoExpandGrip(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ShowInfoExpandGripHint));
+        }
+    }
+
+    /// <summary>
+    /// 副标题: 说清这个把手干什么、关掉之后怎么用, 以及立即生效。
+    /// ★ 必须写明"关掉只是没有入口, 已展开的仍能按 Esc 收回" —— 否则用户会担心
+    ///   关掉开关时万一正处于展开态, 就再也回不到视频了。
+    /// </summary>
+    public string ShowInfoExpandGripHint => Svc.Settings.ShowInfoExpandGrip
+        ? "详情栏左缘显示一条展开把手, 点一下让详情栏(含评论区)铺满整个窗口"
+        : "已隐藏该把手; 详情栏保持常规宽度, 已展开的窗口仍可按 Esc 收回";
+
     // ----------------- 自动连播(2026-11-19) -----------------
 
     /// <summary>

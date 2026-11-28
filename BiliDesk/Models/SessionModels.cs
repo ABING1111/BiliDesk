@@ -108,6 +108,18 @@ public class AppSettings
     public bool ShowRelatedVideos { get; set; } = true;
 
     /// <summary>
+    /// 播放器右侧详情栏左缘那条「展开/收起」把手是否显示(默认**开**)。
+    ///
+    /// ★ 它把详情栏(标题/UP 主/操作栏/简介或评论)铺满整个窗口、盖住视频,
+    ///   适合"只看评论/只看简介"的场景; 不需要的人可以在这里关掉, 那条窄条就不再出现。
+    /// ★ 关闭只影响**入口**, 不影响已经展开的状态: 用户已经点开的仍然能靠 Esc 收回,
+    ///   避免"关掉开关后卡在展开态出不来"(见 PlayerWindow.ApplyInfoPanelState)。
+    /// ★ 老配置没有这个字段 ⇒ 属性初始化值 true ⇒ 行为与改动前一致。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool ShowInfoExpandGrip { get; set; } = true;
+
+    /// <summary>
     /// 自动连播(2026-11-19 新增, 默认**开**)。
     ///
     /// ★ 播完后自动播下一条: 多P 视频先接下一个 P, 再接合集/番剧的下一集,

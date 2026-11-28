@@ -232,6 +232,8 @@ public partial class PlayerWindow : FluentWindow
         Svc.Settings.RelatedVideosChanged -= OnRelatedVideosSettingChanged;
         // 自动连播: 退订 + 收掉倒计时(表已由 StopAllTimers 停过, 这里清状态)
         Svc.Settings.AutoPlayNextChanged -= OnAutoPlayNextSettingChanged;
+        // 详情栏展开把手: 退订(纯显隐同步, 没有在途任务要收)
+        Svc.Settings.InfoExpandGripChanged -= OnInfoExpandGripSettingChanged;
         CancelAutoPlayCountdown();
         // 字幕: 退订 + 掐掉还没回来的请求(在飞的下载不能留着写已关闭窗口的状态)
         Svc.Settings.SubtitleSettingsChanged -= OnSubtitleSettingsChanged;

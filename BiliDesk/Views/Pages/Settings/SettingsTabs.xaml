@@ -770,6 +770,29 @@
                                   IsChecked="{Binding AutoPlayNext, Mode=TwoWay}" />
                     </Grid>
 
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 详情栏展开把手(2026-11-28): 控制播放器右栏左缘那条窄把手的显隐。
+                         ★ 默认开(用户要求): 这是"把详情栏铺满整窗看评论/简介"的入口,
+                           不需要的人可以在里关掉, 右栏就只剩常规的 400 宽。
+                         ★ 关闭只影响**入口**: 已经展开的窗口保持原状, 仍可按 Esc 收回 ——
+                           不这样的话用户会在"展开态 + 把手消失"时找不到出口。
+                         ★ 已打开的播放器会立即生效(见 SettingsStore.InfoExpandGripChanged)。 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="详情栏展开把手" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding ShowInfoExpandGripHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding ShowInfoExpandGrip, Mode=TwoWay}" />
+                    </Grid>
+
                     <!-- ★ 组五: 字幕(2026-11-15)
                          B 站的 CC/AI 字幕是"有人要"的增强功能, 默认关 —— 想要的用户
                          在播放器点一次 CC 就会记住语言, 这里给"找回入口"一个总开关。 -->

@@ -86,6 +86,14 @@ public partial class PlayerWindow : FluentWindow
             ApplyFullscreen(false);
         }
 
+        // ★ 详情栏展开与小窗互斥(2026-11-28): 小窗里信息栏整个 Collapsed,
+        //   带着展开态进去只会留下"视频列 0 宽 + 面板不可见"的空窗口。
+        if (_isInfoExpand)
+        {
+            _isInfoExpand = false;
+            UpdateInfoExpandButton();
+        }
+
         // 与全屏/铺满同理: 小窗几何不记, 切之前把常规几何存好(见 IsNormalStateForPlacement)
         CaptureNormalPlacement();
         PersistNormalPlacement();
