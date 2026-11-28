@@ -16,8 +16,11 @@
           抬起坐标可能落到别的行上, 只靠 Up 会误打开别人的主页。
     -->
     <Border x:Name="Root" Margin="20,3" Padding="12,10" CornerRadius="10"
-            Background="Transparent" Cursor="Hand" ToolTip="打开 UP 主主页"
+            Cursor="Hand" ToolTip="打开 UP 主主页"
             MouseLeftButtonUp="OnOpen">
+        <!-- ★★ 底色**只能**由下面的 Style 给: 在 Border 元素上再写一次 Background 是本地值,
+             优先级高于 Style 里的 Trigger, 悬停高亮会被永久压掉 —— 表现就是"鼠标移到
+             任意 UP 行、点下去都没有高亮提示"(2026-11-28 修)。 -->
         <Border.Style>
             <Style TargetType="Border">
                 <Setter Property="Background" Value="Transparent" />
