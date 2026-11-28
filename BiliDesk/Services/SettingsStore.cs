@@ -289,6 +289,9 @@ public class SettingsStore
     /// <summary>启动后自动检查更新(默认开; 关掉后仍可在设置页手动检查)</summary>
     public bool AutoCheckUpdate { get; set; } = true;
 
+    /// <summary>更新镜像源(空 = 直连 GitHub; 前缀或含 {url} 的模板, 见 UpdateChecker.MirrorUrl)</summary>
+    public string UpdateMirror { get; set; } = "";
+
     /// <summary>用户点过「跳过此版本」的版本号(空 = 没跳过; 只影响自动检查, 见 UpdateChecker.AutoCheckAsync)</summary>
     public string SkippedVersion { get; set; } = "";
 
@@ -971,6 +974,7 @@ public class SettingsStore
         CloseToTray = s.CloseToTray;
         OpenLinksInExternalBrowser = s.OpenLinksInExternalBrowser;
         AutoCheckUpdate = s.AutoCheckUpdate;
+        UpdateMirror = (s.UpdateMirror ?? "").Trim();
         SkippedVersion = s.SkippedVersion ?? "";
         // 失败提示的节流时间: 未来时间只可能来自改系统时钟/手改配置 ——
         // 留着会让失败提示永久不再出现, 一律归 null(与 UpdateFailurePolicy 的兜底一致)。
@@ -1270,6 +1274,7 @@ public class SettingsStore
         CloseToTray = CloseToTray,
         OpenLinksInExternalBrowser = OpenLinksInExternalBrowser,
         AutoCheckUpdate = AutoCheckUpdate,
+        UpdateMirror = UpdateMirror,
         SkippedVersion = SkippedVersion,
         LastUpdateFailureNoticeUtc = LastUpdateFailureNoticeUtc,
         NoLogin1080P = NoLogin1080P,
@@ -1597,6 +1602,15 @@ public class SettingsStore
     {
         if (AutoCheckUpdate == value) return;
         AutoCheckUpdate = value;
+        Save();
+    }
+
+    /// <summary>改"更新镜像源"并落盘(空串 = 直连 GitHub)</summary>
+    public void SetUpdateMirror(string value)
+    {
+        var next = (value ?? "").Trim();
+        if (string.Equals(UpdateMirror, next, StringComparison.Ordinal)) return;
+        UpdateMirror = next;
         Save();
     }
 

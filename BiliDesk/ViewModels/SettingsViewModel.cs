@@ -1603,6 +1603,24 @@ public class SettingsViewModel : ObservableObject
         ? "启动后在后台检查一次, 有新版本或网络异常时弹窗提醒(网络异常每天最多提示一次)"
         : "已关闭, 仍可随时点「检查更新」手动检查";
 
+    /// <summary>更新镜像源(空 = 直连 GitHub); 输入框失焦时落盘。</summary>
+    public string UpdateMirror
+    {
+        get => Svc.Settings.UpdateMirror;
+        set
+        {
+            var next = (value ?? "").Trim();
+            if (string.Equals(next, Svc.Settings.UpdateMirror, StringComparison.Ordinal)) return;
+            Svc.Settings.SetUpdateMirror(next);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(UpdateMirrorHint));
+        }
+    }
+
+    public string UpdateMirrorHint => string.IsNullOrEmpty(Svc.Settings.UpdateMirror)
+        ? "留空直连 GitHub；可填镜像前缀(如 https://gh-proxy.com/)或含 {url} 的模板"
+        : $"当前走镜像：{Svc.Settings.UpdateMirror}";
+
     /// <summary>最近一次检查的结果(手动检查的反馈就落在这里, 让用户确认按钮点下去有反应)</summary>
     private string _updateStatusText = "";
     public string UpdateStatusText

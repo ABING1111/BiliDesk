@@ -485,6 +485,12 @@ public class AppSettings
     public bool AutoCheckUpdate { get; set; } = true;
 
     /// <summary>
+    /// 更新镜像源(空 = 直连 GitHub)。支持前缀(https://gh-proxy.com/)或 {url} 模板。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是读写契约, 两处必须一致。
+    /// </summary>
+    public string UpdateMirror { get; set; } = "";
+
+    /// <summary>
     /// 用户点过「跳过此版本」的版本号(如 "1.2.0")。空 = 没跳过任何版本。
     /// 只对**自动**检查生效: 手动点「检查更新」说明用户就是想看, 一样会弹窗。
     /// </summary>

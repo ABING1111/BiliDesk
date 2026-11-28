@@ -1402,6 +1402,22 @@
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
                     <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="更新镜像源" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding UpdateMirrorHint}" Style="{StaticResource SettingsRowDescStyle}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                        <TextBox Grid.Column="1" Width="260" VerticalAlignment="Center"
+                                 Style="{StaticResource FluentTextBoxStyle}"
+                                 Text="{Binding UpdateMirror, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                 ToolTip="留空直连 GitHub；也支持 https://kkgithub.com/{url} 这种模板" />
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+                    <Grid Style="{StaticResource SettingsRowStyle}">
                         <StackPanel VerticalAlignment="Center">
                             <TextBlock Text="版本号" Style="{StaticResource SettingsRowTitleStyle}" />
                             <TextBlock Text="当前使用中的程序版本"

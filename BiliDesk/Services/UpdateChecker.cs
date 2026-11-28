@@ -97,6 +97,7 @@ public sealed class UpdateCheckException : Exception
 ///     (见 AutoCheckAsync / NotifyFailureAsync), 但 24 小时内最多一次、完全断网不弹;
 ///   · api.github.com 不通时再用 Releases Atom 备用源试一次 —— Atom 不占匿名 API 限额,
 ///     对"共享 VPN 出口 IP 被限流"这种最常见的失败尤其有效。
+/// ★ 2026-11-28: 支持更新镜像源(设置 → 关于 → 更新镜像源), 默认仍直连 GitHub。
 /// </summary>
 public static class UpdateChecker
 {
@@ -104,9 +105,10 @@ public static class UpdateChecker
     public const string RepoOwner = "ABING1111";
     public const string RepoName = "BiliDesk";
 
-    /// <summary>releases/latest 网页地址(弹窗里「前往 GitHub 下载」按钮的落点)。</summary>
-    public const string ReleasePageUrl =
-        $"https://github.com/{RepoOwner}/{RepoName}/releases/latest";
+    private const string ReleasePageRawUrl = $"https://github.com/{RepoOwner}/{RepoName}/releases/latest";
+
+    /// <summary>releases/latest 网页地址(弹窗按钮落点); 配置镜像时走镜像。</summary>
+    public static string ReleasePageUrl => ApplyMirror(ReleasePageRawUrl);
 
     /// <summary>仓库首页(设置 → 关于页「GitHub 仓库」的落点)。</summary>
     public const string RepoPageUrl =
@@ -118,8 +120,7 @@ public static class UpdateChecker
 
     // ★ 这里曾经有一个"微云高速下载"镜像按钮(WeiYunShareUrl / WeiYunSharePwd 两个常量)。
     //   2026-10-01 用户要求**下载全部走 GitHub**, 两个常量与那个按钮一起删掉了。
-    //   别再按"国内下载慢"的直觉加回来: 镜像链接要人工维护, 忘了换新版就是给用户一个旧包;
-    //   国内访问 Releases 页/附件本来也只需要浏览器能开 GitHub。
+    //   现在只做 GitHub 代理转发, 不维护云端副本; 默认直连。
 
     private static readonly HttpClient Http = new()
     {
@@ -135,16 +136,34 @@ public static class UpdateChecker
         Http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
     }
 
+    /// <summary>
+    /// 把 GitHub URL 套到更新镜像上。mirror 为空/不是 http(s) 地址时原样返回。
+    /// 支持前缀("https://gh-proxy.com/")与模板("https://kkgithub.com/{url}")两种写法。
+    /// 抽成纯函数: 单测要覆盖空值、无斜杠、模板、非法输入。
+    /// </summary>
+    public static string MirrorUrl(string? mirror, string url)
+    {
+        var m = (mirror ?? "").Trim();
+        if (m.Length == 0) return url;
+        if (!m.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !m.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return url;
+        if (m.Contains("{url}", StringComparison.Ordinal))
+            return m.Replace("{url}", url, StringComparison.Ordinal);
+        return m.EndsWith("/", StringComparison.Ordinal) ? m + url : m + "/" + url;
+    }
+
+    private static string ApplyMirror(string url) => MirrorUrl(Svc.Settings.UpdateMirror, url);
+
     /// <summary>最新 Release 的 API 地址(每次现拼, 常量拼接没有循环依赖问题)</summary>
     private static string LatestApiUrl =>
-        $"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/latest";
+        ApplyMirror($"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/latest");
 
     /// <summary>
     /// Releases Atom 备用源。不消耗 GitHub API 的匿名限额(60 次/小时/IP),
     /// 共享出口 IP 的 VPN 用户靠它也能拿到最新 tag。
     /// </summary>
     private static string LatestAtomUrl =>
-        $"https://github.com/{RepoOwner}/{RepoName}/releases.atom";
+        ApplyMirror($"https://github.com/{RepoOwner}/{RepoName}/releases.atom");
 
     /// <summary>
     /// 查一次最新版本并与当前版本比较。
@@ -215,7 +234,7 @@ public static class UpdateChecker
                 Title = GetString(root, "name") ?? "",
                 // body 是 Markdown 源文本, 弹窗里由 MarkdownView 渲染(先过 ReleaseNotes.Clean)
                 Notes = GetString(root, "body") ?? "",
-                ReleaseUrl = GetString(root, "html_url") ?? ReleasePageUrl,
+                ReleaseUrl = ApplyMirror(GetString(root, "html_url") ?? ReleasePageRawUrl),
                 PublishedAt = ParseDate(GetString(root, "published_at"))
             };
         }
@@ -242,7 +261,7 @@ public static class UpdateChecker
         }
 
         var xml = await resp.Content.ReadAsStringAsync(cts.Token);
-        return ParseAtomFeed(xml);
+        return ParseAtomFeed(xml, Svc.Settings.UpdateMirror);
     }
 
     /// <summary>
@@ -301,7 +320,7 @@ public static class UpdateChecker
     /// 抽成纯函数: Atom 的结构比 JSON 更容易被改坏(代理返回 HTML 也是走这里),
     /// 单测要能覆盖"版本号来自 id/title 两种形状"。
     /// </summary>
-    public static UpdateInfo? ParseAtomFeed(string xml)
+    public static UpdateInfo? ParseAtomFeed(string xml, string? mirror = null)
     {
         if (string.IsNullOrWhiteSpace(xml)) return null;
 
@@ -327,7 +346,7 @@ public static class UpdateChecker
             Title = title,
             // Atom 里只有 HTML 正文, 没有 Markdown 发布说明; 弹窗会显示"没有填写发布说明"占位。
             Notes = "",
-            ReleaseUrl = string.IsNullOrWhiteSpace(link) ? ReleasePageUrl : link,
+            ReleaseUrl = MirrorUrl(mirror, string.IsNullOrWhiteSpace(link) ? ReleasePageRawUrl : link),
             PublishedAt = ParseDate(entry.Element(ns + "updated")?.Value)
         };
     }
