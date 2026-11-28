@@ -101,7 +101,7 @@
                         Margin="10,0,0,0" Padding="14,9" Click="OnLaterClick" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="前往 GitHub 下载" Style="{StaticResource AccentButtonStyle}"
+                <Button Content="打开下载页" Style="{StaticResource AccentButtonStyle}"
                         Padding="20,9" Click="OnGithubClick" />
             </StackPanel>
         </Grid>

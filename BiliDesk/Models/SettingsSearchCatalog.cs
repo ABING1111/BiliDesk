@@ -9,7 +9,7 @@ namespace BiliDesk.Models;
 ///
 /// ★ 为什么用"行的标题文字"当定位锚点, 而不是给 XAML 每个行加 x:Name / Tag:
 ///   五个 Tab 的内容在 <c>Views/Pages/Settings/SettingsTabs.xaml</c> 里, 是 DataTemplate
-///   而不是页面字段 —— 每次切 Tab 都是全新的一棵可视树, x:Name 拿不到、Tag 要手写 52 遍。
+///   而不是页面字段 —— 每次切 Tab 都是全新的一棵可视树, x:Name 拿不到、Tag 要手写 53 遍。
 ///   标题文字本来就是唯一的(测试会校验), 定位时在**当前 Tab 的子树**里按 Text 找即可。
 ///
 /// ★ 维护约定: **新增/改名一个设置行, 必须同步这里**, 否则
@@ -77,7 +77,7 @@ public sealed class SettingsSearchEntry
 /// <summary>
 /// 设置页搜索的索引(2026-11-28, 用户要求"设置页增加搜索功能")。
 ///
-/// 纯本地: 不请求网络、不需要防抖 —— 52 条静态行 + 15 条快捷键, 每次输入遍历一遍即可。
+/// 纯本地: 不请求网络、不需要防抖 —— 53 条静态行 + 15 条快捷键, 每次输入遍历一遍即可。
 /// 命中后由页面负责"切 Tab + 滚到那一行 + 高亮一下"(见 SettingsPage.xaml.cs)。
 /// </summary>
 public static class SettingsSearchCatalog
@@ -197,6 +197,8 @@ public static class SettingsSearchCatalog
                 "更新 升级 检查 新版本"),
             new(TabAbout, TabTitles[TabAbout], "更新", "检查更新",
                 "更新 升级 检查 新版本"),
+            new(TabAbout, TabTitles[TabAbout], "更新", "更新镜像源",
+                "更新 镜像 加速 github 代理 proxy 更新源"),
             new(TabAbout, TabTitles[TabAbout], "更新", "版本号",
                 "版本 版本号 version"),
             new(TabAbout, TabTitles[TabAbout], "问题诊断", "导出诊断报告",

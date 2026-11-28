@@ -45,6 +45,16 @@ public class UpdateCheckerTests
     }
 
     [Fact]
+    public void Atom_镜像源会重写Release链接()
+    {
+        var tag = NewerTag();
+        var info = UpdateChecker.ParseAtomFeed(AtomFeed(tag, "BiliDesk " + tag), "https://gh-proxy.com/");
+
+        Assert.NotNull(info);
+        Assert.Equal($"https://gh-proxy.com/https://github.com/ABING1111/BiliDesk/releases/tag/{tag}", info!.ReleaseUrl);
+    }
+
+    [Fact]
     public void Atom_id解析不出时回落到title()
     {
         var tag = NewerTag();
@@ -76,6 +86,19 @@ public class UpdateCheckerTests
     {
         // 代理返回 HTML 登录页/错误页时走这里, 由 CheckViaAtomAsync 转成 Parse 失败
         Assert.Throws<XmlException>(() => UpdateChecker.ParseAtomFeed("<feed>"));
+    }
+
+    [Theory]
+    [InlineData(null, "https://api.github.com/repos/a/b/releases/latest", "https://api.github.com/repos/a/b/releases/latest")]
+    [InlineData("", "https://api.github.com/x", "https://api.github.com/x")]
+    [InlineData("   ", "https://api.github.com/x", "https://api.github.com/x")]
+    [InlineData("https://gh-proxy.com/", "https://api.github.com/x", "https://gh-proxy.com/https://api.github.com/x")]
+    [InlineData("https://gh-proxy.com", "https://api.github.com/x", "https://gh-proxy.com/https://api.github.com/x")]
+    [InlineData("https://kkgithub.com/{url}", "https://github.com/x", "https://kkgithub.com/https://github.com/x")]
+    [InlineData("not-a-url", "https://api.github.com/x", "https://api.github.com/x")]
+    public void 镜像源_支持前缀与模板(string? mirror, string url, string expected)
+    {
+        Assert.Equal(expected, UpdateChecker.MirrorUrl(mirror, url));
     }
 
     [Theory]

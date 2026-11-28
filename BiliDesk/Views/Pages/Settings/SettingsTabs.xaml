@@ -1402,6 +1402,28 @@
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
                     <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="更新镜像源" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding UpdateMirrorHint}" Style="{StaticResource SettingsRowDescStyle}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Width="260" VerticalAlignment="Center">
+                            <ComboBox Style="{StaticResource SettingsComboStyle}"
+                                      ItemsSource="{Binding UpdateMirrorOptions}"
+                                      SelectedItem="{Binding UpdateMirrorPreset, Mode=TwoWay}" />
+                            <TextBox Margin="0,6,0,0"
+                                     Style="{StaticResource FluentTextBoxStyle}"
+                                     Text="{Binding UpdateMirror, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                     Visibility="{Binding IsCustomUpdateMirror, Converter={StaticResource BoolToVis}}"
+                                     ToolTip="支持前缀(https://gh-proxy.com/)或含 {url} 的模板" />
+                        </StackPanel>
+                    </Grid>
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+                    <Grid Style="{StaticResource SettingsRowStyle}">
                         <StackPanel VerticalAlignment="Center">
                             <TextBlock Text="版本号" Style="{StaticResource SettingsRowTitleStyle}" />
                             <TextBlock Text="当前使用中的程序版本"
