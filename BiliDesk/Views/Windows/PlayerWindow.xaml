@@ -2899,11 +2899,19 @@
                                                        Style="{StaticResource MetaTextStyle}"
                                                        Margin="14,11,14,7" />
                                             <!-- ListBox 而非 ItemsControl: 靠 SelectedItem 给"正在播的那一段"高亮,
-                                                 且自带 BringIntoView(打开时自动滚到当前段)。 -->
+                                                 打开时由代码滚到当前段并居中(见 OnPagesToggleClick)。
+                                                 ★ 2026-11-28 补 ScrollUnit=Pixel: 不设时 VerticalOffset /
+                                                   ViewportHeight 的单位是**条目**, 按像素算的居中公式会算错
+                                                   (合集列表 PlayerWindow.xaml 里早就设了, 这里漏了)。
+                                                 像素滚动下滚轮也交给全局 WheelScroll 统一平滑。 -->
                                             <ListBox x:Name="PagesList" Grid.Row="1"
                                                      Background="Transparent" BorderThickness="0"
                                                      Padding="8,0,8,8"
                                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                     ScrollViewer.CanContentScroll="True"
+                                                     VirtualizingPanel.IsVirtualizing="True"
+                                                     VirtualizingPanel.VirtualizationMode="Recycling"
+                                                     VirtualizingPanel.ScrollUnit="Pixel"
                                                      SelectionChanged="OnPageSelected">
                                                 <ListBox.ItemContainerStyle>
                                                     <Style TargetType="ListBoxItem">

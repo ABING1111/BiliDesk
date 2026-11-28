@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Media;
@@ -69,5 +70,33 @@ public static class VisualTreeUtil
         // 也会抛, 兜住并当作"到头了"。
         try { return LogicalTreeHelper.GetParent(d); }
         catch { return null; }
+    }
+
+    /// <summary>
+    /// 在 <paramref name="root"/> 的可视树里广度优先找第一个 T。找不到返回 null。
+    ///
+    /// ★ 为什么需要(2026-11-28): 合集列表与分P 列表都是 ListBox, 要"滚到某一项并居中"
+    ///   就必须拿到它模板内部那个 ScrollViewer —— 它在 <c>ListBox.Template</c> 里,
+    ///   不是 XAML 里声明的子元素, 按名字找不到。
+    ///   项目里原本有三份逐字相同的私有实现(SettingsPage / SmoothScroll / CoverLoader),
+    ///   这里收成一份。
+    /// ★ 广度优先而不是深度优先: 命中通常在浅层(模板 → Border → ScrollViewer),
+    ///   深度优先会先把第一个子分支整个走完, 在复杂模板上白跑很多节点。
+    /// </summary>
+    public static T? FindDescendant<T>(DependencyObject? root) where T : DependencyObject
+    {
+        if (root == null) return null;
+
+        var queue = new Queue<DependencyObject>();
+        queue.Enqueue(root);
+        while (queue.Count > 0)
+        {
+            var cur = queue.Dequeue();
+            if (cur is T hit) return hit;
+            var n = VisualTreeHelper.GetChildrenCount(cur);
+            for (var i = 0; i < n; i++)
+                queue.Enqueue(VisualTreeHelper.GetChild(cur, i));
+        }
+        return null;
     }
 }

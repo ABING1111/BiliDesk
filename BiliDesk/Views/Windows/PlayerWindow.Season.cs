@@ -154,20 +154,137 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 把合集列表滚到"正在播的那一集"。100 多集的合集里不滚, 用户得自己找半天。
+    /// 把合集列表滚到"正在播的那一集"并**居中**。100 多集的合集里不滚, 用户得自己找半天。
     ///
     /// ★ 必须派发到 Loaded 优先级之后: 面板刚由 Collapsed 变 Visible 时布局还没跑完,
     ///   此时 ScrollIntoView 会因为没有可视区域高度而无效(静默不滚, 不报错)。
+    ///
+    /// ★★ 2026-11-28 用户报"自动跳下一集后右边列表回到最开始": 本方法原先**只在手动点开
+    ///   面板时**被调用(OpenSeasonPanel)。而换片会把 ItemsSource 清空重灌(见 ClearSeasonUi),
+    ///   WPF 于是把偏移夹回 0; 面板的展开态却是跨片保持的(_seasonOpen 在 PersistentFields 里)
+    ///   ⇒ 自动连播跳集后面板开着、列表却停在顶部, 用户要一路往下划。现在 ApplySeason 末尾
+    ///   在面板开着时也调一次。
     /// </summary>
     private void ScrollSeasonToCurrent()
     {
-        if (SeasonList?.SelectedItem == null) return;
-        var target = SeasonList.SelectedItem;
+        if (SeasonList == null) return;
+        // 定位不上当前集时列表里没有高亮项 —— 没有"该滚到哪"可言, 停在顶部是对的
+        var target = SeasonList.SelectedItem ?? (object?)_currentSeasonEpisode;
+        if (target == null) return;
+        ScrollListToItemCentered(SeasonList, target);
+    }
+
+    /// <summary>
+    /// 把任意 ListBox 滚到某一项并让它落在视口**正中间**。
+    ///
+    /// ★ 为什么不用 ListBox.ScrollIntoView 收工: 它只保证条目"进了视口", 往下走时贴在
+    ///   视口最底边 —— 当前集下面全是空的, 连播时下一集仍在屏幕外(用户还得划)。
+    ///
+    /// ★★ 为什么仍要**先**调一次 ScrollIntoView: 列表是虚拟化的(Pixel 滚动), 条目在视口外时
+    ///   **压根没有容器**, <c>ContainerFromItem</c> 恒为 null, 量不到它的几何。ScrollIntoView
+    ///   是唯一能让虚拟化面板把它"实现"出来的手段 —— 生成容器、顺带滚进视口, 然后第二拍
+    ///   才按真实几何把它挪到正中。★ 别把这一步当成冗余删掉: 删了之后 100 多集的合集里
+    ///   第 60 集永远拿不到容器, 重试几拍后静默放弃, 列表就还是停在顶部(等于没修)。
+    ///
+    /// ★ 重试拍数有上限(<see cref="ScrollRetryCount"/>): 别做成无限轮询,
+    ///   那会在面板关闭后还一直占着 Dispatcher。
+    /// </summary>
+    private void ScrollListToItemCentered(ListBox list, object item, int attempt = 0)
+    {
+        if (_closing || list == null) return;
+
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
         {
-            if (_closing || !_seasonOpen) return;
-            SeasonList?.ScrollIntoView(target);
+            if (_closing) return;
+            // 这一拍期间用户可能换了片 / 换了列表内容: 条目已经不在列表里就别滚了
+            if (!list.Items.Contains(item)) return;
+
+            var sv = VisualTreeUtil.FindDescendant<ScrollViewer>(list);
+            if (sv == null)
+            {
+                // 面板刚变可见时模板可能还没套上(可视树里根本没有 ScrollViewer): 下一拍再来
+                RetryScrollToItemCentered(list, item, attempt);
+                return;
+            }
+
+            // ★★ 面板刚由 Collapsed 变 Visible 时, 布局还没跑: ViewportHeight 是 0。
+            //   此时算出来的"居中"是原地不动 —— 必须等下一拍, 否则"点开面板滚到当前集"
+            //   这条会静默失效(探针实测)。
+            if (sv.ViewportHeight <= 0)
+            {
+                RetryScrollToItemCentered(list, item, attempt);
+                return;
+            }
+
+            // 内容不满一屏: 没有可滚的地方, 收工。★ 别在这里重试 —— 面板被收起时
+            // ScrollableHeight 恒为 0, 重试只会白占四拍 Dispatcher。
+            if (sv.ScrollableHeight <= 0) return;
+
+            if (list.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement container)
+            {
+                // 容器还没生成(虚拟化列表里视口外的条目): 先让它滚进视口, 下一拍再按真实几何居中。
+                // 见上面"为什么仍要先调 ScrollIntoView"。
+                ScrollItemIntoView(list, item);
+                RetryScrollToItemCentered(list, item, attempt);
+                return;
+            }
+
+            if (container.ActualHeight <= 0)
+            {
+                // 容器刚生成、还没排版: 高度为 0 时算出来的偏移会把列表跳错位置
+                RetryScrollToItemCentered(list, item, attempt);
+                return;
+            }
+
+            double top;
+            try { top = container.TransformToAncestor(sv).Transform(new Point(0, 0)).Y; }
+            catch
+            {
+                // 容器还没接进可视树(布局未完成): 交给下一拍
+                RetryScrollToItemCentered(list, item, attempt);
+                return;
+            }
+
+            var target = Helpers.SeasonScrollPolicy.CenterOffset(
+                sv.VerticalOffset, top, container.ActualHeight, sv.ViewportHeight, sv.ScrollableHeight);
+
+            // 已经在正中: 收工(别每次换片都白写一次偏移、触发一轮 ScrollChanged)
+            if (Math.Abs(target - sv.VerticalOffset) < 1) return;
+
+            sv.ScrollToVerticalOffset(target);
+
+            // ★★ 必须再校验一次(探针实测出来的竞态): ListBox 在 SelectedItem 变化后会**自己**
+            //   发一次 RequestBringIntoView, 它的处理排在我们的 Loaded 回调之后 —— 于是刚居中
+            //   就被它改回"贴视口底边"(实测偏移从 4112 掉回 3896, 条目底边正好压住视口底边)。
+            //   这里补一拍校验: 下一拍若发现又没居中, 再纠一次; 已居中就直接收工(收敛)。
+            RetryScrollToItemCentered(list, item, attempt);
         }));
+    }
+
+    /// <summary>
+    /// 让虚拟化列表把某一项"实现"出来(生成容器)。
+    /// ★ ScrollIntoView 在容器尚未布局时可能抛异常(与 FollowPage 里踩过的是同一个坑), 吞掉即可 ——
+    ///   下一拍还会再走一遍。
+    /// </summary>
+    private static void ScrollItemIntoView(ListBox list, object item)
+    {
+        try { list.ScrollIntoView(item); }
+        catch { /* 容器未就绪: 交给重试 */ }
+    }
+
+    /// <summary>
+    /// 滚到当前项的重试拍数上限。见 <see cref="ScrollListToItemCentered"/> 的说明。
+    /// ★ 4 拍 ≈ 换片后 2~4 帧: 足够等虚拟化面板把容器实现出来并排版, 又不会在
+    ///   面板被用户关掉之后还继续空转。
+    /// </summary>
+    private const int ScrollRetryCount = 4;
+
+    private void RetryScrollToItemCentered(ListBox list, object item, int attempt)
+    {
+        if (attempt >= ScrollRetryCount) return;
+        // Background 优先级: 让这一轮布局先跑完再量, 比再排一次 Loaded 更靠后
+        Dispatcher.BeginInvoke(DispatcherPriority.Background,
+            new Action(() => ScrollListToItemCentered(list, item, attempt + 1)));
     }
 
     private void CloseSeasonPanel()
@@ -246,6 +363,11 @@ public partial class PlayerWindow : FluentWindow
         // 连播链: 合集与番剧共用(番剧的分集表已经被合成成同一份 SeasonInfo)。
         // ★ 必须放在 `_currentSeasonEpisode` 定下来之后 —— 它算的是"当前集之后的那些"。
         ApplyAutoPlaySeasonChain(season);
+        // ★★ 2026-11-28: 面板开着(连看几集是常态)就必须把列表滚回当前集。
+        //   ResetForNewMedia 清空过 ItemsSource, 偏移已被 WPF 夹回 0; 不补这一下,
+        //   自动连播跳到下一集后列表就停在最顶上(用户报的正是这个)。
+        //   面板关着时不滚: 那样打开面板时 OpenSeasonPanel 会再滚一次, 白跑一遍布局。
+        if (_seasonOpen) ScrollSeasonToCurrent();
     }
 
     /// <summary>
@@ -411,6 +533,11 @@ public partial class PlayerWindow : FluentWindow
                 PagesList.SelectedItem = _pages.FirstOrDefault(p => p.Cid == _currentCid);
             }
             PagesMetaText.Text = $"共 {_pages.Count} 个分P";
+            // ★ 2026-11-28: 40 段的纪录片里, 打开弹层只给高亮不滚 = 用户看到的永远是 P1,
+            //   得自己往下翻找"现在播到第几段"。与合集列表共用同一套居中滚动。
+            //   拿不到当前段(定位不上)就滚到第一项, 至少列表停在顶部而不是随机位置。
+            var target = PagesList?.SelectedItem ?? PagesList?.Items.Cast<object>().FirstOrDefault();
+            if (PagesList != null && target != null) ScrollListToItemCentered(PagesList, target);
         });
         // 高亮态跟随最终开关态(收起那条路 OnPagesPopupClosed 也会置 off, 两边一致)
         if (BtnPages != null) BtnPages.Tag = PagesPopup.IsOpen ? "on" : "off";
