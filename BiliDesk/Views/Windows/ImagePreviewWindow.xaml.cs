@@ -31,11 +31,54 @@ namespace BiliDesk.Views.Windows;
 /// ★ 2026-11-14 新增"一组图"与左右切换: 调用方可以一次给整组地址 + 起始下标
 ///   (动态九宫格、评论多图、私信图片…), 窗口内用左右箭头 / ←→ 键逐张看。
 ///   单张的旧签名保留并转调新重载 —— 封面/头像那十几处调用点一行都不用改。
+///
+/// ★★★ 2026-11-28 修"快速点 →/← 时序号变了、图要等一会才换"(动态多图):
+///   真凶不是渲染, 而是**每张图第一次进这个窗口都要重新下载 + 按 4096 档解码**:
+///   列表用的是 `@480w.jpg`, 详情窗用 `@720w.jpg`, 而这个窗口要 `Url` 原图 ——
+///   磁盘缓存按 URL 取文件名, 三者是三份文件, 所以第一次看每张都要下 3~4MB;
+///   再加上 <see cref="CoverLoader"/> 的解码槽只有 min(CPU/2,4) 个, 连点时最新那张
+///   排在几次**已经作废**的解码后面 ⇒ 用户看到"右下角已经 3/36, 画面还是 2/36"。
+///   "翻过一圈就好转"其实是那一圈把磁盘缓存预热完了, 不是代码变快了。
+///   ⇒ 现在三条一起做:
+///      ① 当前图上屏后**预取相邻图**(见 <see cref="PreviewPreload"/>), 下载/解码与
+///         "用户看当前这张"的时间重叠;
+///      ② 窗口自己的 LRU 位图缓存(4 张 / 128MB, 永不淘汰当前张), 往回翻是**同步**出图;
+///         预览的大图不再进 <see cref="CoverLoader"/> 那个 24MB 的共享预算(会把背后
+///         卡片封面全挤掉, 且自己刚解完就被淘汰);
+///      ③ 切到还没解好的图时把上一张压暗 + 明说"正在加载图片…", 不再是"看起来卡死"。
+///   ★ 别改回"请求 `@1920w.jpg` 之类的缩放图"来省下载: 双击 1:1 看真像素是这个窗口的
+///     既有契约(见 DynamicImageGrid.ShowPreview 的注释), 而且这里被十几处调用共用。
 /// </summary>
 public partial class ImagePreviewWindow : FluentWindow
 {
+    /// <summary>预览窗的解码档位(4096 = 不解到更大; 实际按原图宽度, 不会放大)。</summary>
+    private const int PreviewDecodeWidth = 4096;
+
+    /// <summary>
+    /// 私有位图缓存的上限(张数 / 字节)。
+    ///
+    /// ★ 为什么要有它(而不是只靠 <see cref="CoverLoader"/> 的 MemCache): 那个预算只有 24MB,
+    ///   而这里一张 2400×3200 的壁纸就是 30MB —— 刚解完就被挤掉, 回头再看一张还要重新解码。
+    /// ★ 为什么是 4 张 / 128MB: "当前 + 预取的那几张(见 <see cref="PreviewPreload"/>:
+    ///   Ahead=2 / Behind=1)"最多同时 4 张。3 张的话"下一张"刚预取好就把"上一张"挤掉,
+    ///   回翻必然重新解码; 整组九宫格(9 张)对壁纸就是 300MB+, 与 2026-11-09 "内存回落"的
+    ///   优化冲突, 也不能放开。
+    /// ★ 单张更大的图(3000×4000 ≈ 48MB)会让实际只留 2~3 张 —— 那是刻意的:
+    ///   **当前正在看的那张永远不会被淘汰**, 剩下的按 LRU, 回翻若已被挤掉就走磁盘缓存
+    ///   (一次解码 + "正在加载"提示), 好过让一个预览窗吃掉三百多 MB。
+    /// </summary>
+    private const int MaxCachedImages = 4;
+    private const long MaxCachedBytes = 128L * 1024 * 1024;
+
+    /// <summary>切图后、新图还没解好时上一张的不透明度(让"没反应"看起来像"在加载")。</summary>
+    private const double LoadingDimOpacity = 0.35;
+
     /// <summary>整组图片地址(已 Normalize、已去空串)。单图预览就是长度 1 的组。</summary>
-    private readonly List<string> _urls = new();
+    /// <remarks>
+    /// ★ 用**数组**而不是 List: <see cref="CoverLoader"/> 的 `abandoned` 回调会在后台线程读它,
+    ///   数组引用读取无撕裂, 也不会和 UI 线程的 Add/Remove 撞上。
+    /// </remarks>
+    private string[] _urls = Array.Empty<string>();
 
     /// <summary>当前显示的是 <see cref="_urls"/> 里的第几张。</summary>
     private int _index;
@@ -45,6 +88,35 @@ public partial class ImagePreviewWindow : FluentWindow
     /// 只有**最后一次**发起的结果允许上屏, 否则先发的慢请求晚到会把图换回去(串图)。
     /// </summary>
     private int _loadGen;
+
+    /// <summary>
+    /// 预取链条的代号。切图就 ++, 旧链条在下次自检时自行退出(在途的那一次不取消 ——
+    /// 它同时也在预热磁盘缓存, 取消等于白下)。
+    /// </summary>
+    private int _prefetchGen;
+
+    /// <summary>窗口已关: 不再动缓存/不再排预取(在途的 await 回来时只看这个)。</summary>
+    private bool _closed;
+
+    /// <summary>已解码位图(url → 位图 + 占用字节)。只在本窗口内有效, 关闭即放。</summary>
+    private readonly Dictionary<string, CachedImage> _decoded = new();
+
+    /// <summary>使用顺序(最久未用在最前面), LRU 淘汰用。</summary>
+    private readonly List<string> _decodedOrder = new();
+
+    private long _decodedBytes;
+
+    /// <summary>正在预取的 url 集合; 它的 Count 就是占用的预取通道数。</summary>
+    private readonly HashSet<string> _prefetching = new();
+
+    /// <summary>正在排预取(防重入: 命中缓存时 <see cref="PrefetchOneAsync"/> 会同步完成并回调 SchedulePrefetch)。</summary>
+    private bool _prefetchScheduling;
+
+    private sealed class CachedImage
+    {
+        public BitmapImage Image = null!;
+        public long Bytes;
+    }
 
     /// <summary>加载 URL(保存用)。空串 = 无图。</summary>
     private string _imageUrl = "";
@@ -79,6 +151,16 @@ public partial class ImagePreviewWindow : FluentWindow
         PreviewImage.MouseMove += OnImageMouseMove;
         PreviewImage.MouseRightButtonUp += (_, _) => Close();
         KeyDown += OnKey;
+
+        // 关窗即放: 私有缓存里的位图每张 10~35MB, 不能等终结器。
+        // ★ 同时把两个代号推走: 在途的加载/预取回来时看到代数变了就什么都不做。
+        Closed += (_, _) =>
+        {
+            _closed = true;
+            _loadGen++;
+            _prefetchGen++;
+            ClearDecodedCache();
+        };
     }
 
     /// <summary>单图预览(封面/头像/番剧封面等)。转调整组重载, 行为与以前完全一致。</summary>
@@ -97,9 +179,12 @@ public partial class ImagePreviewWindow : FluentWindow
         // ★ 过滤空地址 + 下标换算走与 MediaActions 同一个纯函数(PreviewList, 有单测):
         //   两条入口各写一份迟早会算出不同的下标。
         var (clean, target) = PreviewList.Normalize(urls, index);
-        _urls.Clear();
-        _urls.AddRange(clean);
+        _urls = clean;
         _index = target;
+
+        // 换组 = 旧组的位图与预取链条都不再有意义(在途的那次让它自己跑完, 结果不再收)
+        _prefetchGen++;
+        ClearDecodedCache();
 
         _suggestedName = FileNameUtil.Sanitize(
             string.IsNullOrWhiteSpace(title) ? "image" : title!, "image");
@@ -111,7 +196,7 @@ public partial class ImagePreviewWindow : FluentWindow
 
         UpdateNavState();
 
-        if (_urls.Count == 0)
+        if (_urls.Length == 0)
         {
             _imageUrl = "";
             HintText.Text = "没有可显示的图片";
@@ -124,32 +209,61 @@ public partial class ImagePreviewWindow : FluentWindow
 
     /// <summary>
     /// 把当前下标那张解出来上屏。
-    /// ★ 首次加载才显示"正在加载图片…"; 切图时保留上一张直到新图就绪(不闪黑),
+    ///
+    /// ★★★ 2026-11-28 改成"缓存 → 同步上屏"优先:
+    ///   私有缓存命中时**一次 await 都没有**(连点箭头时每一帧都要走这条路);
+    ///   没命中才压暗上一张 + 显示"正在加载图片…", 新图到了再复位不透明度。
     ///   失败也只在中间盖一行提示, 不清掉已有画面。
     /// </summary>
     private async Task LoadCurrentAsync()
     {
-        if (_urls.Count == 0) return;
+        if (_urls.Length == 0) return;
 
         var gen = ++_loadGen;
-        _imageUrl = _urls[_index];
+        var idx = _index;
+        var url = _urls[idx];
+        _imageUrl = url;
 
-        if (PreviewImage.Source == null)
+        // ① 本窗口已经解过这张: 同步换图(往回翻、来回对比都走这条)
+        if (TryGetDecoded(url, out var ready) && ready != null)
         {
-            HintText.Text = "正在加载图片…";
+            ShowImage(ready);
+            StartPrefetch();
+            return;
+        }
+
+        // ② 还没有: 保留上一张但压暗, 并明说在加载 —— 别再让"序号变了、画面没变"像卡死。
+        //    (首次加载时 PreviewImage.Source 为空, 压暗没有意义, 只有提示文字。)
+        if (PreviewImage.Source != null) PreviewImage.Opacity = LoadingDimOpacity;
+        HintText.Text = "正在加载图片…";
+        HintText.Visibility = Visibility.Visible;
+
+        // ★ abandoned 判据是"这张已经不在当前 + 预取窗口里"(见 PreviewPreload.IsWanted) ——
+        //   **不能**改成判加载代数: 用户往回点一张时, 那张图在途的加载会把自己判成没人要,
+        //   结果就是画面一直停在旧图上(正是这次要修的现象)。
+        // ★ cacheInMem: false —— 预览的大图(10~35MB)不进 CoverLoader 那个 24MB 的共享预算。
+        BitmapImage? img;
+        try
+        {
+            img = await CoverLoader.LoadAsync(url, PreviewDecodeWidth,
+                () => !PreviewPreload.IsWanted(_urls.Length, _index, idx), cacheInMem: false);
+        }
+        catch (Exception ex)
+        {
+            // ★ 兜底: 这里抛出去会被 `_ = LoadCurrentAsync()` 吞掉, 而窗口已经压暗了 ——
+            //   那就成了一个永远半透明的死画面。宁可盖一行失败提示, 也不能停在这个状态。
+            if (gen != _loadGen) return;
+            App.ReportError(ex);
+            PreviewImage.Opacity = 1.0;
+            HintText.Text = "图片加载失败";
             HintText.Visibility = Visibility.Visible;
+            return;
         }
-        else
-        {
-            // 已经有画面(切图/重试): 顺手清掉上一张留下的"已保存…/加载失败"提示,
-            // 否则新图都上屏了, 中间还压着一句上一张的旧话。
-            HintText.Visibility = Visibility.Collapsed;
-        }
-
-        var img = await CoverLoader.LoadAsync(_imageUrl, 4096);
 
         // 更晚的请求已经发出: 这次结果作废(防连点串图 / 关窗前的结果也一并丢掉)
         if (gen != _loadGen) return;
+
+        PreviewImage.Opacity = 1.0;
 
         if (img == null)
         {
@@ -158,7 +272,9 @@ public partial class ImagePreviewWindow : FluentWindow
             return;
         }
 
+        PutDecoded(url, img);
         ShowImage(img);
+        StartPrefetch();
     }
 
     /// <summary>
@@ -178,11 +294,152 @@ public partial class ImagePreviewWindow : FluentWindow
         PreviewImage.MaxWidth = _natW;
         PreviewImage.MaxHeight = _natH;
         PreviewImage.Stretch = Stretch.Uniform;
+        // 上一次"加载中"压暗的残留必须清掉, 否则新图一上来就是半透明的
+        PreviewImage.Opacity = 1.0;
         HintText.Visibility = Visibility.Collapsed;
 
         // ★ 换图必须回到基线: 上一张的缩放/平移留着, 新图一上来就是"局部放大"的样子,
         //   与"点开就是完整一张"的预期不符。
         ResetView();
+    }
+
+    // ------------------------------------------------------------ 私有位图缓存
+
+    /// <summary>取缓存(命中即更新 LRU 次序)。</summary>
+    private bool TryGetDecoded(string url, out BitmapImage? img)
+    {
+        img = null;
+        if (!_decoded.TryGetValue(url, out var hit)) return false;
+
+        Touch(url);
+        img = hit.Image;
+        return true;
+    }
+
+    /// <summary>把某个 url 挪到"最新使用"那一端。</summary>
+    private void Touch(string url)
+    {
+        var at = _decodedOrder.IndexOf(url);
+        if (at >= 0) _decodedOrder.RemoveAt(at);
+        _decodedOrder.Add(url);
+    }
+
+    /// <summary>放进私有缓存, 并按 LRU 淘汰到上限以内。</summary>
+    private void PutDecoded(string url, BitmapImage img)
+    {
+        if (_decoded.ContainsKey(url))
+        {
+            Touch(url);
+            return;
+        }
+
+        var bytes = EstimateBytes(img);
+        _decoded[url] = new CachedImage { Image = img, Bytes = bytes };
+        _decodedBytes += bytes;
+        _decodedOrder.Add(url);
+
+        // ★ 淘汰时**永远跳过当前这张**: 超大图(3000×4000 ≈ 48MB)自己就可能超出单个上限,
+        //   而"当前正在看"的那张一旦被淘汰, 下一次切回来又要重新解码 —— 淘汰了等于没缓存。
+        var current = CurrentUrl;
+        while (_decodedOrder.Count > 1 &&
+               (_decoded.Count > MaxCachedImages || _decodedBytes > MaxCachedBytes))
+        {
+            var victim = -1;
+            for (var i = 0; i < _decodedOrder.Count; i++)
+            {
+                if (_decodedOrder[i] == current) continue;
+                victim = i;
+                break;
+            }
+            if (victim < 0) break;   // 只剩下当前这张: 不再淘汰, 宁可这一张超预算
+
+            var key = _decodedOrder[victim];
+            _decodedOrder.RemoveAt(victim);
+            if (_decoded.Remove(key, out var gone)) _decodedBytes -= gone.Bytes;
+        }
+    }
+
+    private string CurrentUrl
+        => _urls.Length > 0 && _index >= 0 && _index < _urls.Length ? _urls[_index] : "";
+
+    private void ClearDecodedCache()
+    {
+        _decoded.Clear();
+        _decodedOrder.Clear();
+        _decodedBytes = 0;
+    }
+
+    /// <summary>估算解码后位图占用的字节(Pbgra32: 每像素 4 字节, 与 CoverLoader 同一把尺子)。</summary>
+    private static long EstimateBytes(BitmapSource img)
+        => (long)Math.Max(1, img.PixelWidth) * Math.Max(1, img.PixelHeight) * 4;
+
+    // ------------------------------------------------------------ 相邻图预取
+
+    /// <summary>
+    /// 重启预取链条(当前这张上屏/换组之后调用)。
+    /// ★ 只是"换代 + 填通道", 不动在飞的那几次 —— 它们回来时看到代数变了就不会进缓存,
+    ///   但下载已经落盘, 下次谁要看都只剩解码。
+    /// </summary>
+    private void StartPrefetch()
+    {
+        _prefetchGen++;
+        SchedulePrefetch();
+    }
+
+    /// <summary>
+    /// 把预取通道填满(<see cref="PreviewPreload.MaxConcurrent"/> 条), 邻居按**当前**下标算。
+    /// ★ 幂等: 每次有条道空出来都按最新位置重填, 所以切图之后不需要显式取消旧链条。
+    /// </summary>
+    private void SchedulePrefetch()
+    {
+        if (_closed || _prefetchScheduling || _urls.Length <= 1) return;
+
+        _prefetchScheduling = true;
+        try
+        {
+            var gen = _prefetchGen;
+            foreach (var offset in PreviewPreload.Order(_urls.Length, _index))
+            {
+                if (_prefetching.Count >= PreviewPreload.MaxConcurrent) return;
+
+                var i = _index + offset;
+                var url = _urls[i];
+                if (_decoded.ContainsKey(url) || _prefetching.Contains(url)) continue;
+
+                _prefetching.Add(url);
+                _ = PrefetchOneAsync(gen, i, url);
+            }
+        }
+        finally
+        {
+            _prefetchScheduling = false;
+        }
+    }
+
+    private async Task PrefetchOneAsync(int gen, int index, string url)
+    {
+        try
+        {
+            // ★★ 预取**不传** abandoned: 用户切到这张时 CoverLoader 的 InFlight 会让两次请求
+            //    共用同一个 Task —— 预取若判"没人要", 会把用户正要看的那一次一起判死(图不显示)。
+            var img = await CoverLoader.LoadAsync(url, PreviewDecodeWidth, null, cacheInMem: false);
+            if (img == null || _closed) return;
+
+            // 链条已换代 / 这张已经不在窗口里: 不进缓存(位置可能很远, 会挤掉真正要看的)
+            if (gen != _prefetchGen) return;
+            if (!PreviewPreload.IsWanted(_urls.Length, _index, index)) return;
+
+            PutDecoded(url, img);
+        }
+        catch
+        {
+            // 预取是尽力而为: 失败了下次切到这张会走正常加载路径, 不该冒出无人观察的异常
+        }
+        finally
+        {
+            _prefetching.Remove(url);
+            if (!_closed) SchedulePrefetch();
+        }
     }
 
     /// <summary>
@@ -212,7 +469,7 @@ public partial class ImagePreviewWindow : FluentWindow
     /// </summary>
     private void UpdateNavState()
     {
-        var multi = _urls.Count > 1;
+        var multi = _urls.Length > 1;
 
         if (PrevButton != null)
         {
@@ -222,10 +479,10 @@ public partial class ImagePreviewWindow : FluentWindow
         if (NextButton != null)
         {
             NextButton.Visibility = multi ? Visibility.Visible : Visibility.Collapsed;
-            NextButton.IsEnabled = multi && _index < _urls.Count - 1;
+            NextButton.IsEnabled = multi && _index < _urls.Length - 1;
         }
         if (IndexText != null)
-            IndexText.Text = multi ? $"{_index + 1} / {_urls.Count}" : "";
+            IndexText.Text = multi ? $"{_index + 1} / {_urls.Length}" : "";
 
         if (HintBarText != null)
             HintBarText.Text = multi
@@ -236,8 +493,8 @@ public partial class ImagePreviewWindow : FluentWindow
     /// <summary>切到相邻一张(<paramref name="delta"/> 为 ±1)。到头就原地不动。</summary>
     private void Navigate(int delta)
     {
-        if (_urls.Count <= 1) return;
-        var next = Math.Clamp(_index + delta, 0, _urls.Count - 1);
+        if (_urls.Length <= 1) return;
+        var next = Math.Clamp(_index + delta, 0, _urls.Length - 1);
         if (next == _index) return;
 
         _index = next;

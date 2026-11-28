@@ -201,15 +201,21 @@ public static class CoverLoader
         => LoadAsync(url, decodeWidth, null);
 
     /// <summary>
-    /// 带"放弃判定"的加载。<paramref name="abandoned"/> 在**拿到解码槽之后**被调用一次:
-    /// 返回 true 表示"这张图已经没人要了, 别再花解码时间", 直接把槽让给别人。
+    /// 带"放弃判定"的加载。<paramref name="abandoned"/> 会在**排队拿解码槽之前**与**拿到槽之后**
+    /// 各被调用一次: 返回 true 表示"这张图已经没人要了, 别再花解码时间", 直接把槽让给别人。
+    /// (下载**不会**因此中止 —— 文件照样落进磁盘缓存, 下次再看就只剩解码。)
     ///
     /// ★★★ 它运行在**后台线程**上, 所以**绝对不能在回调里访问 DependencyObject**
     ///   (那会抛 "调用线程无法访问此对象")。传进来的必须是纯字段读取 ——
     ///   见 <see cref="AbandonFlagFor"/>。
+    ///
+    /// ★★ <paramref name="cacheInMem"/>=false 时解码结果**不写** <see cref="MemCache"/>:
+    ///   图片预览窗按 4096 档解码, 一张就是 10~35MB, 塞进这个 24MB 的预算会把背后的卡片封面
+    ///   全挤掉(而那些封面滚回来又要重下)。预览窗自己有私有缓存, 由它负责留图。
+    ///   InFlight 去重不受影响 —— 同一张图仍然只下载/解码一次。
     /// </summary>
     internal static Task<BitmapImage?> LoadAsync(string? url, int decodeWidth,
-        Func<bool>? abandoned)
+        Func<bool>? abandoned, bool cacheInMem = true)
     {
         url = UrlUtil.Normalize(url);
         if (url.Length == 0) return Task.FromResult<BitmapImage?>(null);
@@ -228,7 +234,7 @@ public static class CoverLoader
             if (InFlight.TryGetValue(cacheKey, out var running)) return running;
         }
 
-        var task = LoadCoreAsync(url, cacheKey, w, abandoned);
+        var task = LoadCoreAsync(url, cacheKey, w, abandoned, cacheInMem);
         lock (Lock)
         {
             // 极端情况下两个线程同时走到这里, 后者会覆盖前者 —— 两者结果等价(都会写同一个缓存键),
@@ -268,7 +274,7 @@ public static class CoverLoader
     }
 
     private static async Task<BitmapImage?> LoadCoreAsync(string url, string cacheKey, int decodeWidth,
-        Func<bool>? abandoned = null)
+        Func<bool>? abandoned = null, bool cacheInMem = true)
     {
         try
         {
@@ -327,13 +333,23 @@ public static class CoverLoader
             if (File.Exists(cacheFile))
             {
                 var path = cacheFile;
-                await DecodeGate.WaitAsync().ConfigureAwait(false);
-                try
+                // ★ 排队**之前**先判一次: 没人要的图连解码槽都别占(见 LoadAsync 的说明)。
+                //   快速连点预览窗时, 前面几次请求已经作废, 却仍排在 DecodeGate 队列里 ——
+                //   用户真正在等的那张要等它们挨个拿到槽、判一次"没人要"、再让出来。
+                if (abandoned != null && abandoned())
                 {
-                    if (abandoned != null && abandoned()) { img = null; }
-                    else img = await Task.Run(() => FromFile(path, decodeWidth)).ConfigureAwait(false);
+                    img = null;
                 }
-                finally { DecodeGate.Release(); }
+                else
+                {
+                    await DecodeGate.WaitAsync().ConfigureAwait(false);
+                    try
+                    {
+                        if (abandoned != null && abandoned()) { img = null; }
+                        else img = await Task.Run(() => FromFile(path, decodeWidth)).ConfigureAwait(false);
+                    }
+                    finally { DecodeGate.Release(); }
+                }
             }
             else if (downloaded != null)
             {
@@ -352,6 +368,9 @@ public static class CoverLoader
                 img = null;   // 既没缓存也没下载到: 这才算真的取不到图
             }
             if (img == null) return null;
+
+            // ★ cacheInMem=false(图片预览窗): 结果交给调用方自己的缓存, 不进这个 24MB 的预算。
+            if (!cacheInMem) return img;
 
             lock (Lock)
             {
