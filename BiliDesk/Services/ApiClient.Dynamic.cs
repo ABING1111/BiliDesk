@@ -103,7 +103,7 @@ public partial class ApiClient
     /// <summary>
     /// 某个 UP 主空间里的动态(UP 主页「图文」Tab 用)。
     /// 接口: GET /x/polymer/web-dynamic/v1/feed/space?host_mid=...
-    /// 返回全部类型, 由调用方筛出图文/纯文字(视频动态单独在「投稿」Tab 展示)。
+    /// 返回全部类型, 由调用方筛出图文/专栏(视频动态单独在「投稿」Tab 展示)。
     /// </summary>
     public async Task<(bool ok, string? err, List<DynamicItem>? items, string? nextOffset, bool hasMore)>
         GetSpaceDynamicsAsync(long mid, string? offset = null)

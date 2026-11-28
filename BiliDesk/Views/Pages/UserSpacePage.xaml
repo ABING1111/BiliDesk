@@ -418,7 +418,7 @@
             </ScrollViewer>
         </Grid>
 
-        <!-- ======== 图文 Tab: 该 UP 发的图文动态 ======== -->
+        <!-- ======== 图文 Tab: 该 UP 发的图文/专栏动态 ======== -->
         <Grid Grid.Row="1" Visibility="{Binding IsImagesTab, Converter={StaticResource BoolToVis}}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -473,7 +473,7 @@
                     <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                FontSize="26" HorizontalAlignment="Center"
                                Foreground="{DynamicResource TextTertiaryBrush}" />
-                    <TextBlock Text="已加载的图文里没有匹配的动态" FontSize="13" Margin="0,10,0,0"
+                    <TextBlock Text="已加载的图文/专栏里没有匹配的动态" FontSize="13" Margin="0,10,0,0"
                                HorizontalAlignment="Center"
                                Foreground="{DynamicResource TextSecondaryBrush}" />
                     <TextBlock Text="继续往后加载更早的动态可能会找到" FontSize="11.5"

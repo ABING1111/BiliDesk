@@ -57,7 +57,7 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
 
     public ObservableCollection<VideoItem> Videos { get; } = new();
 
-    /// <summary>UP 主页「图文」Tab: 该 UP 发的图文/纯文字动态(视频动态不混进来)。</summary>
+    /// <summary>UP 主页「图文」Tab: 该 UP 发的图文/专栏动态(视频动态不混进来)。</summary>
     public ObservableCollection<DynamicItem> ImageDynamics { get; } = new();
 
     // ---------------- Tab 切换 ----------------
@@ -669,8 +669,9 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
     private const int MaxScanPagesPerLoad = 8;
 
     /// <summary>
-    /// 拉一页 UP 主动态, 只挑图文进 ImageDynamics。
+    /// 拉一页 UP 主动态, 只挑图文/专栏进 ImageDynamics。
     /// ★ 服务端一页可能全是视频动态(投稿), 所以这里按"凑够目标条数"连续翻页。
+    /// ★ 2026-11-28: 专栏也归到「图文」Tab —— 判据收敛在 <see cref="SpaceImagesPolicy.Accepts"/>。
     /// </summary>
     private async Task LoadImagesPageAsync(bool reset)
     {
@@ -713,7 +714,7 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
                 {
                     foreach (var it in items)
                     {
-                        if (it.Kind is not DynamicKind.ImageText) continue;
+                        if (!SpaceImagesPolicy.Accepts(it)) continue;
                         if (string.IsNullOrEmpty(it.Id) || !seen.Add(it.Id)) continue;
                         ImageDynamics.Add(it);
                         added++;
@@ -728,7 +729,7 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
             }
 
             if (added == 0 && ImageDynamics.Count == 0 && ImagesError.Length == 0)
-                ImagesError = "该 UP 主暂时没有图文动态";
+                ImagesError = "该 UP 主暂时没有图文或专栏动态";
             OnPropertyChanged(nameof(ImageSummary));
             OnPropertyChanged(nameof(ShowImagesErrorOverlay));
             OnPropertyChanged(nameof(ShowImageSearchEmpty));
