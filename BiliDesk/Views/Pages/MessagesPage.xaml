@@ -715,7 +715,7 @@
                             <TextBox x:Name="DraftBox" Grid.Column="1"
                                      Style="{StaticResource FluentTextBoxStyle}"
                                      Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
-                                     KeyDown="OnDraftKeyDown" MaxLength="500"
+                                     PreviewKeyDown="OnDraftPreviewKeyDown" MaxLength="500"
                                      AcceptsReturn="True" TextWrapping="Wrap"
                                      MaxHeight="120"
                                      VerticalScrollBarVisibility="Auto"

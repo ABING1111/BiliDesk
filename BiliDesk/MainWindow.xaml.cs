@@ -476,10 +476,10 @@ public partial class MainWindow : FluentWindow
         EmbeddedTitle.Text = title;
         EmbeddedContent.Content = page;
 
-        // UP 主主页 / 番剧详情 / 合集详情页的返回按钮放右上角(2026-11-27、2026-11-28 用户要求):
-        // 标题仍在左, 返回贴右。
+        // UP 主主页 / 番剧详情 / 合集详情 / 我的空间页的返回按钮放右上角
+        // (2026-11-27、2026-11-28 用户要求): 标题仍在左, 返回贴右。
         // 按页面类型判断而不是按"谁调用了 ShowEmbeddedPage": 返回栈回弹的上一页也要还原同样的位置。
-        var backOnRight = page is UserSpacePage or BangumiPage or SpaceCollectionPage;
+        var backOnRight = page is UserSpacePage or BangumiPage or SpaceCollectionPage or UserCenterPage;
         DockPanel.SetDock(EmbeddedBackButton, backOnRight ? Dock.Right : Dock.Left);
         EmbeddedTitle.Margin = backOnRight ? new Thickness(0) : new Thickness(14, 0, 0, 0);
 

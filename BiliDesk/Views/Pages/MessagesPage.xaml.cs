@@ -286,11 +286,15 @@ public partial class MessagesPage : UserControl, IRefreshable
     // ---------------------------------------------------------------- 输入
 
     /// <summary>
-    /// 回车即发送(B 站网页端的习惯)。
-    /// ★ 输入框现在支持多行自动扩展, Shift+Enter 留给换行 —— 不 Handle,
-    ///   交给 TextBox 自己插入换行符(它已 AcceptsReturn=true)。
+    /// 回车即发送(B 站网页端的习惯), Shift+Enter 换行。
+    ///
+    /// ★★ 必须挂 <b>PreviewKeyDown</b>(隧道)而不是 KeyDown: 输入框 AcceptsReturn=True,
+    ///   Enter 会在 TextBox 自己的 KeyDown 里先被吃掉并插入换行, 挂 KeyDown 到冒泡阶段
+    ///   已经晚了 —— 表现就是"按 Enter 只换行, 私信发不出去"(与评论输入框同一套做法,
+    ///   见 DynamicDetailView.OnComposerKeyDown / PlayerWindow.OnCommentDraftPreviewKeyDown)。
+    /// ★ IME 组字时 WPF 报的 Key 是 ImeProcessed, 选词的回车不会误触发送。
     /// </summary>
-    private void OnDraftKeyDown(object sender, KeyEventArgs e)
+    private void OnDraftPreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter) return;
         if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) return;

@@ -10,8 +10,9 @@
         一个页面三个 Tab: 动态 / 关注 / 粉丝 —— 看的是**同一个 mid** 的三份内容。
         「我的」页点三个数字进来、UP 主主页点关注数/粉丝数进来, 都用这一个页面。
 
-        ★ Tab 行用全局的 ContentTabStyle(播放器「简介/评论」那一套):
-          强调色下划线 + 互斥(RadioButton + GroupName)。
+        ★ Tab 行沿用全局 ContentTabStyle 的视觉(播放器「简介/评论」那一套):
+          强调色下划线 + 互斥(RadioButton + GroupName); 页面里派生出 CenterTabStyle
+          去掉每颗自带的线, 改由 TabStrip 里一根独立的 TabIndicator 滑动(2026-11-28)。
           ★ 选中态**只由 code-behind 写 IsChecked 驱动** —— 与播放页那条经验一致:
             分散着改必然出现"两个都亮"或"两个都不亮"。
         -->
@@ -73,6 +74,41 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!--
+            「我的空间」页的 Tab 样式(2026-11-28 用户要求"给关注/粉丝/动态的切换加上横线动画")。
+            ★ 字号 / 内边距 / 间距 / 悬停与选中的配色全部 BasedOn 继承 ContentTabStyle,
+              只重写 Template 去掉**每颗标签自带**的下划线 —— 下划线改由 TabStrip 里那根
+              独立的 TabIndicator 统一画, 切换时从旧标签滑到新标签(见 code-behind 的
+              MoveTabIndicator)。
+            ★ 为什么必须去掉自带的那条: 两颗标签各画一条时, 切换只是"旧的灭、新的亮"——
+              旧线先闪一下才轮到新线, 读不出"一根线在动"。
+        -->
+        <Style x:Key="CenterTabStyle" TargetType="RadioButton"
+               BasedOn="{StaticResource ContentTabStyle}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid>
+                            <ContentPresenter x:Name="Cp"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              Margin="{TemplateBinding Padding}"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
     <Grid>
@@ -88,17 +124,71 @@
                下划线几乎贴着概要行的字顶, 看着像"下划线给那行字做了下划线"。
                空隙拆在两处: Tab 行下留 12(Tab 的点击/悬停区不被拉高),
                概要行上留 6(它自己的行盒上下也平衡)。 -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="36,14,36,12">
-            <RadioButton x:Name="TabDynamics" GroupName="UserCenterTab"
-                         Style="{StaticResource ContentTabStyle}" Content="动态"
-                         Checked="OnTabDynamicsChecked" />
-            <RadioButton x:Name="TabFollowings" GroupName="UserCenterTab"
-                         Style="{StaticResource ContentTabStyle}" Content="关注"
-                         Checked="OnTabFollowingsChecked" />
-            <RadioButton x:Name="TabFollowers" GroupName="UserCenterTab"
-                         Style="{StaticResource ContentTabStyle}" Content="粉丝"
-                         Checked="OnTabFollowersChecked" />
-        </StackPanel>
+        <Grid Grid.Row="0" Margin="36,14,36,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <!-- 弹性空列: 搜索入口展开(34 → 240)时由它吸收宽度变化, 标签条不动 -->
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Tab 标签条 + **一根**滑动的下划线(2026-11-28 用户要求"切换时有横线动画")。
+                 ★ 下划线是标签条的**兄弟**而不是每颗标签的一部分: 要"一根线在动",
+                   它就必须独立于标签, 否则就是三条线轮流闪(与首页 Tab 行同一套做法,
+                   见 HomePage 的 TabsRow / TabIndicator)。
+                 ★ 位置靠实测: 三个标签文字等长但以后可能变, 固定间距推不出来。 -->
+            <Grid x:Name="TabStrip" Grid.Column="0" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal">
+                    <RadioButton x:Name="TabDynamics" GroupName="UserCenterTab"
+                                 Style="{StaticResource CenterTabStyle}" Content="动态"
+                                 Checked="OnTabDynamicsChecked" />
+                    <RadioButton x:Name="TabFollowings" GroupName="UserCenterTab"
+                                 Style="{StaticResource CenterTabStyle}" Content="关注"
+                                 Checked="OnTabFollowingsChecked" />
+                    <RadioButton x:Name="TabFollowers" GroupName="UserCenterTab"
+                                 Style="{StaticResource CenterTabStyle}" Content="粉丝"
+                                 Checked="OnTabFollowersChecked" />
+                </StackPanel>
+
+                <!-- 滑动下划线: 高 2、强调色, 贴标签条下沿(Margin 下 -1 与原来自带那条落点一致)。
+                     ★ Width 由 code-behind 按目标标签实测宽度设定并动画过渡;
+                       IsHitTestVisible=False: 它浮在标签下沿, 不能把点击吃掉。 -->
+                <Border x:Name="TabIndicator" Height="2" Width="0" HorizontalAlignment="Left"
+                        VerticalAlignment="Bottom" Margin="0,0,0,-1"
+                        Background="{DynamicResource AccentBrush}" IsHitTestVisible="False">
+                    <Border.RenderTransform>
+                        <TranslateTransform x:Name="TabIndicatorShift" />
+                    </Border.RenderTransform>
+                </Border>
+            </Grid>
+
+            <!-- 搜索已关注的 UP(issue #110): 2026-11-28 用户要求"入口放到右侧、粉丝那一行的右边" ——
+                 从关注 Tab 内容区第一行搬到 Tab 行的最右端, 收成一枚放大镜按钮,
+                 点击向左展开成输入框(Collapsible)。服务端搜索, 不必先把几千人全部加载下来。
+                 ★ 只在**看自己**且停在**关注 Tab**时出现: 结果集只作用于关注列表,
+                   在动态/粉丝 Tab 摆一个点了没反应的入口只会让人困惑。
+                 ★ 可见性走 MultiDataTrigger 而不是直接绑 Visibility: 本地值会盖过触发器,
+                   两个条件只能都写在触发器里。 -->
+            <controls:SearchBox x:Name="FollowingsSearchBox" Grid.Column="2" VerticalAlignment="Center"
+                                Collapsible="True" ShapeRadius="8"
+                                PlaceholderText="搜索已关注的 UP"
+                                Text="{Binding FollowingsSearchText, Mode=TwoWay}">
+                <controls:SearchBox.Style>
+                    <Style TargetType="controls:SearchBox">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding IsSelf}" Value="True" />
+                                    <Condition Binding="{Binding IsFollowingsTab}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="Visibility" Value="Visible" />
+                            </MultiDataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </controls:SearchBox.Style>
+            </controls:SearchBox>
+        </Grid>
 
         <!-- ===== 概要行(已加载 N / 总数) ===== -->
         <TextBlock Grid.Row="1" Text="{Binding SummaryText}" FontSize="13"
@@ -154,22 +244,7 @@
 
             <!-- ========== 关注 Tab ========== -->
             <Grid Visibility="{Binding IsFollowingsTab, Converter={StaticResource BoolToVis}}">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
-
-                <!-- 搜索已关注的 UP(issue #110): 只在自己的关注列表显示。
-                     服务端搜索, 不必先把几千人全部加载下来; 搜索时用结果列表替换普通列表。
-                     ★ 2026-11-28(用户要求"搜索关注的 UP 的按钮也改成矩形圆角"):
-                       ShapeRadius=8 —— 与动态页两处搜索框、排版 chip 同一个圆角基准。 -->
-                <controls:SearchBox Grid.Row="0" Margin="8,0,12,8"
-                                    ShapeRadius="8"
-                                    PlaceholderText="搜索已关注的 UP"
-                                    Text="{Binding FollowingsSearchText, Mode=TwoWay}"
-                                    Visibility="{Binding IsSelf, Converter={StaticResource BoolToVis}}" />
-
-                <Grid Grid.Row="1">
+                <Grid>
                     <!-- 非搜索态: 原来的关注列表与加载/错误/空态 -->
                     <Grid Visibility="{Binding HasFollowingsSearch, Converter={StaticResource InvBoolToVis}}">
                         <ListBox x:Name="FollowingsList" Style="{StaticResource CenterUserListStyle}"

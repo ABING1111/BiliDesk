@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using BiliDesk.Helpers;
 using BiliDesk.Services;
@@ -62,6 +63,8 @@ public partial class UserCenterPage : UserControl, IRefreshable
         //   (FollowPage 那种常驻页不用操心这个, 它是唯一实例。)
         Unloaded += (_, _) => FilterService.Instance.Changed -= OnFilterApplied;
 
+        HookTabIndicator();
+
         // VM 的 Tab 变了要同步 RadioButton 的选中态 ——
         // 否则"页面初始停在关注"而按钮亮的是"动态", 两边对不上。
         DataContextChanged += (_, e) => AttachVm(e.NewValue as UserCenterViewModel);
@@ -97,6 +100,8 @@ public partial class UserCenterPage : UserControl, IRefreshable
         var vm = new UserCenterViewModel();
         DataContext = vm;
 
+        HookTabIndicator();
+
         // ★ VM 的 Tab 变了要同步 RadioButton 的选中态 ——
         //   否则"页面初始停在关注"而按钮亮的是"动态", 两边对不上。
         vm.TabChanged += OnVmTabChanged;
@@ -129,10 +134,102 @@ public partial class UserCenterPage : UserControl, IRefreshable
         {
             _syncingTab = false;
         }
+
+        // 下划线跟着走: 所有切 Tab 的路径(点击 / 初始 Tab / VM 回写)最后都会经过这里
+        MoveTabIndicator(tab, animate: true);
     }
 
     /// <summary>VM 的 Tab 变了 → 同步按钮的选中态。</summary>
     private void OnVmTabChanged(UserCenterTab tab) => SetCheckedTab(tab);
+
+    // ------------------------------------------------------------ Tab 下划线
+
+    /// <summary>下划线滑动的时长(ms)。与首页 Tab 行同一个节奏: 起步快、收尾缓。</summary>
+    private const int TabIndicatorMs = 220;
+
+    /// <summary>
+    /// 下划线是否已经完成过首次摆放。
+    /// ★ 首次必须**直接落位**: 否则一上屏就能看到线从最左边滑过来, 像页面还在初始化。
+    /// </summary>
+    private bool _tabIndicatorPlaced;
+
+    /// <summary>
+    /// 挂上"首次摆放"与"尺寸变化时重新对齐"两条路。
+    /// ★ 两个构造函数都要调(带参数那个没有复用无参构造)。
+    /// </summary>
+    private void HookTabIndicator()
+    {
+        Loaded += (_, _) => MoveTabIndicator(Vm?.Tab ?? UserCenterTab.Dynamics, animate: false);
+
+        // 窗口缩放 / 字体变化会改变标签宽度与位置 ⇒ 重新贴一次(不播动画, 免得线在"追"标签)。
+        TabStrip.SizeChanged += (_, _) =>
+        {
+            if (_tabIndicatorPlaced) MoveTabIndicator(Vm?.Tab ?? UserCenterTab.Dynamics, animate: false);
+        };
+    }
+
+    /// <summary>当前选中 Tab 对应的按钮(下划线要贴到它下面)。</summary>
+    private RadioButton TabButtonOf(UserCenterTab tab) => tab switch
+    {
+        UserCenterTab.Followings => TabFollowings,
+        UserCenterTab.Followers => TabFollowers,
+        _ => TabDynamics,
+    };
+
+    /// <summary>
+    /// 把下划线移到指定 Tab 下面。
+    ///
+    /// ★ 位置与宽度都**实测**(TranslatePoint / ActualWidth): 标签文字长短会变, 推不出来。
+    /// ★★ 顺序: **先读当前值 → 清动画 → 设基准值(终点) → 起动画**。
+    ///   先清动画再读的话, X/Width 会立刻回落到上一次动画开始前的本地值, 新动画就从那里
+    ///   起步 —— 表现是"线先跳回旧位置再滑过来"(见 HomePage.MoveTabIndicator 的同款经验)。
+    /// ★★★ 动画用 FillBehavior.Stop, 而基准值直接设成终点 ⇒ 动画一结束属性自然回落到终点,
+    ///   不需要 Completed 回调; 连点 Tab 时上一段动画的收尾也就没机会把位置改回去。
+    /// </summary>
+    private void MoveTabIndicator(UserCenterTab tab, bool animate)
+    {
+        var target = TabButtonOf(tab);
+        if (target == null || TabStrip.ActualWidth <= 0 || target.ActualWidth <= 0) return;
+
+        var left = target.TranslatePoint(new Point(0, 0), TabStrip).X;
+        var width = target.ActualWidth;
+
+        // 当前画面上的值: 动画进行中读到的就是当前帧, 正是下一段的连续起点
+        var wasPlaced = _tabIndicatorPlaced;
+        var fromLeft = TabIndicatorShift.X;
+        var fromWidth = TabIndicator.ActualWidth > 0 ? TabIndicator.ActualWidth : width;
+
+        ClearIndicatorAnimations();
+        TabIndicator.Width = width;
+        TabIndicatorShift.X = left;
+        _tabIndicatorPlaced = true;
+
+        // 首次摆放 / 本就没动(点在当前 Tab 上时不会走 Checked, 这里只是兜底)
+        if (!animate || !wasPlaced || (fromLeft == left && fromWidth == width)) return;
+
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        var duration = TimeSpan.FromMilliseconds(TabIndicatorMs);
+
+        TabIndicator.BeginAnimation(WidthProperty,
+            new DoubleAnimation(fromWidth, width, duration)
+            {
+                EasingFunction = ease,
+                FillBehavior = FillBehavior.Stop,
+            });
+        TabIndicatorShift.BeginAnimation(TranslateTransform.XProperty,
+            new DoubleAnimation(fromLeft, left, duration)
+            {
+                EasingFunction = ease,
+                FillBehavior = FillBehavior.Stop,
+            });
+    }
+
+    /// <summary>清掉下划线上残留的动画(清完会回落到本地值, 调用方负责重设)。</summary>
+    private void ClearIndicatorAnimations()
+    {
+        TabIndicator.BeginAnimation(WidthProperty, null);
+        TabIndicatorShift.BeginAnimation(TranslateTransform.XProperty, null);
+    }
 
     private void OnTabDynamicsChecked(object sender, RoutedEventArgs e)
     {
