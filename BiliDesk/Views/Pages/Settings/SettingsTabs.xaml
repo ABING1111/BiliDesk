@@ -1470,6 +1470,71 @@
                 </StackPanel>
             </Border>
 
+            <!-- ============ 问题诊断(2026-11-28 新增) ============
+                 放在「开源与反馈」之后、「声明」之前: 这一段是"给开发者取材"的入口,
+                 与它上面的"问题反馈"入口是连着的(反馈时把导出的报告一起发上来)。 -->
+            <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
+                            Content="问题诊断" />
+
+            <Border Style="{StaticResource SettingsCardStyle}">
+                <StackPanel>
+                    <!-- 一键导出诊断报告 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="导出诊断报告" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding ExportReportHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="打开目录" Style="{StaticResource SubtleButtonStyle}"
+                                    Padding="12,5" Margin="0,0,8,0"
+                                    Command="{Binding OpenReportFolderCommand}"
+                                    ToolTip="打开报告所在的文件夹" />
+                            <Button Content="导出报告" Style="{StaticResource SubtleButtonStyle}"
+                                    Padding="12,5"
+                                    Command="{Binding ExportDiagnosticReportCommand}"
+                                    ToolTip="把日志与系统信息打包成一个 zip, 存到「下载」文件夹" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 冻结统计: 客观测出来的"这次运行卡过几次" -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="界面卡住检测" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding FreezeStatsText}"
+                                       Style="{StaticResource SettingsRowDescStyle}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Style="{StaticResource SettingsRowDivider}" />
+
+                    <!-- 崩溃转储开关 -->
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="崩溃转储" Style="{StaticResource SettingsRowTitleStyle}" />
+                            <TextBlock Text="{Binding CrashDumpHint}"
+                                       Style="{StaticResource SettingsRowDescStyle}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SettingsToggleStyle}"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding CrashDumpEnabled, Mode=TwoWay}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
             <ContentControl ContentTemplate="{StaticResource SectionHeaderTemplate}"
                             Content="声明" />
 

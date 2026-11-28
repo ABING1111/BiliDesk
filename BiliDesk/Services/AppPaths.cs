@@ -11,6 +11,16 @@ public static class AppPaths
     public static string LogFile => Path.Combine(DataDir, "errors.txt");
 
     /// <summary>
+    /// 轮转后的上一份错误日志。
+    ///
+    /// ★ 必须有这个名字, 不能各处自己拼: <see cref="App.ReportError"/> 里轮转时用的是
+    ///   <c>LogFile + ".old"</c>(= <c>errors.txt.old</c>), 而"导出诊断报告"那边曾经
+    ///   手写成 <c>errors.old</c> —— 两边对不上, 结果是**上一份日志永远收不进报告**
+    ///   (2026-11-28 审查时发现的)。两边都引用这里就不会再分叉。
+    /// </summary>
+    public static string RotatedLogFile => LogFile + ".old";
+
+    /// <summary>
     /// **内部缓存根目录**(封面图 imgcache + 短视频合流 vcache)。
     /// ★ 2026-10-11 起**不再暴露给用户**: 设置页的"缓存位置"改管下载目录(见 <see cref="DownloadDir"/>)。
     ///   这两类是可再生缓存, 用户看不见也无需管理, 固定留在 <see cref="DataDir"/> 下。

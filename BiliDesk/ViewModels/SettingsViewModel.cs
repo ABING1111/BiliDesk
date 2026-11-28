@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -1838,6 +1839,149 @@ public class SettingsViewModel : ObservableObject
     /// <summary>打开 GitHub Issues(反馈入口)。</summary>
     public ICommand OpenFeedbackCommand { get; }
 
+    // ----------------- 问题诊断(2026-11-28 新增) -----------------
+
+    /// <summary>是否开启崩溃转储(见 <see cref="CrashDumpService"/>)。</summary>
+    public bool CrashDumpEnabled
+    {
+        get => Svc.Settings.CrashDumpEnabled;
+        set
+        {
+            if (value == Svc.Settings.CrashDumpEnabled) return;
+            var ok = Svc.Settings.SetCrashDumpEnabled(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CrashDumpHint));
+            // ★ 能力没落地必须告诉用户 —— 否则界面显示"已开启"、崩了却没有转储,
+            //   是最难排查的那种"看起来生效了"。关不掉也要说(说明处理器还装着)。
+            if (!ok)
+                Svc.Toast.Show(value
+                    ? "崩溃转储没能开启(转储目录不可写), 详情已记入日志"
+                    : "崩溃转储没能关闭, 详情已记入日志");
+        }
+    }
+
+    /// <summary>崩溃转储那一行的说明。写清楚"什么时候开、开了会发生什么"。</summary>
+    public string CrashDumpHint
+    {
+        get
+        {
+            if (!CrashDumpEnabled)
+                return "默认关闭。遇到「卡死或闪退」且能稳定复现时打开它, 复现一次后再导出报告 —— " +
+                       "崩溃现场会被存成转储文件, 是定位原生崩溃的唯一手段";
+            var dir = CrashDumpService.CurrentDumpDirectory() ?? CrashDumpService.DefaultDumpDirectory;
+            var count = CrashDumpService.ListDumpFiles(dir).Length;
+            return $"已开启。转储文件保存在 {dir}(当前 {count} 个); 崩溃后导出报告时会一并打包";
+        }
+    }
+
+    /// <summary>导出诊断报告(zip)。</summary>
+    public ICommand ExportDiagnosticReportCommand { get; }
+
+    /// <summary>在资源管理器里打开报告所在目录。</summary>
+    public ICommand OpenReportFolderCommand { get; }
+
+    /// <summary>
+    /// 最近一次导出的报告路径(空 = 还没导过)。
+    /// ★ 只给「打开目录」用: 没导过时它落到下载目录, 导过之后落到报告所在的目录 ——
+    ///   用户点完"导出"紧接着去"打开目录", 期望看到的就是刚生成的那个文件。
+    /// </summary>
+    private string _lastReportPath = "";
+
+    /// <summary>导出诊断报告的说明文字。</summary>
+    public string ExportReportHint =>
+        "把运行日志、播放诊断、崩溃记录和系统信息打包成一个 zip, 存到「下载」文件夹。" +
+        "反馈问题时把这个文件一起发出来, 定位会快很多(不含登录凭据与个人信息)";
+
+    /// <summary>
+    /// 本次运行的"界面卡住"统计。
+    ///
+    /// ★ 为什么把它显示给用户看: 用户报"卡住了"时, 最难的是分不清"真卡了"还是"我以为卡了"。
+    ///   看门狗是**客观**测出来的(从另一个线程问 UI 线程), 显示出来用户就能自己确认 ——
+    ///   顺便也让人知道"这功能一直在跑, 卡了会被记下来"。
+    /// </summary>
+    public string FreezeStatsText
+    {
+        get
+        {
+            var watchdog = Svc.FreezeWatchdog;
+            if (watchdog == null) return "界面卡住检测: 未启动";
+            var count = watchdog.FreezeCount;
+            return count == 0
+                ? "界面卡住检测: 本次运行未检测到卡住"
+                : $"界面卡住检测: 本次运行检测到 {count} 次卡住(最近一次: {watchdog.LastFreezeSummary})";
+        }
+    }
+
+    /// <summary>
+    /// 导出诊断报告。
+    ///
+    /// ★ 打包要读几个日志文件 + 事件日志, 都是磁盘 IO ⇒ 放后台线程,
+    ///   免得点了按钮界面卡住(日志动辄几百 KB, 事件日志还要解码)。
+    /// ★ 导出完**在资源管理器里选中那个文件** —— 用户下一步就是把它发出去,
+    ///   直接把文件摆在他眼前比只弹一句"导出成功"有用得多。
+    /// </summary>
+    private async Task ExportDiagnosticReportAsync()
+    {
+        try
+        {
+            var path = await System.Threading.Tasks.Task.Run(() =>
+                DiagnosticReportService.Export());
+            _lastReportPath = path;
+            Svc.Toast.Show("诊断报告已导出: " + path);
+            RevealInExplorer(path);
+        }
+        catch (Exception ex)
+        {
+            App.ReportError(ex);
+            Svc.Toast.Show("导出诊断报告失败: " + ex.Message);
+        }
+    }
+
+    /// <summary>在资源管理器里选中文件(失败就退化成打开所在目录)。</summary>
+    private static void RevealInExplorer(string path)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe")
+            {
+                Arguments = "/select,\"" + path + "\"",
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                    Path.GetDirectoryName(path) ?? AppPaths.DownloadDir)
+                {
+                    UseShellExecute = true
+                });
+            }
+            catch { /* 打开不了就算了, 路径已经显示给用户了 */ }
+        }
+    }
+
+    /// <summary>打开上次导出的报告所在目录。</summary>
+    private void OpenReportFolder()
+    {
+        try
+        {
+            var dir = string.IsNullOrEmpty(_lastReportPath)
+                ? AppPaths.DownloadDir
+                : Path.GetDirectoryName(_lastReportPath) ?? AppPaths.DownloadDir;
+            System.IO.Directory.CreateDirectory(dir);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Svc.Toast.Show("打开目录失败: " + ex.Message);
+        }
+    }
+
     public SettingsViewModel()
     {
         ThemeSystemCommand = new RelayCommand(() => ThemeMode = AppTheme.System);
@@ -1885,6 +2029,10 @@ public class SettingsViewModel : ObservableObject
         // GitHub 仓库 / 问题反馈(设置页「关于」Tab, 2026-11-17 取代原作者主页入口)
         OpenRepoCommand = new RelayCommand(() => OpenAboutLink(UpdateChecker.RepoPageUrl));
         OpenFeedbackCommand = new RelayCommand(() => OpenAboutLink(UpdateChecker.IssuesPageUrl));
+
+        // 问题诊断(2026-11-28 新增): 一键导出诊断报告 + 打开报告所在目录
+        ExportDiagnosticReportCommand = new AsyncRelayCommand(ExportDiagnosticReportAsync);
+        OpenReportFolderCommand = new RelayCommand(OpenReportFolder);
 
         // 立即收进托盘(按钮点一下就能验证"关闭到托盘"是什么效果, 不用真的去点关闭键)
         MinimizeToTrayCommand = new RelayCommand(() => TrayService.Instance.MinimizeToTray());
@@ -1964,6 +2112,9 @@ public class SettingsViewModel : ObservableObject
         _ = RefreshUserAsync();
         // 快捷键 Tab: 若已经建过列表, 进来时同步一次(覆盖项可能被手改配置或未来别的入口改过)
         if (_shortcutGroupsBuilt) RefreshShortcutRows();
+        // 冻结统计与崩溃转储状态都会随运行变化, 进来时同步一次
+        OnPropertyChanged(nameof(FreezeStatsText));
+        OnPropertyChanged(nameof(CrashDumpHint));
     }
 
     private void UpdateVideoCacheSizeText()

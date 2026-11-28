@@ -91,6 +91,11 @@ public class MainViewModel : ObservableObject
         //   否则"点一下当前导航项"就会把来源冲成自己, 侧键立刻退不回去。
         if (PageBackPolicy.IsChildPage(key)) _origins[key] = Current;
 
+        // ★ 诊断: 记下"用户当时停在哪个页面"。UI 线程冻住时, 这是现场的一部分
+        //   (见 Services/DiagnosticsState 与 UiFreezeWatchdog)。
+        Services.DiagnosticsState.Set("当前页面", key.ToString());
+        Services.DiagnosticsState.Note($"切到页面 {key}");
+
         Current = key; // setter 内部已 fire PageChanged
     }
 

@@ -66,6 +66,7 @@ public partial class PlayerWindow : FluentWindow
                     $"[Stall] 卡顿自愈第{_stallPolicy.Rebuilds}次: 重建 input " +
                     $"pos={posMs}ms listen={_isListenMode} " +
                     $"deadline={_playUrlDeadline} url={HostOf(CurrentMediaUrl)}\n");
+                DiagnosticsState.Note($"卡顿自愈: 重建 input(第 {_stallPolicy.Rebuilds} 次)");
                 _ = RecoverFromStallAsync();
                 break;
 
@@ -73,6 +74,7 @@ public partial class PlayerWindow : FluentWindow
                 WriteLibVLCDebug(
                     $"[Stall] 自动重连放弃(已重建 {_stallPolicy.Rebuilds} 次) pos={posMs}ms " +
                     $"listen={_isListenMode} url={HostOf(CurrentMediaUrl)}\n");
+                DiagnosticsState.Note("卡顿自愈放弃");
                 // 不再无限转圈: 复用失败遮罩(它自带「重试」按钮, 见 OnRetryClick)。
                 ShowFail("网络卡顿，自动重连失败，请检查网络后重试");
                 break;

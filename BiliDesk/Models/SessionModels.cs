@@ -488,6 +488,16 @@ public class AppSettings
     public bool NoLogin1080P { get; set; } = true;
 
     /// <summary>
+    /// 是否开启**崩溃转储**(2026-11-28 新增, 默认关)。
+    ///
+    /// 原生层崩溃(libvlc 里的 0xc0000005)不是 .NET 异常, 全局兜底处理器一次都跑不到,
+    /// errors.txt 里一个字都没有 —— 只能靠 minidump 定位(见 Services/CrashDumpService)。
+    /// 老配置缺这个字段 ⇒ false ⇒ 默认关, 不需要版本兼容。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public bool CrashDumpEnabled { get; set; }
+
+    /// <summary>
     /// 视频线路(CDN)选择策略。默认**跟随服务端** ——
     /// 换 host 后部分线路的持续吞吐/抖动更差, 用户侧表现为播放中卡顿反而更多;
     /// 跟随服务端用接口原样返回的线路最稳。

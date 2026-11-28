@@ -619,6 +619,13 @@ public partial class MainWindow : FluentWindow
         // (首次建页要解析整棵 XAML, 首页实测 ~360ms)。
         if (NavTransition.InFlight) NavTransition.FinishNow();
 
+        // ★ 诊断标记(2026-11-28): 建页 + 整页布局是已知最慢的 UI 路径之一
+        //   (首次建首页实测 ~360ms, 之后还有目标页的 UpdateLayout)。
+        //   冻结看门狗靠这个标记判断 UI 线程卡在哪(见 DiagnosticsState.BeginUiOperation)。
+        //   ★ 标记必须包住 **PageOf(真正建页)** —— 只包 ShowAnimated 的话,
+        //     最慢的那一段(解析整棵 XAML)反而落在标记外面, 等于没测到。
+        using var _pageScope = DiagnosticsState.BeginUiOperation("切换页面到 " + key);
+
         var target = PageOf(key);
 
         // 首次显示(窗口刚出来)不播过渡: 那时还没有"上一个页面"可淡出。

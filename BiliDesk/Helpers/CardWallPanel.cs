@@ -134,7 +134,12 @@ public class CardWallPanel : Panel
                 try { UpdateLayout(); } catch { /* 布局尚未就绪: 下面的扫描会自然跳过 */ }
                 // ★ 顺便重试"发现 ScrollViewer": 挂载时可能还没进可视树(见 AttachCoverWindow)。
                 TryAttachScroll();
-                UpdateCoverWindow();
+                // ★ 诊断标记(2026-11-28): 封面扫描会遍历整墙, 是已知的最慢路径之一。
+                //   冻结时看门狗靠这个标记判断 UI 线程卡在哪(见 DiagnosticsState.BeginUiOperation)。
+                using (Services.DiagnosticsState.BeginUiOperation("卡片墙封面扫描"))
+                {
+                    UpdateCoverWindow();
+                }
                 // 回到这一屏: 取消"隐藏后延迟全放"的等待(详见 ScheduleFullReleaseWhenHidden)。
                 _hiddenReleaseGeneration++;
             }
@@ -360,6 +365,10 @@ public class CardWallPanel : Panel
     {
         _pumpQueued = false;    // 撤掉已排队的渐进帧, 防止它和这次收敛交错
         _resizePending = false;
+
+        // ★ 诊断标记(2026-11-28): 整墙收敛是已知最慢的 UI 路径之一
+        //   (每趟都要付一次全墙布局)。冻结看门狗靠这个标记判断卡在哪。
+        using var _diagScope = Services.DiagnosticsState.BeginUiOperation("卡片墙整墙收敛");
 
         // ★★ 先把目标尺寸按**当前**宽度算出来: Wall 的 SizeChanged 要等布局走完才发, 不强制这一下
         //   这里读到的还是旧窗口算出来的旧目标 ⇒ 下面一个孩子都不会被收敛(探针实测 收敛=0)。

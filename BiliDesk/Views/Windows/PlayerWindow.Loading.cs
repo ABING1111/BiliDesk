@@ -88,6 +88,10 @@ public partial class PlayerWindow : FluentWindow
         _currentBvid = bvid;
         _isLocalPlayback = false;
         _isLive = false;
+        // ★ 诊断: 记下"正在放哪一路" —— 冻结现场的快照里要有它
+        //   (见 Services/DiagnosticsState)。
+        DiagnosticsState.Set("播放中视频", bvid);
+        DiagnosticsState.Note($"开始播放 {bvid}");
         SetBangumiPlaylist(bangumi);
         ResetForNewMedia();
         _ = LoadVideoAsync();

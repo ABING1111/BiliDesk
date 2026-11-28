@@ -33,5 +33,11 @@ public static class Svc
     public static DynamicNotifyService DynamicNotify => DynamicNotifyService.Instance;
     /// <summary>评论输入框的表情面板数据(视频评论区与图文动态评论区共用一份缓存)</summary>
     public static CommentEmoteService CommentEmotes => CommentEmoteService.Instance;
+    /// <summary>
+    /// UI 线程冻结看门狗(2026-11-28 新增)。用户报"窗口冻住 → 只能强杀"时,
+    /// 由它从后台线程发现冻结并把现场写进日志(见 UiFreezeWatchdog 的说明)。
+    /// ★ 可空: 探针/测试宿主不跑完整启动流程, 不会创建它。
+    /// </summary>
+    public static UiFreezeWatchdog? FreezeWatchdog { get; set; }
     public static NavigationDispatcher? Navigate { get; set; }
 }

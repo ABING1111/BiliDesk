@@ -305,6 +305,23 @@ public class SettingsStore
     /// </summary>
     public bool NoLogin1080P { get; set; } = true;
 
+    /// <summary>
+    /// 是否开启**崩溃转储**(2026-11-28 新增)。
+    ///
+    /// ★ 为什么需要它: 用户报的"窗口冻住 → 进程消失"是原生层崩溃(典型是 libvlc 里的
+    ///   0xc0000005), 那不是 .NET 异常, 我们的兜底处理器一次都不会跑 ——
+    ///   errors.txt 里一个字都没有, 事件查看器也只有一句"应用程序错误"。
+    ///   开了转储, 原生崩溃时会写出一个 minidump, 拿到它就能直接看到崩在哪条原生调用上
+    ///   (见 <see cref="CrashDumpService"/>)。
+    ///
+    /// ★ 默认**关**: 崩溃时写转储要占磁盘(约 300KB)也会拖慢崩溃处理,
+    ///   而绝大多数用户不会遇到这类问题。遇到"必现的卡死"时再打开即可。
+    /// ★ 这个开关是"用户意图"的记录; 真正落地要装上进程内的异常处理器
+    ///   (见 <see cref="ApplyCrashDumpSetting"/>)。
+    /// ★ 与 <see cref="Models.AppSettings.CrashDumpEnabled"/> 是读写契约。
+    /// </summary>
+    public bool CrashDumpEnabled { get; set; }
+
     // ----------------- CDN(线路)设置 -----------------
     // 详见 Models/CdnOption.cs 与 Services/CdnService.cs
 
@@ -918,6 +935,11 @@ public class SettingsStore
             : null;
         NoLogin1080P = s.NoLogin1080P;
 
+        // 崩溃转储(2026-11-28 新增): 老配置没有这个字段 ⇒ false(默认关)。
+        // ★ 只是"用户意图"的记录, 真正落地靠进程内的异常处理器 —— 启动时会按这个值
+        //   重新装一次(见 ApplyCrashDumpSetting)。
+        CrashDumpEnabled = s.CrashDumpEnabled;
+
         // ★ CdnManualId 要校验: 老配置里的 Id 可能已从候选表下线,
         //   留着它会让"手动模式"指到一条不存在的线路(见 CdnService.SelectUrlAsync)。
         CdnMode = s.CdnMode;
@@ -1198,6 +1220,7 @@ public class SettingsStore
         SkippedVersion = SkippedVersion,
         LastUpdateFailureNoticeUtc = LastUpdateFailureNoticeUtc,
         NoLogin1080P = NoLogin1080P,
+        CrashDumpEnabled = CrashDumpEnabled,
         CdnMode = CdnMode,
         CdnManualId = CdnManualId,
         BlockPcdn = BlockPcdn,
@@ -1541,6 +1564,53 @@ public class SettingsStore
         if (NoLogin1080P == value) return;
         NoLogin1080P = value;
         Save();
+    }
+
+    /// <summary>
+    /// 改「崩溃转储」开关并落盘, **同时立刻把异常处理器装上/卸掉**。
+    ///
+    /// ★ 为什么开关与实际能力必须一起动:
+    ///   转储能力由**进程内的异常处理器**提供(见 <see cref="CrashDumpService"/>),
+    ///   设置项只是"用户想不想要"的记录。两者分开就会出现"界面显示已开启, 但崩了没转储"
+    ///   —— 用户白等一场, 而这种"看起来开了其实没生效"的错最难查。
+    ///
+    /// ★ 装不上(权限/目录不可写)不能把设置改回去:
+    ///   设置项记着用户的意图, 下次启动还会再试一次(见 <see cref="ApplyCrashDumpSetting"/>)。
+    /// ★ 返回值是"能力是否真的落地了" —— 调用方(设置页)据此提示用户,
+    ///   而不是让界面显示"已开启"却什么都没发生。
+    /// </summary>
+    public bool SetCrashDumpEnabled(bool value)
+    {
+        if (CrashDumpEnabled == value) return ApplyCrashDumpSetting();
+        CrashDumpEnabled = value;
+        Save();
+        return ApplyCrashDumpSetting();
+    }
+
+    /// <summary>
+    /// 按当前设置值把崩溃转储能力落地(启动时调一次)。
+    ///
+    /// ★ 为什么启动时要再落一次:
+    ///   ① 用户可能在别的程序里改过/删过注册表项, 那时"设置显示开着但实际没开";
+    ///   ② 异常处理器是**进程级**的, 重启后就没了, 必须重新装。
+    ///   ⇒ 每次启动都按设置重新落地一次, 让"界面上的开关"始终等于"实际能力"。
+    /// </summary>
+    public bool ApplyCrashDumpSetting()
+    {
+        try
+        {
+            if (CrashDumpEnabled)
+                CrashDumpService.Enable(CrashDumpService.DefaultDumpDirectory);
+            else
+                CrashDumpService.Disable();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // 装不上就记一笔: 用户反馈"开了没转储"时, 这里能看出原因
+            App.ReportError(ex);
+            return false;
+        }
     }
 
     /// <summary>

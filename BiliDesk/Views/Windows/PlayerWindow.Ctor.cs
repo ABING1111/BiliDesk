@@ -364,6 +364,9 @@ public partial class PlayerWindow : FluentWindow
             // 诊断: 把出错时正在播的 URL 也写进 debug 文件
             WriteLibVLCDebug(
                 $"\n[EncounteredError] bvid={_currentBvid} cid={_currentCid} lastUrl={_lastPlayUrl}\n");
+            // ★ 诊断: 播放出错也记进事件流水 —— 冻结现场里"刚才出过什么错"很关键
+            //   (原生崩溃前的最后一个错误常常就是元凶)。
+            DiagnosticsState.Note($"播放出错 bvid={_currentBvid}");
             // ★ 2026-11-14(issue #81): 地址过期导致的重连 403 —— 手里有新地址就先自救一次,
             //   救不了(或与过期无关)再弹失败遮罩, 不打断几个小时的连续播放。
             if (TryAutoRecoverFromError()) return;
