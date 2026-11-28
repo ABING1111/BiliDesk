@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -111,6 +110,7 @@ public partial class PlayerWindow : FluentWindow
         //   MinWidth 还是 840 的话, 下面那句 Width = 430 会被最小尺寸顶住。
         ApplyInfoPanelState();
         MiniWindowBar.Visibility = Visibility.Visible;
+        MiniWindowDragEdge.Visibility = Visibility.Visible;
         UpdateMiniWindowButton();
 
         Width = target.Value.Width;
@@ -147,6 +147,7 @@ public partial class PlayerWindow : FluentWindow
         TopBar.Visibility = Visibility.Visible;
         TopRow.Height = new GridLength(44);
         MiniWindowBar.Visibility = Visibility.Collapsed;
+        MiniWindowDragEdge.Visibility = Visibility.Collapsed;
         // 最小尺寸回到常规那一档(840×600), 同样必须排在还原尺寸之前
         ApplyInfoPanelState();
         UpdateMiniWindowButton();
@@ -244,23 +245,27 @@ public partial class PlayerWindow : FluentWindow
         BtnMiniWindow.ToolTip = _isMiniWindow ? "还原 (退出小窗)" : "小窗播放（置顶小窗）";
     }
 
-    // ------------------------------------------------------------ 小窗栏(浮层右上角)
+    // ------------------------------------------------------------ 小窗栏 + 上边缘拖动带
 
     /// <summary>
-    /// 指针是否停在小窗栏上。小窗里顶栏是收起的, 这条小栏是覆盖层里**除控制栏与跳过提示条之外**
-    /// 第三个会吃掉左键的自绘元素 —— 视频区手势(单击暂停 / 双击全屏)与"激活点击补偿"
-    /// 都要像对 ControlBar 那样对它让路, 否则点「还原」会顺带切一次播放/暂停。
+    /// 指针是否停在小窗的「窗口控件」上 —— 右上角小窗栏(还原/关闭)与整条上边缘拖动带。
+    /// 小窗里顶栏是收起的, 这两块是覆盖层里**除控制栏与跳过提示条之外**会吃掉左键的自绘元素;
+    /// 视频区手势(单击暂停 / 双击全屏)与"激活点击补偿"都要对它们让路, 否则点「还原」会
+    /// 顺带切一次播放/暂停, 按上边缘也会先起步一次单击手势。
     /// </summary>
+    private bool IsPointerOnMiniChrome => IsPointerOnMiniBar || IsPointerOnMiniDragEdge;
+
+    /// <summary>指针是否停在右上角小窗栏的按钮上。</summary>
     private bool IsPointerOnMiniBar =>
         _isMiniWindow && MiniWindowBar != null && MiniWindowBar.IsMouseOver;
 
-    private void OnMiniGripMouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (!_isMiniWindow || _closing) return;
-        e.Handled = true;
-        StopActivationClickCompensation();
-        BeginMiniWindowDrag();
-    }
+    /// <summary>
+    /// 指针是否停在整条上边缘拖动带上(它是小窗的"标题栏", 见 XAML 的 MiniWindowDragEdge)。
+    /// ★ 直接读元素自己的 IsMouseOver, 不另算坐标: 拖动带与小窗栏在顶部重叠, 命中测试只认
+    ///   最上面那个元素 —— 按在「还原/关闭」上时这里自然是 false, 不会先起拖。
+    /// </summary>
+    private bool IsPointerOnMiniDragEdge =>
+        _isMiniWindow && MiniWindowDragEdge != null && MiniWindowDragEdge.IsMouseOver;
 
     private void OnMiniRestoreClick(object sender, RoutedEventArgs e) => ExitMiniWindow();
 
@@ -306,7 +311,7 @@ public partial class PlayerWindow : FluentWindow
     private void BeginMiniWindowDrag()
     {
         if (_closing || !_isMiniWindow) return;
-        // 已经在拖(激活补偿与抓手自己的 MouseDown 可能先后各调一次): 不叠第二个定时器
+        // 已经在拖(激活补偿与上边缘自己的按下可能先后各调一次): 不叠第二个定时器
         if (_miniDragTimer != null) return;
         if (!GetCursorPos(out var origin)) return;
         var hwnd = new WindowInteropHelper(this).Handle;

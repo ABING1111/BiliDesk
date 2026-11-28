@@ -264,7 +264,22 @@ public partial class PlayerWindow : FluentWindow
         if (_closing || VideoAreaRoot == null) return;
         if (_isFullscreen || WindowState != WindowState.Normal) return;
 
-        VideoAreaRoot.Cursor = HitTestResizeEdge() switch
+        var ht = HitTestResizeEdge();
+
+        // 小窗上边缘拖动带: 左右边缘与左右上角仍属于缩放带, 指针要显示对应的缩放箭头;
+        // 其余上边缘区域是"按住移动窗口", 显示移动十字(见 OnVideoAreaMouseLeftDown)。
+        if (_isMiniWindow && MiniWindowDragEdge != null)
+        {
+            MiniWindowDragEdge.Cursor = ht switch
+            {
+                HtLeft or HtRight => Cursors.SizeWE,
+                HtTopLeft or HtBottomRight => Cursors.SizeNWSE,
+                HtTopRight or HtBottomLeft => Cursors.SizeNESW,
+                _ => Cursors.SizeAll,
+            };
+        }
+
+        VideoAreaRoot.Cursor = ht switch
         {
             HtLeft or HtRight => Cursors.SizeWE,
             HtTop or HtBottom => Cursors.SizeNS,
@@ -296,6 +311,25 @@ public partial class PlayerWindow : FluentWindow
     /// </summary>
     private void OnVideoAreaMouseLeftDown(object sender, MouseButtonEventArgs e)
     {
+        // 小窗的上边缘是它的"标题栏"(2026-11-28): 按住即拖动窗口。
+        // ★ 必须排在 TryBeginEdgeResize 之前 —— 否则最上面 6px 会先被判成"拖上边缘改大小"。
+        // ★ 左上/右上角与左右边缘仍让给缩放(用户反馈角上拖不动大小): 只有上边缘中部才是拖动区,
+        //   压在缩放带上的按下会落到下面 TryBeginEdgeResize 去。
+        if (IsPointerOnMiniDragEdge)
+        {
+            var ht = HitTestResizeEdge();
+            if (ht is not (HtLeft or HtRight or HtTopLeft or HtTopRight))
+            {
+                e.Handled = true;
+                // 上一次单击的延迟播放/暂停与长按计时都要作废: 否则在 220ms 内接着按上边缘拖动,
+                // 那颗单击定时器会在拖动途中把视频暂停掉(与 TryBeginEdgeResize 的收尾同理)。
+                _singleClickTimer?.Stop();
+                _longPressTimer?.Stop();
+                StopActivationClickCompensation();
+                BeginMiniWindowDrag();
+                return;
+            }
+        }
         // 落在窗口边缘缩放带里的按下是"拖边缘改大小", 不算视频区手势(见 TryBeginEdgeResize)
         if (TryBeginEdgeResize()) { e.Handled = true; return; }
         if (_mp == null) return;
@@ -306,8 +340,9 @@ public partial class PlayerWindow : FluentWindow
         // 跳过提示条上的点击(「撤回」按钮)同样不算视频区手势 ——
         // 它是覆盖层里除了控制栏之外唯一会吃掉左键的自绘元素, 不挡住就会"点撤回顺带切一次播放/暂停"。
         if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
-        // 小窗栏上的按下同理(拖动抓手 / 还原 / 关闭各有各的处理, 见 PlayerWindow.MiniWindow.cs)
-        if (IsPointerOnMiniBar) return;
+        // 小窗的窗口控件上的按下同理(上边缘拖动带 / 还原 / 关闭各有各的处理,
+        // 见 PlayerWindow.MiniWindow.cs)
+        if (IsPointerOnMiniChrome) return;
         // ★ 弹层开着 ⇒ 这次按下属于浮层, 视频区手势**不起步**。
         //   这是整套防护的地基(见 _videoGestureActive 的说明): 不起步, 随后漏进来的
         //   那个孤立 Up 才会因为"没有配对 Down"而被丢掉。
@@ -372,9 +407,9 @@ public partial class PlayerWindow : FluentWindow
         if (ControlBar != null && ControlBar.IsMouseOver) return;
         // ★ 与 Down 对称: 跳过提示条上的「撤回」点击也不触发单击暂停
         if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
-        // ★ 与 Down 对称: 小窗栏上的松开要原样放给它的按钮(Button 的 Click 靠这一次 Up 触发),
+        // ★ 与 Down 对称: 小窗控件上的松开要原样放给它的按钮(Button 的 Click 靠这一次 Up 触发),
         //   在这里被当成"弹层余波"吞掉的话, 「还原」「关闭」就成了按不动的摆设。
-        if (IsPointerOnMiniBar) return;
+        if (IsPointerOnMiniChrome) return;
         // ★★ 弹层余波(2026-10-13 第三轮修正, 前两轮都没修对):
         //   关闭清晰度/弹幕弹层那一次点击, Down 被弹层 HWND 吃掉, 只有 Up 漏进视频区。
         //   实测它到达时 IsOpen 已 false、Mouse.LeftButton 已 Released、Closed 还没来
@@ -451,7 +486,7 @@ public partial class PlayerWindow : FluentWindow
         // 控制栏 / 跳过提示条上的右键不算视频区手势(与左键同款理由)
         if (ControlBar != null && ControlBar.IsMouseOver) return;
         if (SkipNoticeBorder != null && SkipNoticeBorder.IsMouseOver) return;
-        if (IsPointerOnMiniBar) return;
+        if (IsPointerOnMiniChrome) return;
         // 弹层开着 ⇒ 这一下属于浮层, 不起步(地基, 见方法说明)
         if (AnyPlayerPopupOpen) { _rightGestureActive = false; return; }
         _rightGestureActive = true;

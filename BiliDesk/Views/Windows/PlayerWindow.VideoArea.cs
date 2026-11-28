@@ -424,14 +424,25 @@ public partial class PlayerWindow : FluentWindow
     private void OnOverlayActivated(object? sender, EventArgs e)
     {
         if (_closing || _mp == null) return;
-        // ★ 小窗栏(2026-11-25, issue #127): 它的点击不走下面"补一次暂停"那套, 各有各的处理;
-        //   而且**必须排在 Mouse.LeftButton 判定之前** —— 激活那一下 WPF 不派发鼠标消息,
-        //   它记录的按键状态可能还停在"松开"(实测: 排在后面时这个分支永远进不来)。
+        // ★ 小窗的窗口控件(2026-11-25, issue #127; 2026-11-28 拖动入口改成上边缘):
+        //   它们的点击不走下面"补一次暂停"那套, 各有各的处理; 而且**必须排在 Mouse.LeftButton
+        //   判定之前** —— 激活那一下 WPF 不派发鼠标消息, 它记录的按键状态可能还停在"松开"
+        //   (实测: 排在后面时这个分支永远进不来)。
+        if (IsPointerOnMiniDragEdge)
+        {
+            // 按在上边缘拖动带上: 当场起拖(这次点击已被激活吃掉, 不会派发 MouseDown)
+            // ★ 左右边缘/左右上角仍交给缩放: 与 OnVideoAreaMouseLeftDown 同一套排除规则,
+            //   否则别的窗口在前台时按角上会变成移动窗口。
+            var ht = HitTestResizeEdge();
+            if ((ht is HtLeft or HtRight or HtTopLeft or HtTopRight) && TryBeginEdgeResize())
+                return;
+            BeginMiniWindowDrag();
+            return;
+        }
         if (IsPointerOnMiniBar)
         {
-            // 按在抓手上就当场起拖; 按在按钮上等松开补一次 Click(这次点击已被激活吃掉)
-            if (MiniWindowGrip != null && MiniWindowGrip.IsMouseOver) BeginMiniWindowDrag();
-            else QueueMiniBarButtonClick(BtnMiniRestore is { IsMouseOver: true } ? BtnMiniRestore : BtnMiniClose);
+            // 按在小窗栏按钮上: 等松开补一次 Click
+            QueueMiniBarButtonClick(BtnMiniRestore is { IsMouseOver: true } ? BtnMiniRestore : BtnMiniClose);
             return;
         }
         // 直播: 点画面本来就不该切播放/暂停, 这套"补一次被吞掉的单击"对直播没有意义

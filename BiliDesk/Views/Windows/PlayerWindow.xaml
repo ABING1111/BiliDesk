@@ -1319,7 +1319,7 @@
 
                     <!-- 小窗播放(2026-11-25, issue #127): 播放器缩成一颗置顶的 16:9 小窗, 浮在别的
                          窗口上面 —— 给"边打游戏边看攻略视频"用。顶栏与信息栏都收起, 小窗里靠浮层
-                         右上角的小窗栏(MiniWindowBar)拖动 / 还原 / 关闭, Esc 也能还原。
+                         右上角的小窗栏(MiniWindowBar)只留还原 / 关闭, 小窗里按住上边缘拖动, Esc 也能还原。
                          ★ 图标用自带的矢量(Themes/FloatingIcons.xaml), 描边色绑按钮前景 ——
                            全局隐式 TextBlock 样式会吃掉字体字形的前景色(铺满窗口按钮踩过的坑)。 -->
                     <Button x:Name="BtnMiniWindow" Style="{StaticResource BareIconButtonStyle}"
@@ -2350,8 +2350,8 @@
                             </Grid>
 
                             <!-- ============ 小窗栏(2026-11-25, issue #127 小窗模式) ============
-                                 小窗里顶栏是收起的(整颗窗口只剩视频), 这条小栏是它唯一的"窗口控件":
-                                 拖动抓手 + 还原 + 关闭。
+                                 小窗里顶栏是收起的(整颗窗口只剩视频), 窗口控件分两处:
+                                 整条上边缘(MiniWindowDragEdge)负责拖动, 这条小栏只负责还原 + 关闭。
                                  ★ 放在 ControlBar **之后**: 两者同在浮层窗口里, 后声明的盖在前面。
                                  ★ 不参与控制栏的"播放时自动隐藏": 它是窗口控件, 跟着藏起来的话
                                    窗口就拖不动也关不掉(ShouldHideControls 只管 ControlBar)。
@@ -2359,20 +2359,28 @@
                                    就是浅字压亮画面(字幕层同一个坑)。
                                  ★ Cursor="Arrow": HideControls 会把 VideoAreaRoot 的指针设成 None,
                                    小窗栏自己不盖一层的话, 指针停在它上面也会消失。 -->
+
+                            <!-- 上边缘拖动带(2026-11-28, 用户要求): 小窗里没有标题栏, 整条上边缘
+                                 就是它的"标题栏" —— 在任意横向位置按住即拖动窗口(见 BeginMiniWindowDrag),
+                                 所以右上角不再需要单独的移动按钮。
+                                 ★ 放在 MiniWindowBar **之前**: 两者都在顶部, 后声明的栏盖在它上面,
+                                    「还原 / 关闭」才点得到。
+                                 ★ 高度 28: 比 6px 的缩放带厚得多, 随手一按就能抓住; 左右边缘与左上/右上角
+                                    仍按缩放带处理(见 TryBeginEdgeResize), 只有上边缘中部用于拖动。
+                                 ★ Cursor 默认 SizeAll; 压在左右边缘/角上时由 UpdateVideoAreaResizeCursor
+                                    换成对应的缩放箭头。HideControls 把 VideoAreaRoot 的指针设成 None 时,
+                                    这里的局部值仍然生效。 -->
+                            <Border x:Name="MiniWindowDragEdge"
+                                    VerticalAlignment="Top" Height="28"
+                                    Background="Transparent" Cursor="SizeAll"
+                                    Visibility="Collapsed"
+                                    ToolTip="按住上边缘拖动小窗" />
+
                             <Border x:Name="MiniWindowBar" VerticalAlignment="Top" HorizontalAlignment="Right"
                                     Margin="10,10,10,0" Visibility="Collapsed" Cursor="Arrow"
                                     CornerRadius="8" Background="#C0121318"
                                     BorderBrush="#26FFFFFF" BorderThickness="1">
                                 <StackPanel Orientation="Horizontal">
-                                    <!-- 抓手: 整块透明, 按下即拖动(窗口跟着光标走, 见 BeginMiniWindowDrag) -->
-                                    <Border x:Name="MiniWindowGrip" Width="40" Height="30"
-                                            Background="Transparent" Cursor="SizeAll"
-                                            ToolTip="按住拖动小窗"
-                                            MouseLeftButtonDown="OnMiniGripMouseDown">
-                                        <TextBlock Text="&#xE700;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                   FontSize="13" Foreground="#F2FFFFFF"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    </Border>
                                     <Button x:Name="BtnMiniRestore" Style="{StaticResource PlayerIconBtn}"
                                             Click="OnMiniRestoreClick" ToolTip="还原 (Esc)">
                                         <TextBlock Text="&#xE73F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
