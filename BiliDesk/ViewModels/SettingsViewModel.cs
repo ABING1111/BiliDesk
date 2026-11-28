@@ -206,6 +206,89 @@ public class SettingsViewModel : ObservableObject
     public bool IsDataTab     { get => TabIndex == 3; set { if (value) TabIndex = 3; } }
     public bool IsAboutTab    { get => TabIndex == 4; set { if (value) TabIndex = 4; } }
 
+    // ----------------- 设置项搜索(2026-11-28) -----------------
+    //
+    // 用户要求"设置页增加搜索功能, 按钮放在胶囊的右边默认收缩态"。
+    // 形态与收藏页/历史页的吸顶搜索完全一致(Views/Controls/TabSearchBox),
+    // 这里只管**搜什么、命中哪些**; "切 Tab + 滚到那一行 + 高亮"是页面的活
+    // (它才拿得到可视树, 见 SettingsPage.OnLocateRequested)。
+    //
+    // ★ 索引在 Models/SettingsSearchCatalog 里: 纯静态、无网络, 52 条行 + 快捷键目录投影。
+    //   每次输入遍历一遍即可, 不需要防抖 —— 也不该防抖: 本地几十条, 延迟只会让人觉得卡。
+
+    private string _searchText = "";
+    private readonly System.Collections.ObjectModel.ObservableCollection<SettingsSearchEntry> _searchHits = new();
+
+    /// <summary>搜索框里的关键词(双向绑到 TabSearchBox)。</summary>
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (!SetProperty(ref _searchText, value ?? "")) return;
+            RebuildSearchHits();
+        }
+    }
+
+    /// <summary>当前命中的设置项(右上角悬浮卡片的列表源)</summary>
+    public System.Collections.ObjectModel.ObservableCollection<SettingsSearchEntry> SearchHits => _searchHits;
+
+    /// <summary>有没有关键词(决定结果卡片显不显示)</summary>
+    public bool HasSearch => SearchText.Trim().Length > 0;
+
+    /// <summary>关键词有没有命中任何设置项</summary>
+    public bool HasSearchHits => _searchHits.Count > 0;
+
+    /// <summary>有词但零命中: 结果卡片里显示一句提示, 而不是整块消失(用户会以为没响应)</summary>
+    public bool ShowSearchEmpty => HasSearch && _searchHits.Count == 0;
+
+    /// <summary>结果卡片的标题行(只在有命中时显示)</summary>
+    public string SearchSummaryText => $"找到 {_searchHits.Count} 项设置";
+
+    /// <summary>点结果卡片里的一行</summary>
+    public ICommand ActivateSearchHitCommand { get; }
+
+    /// <summary>
+    /// 请求页面把某条设置项滚到视野里并高亮。
+    /// ★ 走事件而不是让 VM 直接碰可视树: VM 在设置页长期缓存、且完全没有 UI 引用;
+    ///   页面在 OnLoaded 里订阅(见 SettingsPage)。
+    /// </summary>
+    public event Action<SettingsSearchEntry>? LocateRequested;
+
+    private void RebuildSearchHits()
+    {
+        _searchHits.Clear();
+        foreach (var hit in SettingsSearchCatalog.Search(_searchText))
+            _searchHits.Add(hit);
+
+        OnPropertyChanged(nameof(HasSearch));
+        OnPropertyChanged(nameof(HasSearchHits));
+        OnPropertyChanged(nameof(ShowSearchEmpty));
+        OnPropertyChanged(nameof(SearchSummaryText));
+    }
+
+    /// <summary>
+    /// 跳到一条命中项: 先清空关键词(结果卡片随之收起、搜索框收回圆), 再切 Tab 并请求定位。
+    /// ★ 必须**先**清空: 否则结果卡片会盖在刚跳过去的那一行上, 用户看不到高亮。
+    /// ★ 清空后 TabSearchBox 不会自己收回(它只在失焦/Esc/点外面时收), 由页面补一次
+    ///   CollapseIfEmpty。
+    /// </summary>
+    public void ActivateSearchHit(SettingsSearchEntry? hit)
+    {
+        if (hit == null) return;
+        SearchText = "";
+        TabIndex = hit.TabIndex;
+        LocateRequested?.Invoke(hit);
+    }
+
+    /// <summary>回车 = 跳到第一条命中项(没有命中就什么都不做, 让事件继续往下走)。</summary>
+    public bool ActivateFirstSearchHit()
+    {
+        if (_searchHits.Count == 0) return false;
+        ActivateSearchHit(_searchHits[0]);
+        return true;
+    }
+
     // ----------------- 主题色 -----------------
 
     /// <summary>
@@ -2017,6 +2100,10 @@ public class SettingsViewModel : ObservableObject
 
         // 恢复默认 = 落回空串(存"没自定义过", 而不是存 "#FB7299" —— 这样默认色以后调了会跟着变)
         ResetAccentCommand = new RelayCommand(() => AccentColor = "");
+
+        // 设置项搜索(2026-11-28): 结果卡片里每一行带自己的 entry 当 CommandParameter
+        ActivateSearchHitCommand = new RelayCommand(
+            p => ActivateSearchHit(p as SettingsSearchEntry));
 
         // 界面字体(2026-11-14): 导入文件 / 恢复默认。下拉选择走 FontSelected(TwoWay)。
         ImportFontCommand = new RelayCommand(ImportFont);

@@ -68,6 +68,19 @@ public partial class TabSearchBox : UserControl
     /// <summary>当前是否展开(只读, 给探针/调试看)。</summary>
     public bool IsExpanded => _expanded;
 
+    /// <summary>
+    /// 内容为空时收起(2026-11-28, 与 <see cref="SearchBox.CollapseIfEmpty"/> 同名同义)。
+    ///
+    /// ★ 为什么要这个公开入口: 设置页搜索命中后由 VM 把关键词清空并跳走 ——
+    ///   TabSearchBox 只在自己失焦 / Esc / 点页面外面时才收回, 程序改 Text 不在那几条路上,
+    ///   结果就是"跳到目标行之后, 胶囊旁边还挂着一个空的展开输入框"。
+    /// </summary>
+    public void CollapseIfEmpty()
+    {
+        if (!_expanded) return;
+        if (Box.Text.Trim().Length == 0) Collapse();
+    }
+
     public TabSearchBox()
     {
         InitializeComponent();
@@ -78,13 +91,49 @@ public partial class TabSearchBox : UserControl
         {
             if (_expanded) AttachWindowHook();
             else Width = CollapsedSize;      // 高度由 XAML 绑到 tab 胶囊, 收起态是等高等宽的圆
+            // ★ 展开期间宿主变窄(拖小窗口 / 侧栏展开): 输入框要跟着收敛, 否则会顶出右缘
+            //   被 ScrollViewer 裁掉 —— 那半截输入框既看不见也点不到。
+            //   自身 SizeChanged 量不到宿主变化(宽度本来就是我们自己设的), 只能挂父级。
+            HookHostResize();
         };
+        Unloaded += (_, _) => UnhookHostResize();
         // 高度跟着 tab 胶囊走时(H 绑定变化), 收起态直径也要跟着变
         SizeChanged += (_, _) =>
         {
             if (!_expanded && Math.Abs(Width - CollapsedSize) > 0.5) Width = CollapsedSize;
         };
         SyncTextUi();
+    }
+
+    private FrameworkElement? _resizeHost;
+
+    private void HookHostResize()
+    {
+        UnhookHostResize();
+        if (Parent is not FrameworkElement host) return;
+        _resizeHost = host;
+        host.SizeChanged += OnHostSizeChanged;
+    }
+
+    private void UnhookHostResize()
+    {
+        if (_resizeHost == null) return;
+        _resizeHost.SizeChanged -= OnHostSizeChanged;
+        _resizeHost = null;
+    }
+
+    /// <summary>
+    /// 宿主宽度变了: 按新可用宽度重算"展开到多宽 / 要不要向左借位"。
+    /// ★ 先停掉宽度动画再赋值: 展开动画优先级高于本地值, 不停的话这次赋值会被它盖掉,
+    ///   动画仍会走到旧目标宽度(窗口已经变窄了, 输入框还是 240)。
+    /// </summary>
+    private void OnHostSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (!_expanded) return;
+        BeginAnimation(WidthProperty, null);
+        var (width, shift) = ExpandedLayout();
+        Width = width;
+        SlideX.X = -shift;
     }
 
     private static void OnTextPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)

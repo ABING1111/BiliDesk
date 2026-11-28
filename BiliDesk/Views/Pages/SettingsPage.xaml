@@ -1,6 +1,7 @@
 <UserControl x:Class="BiliDesk.Views.Pages.SettingsPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
              xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
              Background="{DynamicResource AppBackgroundBrush}">
     <!--
@@ -20,6 +21,14 @@
         功能一个不少: 旧页的每一项绑定都原样搬进新布局, VM 只加了 Tab 投影属性。
         五个 Tab 的内容在 Settings/SettingsTabs.xaml(独立 ResourceDictionary,
         模板里不能挂事件, 关于页的 GitHub 仓库 / 反馈外链因此改走命令)。
+
+        ★ 2026-11-28 新增设置项搜索(用户要求"按钮放在胶囊的右边, 默认收缩态"):
+          · 形态完全复用收藏页/历史页的 controls:TabSearchBox: 收起是磨砂圆,
+            点击原地展开成输入框; Esc / 失焦 / 点外面按共用控件自己的规则收起。
+          · 胶囊**保持正中**: 吸顶行是三列 *(占位) / Auto(胶囊) / *(搜索),
+            搜索圆挂在胶囊右缘 12px 处, 展开时向右生长, 不会把胶囊推歪。
+          · 命中后由右上角的悬浮卡片列出(见文件末尾), 点一行 = 切 Tab + 滚到那一行 + 高亮;
+            索引与匹配规则在 Models/SettingsSearchCatalog。
     -->
     <Grid>
         <ScrollViewer x:Name="PageScroll" VerticalScrollBarVisibility="Auto"
@@ -52,8 +61,10 @@
                          ★ Content 必须保持是 **VM 本身**({Binding}): 模板里所有 Command / 属性绑定
                            都以 Content 为数据源 —— 之前把它设成 "{Binding TabIndex}"(一个 int),
                            所有按钮的绑定就全落空了(真机症状: 五个 Tab 的功能全没反应)。
-                           Triggers 只负责读 TabIndex 换模板, 不动 Content。 -->
-                    <ContentControl Margin="0,4,0,0" HorizontalAlignment="Stretch"
+                           Triggers 只负责读 TabIndex 换模板, 不动 Content。
+                         ★ x:Name 给搜索定位用: 只在**当前 Tab 的模板**里按标题找行 ——
+                           不能从页面根找, 右上角结果卡片里也有同样的标题文字。 -->
+                    <ContentControl x:Name="TabContent" Margin="0,4,0,0" HorizontalAlignment="Stretch"
                                     Focusable="False"
                                     Content="{Binding}">
                         <ContentControl.Resources>
@@ -85,48 +96,163 @@
                     </ContentControl>
                 </StackPanel>
 
-                <!-- ============ 吸顶 Tab 胶囊 ============
+                <!-- ============ 高亮层(2026-11-28) ============
+                     搜索跳转后那一行的强调色闪烁。放在内容流里的**浮层**(不占位、不参与命中测试),
+                     这样色带能随内容一起滚动、也被 ScrollViewer 正确裁剪。
+                     ★ 为什么不用改行的 Background: 行元素只有内容框那么大, 行间距(14)与卡片
+                       内边距(26)都盖不到, 高亮看起来是一小块而不是"这一条"。这里按"行的外边距盒"
+                       铺满卡片内宽, 视觉上才是一条完整的色带。
+                     ★ ZIndex 1: 压在卡片之上、吸顶行之下(吸顶行是最后一个子元素)。 -->
+                <Canvas x:Name="HighlightLayer" IsHitTestVisible="False"
+                        Panel.ZIndex="1" />
+
+                <!-- ============ 吸顶行: Tab 胶囊(正中) + 可折叠搜索(右侧) ============
                      ★ 只有一个实例: 不再有"缩小版"副本, 尺寸/样式与原来的胶囊完全一致。
-                     ★ 必须放在滚动内容的**最后一个子元素**: 它要画在卡片之上; 滚动过程中由
+                     ★ 必须是滚动内容的**最后一个子元素**: 它要画在卡片之上; 滚动过程中由
                        code-behind 反向平移抵消滚动量, 到距顶端 8px 处钉住(见 Helpers/StickyPin)。
-                     ★ 只有这颗胶囊, 没有整条背景/分隔线 —— 内容从它两侧与下方正常经过。
+                     ★ 只有这一行, 没有整条背景/分隔线 —— 内容从它两侧与下方正常经过。
+                     ★ 三列 *(占位) / Auto(胶囊) / *(搜索): 胶囊因此**始终在正中**;
+                       搜索圆挂在它右缘 12px 处, 展开时向右长, 也不会把胶囊推歪
+                       (2026-11-28 用户要求"按钮放在胶囊的右边, 胶囊保持正中")。
+                     ★ 行本身不画任何东西 ⇒ 不参与命中测试; IsHitTestVisibleInChrome 只标在
+                       胶囊与搜索控件上, 顶部那条空白仍然可以拖动窗口。
                      ★ 钉住后顶端会进入窗口标题栏区域(CaptionHeight=20):
                        IsHitTestVisibleInChrome 让那块区域里的点击仍然落到 Tab 上,
                        而不是被 WindowChrome 当成"拖动窗口"吞掉。 -->
                 <!-- ★ 底色用 FrostedPanelBrush(磨砂浮层): 胶囊吸顶后压在卡片封面上,
-                     亚克力下要半透明、又要把封面压住保证标签可读 —— PanelBackgroundBrush 太透会糊字,
-                     FlyoutBackgroundBrush 又全不透明成死白。这一档是两者的平衡(见 ThemeService)。 -->
-                <Border x:Name="StickyCapsule" VerticalAlignment="Top" HorizontalAlignment="Center"
-                        Margin="0,20,0,0"
-                        Background="{DynamicResource FrostedPanelBrush}"
-                        BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
-                        CornerRadius="22" Padding="5"
-                        shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <Border.RenderTransform>
-                        <TranslateTransform x:Name="StickyCapsuleShift" />
-                    </Border.RenderTransform>
-                    <Border.Effect>
-                        <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
-                    </Border.Effect>
-                    <StackPanel Orientation="Horizontal">
-                        <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
-                                     Content="通用"
-                                     IsChecked="{Binding IsGeneralTab, Mode=TwoWay}" />
-                        <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
-                                     Content="播放" Margin="2,0,0,0"
-                                     IsChecked="{Binding IsPlaybackTab, Mode=TwoWay}" />
-                        <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
-                                     Content="快捷键" Margin="2,0,0,0"
-                                     IsChecked="{Binding IsShortcutTab, Mode=TwoWay}" />
-                        <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
-                                     Content="数据管理" Margin="2,0,0,0"
-                                     IsChecked="{Binding IsDataTab, Mode=TwoWay}" />
-                        <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
-                                     Content="关于" Margin="2,0,0,0"
-                                     IsChecked="{Binding IsAboutTab, Mode=TwoWay}" />
-                    </StackPanel>
-                </Border>
+                      亚克力下要半透明、又要把封面压住保证标签可读 —— PanelBackgroundBrush 太透会糊字,
+                      FlyoutBackgroundBrush 又全不透明成死白。这一档是两者的平衡(见 ThemeService)。 -->
+                <Grid x:Name="StickyRow" VerticalAlignment="Top" Margin="0,20,0,0"
+                      Panel.ZIndex="2">
+                    <Grid.RenderTransform>
+                        <TranslateTransform x:Name="StickyRowShift" />
+                    </Grid.RenderTransform>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border x:Name="StickyCapsule" Grid.Column="1"
+                            VerticalAlignment="Top" HorizontalAlignment="Center"
+                            Background="{DynamicResource FrostedPanelBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                            CornerRadius="22" Padding="5"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="14" ShadowDepth="1" Opacity="0.08" />
+                        </Border.Effect>
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
+                                         Content="通用"
+                                         IsChecked="{Binding IsGeneralTab, Mode=TwoWay}" />
+                            <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
+                                         Content="播放" Margin="2,0,0,0"
+                                         IsChecked="{Binding IsPlaybackTab, Mode=TwoWay}" />
+                            <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
+                                         Content="快捷键" Margin="2,0,0,0"
+                                         IsChecked="{Binding IsShortcutTab, Mode=TwoWay}" />
+                            <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
+                                         Content="数据管理" Margin="2,0,0,0"
+                                         IsChecked="{Binding IsDataTab, Mode=TwoWay}" />
+                            <RadioButton GroupName="SettingsTab" Style="{StaticResource SettingsTabStyle}"
+                                         Content="关于" Margin="2,0,0,0"
+                                         IsChecked="{Binding IsAboutTab, Mode=TwoWay}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 可折叠搜索(2026-11-28): 与收藏页/历史页同一个控件(controls:TabSearchBox)。
+                         收起是磨砂圆, 点击原地展开成输入框(左对齐 ⇒ 向右长), 胶囊不动。
+                         ★ 高度绑到胶囊: 收起态直径 = 胶囊高度, 两个圆头在同一水平线上。
+                         ★ 回车 = 跳到第一条命中(见 SettingsPage.OnSearchKeyDown)。 -->
+                    <controls:TabSearchBox x:Name="SearchPill" Grid.Column="2"
+                                           HorizontalAlignment="Left" VerticalAlignment="Top"
+                                           Margin="12,0,0,0"
+                                           Height="{Binding ActualHeight, ElementName=StickyCapsule}"
+                                           shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                                           PlaceholderText="搜索设置项"
+                                           Text="{Binding SearchText, Mode=TwoWay}"
+                                           PreviewKeyDown="OnSearchKeyDown" />
+                </Grid>
             </Grid>
         </ScrollViewer>
+
+        <!-- ============ 搜索结果卡片(2026-11-28) ============
+             固定在页面右上、**不随内容滚动**(放在 ScrollViewer 之外), 关键词非空时出现。
+             ★ 为什么不用 Popup: Popup 是独立 HWND, 定位要跟着窗口移动/缩放重算; 而且
+               StaysOpen=False 会抢走输入框的焦点 —— 用户刚打一个字卡片就关了。
+               这里就是普通浮层 Border, 显隐由 VM 的 HasSearch 驱动。
+             ★ 底色用 FlyoutBackgroundBrush(恒不透明): 它压在设置卡片上, 亚克力下用
+               PanelBackgroundBrush 会透出底下的行文字, 糊成一片。
+             ★ 每行整块可点(AboutLinkButtonStyle), 点一下 = 切 Tab + 滚过去 + 高亮。 -->
+        <Border x:Name="SearchResultPanel"
+                Width="360" MaxHeight="400"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,76,36,0" Padding="0,8"
+                Panel.ZIndex="20"
+                Background="{DynamicResource FlyoutBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                CornerRadius="12"
+                Visibility="{Binding HasSearch, Converter={StaticResource BoolToVis}}">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="18" ShadowDepth="2" Opacity="0.16" />
+            </Border.Effect>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- 标题行: "找到 N 项设置"; 零命中时改由下面那块提示(不重复说两遍"没找到") -->
+                <TextBlock Grid.Row="0" Text="{Binding SearchSummaryText}"
+                           Margin="14,2,14,8" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           Visibility="{Binding HasSearchHits, Converter={StaticResource BoolToVis}}" />
+
+                <!-- 命中列表。零命中时整块收起, 下面那句提示由 ShowSearchEmpty 显示。 -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Visibility="{Binding HasSearchHits, Converter={StaticResource BoolToVis}}">
+                    <ItemsControl ItemsSource="{Binding SearchHits}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Style="{StaticResource AboutLinkButtonStyle}"
+                                        HorizontalContentAlignment="Stretch"
+                                        Padding="14,7" Margin="4,0"
+                                        Cursor="Hand"
+                                        Command="{Binding DataContext.ActivateSearchHitCommand,
+                                                          RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                        CommandParameter="{Binding}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Title}" FontSize="13"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{Binding LocationText}" FontSize="11"
+                                                   Margin="0,2,0,0"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <!-- 零命中提示 -->
+                <StackPanel Grid.Row="1" Margin="14,6,14,14"
+                            Visibility="{Binding ShowSearchEmpty, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="没有找到匹配的设置项" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                    <TextBlock Text="换个关键词试试, 比如「弹幕」「缓存」「快捷键」" FontSize="12"
+                               Margin="0,6,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                </StackPanel>
+
+                <!-- 底部提示: 只在有命中时出现 -->
+                <TextBlock Grid.Row="2" Text="回车跳到第一项" FontSize="11" Margin="14,6,14,2"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           Visibility="{Binding HasSearchHits, Converter={StaticResource BoolToVis}}" />
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>
