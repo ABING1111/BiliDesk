@@ -3014,27 +3014,35 @@
                                              FontSize="12" Cursor="IBeam"
                                              Text="加载中…"
                                              MaxHeight="{StaticResource DescCollapsedHeight}" />
-                                    <!-- 展开/收起(2026-10-12 用户要求"加粗、居中、加展开/收起符号"):
+                                    <!-- 展开/收起(2026-10-12 用户要求"加粗、居中、加展开/收起符号";
+                                         2026-11-28 箭头统一成矢量, 见 FoldChevronStyle):
                                          ★ 加粗 + 居中: 它是简介的唯一操作入口, 之前是 12px 普通体
                                            靠左, 夹在一大段灰色正文里几乎看不见。
-                                         ★ 符号用 **⌄ / ⌃**(U+2303 / U+2302): 这两个是"上下尖头",
-                                           语义直指"往下展开 / 往上收起"; 常见的 ▾ 会让人以为
-                                           折叠起来是个下拉菜单。
-                                         ★ 符号与文案**写在同一个 TextBlock 的两段**里(而不是两个控件):
-                                           它们要一起换方向, 分成两个控件就得在代码里同时改两处,
-                                           早晚会漏掉一个。
+                                         ★ 箭头用 FoldChevronStyle 的矢量 chevron, **只翻转不换形**:
+                                           之前是 ⌄/⌃ 两个不同字符, 行框高度/基线不同,
+                                           切换时整行会轻微上下跳(而且字形墨迹偏左上, 看着歪)。
+                                         ★ 箭头与文案仍是**同一次调用**里一起写的(见 ApplyDescFoldText):
+                                           分两处写早晚会漏掉一个, 出现"文字说收起、箭头还朝下"。
                                          ★ 显式给 Foreground(局部值): 全局隐式 TextBlock 样式带
-                                           Foreground setter, 会吃掉继承来的强调色。 -->
+                                           Foreground setter, 会吃掉继承来的颜色。
+                                         ★ 文案与箭头都用**普通主文字色**, 不用强调色
+                                           (2026-11-28 用户要求"去除主题色, 改为普通颜色"):
+                                           它是功能操作, 不该跟着主题色走。箭头那边由
+                                           FoldChevronStyle 自己给 TextPrimaryBrush, 与文案同色。 -->
                                     <Button x:Name="BtnDescFold" Style="{StaticResource LinkButtonStyle}"
                                             HorizontalAlignment="Center" Padding="6,4,6,4"
                                             Margin="0,4,0,0"
                                             Visibility="Collapsed" Click="OnDescFoldClick"
                                             ToolTip="展开完整简介">
-                                        <TextBlock x:Name="BtnDescFoldText" FontSize="12.5" FontWeight="SemiBold">
-                                            <TextBlock x:Name="BtnDescFoldGlyph" Text="&#x2303;"
-                                                       FontWeight="Normal" Margin="0,0,4,0" />
-                                            <Run x:Name="BtnDescFoldLabel" Text="展开简介" />
-                                        </TextBlock>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Path x:Name="BtnDescFoldGlyph"
+                                                  Style="{StaticResource FoldChevronStyle}"
+                                                  Margin="0,0,5,0" />
+                                            <TextBlock x:Name="BtnDescFoldLabel" Text="展开简介"
+                                                       FontSize="12.5" FontWeight="SemiBold"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        </StackPanel>
                                     </Button>
 
                                     <!-- ============ 相关视频(2026-10-12 新增) ============

@@ -627,6 +627,49 @@
         </Setter>
     </Style>
 
+    <!-- ============ 折叠箭头(2026-11-28 统一) ============
+         简介/签名的「展开简介 / 收起简介」按钮里那颗 chevron, 全应用**只此一份**。
+         ★ 用矢量而不是 Segoe 字形(⌄/⌃ 或 E70D/E70E):
+           字形墨迹在 em 框里天然偏左上, 小字号下一眼就能看出不居中; 而且 ⌄ 与 ⌃ 是
+           **两个不同字符**, 行框高度/基线不同, 切换时整行会轻微上下跳(播放器实测如此)。
+           矢量只翻转不换形, 两个状态的包围盒完全一致。
+         ★ 翻转靠 Tag 驱动(True = 已展开 = 朝上), 照抄 SpaceTabStyle 的 Tag="on" 写法,
+           不引入新的附加属性; 绑定方可以直接 Tag="{Binding IsSignExpanded}",
+           也可以由代码写 Tag(播放器就是)。
+         ★★★ RenderTransformOrigin 必须显式写 0.5,0.5: 默认原点是**左上角**,
+           180° 旋转会把墨迹甩到元素外(同 PlayerWindow 详情栏把手那段注释)。
+         ★ Stroke 用 TextPrimaryBrush(普通主文字色), **不用强调色**: 2026-11-28 用户要求
+           "去除主题色, 改为普通颜色" —— 折叠入口是功能操作, 不该染上主题色。
+         ★ IsHitTestVisible=False: 点击要落在整个按钮上, 箭头不该自己吃掉命中测试。 -->
+    <Style x:Key="FoldChevronStyle" TargetType="Path">
+        <Setter Property="Data" Value="{StaticResource ChevronDownIconGeometry}" />
+        <Setter Property="Width" Value="10" />
+        <Setter Property="Height" Value="10" />
+        <Setter Property="Stretch" Value="Uniform" />
+        <Setter Property="Stroke" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="StrokeThickness" Value="1.5" />
+        <Setter Property="StrokeStartLineCap" Value="Round" />
+        <Setter Property="StrokeEndLineCap" Value="Round" />
+        <Setter Property="StrokeLineJoin" Value="Round" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="RenderTransform">
+            <Setter.Value>
+                <RotateTransform Angle="0" />
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="True">
+                <Setter Property="RenderTransform">
+                    <Setter.Value>
+                        <RotateTransform Angle="180" />
+                    </Setter.Value>
+                </Setter>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
     <!-- 链接按钮 -->
     <Style x:Key="LinkButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="Transparent" />

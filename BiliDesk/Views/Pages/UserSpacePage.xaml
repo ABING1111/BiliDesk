@@ -184,10 +184,27 @@
                         <controls:LinkTextBlock SourceText="{Binding Sign}"
                                    Style="{StaticResource SpaceSignStyle}"
                                    MaxWidth="620" HorizontalAlignment="Left" />
-                        <Button Content="{Binding SignDetailText}" Command="{Binding ToggleSignCommand}"
+                        <!-- 展开/收起(2026-11-28 与播放器简介统一):
+                             箭头与文案的写法与播放器一致 —— 同一份 FoldChevronStyle 的矢量
+                             chevron + 「展开简介 / 收起简介」文案(原来是纯文字「详情 / 收起」,
+                             既没有箭头、说法也和播放器不一样)。
+                             ★ Tag 直接绑 IsSignExpanded: 翻转由样式里的 DataTrigger 完成,
+                               VM 只管状态, 不必再暴露一个"箭头字形"属性。
+                             ★ 颜色用普通主文字色(2026-11-28 用户要求"去除主题色"):
+                               与播放器简介那处保持一致。 -->
+                        <Button Command="{Binding ToggleSignCommand}"
                                 Style="{StaticResource LinkButtonStyle}" FontSize="12" Padding="0,2"
                                 HorizontalAlignment="Left" Margin="0,2,0,0"
-                                Visibility="{Binding CanExpandSign, Converter={StaticResource BoolToVis}}" />
+                                ToolTip="{Binding SignDetailTip}"
+                                Visibility="{Binding CanExpandSign, Converter={StaticResource BoolToVis}}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource FoldChevronStyle}"
+                                      Tag="{Binding IsSignExpanded}" Margin="0,0,4,0" />
+                                <TextBlock Text="{Binding SignDetailText}" FontSize="12"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                            </StackPanel>
+                        </Button>
                     </StackPanel>
                 </StackPanel>
 

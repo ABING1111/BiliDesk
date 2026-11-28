@@ -380,7 +380,7 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
     // ---------------- 简介展开 ----------------
     private bool _signExpanded;
 
-    /// <summary>简介是否展开(默认两行, 点「详情」展开全部)</summary>
+    /// <summary>简介是否展开(默认两行, 点「展开简介」展开全部)</summary>
     public bool IsSignExpanded
     {
         get => _signExpanded;
@@ -388,13 +388,18 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         {
             if (!SetProperty(ref _signExpanded, value)) return;
             OnPropertyChanged(nameof(SignDetailText));
+            OnPropertyChanged(nameof(SignDetailTip));
         }
     }
 
-    /// <summary>简介是否长到需要「详情」(短签名不显示这个入口)</summary>
+    /// <summary>简介是否长到需要「展开简介」(短签名不显示这个入口)</summary>
     public bool CanExpandSign => Sign.Length > 40;
 
-    public string SignDetailText => IsSignExpanded ? "收起" : "详情";
+    /// <summary>折叠入口的文案(2026-11-28 与播放器简介统一为同一套说法)</summary>
+    public string SignDetailText => IsSignExpanded ? "收起简介" : "展开简介";
+
+    /// <summary>折叠入口的悬停提示(与播放器 ApplyDescFoldText 保持一致)</summary>
+    public string SignDetailTip => IsSignExpanded ? "收起简介" : "展开完整简介";
 
     // ---------------- 页内搜索 ----------------
 

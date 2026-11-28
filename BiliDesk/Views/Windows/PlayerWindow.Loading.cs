@@ -179,18 +179,21 @@ public partial class PlayerWindow : FluentWindow
     }
 
     /// <summary>
-    /// 「展开/收起」那行文字的**唯一**写法点(文案 + 符号一起换方向)。
+    /// 「展开/收起」那行文字的**唯一**写法点(文案 + 箭头一起换方向)。
     ///
-    /// ★ 为什么单独抽出来: 符号(⌄/⌃)与文案必须在**同一次**调用里同步更新,
-    ///   而它们分属两个不同的对象(TextBlock 与 Run)。留在 UpdateDescFold 里就地写没问题,
-    ///   但一旦以后新增第二个入口(比如键盘快捷键/右键菜单)忘了改符号方向,
+    /// ★ 为什么单独抽出来: 文案与箭头(Path 的 Tag)必须在**同一次**调用里同步更新,
+    ///   而它们分属两个不同的对象(TextBlock 与 Path)。留在 UpdateDescFold 里就地写没问题,
+    ///   但一旦以后新增第二个入口(比如键盘快捷键/右键菜单)忘了改箭头方向,
     ///   就会出现"点了展开, 文字说收起、箭头还朝下"这种自相矛盾的按钮。
+    /// ★ 箭头是 Themes/Styles.xaml 里的 FoldChevronStyle: 一个**向下的 chevron**,
+    ///   展开时靠 Tag=True 触发 180° 翻转 —— 不是换成另一个字符, 所以两个状态的
+    ///   墨迹尺寸与基线完全一致(旧版 ⌄/⌃ 会上下跳)。
     /// </summary>
     private void ApplyDescFoldText()
     {
         if (BtnDescFoldLabel != null) BtnDescFoldLabel.Text = _descExpanded ? "收起简介" : "展开简介";
-        // ⌄ = 往下展开, ⌃ = 往上收起
-        if (BtnDescFoldGlyph != null) BtnDescFoldGlyph.Text = _descExpanded ? "⌃" : "⌄";
+        // Tag=True 时 FoldChevronStyle 把箭头翻 180°(朝上 = 收起)
+        if (BtnDescFoldGlyph != null) BtnDescFoldGlyph.Tag = _descExpanded;
         if (BtnDescFold != null) BtnDescFold.ToolTip = _descExpanded ? "收起简介" : "展开完整简介";
     }
 

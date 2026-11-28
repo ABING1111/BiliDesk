@@ -16,6 +16,13 @@
         Figures="M 16.4,8.2 A 6.6,6.6 0 1 0 16.9,11.8 M 16.4,8.2 L 16.4,3.8 M 16.4,8.2 L 12,8.2" />
     <PathGeometry x:Key="ChevronUpIconGeometry" PresentationOptions:Freeze="True"
         Figures="M 4.8,12.4 L 10,7.2 L 15.2,12.4" />
+    <!-- 向下的 chevron(2026-11-28, 简介/签名折叠用): 与 ChevronUp 严格互为上下镜像
+         —— 顶点 x 都是 10、两翼端点 y 关于 10 对称(7.2/12.8 ⇄ 7.6/12.4 的两组同一中心)。
+         ★ 折叠按钮**只翻转**这个几何(0°/180°), 不换字形也不换另一条路径:
+           两个状态共用同一份墨迹, 尺寸与基线绝对一致, 展开/收起时文字不会上下跳。
+           之前播放器用 ⌄/⌃ 两个不同字符, 行框高度不同, 切换时那一行会轻微抖动。 -->
+    <PathGeometry x:Key="ChevronDownIconGeometry" PresentationOptions:Freeze="True"
+        Figures="M 4.8,7.6 L 10,12.8 L 15.2,7.6" />
     <PathGeometry x:Key="SunIconGeometry" PresentationOptions:Freeze="True"
         Figures="M 10,6.8 A 3.2,3.2 0 1 1 10,13.2 A 3.2,3.2 0 1 1 10,6.8 Z M 10,2 V 4 M 10,16 V 18 M 2,10 H 4 M 16,10 H 18 M 4.3,4.3 L 5.7,5.7 M 14.3,14.3 L 15.7,15.7 M 15.7,4.3 L 14.3,5.7 M 5.7,14.3 L 4.3,15.7" />
     <PathGeometry x:Key="MoonIconGeometry" PresentationOptions:Freeze="True"
