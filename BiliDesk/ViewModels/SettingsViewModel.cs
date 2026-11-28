@@ -1603,6 +1603,53 @@ public class SettingsViewModel : ObservableObject
         ? "启动后在后台检查一次, 有新版本或网络异常时弹窗提醒(网络异常每天最多提示一次)"
         : "已关闭, 仍可随时点「检查更新」手动检查";
 
+    public string[] UpdateMirrorOptions { get; } = { "直连", "gh-proxy", "ghfast", "ghproxy", "自定义" };
+
+    private const string UpdateMirrorGhProxy = "https://gh-proxy.com/";
+    private const string UpdateMirrorGhFast = "https://ghfast.top/";
+    private const string UpdateMirrorGhProxyNet = "https://ghproxy.net/";
+
+    private string _updateMirrorPreset = UpdateMirrorPresetOf(Svc.Settings.UpdateMirror);
+
+    /// <summary>镜像源下拉: 预设选项 + 自定义。选自定义时保留输入框里的值，由文本框写设置。</summary>
+    public string UpdateMirrorPreset
+    {
+        get => _updateMirrorPreset;
+        set
+        {
+            var next = value ?? "自定义";
+            if (string.Equals(next, _updateMirrorPreset, StringComparison.Ordinal)) return;
+            _updateMirrorPreset = next;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsCustomUpdateMirror));
+            switch (next)
+            {
+                case "直连": SetUpdateMirrorSetting(""); break;
+                case "gh-proxy": SetUpdateMirrorSetting(UpdateMirrorGhProxy); break;
+                case "ghfast": SetUpdateMirrorSetting(UpdateMirrorGhFast); break;
+                case "ghproxy": SetUpdateMirrorSetting(UpdateMirrorGhProxyNet); break;
+            }
+        }
+    }
+
+    public bool IsCustomUpdateMirror => _updateMirrorPreset == "自定义";
+
+    private void SetUpdateMirrorSetting(string value)
+    {
+        Svc.Settings.SetUpdateMirror(value);
+        OnPropertyChanged(nameof(UpdateMirror));
+        OnPropertyChanged(nameof(UpdateMirrorHint));
+    }
+
+    private static string UpdateMirrorPresetOf(string? mirror) => (mirror ?? "").Trim() switch
+    {
+        "" => "直连",
+        UpdateMirrorGhProxy => "gh-proxy",
+        UpdateMirrorGhFast => "ghfast",
+        UpdateMirrorGhProxyNet => "ghproxy",
+        _ => "自定义"
+    };
+
     /// <summary>更新镜像源(空 = 直连 GitHub); 输入框失焦时落盘。</summary>
     public string UpdateMirror
     {
@@ -1618,7 +1665,7 @@ public class SettingsViewModel : ObservableObject
     }
 
     public string UpdateMirrorHint => string.IsNullOrEmpty(Svc.Settings.UpdateMirror)
-        ? "留空直连 GitHub；可填镜像前缀(如 https://gh-proxy.com/)或含 {url} 的模板"
+        ? "留空直连 GitHub；选「自定义」可填镜像前缀或 {url} 模板"
         : $"当前走镜像：{Svc.Settings.UpdateMirror}";
 
     /// <summary>最近一次检查的结果(手动检查的反馈就落在这里, 让用户确认按钮点下去有反应)</summary>

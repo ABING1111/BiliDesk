@@ -1411,10 +1411,16 @@
                             <TextBlock Text="{Binding UpdateMirrorHint}" Style="{StaticResource SettingsRowDescStyle}"
                                        TextWrapping="Wrap" />
                         </StackPanel>
-                        <TextBox Grid.Column="1" Width="260" VerticalAlignment="Center"
-                                 Style="{StaticResource FluentTextBoxStyle}"
-                                 Text="{Binding UpdateMirror, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                 ToolTip="留空直连 GitHub；也支持 https://kkgithub.com/{url} 这种模板" />
+                        <StackPanel Grid.Column="1" Width="260" VerticalAlignment="Center">
+                            <ComboBox Style="{StaticResource SettingsComboStyle}"
+                                      ItemsSource="{Binding UpdateMirrorOptions}"
+                                      SelectedItem="{Binding UpdateMirrorPreset, Mode=TwoWay}" />
+                            <TextBox Margin="0,6,0,0"
+                                     Style="{StaticResource FluentTextBoxStyle}"
+                                     Text="{Binding UpdateMirror, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                     Visibility="{Binding IsCustomUpdateMirror, Converter={StaticResource BoolToVis}}"
+                                     ToolTip="支持前缀(https://gh-proxy.com/)或含 {url} 的模板" />
+                        </StackPanel>
                     </Grid>
                     <Border Style="{StaticResource SettingsRowDivider}" />
                     <Grid Style="{StaticResource SettingsRowStyle}">
