@@ -188,11 +188,21 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
 
     /// <summary>
     /// 播放数展示串。0 时返回空串 —— 动态时间线等来源拿不到播放数,
-    /// 显示"▶ 0"是错误信息(截图实测), 拿不到就整个胶囊隐藏(与弹幕数同款约定)。
+    /// 显示"▶ 0"是错误信息(截图实测), 拿不到就整组角标隐藏(与弹幕数同款约定)。
     /// </summary>
     public string ViewCountText => ViewCount > 0 ? FormatCount(ViewCount) : "";
-    /// <summary>弹幕数的展示串(封面左下角胶囊)。0 或未知时为空, 由界面隐藏。</summary>
+    /// <summary>弹幕数的展示串(封面左下角角标)。0 或未知时为空, 由界面隐藏。</summary>
     public string DanmakuCountText => DanmakuCount > 0 ? FormatCount(DanmakuCount) : "";
+
+    /// <summary>
+    /// 卡片封面左下角**弹幕角标**的文字(2026-11-28, 对标 B 站卡片: 播放量 + 弹幕数 + 时长)。
+    ///
+    /// ★ 历史条目返回空串: 它与播放量同一口径 —— 云端历史**故意不填** ViewCount
+    ///   (用户 2026-11-28 要求"历史卡片去掉播放量"), 历史卡片上只留时长与进度,
+    ///   单独挂一个弹幕数反而和别的卡片对不上。
+    /// ★ 其它来源拿不到 DanmakuCount(部分列表接口不下发)时也返回空串, 角标自动隐藏。
+    /// </summary>
+    public string DanmakuBadgeText => HasViewTime ? "" : DanmakuCountText;
 
     /// <summary>
     /// 发布日期的短格式(卡片文字区右侧): 同年显示 "9-1", 跨年带年份。

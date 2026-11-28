@@ -119,12 +119,14 @@
                         Cursor="Hand" MouseLeftButtonUp="OnVideoClick">
                     <Grid>
                         <Border CornerRadius="8" helpers:Cover.Source="{Binding Item.VideoCover}" />
-                        <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                Margin="0,0,8,8" CornerRadius="4" Padding="6,2"
-                                Background="{DynamicResource DurationBadgeBackgroundBrush}"
-                                Visibility="{Binding Item.VideoDuration, Converter={StaticResource StrToVis}}">
-                            <TextBlock Text="{Binding Item.VideoDuration}" Foreground="White" FontSize="11" />
-                        </Border>
+                        <!-- 底部阴影 + 纯白时长(2026-11-28, 与 VideoCard 同一套角标画法) -->
+                        <Border VerticalAlignment="Bottom" Height="48" IsHitTestVisible="False"
+                                CornerRadius="0,0,8,8"
+                                Background="{StaticResource CoverBottomScrimBrush}" />
+                        <TextBlock HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                   Margin="0,0,8,6" Text="{Binding Item.VideoDuration}"
+                                   Style="{StaticResource CoverStatTextStyle}"
+                                   Visibility="{Binding Item.VideoDuration, Converter={StaticResource StrToVis}}" />
                     </Grid>
                 </Border>
                 <TextBlock Text="{Binding Item.VideoTitle}" FontSize="15" FontWeight="SemiBold"
@@ -188,12 +190,13 @@
                             Visibility="{Binding HasPlayableVideo, Converter={StaticResource BoolToVis}}">
                         <Grid>
                             <Border CornerRadius="6" helpers:Cover.Source="{Binding Cover}" />
-                            <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                    Margin="0,0,6,6" CornerRadius="4" Padding="5,1"
-                                    Background="{DynamicResource DurationBadgeBackgroundBrush}"
-                                    Visibility="{Binding Duration, Converter={StaticResource StrToVis}}">
-                                <TextBlock Text="{Binding Duration}" Foreground="White" FontSize="10" />
-                            </Border>
+                            <Border VerticalAlignment="Bottom" Height="36" IsHitTestVisible="False"
+                                    CornerRadius="0,0,6,6"
+                                    Background="{StaticResource CoverBottomScrimBrush}" />
+                            <TextBlock HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                       Margin="0,0,6,4" Text="{Binding Duration}" FontSize="10"
+                                       Style="{StaticResource CoverStatTextStyle}"
+                                       Visibility="{Binding Duration, Converter={StaticResource StrToVis}}" />
                         </Grid>
                     </Border>
                     <controls:DynamicImageGrid Margin="0,8,0,0" UseDetail="True" ShowAll="True"

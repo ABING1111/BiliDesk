@@ -2844,6 +2844,26 @@
         </Setter>
     </Style>
 
+    <!-- 封面角标的底衬(2026-11-28): 播放量/弹幕/时长改成纯白文字与图标后, 靠这层
+         "透明 → 60% 黑"的底部渐变保证浅色封面上仍然读得清(用户给的目标图就是 B 站这种画法)。
+         ★ 用渐变而不是给每个数字加 DropShadowEffect: 卡片墙零虚拟化, 一屏几百张卡,
+           逐元素位图效果在滚动时明显掉帧(见 MEMORY「卡片墙性能」)。
+         ★ 高度由使用方给(大封面 48~56, 96×54 的小缩略图 24): 百分比高度在 WPF 里做不到,
+           而各处的封面比例差得远, 写死一个值总有一边不合适。 -->
+    <LinearGradientBrush x:Key="CoverBottomScrimBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#00000000" Offset="0" />
+        <GradientStop Color="#66000000" Offset="0.62" />
+        <GradientStop Color="#99000000" Offset="1" />
+    </LinearGradientBrush>
+
+    <!-- 封面角标文字(2026-11-28): 纯白、11px, 底色交给 CoverBottomScrimBrush。
+         悬停淡出仍由外层的 CoverBadgeFadeStyle 统一控制, 这里不管动画。 -->
+    <Style x:Key="CoverStatTextStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
     <!-- 封面角标(播放量/弹幕/时长): 卡片一悬停就淡出, 取消悬停再淡回。
          放大的是封面, 角标压在上面会挡住画面 —— 这也是 B 站网页版的行为。 -->
     <Style x:Key="CoverBadgeFadeStyle" TargetType="FrameworkElement">

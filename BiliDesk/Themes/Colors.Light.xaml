@@ -98,6 +98,9 @@
     <SolidColorBrush x:Key="InputBorderBrush" Color="#22000000" />
 
     <!-- 特殊 -->
+    <!-- 分集列表左上角的「集序号」胶囊底色(2026-11-28 起只剩它还用这个键:
+         视频卡片的播放量/时长角标已改成纯白文字 + CoverBottomScrimBrush)。
+         它不在封面底部、没有渐变衬托, 去掉底就压不住浅色画面。 -->
     <SolidColorBrush x:Key="DurationBadgeBackgroundBrush" Color="#A6000000" />
     <SolidColorBrush x:Key="ToastBackgroundBrush" Color="#F2FFFFFF" />
     <SolidColorBrush x:Key="ToastBorderBrush" Color="#26000000" />

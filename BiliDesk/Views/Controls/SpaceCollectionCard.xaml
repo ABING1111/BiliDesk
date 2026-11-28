@@ -27,15 +27,11 @@
                     <!-- 圆角写在封面自己身上: 外层 Border 的圆角不裁子元素 -->
                     <Border CornerRadius="8" helpers:Cover.Source="{Binding Cover}" />
 
-                    <!-- 底部渐变: 给内容数和角标当衬底 -->
-                    <Border VerticalAlignment="Bottom" Height="56">
-                        <Border.Background>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                <GradientStop Color="#00000000" Offset="0" />
-                                <GradientStop Color="#99000000" Offset="1" />
-                            </LinearGradientBrush>
-                        </Border.Background>
-                    </Border>
+                    <!-- 底部渐变: 给内容数和角标当衬底(2026-11-28 换成全站共用的
+                         CoverBottomScrimBrush, 与视频卡角标的阴影同一份; 下沿圆角跟着封面走) -->
+                    <Border VerticalAlignment="Bottom" Height="56" IsHitTestVisible="False"
+                            CornerRadius="0,0,8,8"
+                            Background="{StaticResource CoverBottomScrimBrush}" />
 
                     <TextBlock Text="{Binding CountText}" FontSize="12" Foreground="#F2FFFFFF"
                                HorizontalAlignment="Left" VerticalAlignment="Bottom"

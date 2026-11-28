@@ -3132,12 +3132,10 @@
                                                             </ControlTemplate>
                                                         </Button.Template>
                                                         <!-- 卡片: 16:9 封面 + 标题 + UP 主 + 播放/弹幕。
-                                                             ★★ 封面必须是**三层叠放**(封面 Border / 时长角标 / 无)而不是
+                                                             ★★ 封面必须是**多层叠放**(封面 Border / 底部阴影 / 时长)而不是
                                                                两个同尺寸 Border 并排 —— 这是本轮修掉的一个真 bug:
                                                                我给时长角标也写了 Width=96 Height=54,
-                                                               而 DurationBadgeBackgroundBrush 是 **65% 黑**,
-                                                               于是那层半透明黑铺满了整张封面, 画面明显发暗。
-                                                               角标必须"有多大底就多大底", 由 Padding 撑出尺寸。 -->
+                                                               而它当时带半透明黑底, 于是那层黑铺满了整张封面, 画面明显发暗。 -->
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
                                                                 <ColumnDefinition Width="Auto" />
@@ -3150,17 +3148,17 @@
                                                                 <Border CornerRadius="6" ClipToBounds="True"
                                                                         Background="{DynamicResource PlaceholderBrush}"
                                                                         behaviors:Cover.Source="{Binding Cover}" />
-                                                                <!-- 时长压在封面右下角(与全站卡片一致)。
-                                                                     ★ 不写 Width/Height: 尺寸由 Content + Padding 决定,
-                                                                       否则半透明黑底会铺满整个封面格子。 -->
-                                                                <Border HorizontalAlignment="Right"
-                                                                        VerticalAlignment="Bottom" Margin="0,0,4,4"
-                                                                        CornerRadius="3" Padding="4,1"
-                                                                        Background="{DynamicResource DurationBadgeBackgroundBrush}"
-                                                                        Visibility="{Binding Duration, Converter={StaticResource StrToVis}}">
-                                                                    <TextBlock Text="{Binding Duration}" FontSize="10"
-                                                                               Foreground="White" />
-                                                                </Border>
+                                                                <!-- 底部阴影 + 纯白时长(2026-11-28, 与全站卡片同一套角标画法)。
+                                                                     ★ 不写 Width/Height: 阴影只铺底部一条, 靠 Height 收口。 -->
+                                                                <Border VerticalAlignment="Bottom" Height="24"
+                                                                        IsHitTestVisible="False"
+                                                                        CornerRadius="0,0,6,6"
+                                                                        Background="{StaticResource CoverBottomScrimBrush}" />
+                                                                <TextBlock HorizontalAlignment="Right"
+                                                                           VerticalAlignment="Bottom" Margin="0,0,5,4"
+                                                                           Text="{Binding Duration}" FontSize="10"
+                                                                           Style="{StaticResource CoverStatTextStyle}"
+                                                                           Visibility="{Binding Duration, Converter={StaticResource StrToVis}}" />
                                                             </Grid>
                                                             <StackPanel Grid.Column="1" Margin="10,0,0,0"
                                                                         VerticalAlignment="Center">
@@ -3789,19 +3787,23 @@
                                                 ClipToBounds="True"
                                                 Background="{DynamicResource PlaceholderBrush}"
                                                 behaviors:Cover.Source="{Binding Cover}" />
-                                        <!-- 集序号压在封面左上角: 与视频卡片上的时长角标同款做法 -->
+                                        <!-- 底部阴影(2026-11-28): 时长改成纯白文字后靠它保底; 只铺底部一条 -->
+                                        <Border Grid.Column="0" VerticalAlignment="Bottom" Height="24"
+                                                IsHitTestVisible="False"
+                                                CornerRadius="0,0,6,6"
+                                                Background="{StaticResource CoverBottomScrimBrush}" />
+                                        <!-- 集序号压在封面左上角: 这里**保留**黑色胶囊 —— 它不在底部,
+                                             没有阴影衬托, 白字压浅色画面上会看不清。 -->
                                         <Border Grid.Column="0" HorizontalAlignment="Left" VerticalAlignment="Top"
                                                 Margin="4,4,0,0" CornerRadius="4" Padding="5,2"
                                                 Background="{DynamicResource DurationBadgeBackgroundBrush}">
                                             <TextBlock Text="{Binding Index}" FontSize="11" Foreground="White" />
                                         </Border>
-                                        <!-- 时长压在封面右下角 -->
-                                        <Border Grid.Column="0" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                                Margin="0,0,4,3" CornerRadius="4" Padding="4,2"
-                                                Background="{DynamicResource DurationBadgeBackgroundBrush}"
-                                                Visibility="{Binding DurationText, Converter={StaticResource StrToVis}}">
-                                            <TextBlock Text="{Binding DurationText}" FontSize="11" Foreground="White" />
-                                        </Border>
+                                        <!-- 时长压在封面右下角(2026-11-28: 纯白文字, 无黑底) -->
+                                        <TextBlock Grid.Column="0" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                   Margin="0,0,5,3" Text="{Binding DurationText}"
+                                                   Style="{StaticResource CoverStatTextStyle}"
+                                                   Visibility="{Binding DurationText, Converter={StaticResource StrToVis}}" />
                                         <StackPanel Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Center">
                                             <!-- 正在播的那一集由 ListBoxItem 的 IsSelected 触发器整行点亮
                                                  (强调色浅底 + 描边), 标题不再单独变色 —— 条目是普通 POCO,

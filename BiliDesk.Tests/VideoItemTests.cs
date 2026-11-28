@@ -128,4 +128,25 @@ public class VideoItemTests
         Assert.Equal(home.PubDateShort, home.CardDateText);
         Assert.False(home.HasViewTime);
     }
+
+    // ------------------------------------------------------------ 封面弹幕角标(2026-11-28)
+
+    [Theory]
+    [InlineData(404, "404")]        // 目标图上的真实样例
+    [InlineData(12345, "1.2万")]    // 简写口径与播放量完全一致(FormatCount)
+    [InlineData(0, "")]             // 接口没给 / 为 0: 角标整组隐藏
+    public void 弹幕角标按播放量同款口径简写(long danmaku, string expected)
+        => Assert.Equal(expected, new VideoItem { DanmakuCount = danmaku }.DanmakuBadgeText);
+
+    [Fact]
+    public void 历史卡片不显示弹幕角标()
+    {
+        // 历史条目故意不填播放量, 弹幕数也要跟它同一口径 —— 否则历史卡上会孤零零挂一个数字
+        var history = new VideoItem { DanmakuCount = 404, ViewTimeText = "今天 14:30" };
+
+        Assert.Equal("", history.DanmakuBadgeText);
+        Assert.Equal("", history.ViewCountText);
+        // 底层数据仍在: 只是卡片不显示, 不是解析丢了
+        Assert.Equal("404", history.DanmakuCountText);
+    }
 }

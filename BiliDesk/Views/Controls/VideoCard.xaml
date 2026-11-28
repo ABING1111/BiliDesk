@@ -26,36 +26,52 @@
                      设在 Background 上, 子元素不圆角就会把四个角顶成直角(用户实测反馈)。 -->
                 <Border x:Name="CoverBox" CornerRadius="8" behaviors:Cover.Source="{Binding Cover}" />
 
-                <!-- 左下: 播放量(参考 B 站网页版卡片)。悬停放大封面时角标淡出,
-                     免得压在放大的画面上。拿不到(空串)就整段藏起来。
-                     ★ 2026-11-28 用户要求去掉弹幕数角标, 卡片上只留播放量。
-                     ★ 2026-11-28 历史卡片也不再显示播放量(那条记录看了多少次跟"我"无关):
-                       历史解析**不填 ViewCount**(见 ApiClient.GetCloudHistoryAsync), 这里靠
-                       ViewCountText 为空自动整段隐藏 —— 首页/搜索等页面照旧显示。 -->
+                <!-- 底部阴影(2026-11-28): 角标改成 B 站式纯白文字/图标后不再各自带黑底,
+                     读不读得清全看这一层。透明 → 60% 黑的渐变只在底部, 不压整张画面。
+                     ★ 不参与悬停淡出(角标淡出是因为放大的画面被挡住, 阴影本身就是画面的一部分)。
+                     ★ CornerRadius 必须与封面一致(0,0,8,8): 它盖在封面上, 不圆角就会在
+                       封面下沿把两个圆角顶成直角。 -->
+                <Border VerticalAlignment="Bottom" Height="56" IsHitTestVisible="False"
+                        CornerRadius="0,0,8,8"
+                        Background="{StaticResource CoverBottomScrimBrush}" />
+
+                <!-- 左下: 播放量 + 弹幕数(2026-11-28 按用户给的目标图改成 B 站式:
+                     圆角屏幕外框图标 + 纯白数字, 不带黑色胶囊)。
+                     ★ 播放量拿不到(空串)时整组隐藏; 历史条目**不填**播放量
+                       (见 ApiClient.GetCloudHistoryAsync), 弹幕数按同一口径隐藏(DanmakuBadgeText)——
+                       历史卡片上只剩时长与进度。
+                     ★ 图标是矢量几何(VideoPlayStatIconGeometry / VideoDanmakuStatIconGeometry),
+                       不用 Segoe 字形: 字形里没有"圆角屏幕 + 播放三角"这种 B 站角标图案。 -->
                 <StackPanel x:Name="StatsBadge" Orientation="Horizontal"
                             HorizontalAlignment="Left" VerticalAlignment="Bottom"
                             Margin="8,0,0,8"
                             Style="{StaticResource CoverBadgeFadeStyle}">
-                    <Border CornerRadius="4" Padding="6,2"
-                            Background="{DynamicResource DurationBadgeBackgroundBrush}"
-                            Visibility="{Binding ViewCountText, Converter={StaticResource StrToVis}}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE768;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                       FontSize="10" Foreground="#F2FFFFFF" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding ViewCountText, Mode=OneWay}" FontSize="11"
-                                       Foreground="#F2FFFFFF" Margin="3,0,0,0" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Border>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                Visibility="{Binding ViewCountText, Converter={StaticResource StrToVis}}">
+                        <Path Data="{StaticResource VideoPlayStatIconGeometry}" Fill="White"
+                              VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ViewCountText, Mode=OneWay}"
+                                   Style="{StaticResource CoverStatTextStyle}" Margin="3,0,0,0" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                Margin="8,0,0,0"
+                                Visibility="{Binding DanmakuBadgeText, Converter={StaticResource StrToVis}}">
+                        <Path Data="{StaticResource VideoDanmakuStatIconGeometry}" Fill="White"
+                              VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding DanmakuBadgeText, Mode=OneWay}"
+                                   Style="{StaticResource CoverStatTextStyle}" Margin="3,0,0,0" />
+                    </StackPanel>
                 </StackPanel>
 
                 <!-- 右下: 时长。历史卡片会变成"已看 / 总长"("1:20 / 1:21", 见 VideoItem.DurationBadgeText);
-                     其它页面没有进度数据, 取到的就是原总时长, 一个字都不变。 -->
+                     其它页面没有进度数据, 取到的就是原总时长, 一个字都不变。
+                     ★ 黑色胶囊已去掉(2026-11-28): 纯白文字 + 上面的底部阴影。Border 只为承载
+                       淡出样式和可见性绑定, 没有任何底色。 -->
                 <Border x:Name="DurationBadge" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                        Margin="0,0,8,8" CornerRadius="4" Padding="6,2"
-                        Background="{DynamicResource DurationBadgeBackgroundBrush}"
+                        Margin="0,0,8,8"
                         Style="{StaticResource CoverBadgeFadeStyle}"
                         Visibility="{Binding DurationBadgeText, Converter={StaticResource StrToVis}}">
-                    <TextBlock Text="{Binding DurationBadgeText}" Foreground="White" FontSize="11" />
+                    <TextBlock Text="{Binding DurationBadgeText}" Style="{StaticResource CoverStatTextStyle}" />
                 </Border>
 
                 <!-- 底部: 观看进度条(2026-11-28 用户要求, 参考 B 站历史卡片)。
