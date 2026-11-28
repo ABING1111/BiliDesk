@@ -25,6 +25,48 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
     public string AuthorFace { get; set; } = "";
 
     public string Duration { get; set; } = "";
+
+    /// <summary>
+    /// 视频总时长(秒)。目前**只有云端历史**会填(接口的 <c>duration</c>)——
+    /// 别的列表接口大多只给"12:34"这种排好版的文本, 卡片也不按秒数排版, 所以保持 0。
+    /// 进度条要靠它算比例, 见 <see cref="ProgressRatio"/>。
+    /// </summary>
+    public int DurationSec { get; set; }
+
+    /// <summary>
+    /// 已观看位置(秒)。只有云端历史会填(接口的 <c>progress</c>)。
+    /// ★ &lt;= 0 一律当"不知道": 接口给的 <b>-1</b> 表示**已看完**, 那正是"信息量为零"的情况,
+    ///   卡片上既画不出进度条也不该显示"已看"。
+    /// </summary>
+    public int ProgressSec { get; set; }
+
+    /// <summary>
+    /// 观看进度 0~1(绑到填充条的 ScaleX)。不知道 / 已经看完 / 时长缺失都是 0。
+    /// ★ 用 RenderTransform 缩放而不是改 Width: 不参与布局, 也就不需要"比例 → 宽度"的转换器。
+    /// </summary>
+    public double ProgressRatio =>
+        DurationSec > 0 && ProgressSec > 0 && ProgressSec < DurationSec
+            ? (double)ProgressSec / DurationSec
+            : 0;
+
+    /// <summary>封面底部那条进度条要不要显示(接近 0 也当没有, 免得露出一颗小圆点)。</summary>
+    public bool ShowProgressBar => ProgressRatio > 0.01;
+
+    /// <summary>
+    /// 时长角标的文字: 知道进度时是"已看 / 总长"(<c>1:20 / 1:21</c>), 否则就是原来的总时长。
+    /// ★ 其它页面没有 <see cref="ProgressSec"/>, 取到的就是 <see cref="Duration"/> 本身,
+    ///   角标一字不变(卡片是全站共用的, 见 VideoCard.xaml 头部说明)。
+    /// </summary>
+    public string DurationBadgeText =>
+        ProgressRatio > 0
+            ? FormatSeconds(ProgressSec) + " / " + FormatSeconds(DurationSec)
+            : Duration;
+
+    /// <summary>
+    /// 播放量。<see cref="ViewCountText"/> 空串时卡片隐藏那枚胶囊 ——
+    /// ★ 云端历史**故意不填**(用户 2026-11-28 要求"历史卡片去掉播放量"), 字段仍在接口里,
+    ///   是"不显示"而不是"拿不到", 别把它当成解析 bug 修回去。
+    /// </summary>
     public long ViewCount { get; set; }
     public long DanmakuCount { get; set; }
     public long Pubdate { get; set; }
@@ -159,6 +201,25 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
     public string PubDateShort => FormatPubDateShort(Pubdate);
 
     /// <summary>
+    /// 观看时间的口语化文本: "今天 14:30" / "昨天 21:05" / "11月20日 18:40"(跨年带年份)。
+    ///
+    /// ★ 只有**云端历史**会填(见 ApiClient.GetCloudHistoryAsync)。别的列表里的 Pubdate 是
+    ///   "发布时间", 拿同一套措辞显示成"今天"就是错的信息, 所以这里做成显式写入的字段,
+    ///   而不是像 <see cref="PubDateShort"/> 那样从 Pubdate 无条件推算。
+    /// ★ 卡片把显示在**第二行右端**(卡片右下角), 见 VideoCard.xaml。
+    /// </summary>
+    public string ViewTimeText { get; set; } = "";
+
+    /// <summary>有没有观看时间(没有就不占那一列, 非历史卡片的版式与从前完全一致)。</summary>
+    public bool HasViewTime => ViewTimeText.Length > 0;
+
+    /// <summary>
+    /// 卡片第二行那枚日期的文本。历史条目已经有 <see cref="ViewTimeText"/> 了, 这里给空串 ——
+    /// 历史里的 Pubdate 就是观看时间, 再显示一次 "11-28" 是同一件事说两遍。
+    /// </summary>
+    public string CardDateText => HasViewTime ? "" : PubDateShort;
+
+    /// <summary>
     /// 接口**直接给的**发布时间展示串(动态接口的 `pub_time` 就是这种已经排好版的文本,
     /// 形如 "2小时前" / "09-25")。非空时优先用它 —— 服务端算好的相对时间比本地推算准。
     /// </summary>
@@ -275,6 +336,34 @@ public class VideoItem : System.ComponentModel.INotifyPropertyChanged
             var t = DateTimeOffset.FromUnixTimeSeconds(pubdate).LocalDateTime;
             var now = DateTime.Now;
             return t.Year == now.Year ? $"{t.Month}-{t.Day}" : $"{t.Year}-{t.Month}-{t.Day}";
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>
+    /// 观看时间说成人话(历史卡片第二行右端, 用户 2026-11-28 要求):
+    /// 今天 → "今天 14:30"; 昨天 → "昨天 21:05"; 更早 → "11月20日 18:40"; 跨年 → "2024-11-20 18:40"。
+    ///
+    /// ★ 与 <see cref="FormatPubRelative"/> 的分工: 那个是"多久以前"(刚刚/N分钟前/2小时前),
+    ///   适合动态流, 但历史记录里"3小时前"远不如"今天 11:20"好认 —— 用户要的是**钟点**。
+    /// ★ 跨年为什么退成短横线而不是"2024年11月20日": 卡片最窄只有 220, 第二行左边还要放 UP 名。
+    ///   实测 MetaTextStyle 下"2024年11月20日 18:40"占 128.7px, 只剩 83px 给作者(它按 100 排版)——
+    ///   作者名就会被裁掉半截;"2024-11-20 18:40"只占 104px, 留得下。格式与
+    ///   <see cref="FormatPubDateTimeFull"/> 一致。
+    /// ★ 按**本机时区**折算(与全站其它时间显示一致), 时间戳越界时返回空串不让它抛。
+    /// </summary>
+    public static string FormatViewTime(long viewAt)
+    {
+        if (viewAt <= 0) return "";
+        try
+        {
+            var t = DateTimeOffset.FromUnixTimeSeconds(viewAt).LocalDateTime;
+            var today = DateTime.Today;
+            if (t.Date == today) return "今天 " + t.ToString("HH:mm");
+            if (t.Date == today.AddDays(-1)) return "昨天 " + t.ToString("HH:mm");
+            return t.Year == today.Year
+                ? $"{t.Month}月{t.Day}日 {t:HH:mm}"
+                : t.ToString("yyyy-MM-dd HH:mm");
         }
         catch { return ""; }
     }

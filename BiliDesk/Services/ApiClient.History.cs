@@ -90,6 +90,8 @@ public partial class ApiClient
                         if (ownerMid <= 0) ownerMid = GetLong(owner, "mid");
                     }
 
+                    // 观看时间(view_at): 直播历史同样有, 卡片第二行右端显示"今天 21:05"这种
+                    var liveViewAt = GetLong(h, "view_at");
                     items.Add(new VideoItem
                     {
                         RoomId = roomId,
@@ -100,7 +102,8 @@ public partial class ApiClient
                         // 时长位显示开播状态: live_status 1=直播中, 0=未开播(接口还给 badge 文案)
                         Duration = GetInt(h, "live_status") == 1 ? "直播中" : "未开播",
                         ViewCount = 0,   // 历史接口不给人气, 留 0 让卡片隐藏那个胶囊
-                        Pubdate = GetLong(h, "view_at"),
+                        Pubdate = liveViewAt,
+                        ViewTimeText = VideoItem.FormatViewTime(liveViewAt),
                     });
                 }
             }
@@ -137,7 +140,12 @@ public partial class ApiClient
     }
 
     /// <summary>获取登录用户的云端观看历史(x/v2/history, 分页)。
-    /// 返回 (ok, err, items): items 为 VideoItem 列表, IsSelected 可复用</summary>
+    /// 返回 (ok, err, items): items 为 VideoItem 列表, IsSelected 可复用。
+    ///
+    /// 每条会带上历史页专属的三个显示字段(其它列表接口都没有):
+    /// <c>progress</c>/<c>duration</c> → 封面进度条与"已看 / 总长"角标;
+    /// <c>view_at</c> → 第二行右端的"今天 14:30"式观看时间。
+    /// 播放量则**故意不填**(用户要求历史卡片去掉), 见下面的字段注释。</summary>
     public async Task<(bool ok, string? err, List<VideoItem>? items)> GetCloudHistoryAsync(int pn = 1, int ps = 30)
     {
         try
@@ -178,6 +186,9 @@ public partial class ApiClient
                         if (author.Length == 0) author = GetStr(owner, "name");
                         if (ownerMid <= 0) ownerMid = GetLong(owner, "mid");
                     }
+                    // duration/progress 单位都是**秒**; view_at 是"观看时间"(不是发布时间)
+                    var durationSec = GetInt(h, "duration");
+                    var viewAt = GetLong(h, "view_at");
                     items.Add(new VideoItem
                     {
                         Bvid = bvid,
@@ -186,14 +197,20 @@ public partial class ApiClient
                         Cover = UrlUtil.Normalize(cover),
                         Author = author,
                         OwnerMid = ownerMid,
-                        Duration = VideoItem.FormatSeconds(GetInt(h, "duration")),
-                        // 播放量在 **stat.view** 里, 顶层没有 view 字段。
-                        // 之前写成 GetLong(h, "view") 拿到的一直是 0, 于是云端历史每条都显示"0 播放"。
-                        // 另外 stat.view 为 -1 表示"播放量被屏蔽", 当成 0 处理而不是显示负数。
-                        ViewCount = Math.Max(0, GetNestedLong(h, "stat", "view")),
+                        Duration = VideoItem.FormatSeconds(durationSec),
+                        // 观看进度(进度条 + 右下角"已看 / 总长"角标): duration 是总长, progress 是已看位置。
+                        // ★ progress = -1 是接口的"已看完", 原样存下 —— VideoItem 那边把 <=0 一律当
+                        //   "不知道", 既不长出满格进度条, 也不显示"已看"(详见 VideoItem.ProgressSec)。
+                        DurationSec = durationSec,
+                        ProgressSec = GetInt(h, "progress"),
+                        // ★ 播放量**故意不填**(2026-11-28 用户要求历史卡片去掉播放量)。
+                        //   字段本身在 stat.view 里(顶层没有 view 字段), 要恢复显示就换回:
+                        //   Math.Max(0, GetNestedLong(h, "stat", "view")) —— stat.view = -1 表示"被屏蔽"。
+                        ViewCount = 0,
                         DanmakuCount = Math.Max(0, GetNestedLong(h, "stat", "danmaku")),
                         LikeCount = Math.Max(0, GetNestedLong(h, "stat", "like")),
-                        Pubdate = GetLong(h, "view_at")
+                        Pubdate = viewAt,
+                        ViewTimeText = VideoItem.FormatViewTime(viewAt)
                     });
                 }
             }

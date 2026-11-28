@@ -28,7 +28,10 @@
 
                 <!-- 左下: 播放量(参考 B 站网页版卡片)。悬停放大封面时角标淡出,
                      免得压在放大的画面上。拿不到(空串)就整段藏起来。
-                     ★ 2026-11-28 用户要求去掉弹幕数角标, 卡片上只留播放量。 -->
+                     ★ 2026-11-28 用户要求去掉弹幕数角标, 卡片上只留播放量。
+                     ★ 2026-11-28 历史卡片也不再显示播放量(那条记录看了多少次跟"我"无关):
+                       历史解析**不填 ViewCount**(见 ApiClient.GetCloudHistoryAsync), 这里靠
+                       ViewCountText 为空自动整段隐藏 —— 首页/搜索等页面照旧显示。 -->
                 <StackPanel x:Name="StatsBadge" Orientation="Horizontal"
                             HorizontalAlignment="Left" VerticalAlignment="Bottom"
                             Margin="8,0,0,8"
@@ -45,14 +48,35 @@
                     </Border>
                 </StackPanel>
 
-                <!-- 右下: 时长 -->
+                <!-- 右下: 时长。历史卡片会变成"已看 / 总长"("1:20 / 1:21", 见 VideoItem.DurationBadgeText);
+                     其它页面没有进度数据, 取到的就是原总时长, 一个字都不变。 -->
                 <Border x:Name="DurationBadge" HorizontalAlignment="Right" VerticalAlignment="Bottom"
                         Margin="0,0,8,8" CornerRadius="4" Padding="6,2"
                         Background="{DynamicResource DurationBadgeBackgroundBrush}"
                         Style="{StaticResource CoverBadgeFadeStyle}"
-                        Visibility="{Binding Duration, Converter={StaticResource StrToVis}}">
-                    <TextBlock Text="{Binding Duration}" Foreground="White" FontSize="11" />
+                        Visibility="{Binding DurationBadgeText, Converter={StaticResource StrToVis}}">
+                    <TextBlock Text="{Binding DurationBadgeText}" Foreground="White" FontSize="11" />
                 </Border>
+
+                <!-- 底部: 观看进度条(2026-11-28 用户要求, 参考 B 站历史卡片)。
+                     ★ 只有历史条目有 ProgressSec(云端历史的 progress/duration), 其它页面 ShowProgressBar
+                       恒为 false, 这一块整个 Collapsed —— 首页/搜索/收藏的卡片版式完全没动。
+                     ★ 内缩 2px + 圆角 1.5: 封面四角是 8 的圆角, 进度条贴到最边上会把这四个角顶成直角。
+                     ★ 悬停**不淡出**(与上面两枚角标不同): 进度是"这条看到哪了"的核心信息,
+                       鼠标一放上去就消失反而没法确认。IsHitTestVisible=False 不抢点击。
+                     ★ 填充条用 RenderTransform 的 ScaleX 缩放(比例直接绑 ProgressRatio),
+                       不参与布局, 也就不需要"比例 → 宽度"的转换器。 -->
+                <Grid VerticalAlignment="Bottom" Height="3" Margin="2,0,2,2"
+                      IsHitTestVisible="False"
+                      Visibility="{Binding ShowProgressBar, Converter={StaticResource BoolToVis}}">
+                    <Rectangle Fill="#59000000" RadiusX="1.5" RadiusY="1.5" />
+                    <Rectangle Fill="{DynamicResource AccentBrush}" RadiusX="1.5" RadiusY="1.5"
+                               RenderTransformOrigin="0,0.5">
+                        <Rectangle.RenderTransform>
+                            <ScaleTransform ScaleX="{Binding ProgressRatio}" />
+                        </Rectangle.RenderTransform>
+                    </Rectangle>
+                </Grid>
 
                 <!--
                     编辑模式的选中圆标(压在封面左上角)。
@@ -112,39 +136,64 @@
                        Style="{StaticResource CardTitleStyle}"
                        Cursor="Hand" MouseLeftButtonUp="OnTitleClick"
                        ToolTip="{Binding Title, Mode=OneWay}" />
-            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                <!-- 「已关注」标签(2026-11-08): 放在第二行**行首**, 即 UP 主名左边 ——
-                     与 B 站网页版/用户给的参考图一致(「[已关注] 差评君 · 10-24」)。
-                     首页推荐流由接口的 is_followed 直接给出; 搜索页由 SearchViewModel
-                     在结果展示后批量查 /x/relation/relations 回填(2026-11-14)。
-                     其它列表恒为 false, 标签自动隐藏。 -->
-                <Border Style="{StaticResource FollowedBadgeStyle}"
-                        Visibility="{Binding IsAuthorFollowed, Converter={StaticResource BoolToVis}}">
-                    <TextBlock Text="已关注" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextOnAccentBrush}" />
-                </Border>
-                <TextBlock x:Name="AuthorText" Text="{Binding Author}"
-                           Style="{StaticResource CardAuthorStyle}"
-                           Cursor="Hand" MouseLeftButtonUp="OnAuthorClick"
-                           TextTrimming="CharacterEllipsis" MaxWidth="100"
-                           ToolTip="{Binding Author, Mode=OneWay}" />
-                <!-- 直播卡片: 「UP 名 · 分区名」(2026-11-08)。
-                     视频稿件的 AreaName 为空, 这里的点与文字都自动隐藏。 -->
-                <TextBlock Text="·" Style="{StaticResource MetaTextStyle}" Margin="4,0"
-                           VerticalAlignment="Center"
-                           Visibility="{Binding AreaName, Converter={StaticResource StrToVis}}" />
-                <TextBlock Text="{Binding AreaName, Mode=OneWay}"
-                           Style="{StaticResource MetaTextStyle}" VerticalAlignment="Center"
-                           TextTrimming="CharacterEllipsis" MaxWidth="96"
-                           ToolTip="{Binding AreaName, Mode=OneWay}"
-                           Visibility="{Binding AreaName, Converter={StaticResource StrToVis}}" />
-                <!-- 发布日期(部分接口没给, 空着即可): 前面那个点只在有日期时显示 -->
-                <TextBlock Text="·" Style="{StaticResource MetaTextStyle}" Margin="4,0"
-                           VerticalAlignment="Center"
-                           Visibility="{Binding PubDateShort, Converter={StaticResource StrToVis}}" />
-                <TextBlock Text="{Binding PubDateShort, Mode=OneWay}"
-                           Style="{StaticResource MetaTextStyle}" VerticalAlignment="Center" />
-            </StackPanel>
+            <!-- 第二行: 左边是"已关注 · UP 名 · 分区 · 日期", 右端是**观看时间**(历史页才有)。
+                 ★ 用两列 Grid 而不是一根横排 StackPanel: 观看时间要贴卡片右下角(用户 2026-11-28 要求),
+                   横排里它只能跟在日期后面, 位置随作者名长短漂移。
+                 ★ 非历史卡片的 HasViewTime 恒为 false, 右列 Auto 宽度收到 0 —— 版式与改前完全一致。 -->
+            <Grid Margin="0,6,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- ClipToBounds: 卡片被压到最窄(220)且观看时间又长(跨年那串)时, 作者名那头
+                     宁可被裁掉一点, 也不能画到右边的时间上(StackPanel 默认不裁子元素)。 -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" ClipToBounds="True">
+                    <!-- 「已关注」标签(2026-11-08): 放在第二行**行首**, 即 UP 主名左边 ——
+                         与 B 站网页版/用户给的参考图一致(「[已关注] 差评君 · 10-24」)。
+                         首页推荐流由接口的 is_followed 直接给出; 搜索页由 SearchViewModel
+                         在结果展示后批量查 /x/relation/relations 回填(2026-11-14)。
+                         其它列表恒为 false, 标签自动隐藏。 -->
+                    <Border Style="{StaticResource FollowedBadgeStyle}"
+                            Visibility="{Binding IsAuthorFollowed, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="已关注" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextOnAccentBrush}" />
+                    </Border>
+                    <TextBlock x:Name="AuthorText" Text="{Binding Author}"
+                               Style="{StaticResource CardAuthorStyle}"
+                               Cursor="Hand" MouseLeftButtonUp="OnAuthorClick"
+                               TextTrimming="CharacterEllipsis" MaxWidth="100"
+                               ToolTip="{Binding Author, Mode=OneWay}" />
+                    <!-- 直播卡片: 「UP 名 · 分区名」(2026-11-08)。
+                         视频稿件的 AreaName 为空, 这里的点与文字都自动隐藏。 -->
+                    <TextBlock Text="·" Style="{StaticResource MetaTextStyle}" Margin="4,0"
+                               VerticalAlignment="Center"
+                               Visibility="{Binding AreaName, Converter={StaticResource StrToVis}}" />
+                    <TextBlock Text="{Binding AreaName, Mode=OneWay}"
+                               Style="{StaticResource MetaTextStyle}" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" MaxWidth="96"
+                               ToolTip="{Binding AreaName, Mode=OneWay}"
+                               Visibility="{Binding AreaName, Converter={StaticResource StrToVis}}" />
+                    <!-- 发布日期(部分接口没给, 空着即可): 前面那个点只在有日期时显示。
+                         ★ 绑 CardDateText 而不是 PubDateShort: 历史条目已经用观看时间顶掉这一格
+                           (历史里 Pubdate 就是观看时间, 再显示一次 "11-28" 是同一句话两遍)。 -->
+                    <TextBlock Text="·" Style="{StaticResource MetaTextStyle}" Margin="4,0"
+                               VerticalAlignment="Center"
+                               Visibility="{Binding CardDateText, Converter={StaticResource StrToVis}}" />
+                    <TextBlock Text="{Binding CardDateText, Mode=OneWay}"
+                               Style="{StaticResource MetaTextStyle}" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <!-- 右端: 观看时间("今天 14:30" / "昨天 21:05" / "11月20日 18:40")。
+                     ★ 文案由 VideoItem.FormatViewTime 在解析历史时算好(ViewTimeText), 卡片只负责摆位置。
+                     ★ TextTrimming 不用: 时间被截成"11月20…"比不显示更糟 —— 作者名那边本来就有
+                       MaxWidth 限着, 最小卡片宽(220)下这一行放得下。 -->
+                <TextBlock Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center"
+                           Text="{Binding ViewTimeText}"
+                           Style="{StaticResource MetaTextStyle}"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           Visibility="{Binding HasViewTime, Converter={StaticResource BoolToVis}}" />
+            </Grid>
         </StackPanel>
     </StackPanel>
 </UserControl>

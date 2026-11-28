@@ -19,6 +19,11 @@ namespace BiliDesk.Views.Controls;
 ///   · 入场淡入上浮 → 最外层 Root(封面和文字一起进场);
 ///   · 悬停放大     → 封面 CoverCard(放大文字会让下面两行互相挤压, 没有意义)。
 /// 两者都是 RenderTransform, 不参与布局, 缩放不会把周围的卡片挤开。
+///
+/// ★ 2026-11-28(历史页): 封面底部加观看进度条、右下角时长变成"已看 / 总长"、
+///   第二行右端显示"今天 14:30"式观看时间。三样都**由数据驱动**
+///   (VideoItem.ProgressRatio / DurationBadgeText / ViewTimeText, 只有云端历史会填),
+///   其它页面取到的都是空值/0, 卡片外观与改前完全一致 —— 这个卡片全站共用, 改它必须保持这条。
 /// </summary>
 public partial class VideoCard : UserControl
 {
