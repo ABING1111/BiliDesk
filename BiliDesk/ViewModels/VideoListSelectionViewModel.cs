@@ -124,6 +124,33 @@ public abstract class VideoListSelectionViewModel : ObservableObject
     /// <summary>取消全选(退出编辑模式时用)</summary>
     protected void ClearSelection() => SetSelectionBulk(SelectionSource, false);
 
+    /// <summary>批量往集合里灌数据期间的静默标志(见 <see cref="RunBulkSourceEdit"/>)。</summary>
+    private bool _bulkSource;
+
+    /// <summary>
+    /// 批量增删集合期间**压住逐条的选择态刷新**, 整批结束后统一报一次。
+    ///
+    /// ★ 为什么需要(2026-11-28 历史页搜索卡顿): 分页追加是一次一条 Add,
+    ///   每次都会走 <see cref="OnSourceChanged"/> → <see cref="RaiseSelection"/>,
+    ///   而 RaiseSelection 要枚举可见项、发 6 个派生属性 + 子类的搜索计数 ——
+    ///   一页 30 条就是 30 遍全表扫描; 深翻 10 页叠加起来就是肉眼可见的卡顿。
+    ///   压成"整页一次"之后, 结果与逐条通知完全一致, 只是少了中间态。
+    /// </summary>
+    protected void RunBulkSourceEdit(Action action)
+    {
+        _bulkSource = true;
+        try
+        {
+            action();
+        }
+        finally
+        {
+            _bulkSource = false;
+        }
+        _visibleCache = null;
+        RaiseSelection();
+    }
+
     /// <summary>
     /// 开始监听选择集合的增删。**子类构造函数末尾必须调一次**(集合字段就绪之后)。
     ///
@@ -142,6 +169,7 @@ public abstract class VideoListSelectionViewModel : ObservableObject
             foreach (var it in e.NewItems.OfType<VideoItem>()) it.PropertyChanged += OnItemChanged;
 
         OnSourceItemsChanged();
+        if (_bulkSource) return;   // 批量灌数据中: 由 RunBulkSourceEdit 结束时统一报一次
         RaiseSelection();
     }
 

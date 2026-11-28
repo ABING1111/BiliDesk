@@ -36,6 +36,13 @@
           · 关键词在更早的记录里时, VM 自动往下翻页找(有页数上限, 见 DeepenSearchAsync);
           · 全选/批量删除的基数排除未命中项(见 VideoListSelectionViewModel.IsItemVisible)。
 
+        ★★ 2026-11-28(用户报"快速随意输入时出现两个加载圆环并不断闪烁、还卡"):
+          · 底部两行状态(加载中 / 正在更早的记录中查找)改成**互斥**, 深翻期间只留后者 ——
+            原来深翻的每个分页都会点亮 LoadingMore, 两个圆环轮流闪;
+          · 深翻在防抖之后再等一小段"关键词落定"才开始, 连续输入时一页都不翻;
+            同一时刻只允许一轮深翻, 在途时换词靠接力, 不再每代各起一轮;
+          · 分页追加改为整页一次刷新(RunBulkSourceEdit), 不再逐条触发全表的选择/计数扫描。
+
         ★ 虚拟化的取舍: 原来那个 ListBox 是虚拟化的, 换成卡片墙之后就**没有虚拟化**了
           (WrapPanel 不实现 IScrollPosInfo, 挂上去等于关掉)。这是"与首页一致"的必然代价,
           首页也是同一套结构(靠 DeferredFill 分帧规避卡顿)。历史每次"加载更多"只追加一页,
@@ -144,13 +151,16 @@
 
                         <!-- 底部状态(与首页同一套写法: 放在滚动流里, 不再浮在列表下沿) -->
                         <StackPanel Margin="0,12,0,0" HorizontalAlignment="Center">
+                            <!-- ★ 2026-11-28: 绑 ShowLoadingMoreRow 而不是 LoadingMore ——
+                                 深翻搜索时每个分页都会短暂点亮 LoadingMore, 与下面那行
+                                 "正在更早的记录中查找…" 叠成**两个圆环轮流闪**。 -->
                             <StackPanel Orientation="Horizontal"
-                                        Visibility="{Binding LoadingMore, Converter={StaticResource BoolToVis}}">
+                                        Visibility="{Binding ShowLoadingMoreRow, Converter={StaticResource BoolToVis}}">
                                 <controls:LoadingRing Width="18" Height="18" />
                                 <TextBlock Text="加载中…" Margin="8,0,0,0"
                                            VerticalAlignment="Center" Style="{StaticResource MetaTextStyle}" />
                             </StackPanel>
-                            <!-- 零命中时的自动深翻: 在加载状态下说清楚在找什么 -->
+                            <!-- 零命中时的自动深翻: 在加载状态下说清楚在找什么(与上一行互斥, 永远只出现一个圆环) -->
                             <StackPanel Orientation="Horizontal"
                                         Visibility="{Binding SearchingDeeper, Converter={StaticResource BoolToVis}}">
                                 <controls:LoadingRing Width="14" Height="14" />

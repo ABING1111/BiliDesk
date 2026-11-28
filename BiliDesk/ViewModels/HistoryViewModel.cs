@@ -66,8 +66,10 @@ public class HistoryViewModel : VideoListSelectionViewModel
         set
         {
             if (!SetProperty(ref _searchText, value)) return;
-            OnPropertyChanged(nameof(HasSearch));
-            RaiseSearchState();
+            // ★ 不再在每个按键上 RaiseSearchState(2026-11-28): 那会为**每一次按键**
+            //   全表扫一遍命中数(深翻后动辄上千条), 而关键词此刻还没生效(要等防抖),
+            //   算出来的只是上一次的结果 —— 既费 CPU 又会把计数刷成跳动的中间值。
+            //   计数 / 空态 / 到底提示统一由防抖到点后的 ApplySearch 刷新。
             _searchDebounce.Stop();
             // 清空关键词立刻恢复整墙(不等防抖) —— 否则会看到"搜索框已经空了, 卡片还少着"
             if (value.Trim().Length == 0) ApplySearch();
@@ -96,8 +98,18 @@ public class HistoryViewModel : VideoListSelectionViewModel
         {
             if (!SetProperty(ref _searchingDeeper, value)) return;
             OnPropertyChanged(nameof(ShowNoMatch));
+            OnPropertyChanged(nameof(ShowLoadingMoreRow));
         }
     }
+
+    /// <summary>
+    /// 底部「加载中…」那一行要不要显示。
+    ///
+    /// ★ 2026-11-28: 深翻搜索时每个分页都会把 <see cref="LoadingMore"/> 点亮一次,
+    ///   而 <see cref="SearchingDeeper"/> 同时立着 —— 于是两行"加载中 / 正在更早的记录中查找"
+    ///   会一上一下轮流闪(用户截图里看到的就是两个圆环)。深翻期间只留后一行。
+    /// </summary>
+    public bool ShowLoadingMoreRow => LoadingMore && !SearchingDeeper;
 
     /// <summary>
     /// 搜索零命中时的空态。★ 必须等"继续翻页找"结束再显示: 关键词可能在很靠后的记录里,
@@ -196,7 +208,15 @@ public class HistoryViewModel : VideoListSelectionViewModel
         }
     }
 
-    public bool LoadingMore { get => _loadingMore; private set => SetProperty(ref _loadingMore, value); }
+    public bool LoadingMore
+    {
+        get => _loadingMore;
+        private set
+        {
+            if (!SetProperty(ref _loadingMore, value)) return;
+            OnPropertyChanged(nameof(ShowLoadingMoreRow));
+        }
+    }
 
     public bool HasMore
     {
@@ -352,15 +372,20 @@ public class HistoryViewModel : VideoListSelectionViewModel
         if (ok && items != null)
         {
             // 视频按 bvid 过滤(没有 bvid 的条目播不了); 直播没有 bvid, 按房间号过滤。
-            foreach (var it in items.Where(x => kind == ContentKind.Live
-                                                    ? x.RoomId > 0
-                                                    : !string.IsNullOrEmpty(x.Bvid)))
+            // ★ 整页一次性灌入(RunBulkSourceEdit): 逐条 Add 会每条都重算一遍可见项与
+            //   搜索计数, 一页 30 条 = 30 遍全表扫描; 深翻 10 页叠加就是卡顿的主要来源。
+            RunBulkSourceEdit(() =>
             {
-                // 搜索中追加进来的条目先标好命中态 —— 卡片容器一生成就是对的,
-                // 不会先"露一下再消失"。
-                it.IsSearchMatch = MatchesCurrent(it);
-                Entries.Add(it);
-            }
+                foreach (var it in items.Where(x => kind == ContentKind.Live
+                                                        ? x.RoomId > 0
+                                                        : !string.IsNullOrEmpty(x.Bvid)))
+                {
+                    // 搜索中追加进来的条目先标好命中态 —— 卡片容器一生成就是对的,
+                    // 不会先"露一下再消失"。
+                    it.IsSearchMatch = MatchesCurrent(it);
+                    Entries.Add(it);
+                }
+            });
             // 视频一页 30 条、直播一页 20 条(见各自接口的 ps); 不满一页说明到底了。
             // ★ 直播还有个额外信号: 游标归零时接口会返回空列表, 上面的 items.Count==0 就涵盖了。
             var pageSize = kind == ContentKind.Live ? 20 : 30;
@@ -378,7 +403,7 @@ public class HistoryViewModel : VideoListSelectionViewModel
         // 搜索零命中: 继续往下翻, 直到找到一条或到底(有上限)。在流里做而不是等用户滚 ——
         // 零命中时墙是空的, 没有滚动条, 用户根本没法"下滑加载更多"。
         if (HasSearch && SearchMatchCount == 0 && HasMore && !Loading && !LoadingMore)
-            _ = DeepenSearchAsync();
+            RequestDeepenSearch();
     }
 
     // ------------------------------------------------------------ 搜索
@@ -400,7 +425,6 @@ public class HistoryViewModel : VideoListSelectionViewModel
         // 每次换词都是一代新的搜索: 上一次"继续翻页找"与上一次分帧恢复都不再作数
         _searchGen++;
         var gen = _searchGen;
-        SearchingDeeper = false;
 
         var matches = 0;
         var needReveal = false;
@@ -421,9 +445,17 @@ public class HistoryViewModel : VideoListSelectionViewModel
         RaiseSearchState();
         RaiseSelection();
 
+        // 深翻的调度:
+        //  · 有关键词、零命中、还有下一页 → 交给 RequestDeepenSearch(关键词落定后才真翻);
+        //  · 其余情况(清空 / 有命中 / 到底了 / 正在整页加载)立刻收掉指示器。
+        // ★ 这里不再无条件 `SearchingDeeper = false`(2026-11-28): 连续输入时那会让
+        //   "正在更早的记录中查找…"每一代都熄灭再点亮一次 —— 就是用户看到的闪烁。
+        if (_searchTerms.Length > 0 && matches == 0 && HasMore && !Loading)
+            RequestDeepenSearch();
+        else
+            SearchingDeeper = false;
+
         if (needReveal) _ = RevealMatchesAsync(gen);
-        else if (_searchTerms.Length > 0 && matches == 0 && HasMore && !Loading)
-            _ = DeepenSearchAsync();
     }
 
     /// <summary>分帧恢复时每帧放出多少张。★ 按单帧预算取: 一张卡重测约 0.8ms, 12 张 ≈ 10ms。</summary>
@@ -480,30 +512,101 @@ public class HistoryViewModel : VideoListSelectionViewModel
     /// </summary>
     private const int MaxSearchDeepenPages = 10;
 
-    private async Task DeepenSearchAsync()
+    /// <summary>
+    /// 深翻前等关键词"落定"的时间(防抖到点之后再等这一段)。
+    /// ★ 2026-11-28: 快速随意输入时, 每个 >250ms 的停顿都会触发一次防抖 ⇒ 一次深翻。
+    ///   期间每代都在翻页、追加卡片、点亮/熄灭指示器 —— 既闪又卡。等一小段再翻,
+    ///   连续输入时一页都不会翻, 只有真正停下来的那个关键词才去搜更早的记录。
+    /// </summary>
+    private const int SearchSettleMs = 220;
+
+    /// <summary>是否已有一轮"继续往下翻找"在跑(同一时刻只允许一轮)。</summary>
+    private bool _deepenRunning;
+
+    /// <summary>在跑的那一轮服务的是哪一代关键词(用于判断新请求是不是"换词了")。</summary>
+    private int _deepenServingGen = -1;
+
+    /// <summary>在途一轮期间关键词变了: 等它退出后用新关键词再跑一轮。</summary>
+    private bool _deepenPending;
+
+    /// <summary>
+    /// 请求"继续往下翻找"。重复调用是安全的 —— 在途时不重复开轮,
+    /// 只有在关键词真的换了一代时才登记接力。
+    /// </summary>
+    private void RequestDeepenSearch()
     {
-        if (_searchingDeeper) return;
-        var gen = _searchGen;
-        SearchingDeeper = true;
+        if (!HasSearch) return;
+
+        if (!_deepenRunning)
+        {
+            if (NeedDeepen(_searchGen)) _ = DeepenSearchAsync(_searchGen);
+            return;
+        }
+
+        // ★ 同一代关键词的重复请求(每翻完一页 LoadAsync 尾部都会来一次)必须忽略,
+        //   否则一轮翻满 10 页后又从头再来, 卡片墙会无限增长。
+        //   只有"关键词换了一代"才登记接力, 交给当前这轮退出时处理。
+        if (_deepenServingGen != _searchGen) _deepenPending = true;
+    }
+
+    /// <summary>这一代关键词现在还值得翻页找吗</summary>
+    private bool NeedDeepen(int gen)
+        => gen == _searchGen && HasSearch && HasMore
+           && !Loading && !LoadingMore
+           && SearchMatchCount == 0;
+
+    private async Task DeepenSearchAsync(int gen)
+    {
+        _deepenRunning = true;
+        _deepenServingGen = gen;
+        _deepenPending = false;
         try
         {
+            // 先判断清楚再点亮指示器: 正在整页加载 / 已经到底时不该闪一下"正在查找"
+            if (!NeedDeepen(gen)) return;
+            SearchingDeeper = true;
+
+            // 等关键词落定。用户继续输入 ⇒ _searchGen 变了, 这里直接退出(一页都不翻)。
+            await Task.Delay(SearchSettleMs);
+            if (!NeedDeepen(gen)) return;
+
             for (var i = 0; i < MaxSearchDeepenPages; i++)
             {
-                if (gen != _searchGen || !HasSearch) return;
-                if (!HasMore || Loading || LoadingMore) return;
+                if (!NeedDeepen(gen)) return;
 
                 await LoadAsync(reset: false);
 
-                if (gen != _searchGen) return;
+                // 关键词 / 类别在这一页的请求途中变了: 这页属于旧搜索, 不再继续
+                if (gen != _searchGen || !HasSearch) return;
                 if (SearchMatchCount > 0) return;
+                if (!HasMore) return;
             }
         }
         finally
         {
+            _deepenRunning = false;
+            _deepenServingGen = -1;
+
+            // ★ 只有这一轮仍属于当前关键词才收指示器。关键词已经换了的话,
+            //   接力那轮马上会重新点亮它 —— 先灭再亮就是肉眼看到的闪烁。
             if (gen == _searchGen)
             {
                 SearchingDeeper = false;
                 RaiseSearchState();
+            }
+
+            if (_deepenPending)
+            {
+                _deepenPending = false;
+                if (NeedDeepen(_searchGen))
+                {
+                    _ = DeepenSearchAsync(_searchGen);
+                }
+                else
+                {
+                    SearchingDeeper = false;
+                    RaiseSearchState();
+                }
             }
         }
     }
