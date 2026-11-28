@@ -91,6 +91,13 @@ public sealed class VideoDownloadRequest
     public long Cid { get; init; }
     public int Qn { get; init; }
 
+    /// <summary>
+    /// 这一档的显示名(如 "1080P 高码率 HEVC"), 用来拼文件名。
+    /// ★ 文件名里必须带清晰度: 否则同一视频下多个清晰度会**写进同一个文件**互相覆盖,
+    ///   用户下完 4 档只留下最后一档(实测就是这样"四个清晰度都是最低档")。
+    /// </summary>
+    public string QualityLabel { get; init; } = "";
+
     /// <summary>视频流候选地址(第一项优先)</summary>
     public List<string> VideoUrls { get; init; } = new();
 

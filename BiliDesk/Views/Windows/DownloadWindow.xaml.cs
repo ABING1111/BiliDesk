@@ -370,6 +370,7 @@ public partial class DownloadWindow : FluentWindow
             Cid = _cid,
             Title = string.IsNullOrWhiteSpace(_title) ? _bvid : _title,
             Qn = _selected.Qn,
+            QualityLabel = BuildQualityLabel(_selected),
             UseMuxed = useMuxed,
             VideoUrls = useMuxed ? new List<string>() : new List<string>(_selected.VideoUrls),
             MuxedUrls = useMuxed ? new List<string>(_selected.VideoUrls) : new List<string>(),
@@ -381,6 +382,18 @@ public partial class DownloadWindow : FluentWindow
             OpenFolderWhenDone = OpenFolderCheck.IsChecked == true
         };
         Close();
+    }
+
+    /// <summary>
+    /// 这一档的文件名标签(如 "1080P 高码率 HEVC")。
+    /// ★ 要把编码也带上: 同一档可能有 AVC 与 HEVC 两个版本, 文件名不区分就会互相覆盖。
+    /// </summary>
+    private static string BuildQualityLabel(DownloadQualityOption q)
+    {
+        var label = string.IsNullOrWhiteSpace(q.Label) ? "" : q.Label.Trim();
+        var codec = string.IsNullOrWhiteSpace(q.CodecLabel) ? "" : q.CodecLabel.Trim();
+        if (codec.Length == 0) return label;
+        return label.Length == 0 ? codec : label + " " + codec;
     }
 
     private void OnCancelClick(object sender, RoutedEventArgs e) => Close();

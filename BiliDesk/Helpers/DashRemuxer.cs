@@ -230,8 +230,34 @@ public static class DashRemuxer
         public int ElstSegDurOffset = -1;
         /// <summary>elst 第一条是不是 media_time=-1 的**空编辑**(是 => segment_duration 不补, 保持原样)</summary>
         public bool ElstFirstEntryIsEmpty;
+        /// <summary>**主编辑**(media_time >= 0 的那条)的 media_time 字段在 trak 里的偏移; -1 = 没有</summary>
+        public int ElstMediaTimeOffset = -1;
+        /// <summary>主编辑当前的 media_time 值</summary>
+        public long ElstMainMediaTime;
         public byte[] Udta = Array.Empty<byte>();
         public readonly List<Frag> Frags = new();
+
+        /// <summary>
+        /// moov 里 <c>mvex/trex</c> 声明的轨道缺省样本时长/大小(按 track id 索引)。
+        ///
+        /// ★ ISO/IEC 14496-12 的**缺省链**是三级:
+        ///   trun.sample_duration → tfhd.default_sample_duration → **trex.default_sample_duration**。
+        ///   B 站的音频流(CBR, 每帧 1024 采样)只给到第三级: trun 里不带 sample_duration、
+        ///   tfhd 也不带 default_sample_duration(实测某视频 46 个音频分片里 44 个如此)。
+        ///   少了这一级回落, 每个样本的时长都算成 0 → 合流直接失败("音频流: 样本时长为 0"),
+        ///   下载只好退到 durl 单流 —— 而 durl 对多数视频只给 360P, 于是"选了 1080P 却拿到 360P"。
+        /// </summary>
+        public readonly Dictionary<int, (long Duration, long Size)> TrexDefaults = new();
+
+        /// <summary>moov 里只有一条 trex 时的兜底值(track id 对不上时用)。</summary>
+        public (long Duration, long Size) TrexOnly = (0, 0);
+
+        /// <summary>按 track id 取 trex 缺省值; 对不上就退回"唯一那条 trex"。</summary>
+        public (long Duration, long Size) LookupTrexDefault(int trackId)
+        {
+            if (TrexDefaults.TryGetValue(trackId, out var v)) return v;
+            return TrexOnly;
+        }
 
         /// <summary>媒体时长(媒体时间基单位) = 所有样本时长之和</summary>
         public long MediaDuration
@@ -340,12 +366,48 @@ public static class DashRemuxer
                                 // 否则整条轨被宣告成静默编辑期("有画面没声音", 见 BuildTrak 的说明)。
                                 // entry 大小: ver 0 是 segDur(u32)+mediaTime(u32 各 4B), ver 1 是各 8B。
                                 var firstEntry = elst[1].Offset + 16;
+                                var entrySize = ElstVersion == 0 ? 8 : 16;
+                                var entryCount = (int)ReadU32(moov, elst[1].Offset + 12);
                                 var mtOff = firstEntry + (ElstVersion == 0 ? 4 : 8);
                                 var mediaTime = ElstVersion == 0
                                     ? (long)(int)ReadU32(moov, mtOff)
                                     : (long)ReadU64(moov, mtOff);
                                 ElstFirstEntryIsEmpty = mediaTime < 0;
-                                ElstSegDurOffset = elst[1].Offset + 16 - off;
+                                // 真正要补的是**主编辑**(media_time >= 0 的那条), 可能不是第一条:
+                                //   视频轨的 elst 是"空编辑(46ms 对位垫片) + 主编辑"两条,
+                                //   主编辑在第二条。B 站自己的单流文件里, 它的 media_time
+                                //   指向**该轨末尾**(如 225366), 而不是 0。
+                                for (var i = 0; i < entryCount; i++)
+                                {
+                                    var ent = firstEntry + i * entrySize;
+                                    var entMtOff = ent + (ElstVersion == 0 ? 4 : 8);
+                                    var entMediaTime = ElstVersion == 0
+                                        ? (long)(int)ReadU32(moov, entMtOff)
+                                        : (long)ReadU64(moov, entMtOff);
+                                    if (entMediaTime < 0) continue;
+                                    ElstSegDurOffset = ent - off;              // 主编辑的 segment_duration
+                                    ElstMediaTimeOffset = entMtOff - off;      // 主编辑的 media_time
+                                    ElstMainMediaTime = entMediaTime;
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+
+                    case "mvex":
+                        {
+                            // trex: 轨道缺省样本时长/大小(缺省链的最后一级, 见 TrexDefaults 的说明)
+                            foreach (var (tt, to, ts, th) in Children(moov, off + hdr, off + size))
+                            {
+                                if (tt != "trex") continue;
+                                // trex 是 FullBox: version/flags(4) + track_ID(4)
+                                //   + default_sample_description_index(4) + default_sample_duration(4)
+                                //   + default_sample_size(4)
+                                var tid = (int)ReadU32(moov, to + 12);
+                                var trexDur = (long)ReadU32(moov, to + 20);
+                                var trexSize = (long)ReadU32(moov, to + 24);
+                                TrexDefaults[tid] = (trexDur, trexSize);
+                                if (TrexOnly == (0, 0)) TrexOnly = (trexDur, trexSize);
                             }
                             break;
                         }
@@ -367,7 +429,12 @@ public static class DashRemuxer
             var frag = new Frag { Track = t };
 
             long defDur = 0, defSize = 0;
-            var defFlags = 0;
+            // ★ 缺省的样本标志: 同步位(non'sync, 0x00010000)默认置上 ⇒ **非同步**。
+            //   B 站的 tfhd 里**没有** default_sample_flags(实测 flags=0x020000 只有
+            //   default-base-is-moof), 以前这里留 0 ⇒ 每个样本都被当成同步样本,
+            //   stss 会把几乎所有样本都列进去(B 站自己的单流文件只有 46 个关键帧,
+            //   我们那份是 6602 个)⇒ 同步表失去意义, 跳转精度也受影响。
+            var defFlags = 0x0001_0000;
             long tfdt = -1, dataOffset = 0;
             var sampleCount = 0;
             var firstSampleFlags = -1;
@@ -450,6 +517,17 @@ public static class DashRemuxer
             if (trafSeen != 1) { error = $"一个 moof 里有 {trafSeen} 个 traf, 不认识"; return null; }
             if (tfdt < 0) { error = "缺 tfdt"; return null; }
             if (sampleCount <= 0) { error = "缺 trun 或样本数为 0"; return null; }
+
+            // ★ trex 兜底(缺省链的最后一级): tfhd 没带 default_sample_duration 时,
+            //   用 moov 里 mvex/trex 声明的那个。B 站的音频流只有这一级 ——
+            //   trun 不带 sample_duration、tfhd 也不带, 少了它每个样本时长都是 0,
+            //   合流会以"音频流: 样本时长为 0"失败, 下载只好退到 360P 的 durl 单流。
+            if (defDur == 0 || defSize == 0)
+            {
+                var trex = t.LookupTrexDefault(t.SrcTrackId);
+                if (defDur == 0) defDur = trex.Duration;
+                if (defSize == 0) defSize = trex.Size;
+            }
 
             // 样本数据起点: tfhd 没给 base_data_offset 时基准就是 moof 起点(本片源带 default-base-is-moof)
             frag.SrcDataStart = moofStart + dataOffset;
@@ -554,10 +632,22 @@ public static class DashRemuxer
         //   正确做法与官方单流一致: media_time = -1 的空编辑保持**原样**(时长是占位就让它
         //   留着占位), 只补 media_time >= 0 的主编辑段。找到哪条主编辑需要记录它的偏移,
         //   见 ParseMoov 里 ElstMediaTimeNeg 标记。
-        if (t.ElstSegDurOffset >= 0 && movieDuration > 0 && !t.ElstFirstEntryIsEmpty)
+        if (t.ElstSegDurOffset >= 0 && movieDuration > 0)
         {
             if (t.ElstVersion == 0) WriteU32(trak, t.ElstSegDurOffset, (uint)movieDuration);
             else WriteU64(trak, t.ElstSegDurOffset, (ulong)movieDuration);
+        }
+        // ★★ 主编辑的 media_time 也要补: 该轨前面有"空编辑"(media_time = -1, 视频轨用它
+        //   做 46ms 音画对位)时, 主编辑的 media_time 要指向**该轨末尾**
+        //   (B 站自己的单流文件就是 225366 这种值, 不是 0)。
+        //   少了这一步, 解复用器会把这条编辑当成"从媒体 0 处裁一段" ⇒ 视频轨只读得到
+        //   开头几个包(实测 6761 个样本只读出 2 个), 画面直接没了 —— 而音频轨没有空编辑,
+        //   它的 media_time 保持 0 才是对的, 所以条件里必须带上"有前置空编辑"。
+        if (t.ElstMediaTimeOffset >= 0 && t.ElstFirstEntryIsEmpty
+            && t.ElstMainMediaTime == 0 && movieDuration > 0)
+        {
+            if (t.ElstVersion == 0) WriteU32(trak, t.ElstMediaTimeOffset, (uint)movieDuration);
+            else WriteU64(trak, t.ElstMediaTimeOffset, (ulong)movieDuration);
         }
         return trak;
     }
@@ -663,6 +753,10 @@ public static class DashRemuxer
             parts.Add(MakeFullBox("stss", 0, sb));
         }
 
+        // ★ stsc 的条目是 **12 字节**: first_chunk + samples_per_chunk +
+        //   sample_description_index(ISO/IEC 14496-12 的 SampleToChunkBox 就是三个字段;
+        //   B 站自己的单流文件与 ffmpeg 产出的文件也都是 12 字节 —— 写成 8 字节会让
+        //   解复用器整张表错位)。
         var sc = new byte[4 + stsc.Count * 12];
         WriteU32(sc, 0, (uint)stsc.Count);
         for (var i = 0; i < stsc.Count; i++)
