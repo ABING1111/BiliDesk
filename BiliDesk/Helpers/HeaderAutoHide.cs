@@ -63,11 +63,15 @@ public static class HeaderAutoHidePolicy
 }
 
 /// <summary>
-/// 顶部信息区的收起/展开执行器: 量一次展开高度, 之后按
+/// 顶部信息区的收起/展开执行器: 记住展开高度, 之后按
 /// <see cref="HeaderAutoHidePolicy"/> 的判定做高度动画。
 ///
 /// 用法: 页面构造时 new 一个(传入头部元素), ScrollChanged 里调 <see cref="HandleScroll"/>,
 /// 切 Tab / 重新进场时调 <see cref="Reset"/>(恢复展开并重新量高度)。
+///
+/// ★ 展开高度**不是量一次就定终身**: 头部的实际高度会随内容变(简介接口回来后折行、
+///   点「详情」展开简介、窗口变窄多折一行), 所以缓存在展开态跟着 SizeChanged 走,
+///   展开动画结束也把 Height 放回 Auto —— 详见 OnHostSizeChanged 与 SetCollapsed。
 /// </summary>
 public sealed class HeaderAutoHideController
 {
@@ -79,12 +83,42 @@ public sealed class HeaderAutoHideController
     /// <summary>头部当前是否已收起</summary>
     private bool _collapsed;
 
+    /// <summary>正在播高度动画。这期间 ActualHeight 是过渡值, 不能当成"展开高度"记下来。</summary>
+    private bool _animating;
+
+    /// <summary>动画代次: 收起/展开连着触发时, 只认最后一次动画的 Completed。</summary>
+    private int _animGen;
+
     public HeaderAutoHideController(FrameworkElement host)
-        => _host = host ?? throw new ArgumentNullException(nameof(host));
+    {
+        _host = host ?? throw new ArgumentNullException(nameof(host));
+        _host.SizeChanged += OnHostSizeChanged;
+    }
+
+    /// <summary>
+    /// 展开态下高度变了就刷新缓存。
+    ///
+    /// ★★★ 这一条是"简介两行以上时, 收起再展开后投稿那一栏显示不全"的根因修复。
+    ///   原来只在第一次滚动时量一次高度并永久缓存, 而 UP 主信息(昵称/简介)是
+    ///   **接口回来之后**才填进去的 —— 首帧量到的是"空简介"的高度, 简介折成两行后
+    ///   头部实际更高, 缓存却还是旧值。收起再展开时按旧高度把 Height 钉死,
+    ///   ClipToBounds 就把底部的 Tab 行(投稿/图文/合集和系列)裁掉一截。
+    ///   简介行数越多差得越多, 所以只有两行以上才看得出来。
+    ///
+    /// ★ 点「详情」把简介展开、窗口变窄让简介多折一行, 也走这条路 —— 高度都得跟着改。
+    /// </summary>
+    private void OnHostSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        // 收起态(Height=0)、动画中途、重量过程中量到的都不是"展开高度"
+        if (_animating || _collapsed || _measuring) return;
+        if (e.NewSize.Height <= 0) return;
+        _expandedHeight = e.NewSize.Height;
+    }
 
     /// <summary>滚动了: 先量高度(只量一次), 再按策略收起/展开。</summary>
     public void HandleScroll(double offset, double extent, double viewport)
     {
+        if (_measuring) return;   // 重量高度时 Height 临时是 Auto, 这期间的滚动值不可信
         if (double.IsNaN(_expandedHeight))
         {
             var measured = _host.ActualHeight;
@@ -109,27 +143,79 @@ public sealed class HeaderAutoHideController
     public void Reset()
     {
         _collapsed = false;
+        _animating = false;
+        _animGen++;
         _host.BeginAnimation(FrameworkElement.HeightProperty, null);
         _host.Height = double.NaN;   // Auto
         _expandedHeight = double.NaN;
+    }
+
+    /// <summary>正在重量高度。这期间布局会临时改成 Auto, 不能让 ScrollChanged 重入。</summary>
+    private bool _measuring;
+
+    /// <summary>
+    /// 收起态下把 Height 临时放回 Auto, 量出**当前内容**的真实高度。
+    ///
+    /// ★ 收起时 Height 被钉成 0, 直接读 ActualHeight 只会得到 0 —— 缓存若在收起期间
+    ///   过期(简介是收起之后才折行到位、或窗口变窄多折了一行), 按旧值展开就会
+    ///   把底部的 Tab 行裁掉。这里量一次再把 0 写回去, 全程在同一个调度操作里完成,
+    ///   渲染在之后, 所以不会闪出整块头部。
+    /// </summary>
+    private void MeasureExpandedHeight()
+    {
+        if (_measuring) return;
+        _measuring = true;
+        try
+        {
+            _host.BeginAnimation(FrameworkElement.HeightProperty, null);
+            _host.Height = double.NaN;      // Auto
+            _host.UpdateLayout();           // 同步布局: 不产生中间帧
+            var height = _host.ActualHeight;
+            _host.Height = 0;               // 还原收起态, 下面由动画接管
+            if (height > 0) _expandedHeight = height;
+        }
+        finally
+        {
+            _measuring = false;
+        }
     }
 
     private void SetCollapsed(bool collapse)
     {
         if (_collapsed == collapse) return;
         _collapsed = collapse;
+
+        // 动画起点: 收起时从当前(展开)高度开始; 展开时固定从 0 开始 ——
+        // 重量高度会把 Height 临时改成 Auto, 直接读 ActualHeight 会拿到展开高度,
+        // 那样展开动画就变成"原地不动"了。
+        var from = _host.ActualHeight;
+        if (!collapse)
+        {
+            MeasureExpandedHeight();   // 按真实内容重量一次, 缓存可能是收起期间就过期的旧值
+            from = 0;
+        }
+
         if (double.IsNaN(_expandedHeight) || _expandedHeight <= 0) return;
 
         var target = collapse ? 0 : _expandedHeight;
-        var anim = new DoubleAnimation(_host.ActualHeight, target, TimeSpan.FromMilliseconds(180))
+        var gen = ++_animGen;
+        _animating = true;
+        var anim = new DoubleAnimation(from, target, TimeSpan.FromMilliseconds(180))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
         };
         // 动画结束后把基准值落到目标值, 下次从正确高度起算
         anim.Completed += (_, _) =>
         {
+            // 半路又被反向触发: 这条动画作废, 别把旧目标写回 Height
+            if (gen != _animGen) return;
+            _animating = false;
             _host.BeginAnimation(FrameworkElement.HeightProperty, null);
-            _host.Height = target;
+            // ★ 收起钉 0(ClipToBounds 才能真的让出空间); **展开回 Auto** ——
+            //   这是"投稿那一栏显示不全"的另一半修复。原来展开后把 Height 钉成动画目标
+            //   (一个数值), 之后内容只要高一点(简介多折一行 / 点「详情」/ 窗口变窄),
+            //   固定高度就再也跟不上, ClipToBounds 又把 Tab 行裁掉。回 Auto 永远贴合内容。
+            _host.Height = collapse ? 0 : double.NaN;
         };
         _host.BeginAnimation(FrameworkElement.HeightProperty, anim);
     }
