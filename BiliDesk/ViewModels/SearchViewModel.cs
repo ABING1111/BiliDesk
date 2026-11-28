@@ -102,6 +102,10 @@ public class SearchViewModel : ObservableObject
             Error = "";
             Blocked = false;
             HasMore = false;
+            OnPropertyChanged(nameof(ResultCount));
+            // ★ 换类别同样算"换了一批内容": 结果区要滚回顶部, 否则偏移停在上一次的位置,
+            //   新一类结果更短就被夹到底部 ⇒ 自动补页被反复触发(见 ScrollToTopRequested 的说明)。
+            ScrollToTopRequested?.Invoke();
             if (_lastKeyword != null) _ = SearchAsync();
             else OnPropertyChanged(nameof(IsIdle));
         }
@@ -235,6 +239,18 @@ public class SearchViewModel : ObservableObject
     public ICommand RetryCommand { get; }
     public ICommand OpenWebSearchCommand { get; }
 
+    /// <summary>
+    /// "结果被整批换掉了, 请把结果区滚回顶部"。
+    ///
+    /// ★★★ 2026-11-28(用户报"再次点击搜索后会不断触发下拉刷新视频"):
+    ///   新一次搜索 / 换类别之后, 用户可能还停在上一次的滚动位置。新结果往往更短,
+    ///   ScrollViewer 会把越界偏移**夹回底部** —— 那一拍正好命中"离底很近",
+    ///   自动补页于是被反复触发, 看起来就是页面自己在不停加载。
+    ///   滚回顶部是"换了一批内容"语义下唯一确定的落点(与首页刷新同款做法)。
+    /// ★ 滚动位置是视图的事, 所以这里只发信号, 由 SearchPage 去滚(与 FavoritesViewModel 同一分工)。
+    /// </summary>
+    public event Action? ScrollToTopRequested;
+
     public SearchViewModel()
     {
         // ★ 初始类别来自设置(上次停在哪个 tab), 所以要把四个投影属性各通知一次 ——
@@ -303,6 +319,17 @@ public class SearchViewModel : ObservableObject
         HasMore = false;
         LoadingMore = false;
         _lastKeyword = kw;
+        // ★★★ 2026-11-28(用户报"再次点击搜索后会不断触发下拉刷新视频"):
+        //   旧结果必须在**发起请求之前**就清掉, 不能等响应回来再清 ——
+        //   否则请求在飞的这段时间里, 旧内容还撑着 ScrollableHeight, 而滚动偏移仍停在上一次
+        //   的位置; 响应回来一换批、内容变短, 偏移被夹回底部, 那一拍的 ScrollChanged
+        //   就命中"离底很近" ⇒ 自动补页被反复触发(页面自己不停加载)。
+        //   先清空 + 通知视图滚回顶部, 这个中间态就不存在了。
+        Results.Clear();
+        BangumiResults.Clear();
+        UserResults.Clear();
+        OnPropertyChanged(nameof(ResultCount));
+        ScrollToTopRequested?.Invoke();
         OnPropertyChanged(nameof(IsIdle));
         // 记进搜索历史(去重后挪到最前)。放在发起请求之前 ——
         // 被风控拦下的搜索也算"我搜过", 用户往往正是要照着重试一次。
@@ -315,9 +342,8 @@ public class SearchViewModel : ObservableObject
             {
                 if (gen != _generation) return;   // 已经有更新的一次搜索接管了, 这份结果作废
                 Searching = false;
-                Results.Clear();
-                BangumiResults.Clear();
-                UserResults.Clear();
+                // ★ 列表在 SearchAsync 开头就已经清空了(见那段说明), 这里不再重复 Clear ——
+                //   清两次只会多触发一轮集合通知/布局。
                 // ★ 三套集合按类别分流: 番剧在 data.BangumiItems、用户在 data.UserItems,
                 //   都不在 data.Items 里。灌错集合的后果是"界面一片空白 / 点开走错路"。
                 if (IsBangumiSearch) AppendBangumiDistinct(BangumiResults, data.BangumiItems);

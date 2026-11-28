@@ -37,13 +37,17 @@ public partial class WatchLaterPage : UserControl
     }
 
     /// <summary>
-    /// 滚到接近底部(或内容不足一屏)就补下一页。
+    /// 连续自动补页的闸门(见 <see cref="AutoFillGuard"/>)。
+    ///
+    /// ★★★ 2026-11-28: 原来这里是 `_autoFillCount++ / finally { _autoFillCount--; }` ——
+    ///   await 一结束就减回去, 计数器只等于"在飞请求数", **永远到不了上限 5**,
+    ///   连续补页没有刹车。改成只增不减, 由用户滚动 / 刷新来重置。
     ///
     /// ★ 补页进行中必须暂停判定: 每补一批内容都在长, 这时"内容不够一屏"是假象 ——
     ///   不挡住的话几次 ScrollChanged 就把剩下所有页一口气全铺出来, 分页等于白做
-    ///   (与首页分帧填充时踩的是同一个坑)。
+    ///   (与首页分帧填充时踩的是同一个坑)。这道判断在 <see cref="MaybeAutoLoad"/> 里。
     /// </summary>
-    private int _autoFillCount;
+    private readonly AutoFillGuard _autoFillGuard = new();
 
     /// <summary>自动加载的公共闸门: 缩放/布局变化时不立即翻页(见 <see cref="AutoLoadThrottle"/>)。</summary>
     private readonly AutoLoadThrottle _autoLoadThrottle = new();
@@ -53,7 +57,10 @@ public partial class WatchLaterPage : UserControl
         if (sender is not ScrollViewer sv) return;
         // 工具列顶部 = 刷新, 下滑 = 回到顶部
         BtnTopRefresh.UpdateForOffset(sv);
+        // ★ 先把布局变化那一类挡掉: 卡片墙补锚点的程序化滚动也带 VerticalChange,
+        //   不能拿它给连续补页"充值"(见 AutoFillGuard)。
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => MaybeAutoLoad(sv))) return;
+        if (Math.Abs(e.VerticalChange) > 0.5) _autoFillGuard.Reset();
         MaybeAutoLoad(sv);
     }
 
@@ -63,7 +70,8 @@ public partial class WatchLaterPage : UserControl
         if (sv == null) return;
         if (Vm is not { HasMore: true } vm) return;
         if (vm.IsFilling) return;
-        if (_autoFillCount > 5) return;   // 防止"补了但布局还没长"造成的死循环
+        // ★ 连续补页上限(见 AutoFillGuard): 补了还是不满一屏时不能无限自补。
+        if (!_autoFillGuard.CanFill) return;
 
         var nearBottom = sv.ScrollableHeight - sv.VerticalOffset < 400;
         var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;
@@ -71,22 +79,23 @@ public partial class WatchLaterPage : UserControl
 
         if (!_autoLoadThrottle.TryEnter()) return;
 
-        _autoFillCount++;
-        try { vm.ShowNextPage(); }
-        finally { _autoFillCount--; }
+        // ★ 只累加、不在"加载完"时回退 —— 回退就等于没有上限。
+        _autoFillGuard.OnFilled();
+        vm.ShowNextPage();
     }
 
     /// <summary>屏蔽条件落地后, 等布局量完再补内容</summary>
     private void OnFilterApplied()
     {
         if (!IsLoaded || !IsVisible) return;
+        // ★ 屏蔽刚筛掉一批内容: 这是"内容变短"的新前提, 连续补页额度重开一次。
+        _autoFillGuard.Reset();
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
         {
             if (IsLoaded && IsVisible) MaybeAutoLoad(ListScroll);
         }));
     }
 
-    /// <summary>返回「我的」页(入口在那里)</summary>
     /// <summary>工具列二合一按钮: 顶部 = 刷新稍后再看, 下滑 = 回到顶部。</summary>
     private void OnTopRefreshClick(object sender, RoutedEventArgs e)
     {
@@ -96,6 +105,8 @@ public partial class WatchLaterPage : UserControl
             return;
         }
 
+        // ★ 刷新 = 整批换内容: 连续补页额度重开。
+        _autoFillGuard.Reset();
         if (Vm?.ReloadCommand.CanExecute(null) == true) Vm.ReloadCommand.Execute(null);
     }
 

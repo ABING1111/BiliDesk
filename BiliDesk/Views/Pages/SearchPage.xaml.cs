@@ -69,7 +69,19 @@ public partial class SearchPage : UserControl
         {
             ResetCard();
             // 搜索结果也纳入全局屏蔽。以前只挂了首页/收藏/历史, 在搜索页怎么屏蔽都不生效。
-            if (e.NewValue is SearchViewModel vm) FilterService.Instance.Attach(vm.Results, isActive: () => IsVisible);
+            if (e.NewValue is SearchViewModel vm)
+            {
+                FilterService.Instance.Attach(vm.Results, isActive: () => IsVisible);
+                // ★ 换了一次搜索内容(新一次搜索 / 换类别): 连续补页额度重开,
+                //   并把结果区滚回顶部 —— 否则偏移停在上一次的位置, 新结果更短就被夹到底部,
+                //   反复命中"内容不足一屏"就是用户看到的"不断下拉刷新"。
+                vm.ScrollToTopRequested -= OnScrollToTopRequested;
+                vm.ScrollToTopRequested += OnScrollToTopRequested;
+            }
+            else if (e.OldValue is SearchViewModel old)
+            {
+                old.ScrollToTopRequested -= OnScrollToTopRequested;
+            }
         };
         // 屏蔽筛掉一批结果后, 结果区可能不够一屏: 主动补下一页(滚动事件不会因此触发)
         FilterService.Instance.Changed += OnFilterApplied;
@@ -126,10 +138,15 @@ public partial class SearchPage : UserControl
     private const double AutoLoadThreshold = 240;
 
     /// <summary>
-    /// 连续自动填充的次数。与首页同款的一道闸: 内容不足一屏时"补了还是短"会立刻再来一次,
-    /// 没有它就会一直往下拉(用户看到的是"页面自己在不停加载")。
+    /// 连续自动补页的闸门(见 <see cref="AutoFillGuard"/>)。
+    ///
+    /// ★★★ 2026-11-28(用户报"再次点击搜索后会不断触发下拉刷新视频"):
+    ///   原来这里是 `_autoFillCount++ / finally { _autoFillCount--; }` —— await 一结束就减回去,
+    ///   计数器只等于"在飞请求数", **永远到不了上限 5**, 连续补页没有刹车。
+    ///   再搜一次时滚动偏移还停在上次的位置, 新结果更短就被夹到底部, 反复命中"内容不足一屏"
+    ///   ⇒ 页面自己不停加载。现在改成只增不减, 由用户滚动 / 重新搜索来重置。
     /// </summary>
-    private int _autoFillCount;
+    private readonly AutoFillGuard _autoFillGuard = new();
 
     /// <summary>自动加载的公共闸门: 缩放/布局变化时不立即翻页(见 <see cref="AutoLoadThrottle"/>)。</summary>
     private readonly AutoLoadThrottle _autoLoadThrottle = new();
@@ -137,14 +154,18 @@ public partial class SearchPage : UserControl
     /// <summary>
     /// 结果区滚到接近底部(或内容不足一屏)就自动翻下一页 —— 与首页/稍后再看页同一套写法。
     ///
-    /// 用 async void + await 是**故意的**: _autoFillCount 计数跨 await 必须还有效, 否则
-    /// 几次请求同时在飞, 闸门等于没有(首页那边也是这么写的, 见 HomePage.TriggerAutoLoad)。
+    /// ★ 这里**不是** async void: 计数已挪进 <see cref="AutoFillGuard"/>(它跨 await 有效),
+    ///   所以事件处理器只负责派发, 不需要 await。
     /// </summary>
     private void OnResultScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (sender is not ScrollViewer sv) return;
         // 缩放/布局变化会连续发 ScrollChanged, 不能立即判(见 AutoLoadThrottle)。
+        // ★ 必须先过这道闸再看 VerticalChange: 卡片墙补锚点自己调的 ScrollToVerticalOffset
+        //   也会带来 VerticalChange —— 那是程序化滚动, 不能拿它给连续补页"充值"。
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = MaybeAutoLoadAsync(sv))) return;
+        // ★ 用户**真的**滚动过 ⇒ 连续补页的额度重新开始(与动态页 _shortContentFills 同一口径)。
+        if (Math.Abs(e.VerticalChange) > 0.5) _autoFillGuard.Reset();
         _ = MaybeAutoLoadAsync(sv);
     }
 
@@ -152,9 +173,11 @@ public partial class SearchPage : UserControl
     private async Task MaybeAutoLoadAsync(ScrollViewer? sv)
     {
         if (sv == null) return;
+        if (!IsVisible) return;   // 页面切走了就别再补(实例常驻 PageLayer)
         if (Vm is not { HasMore: true } vm) return;
         if (vm.LoadingMore || vm.Searching || vm.Blocked) return;
-        if (_autoFillCount > 5) return;
+        // ★ 连续补页上限: 补了还是不满一屏时不能无限自补(见 AutoFillGuard)。
+        if (!_autoFillGuard.CanFill) return;
 
         var distanceToBottom = sv.ScrollableHeight - sv.VerticalOffset;
         var contentShort = sv.ScrollableHeight < sv.ActualHeight * 0.8;
@@ -162,19 +185,37 @@ public partial class SearchPage : UserControl
 
         if (!_autoLoadThrottle.TryEnter()) return;
 
-        _autoFillCount++;
-        try { await vm.LoadMoreAsync(); }
-        finally { _autoFillCount--; }
+        // ★ 只累加、不在 finally 里回退 —— 回退就等于没有上限(见字段上的说明)。
+        _autoFillGuard.OnFilled();
+        await vm.LoadMoreAsync();
     }
 
     /// <summary>屏蔽条件落地后, 等布局量完再决定要不要补一页(否则会停在半屏空白上)</summary>
     private void OnFilterApplied()
     {
         if (!IsLoaded || !IsVisible) return;
+        // ★ 屏蔽刚筛掉一批内容: 这是"内容变短"的新前提, 连续补页额度重开一次。
+        _autoFillGuard.Reset();
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(async () =>
         {
             if (IsLoaded && IsVisible) await MaybeAutoLoadAsync(ResultScroll);
         }));
+    }
+
+    /// <summary>
+    /// 新的一次搜索 / 换了类别: 结果区滚回顶部, 并把连续补页额度清零。
+    ///
+    /// ★★★ 2026-11-28(用户报"再次点击搜索后会不断触发下拉刷新视频"):
+    ///   搜索前用户可能已经滚到很下面, 而新结果往往更短 —— ScrollViewer 会把越界的偏移
+    ///   夹回底部, 那一拍的 ScrollChanged 正好命中"离底很近", 于是自动补页被反复触发。
+    ///   回到顶部是"换了一批内容"语义下唯一确定的落点(与首页刷新同款做法)。
+    /// ★ 必须派到 Loaded 优先级: 此刻新结果还没排进布局, 当场滚会被夹回旧位置。
+    /// </summary>
+    private void OnScrollToTopRequested()
+    {
+        _autoFillGuard.Reset();
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded,
+            new Action(() => ResultScroll?.ScrollToTop()));
     }
 
     /// <summary>

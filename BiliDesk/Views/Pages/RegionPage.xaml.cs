@@ -51,6 +51,8 @@ public partial class RegionPage : UserControl
         var sameRegion = vm.RegionName == name && vm.Tid == tid && vm.HasItems;
         if (!sameRegion)
         {
+            // ★ 换分区 = 换了一整批内容: 连续补页额度重开(见 AutoFillGuard)。
+            _autoFillGuard.Reset();
             await vm.OpenAsync(name, tid);   // LoadAsync 结束时 PropertyChanged(Loading=false) 会触发挂载
             ListScroll.ScrollToTop();        // 换分区 = 换一整批内容, 停在原来的滚动位置毫无意义
         }
@@ -91,10 +93,13 @@ public partial class RegionPage : UserControl
     private const double AutoLoadThreshold = 240;
 
     /// <summary>
-    /// 连续自动补页的次数。与首页/搜索同款的一道闸: 内容不足一屏时"补了还是短"会立刻再来一次,
-    /// 没有它就会一直往下拉(用户看到的是"页面自己在不停加载")。
+    /// 连续自动补页的闸门(见 <see cref="AutoFillGuard"/>)。
+    ///
+    /// ★★★ 2026-11-28: 原来这里是 `_autoFillCount++ / finally { _autoFillCount--; }` ——
+    ///   await 一结束就减回去, 计数器只等于"在飞请求数", **永远到不了上限 5**,
+    ///   连续补页没有刹车。改成只增不减, 由用户滚动 / 换分区来重置。
     /// </summary>
-    private int _autoFillCount;
+    private readonly AutoFillGuard _autoFillGuard = new();
 
     /// <summary>自动加载的公共闸门: 缩放/布局变化时不立即翻页(见 <see cref="AutoLoadThrottle"/>)。</summary>
     private readonly AutoLoadThrottle _autoLoadThrottle = new();
@@ -102,14 +107,16 @@ public partial class RegionPage : UserControl
     /// <summary>
     /// 列表滚到接近底部(或内容不足一屏)就自动翻下一页 —— 与首页/搜索页同一套写法。
     ///
-    /// ★ 用 async void + await 是**故意的**: _autoFillCount 计数跨 await 必须还有效,
-    ///   否则几次请求同时在飞时闸门等于没有(首页/搜索那边也是这么写的)。
+    /// ★ 计数已挪进 <see cref="AutoFillGuard"/>(它跨 await 有效), 事件处理器只负责派发。
     /// </summary>
     private void OnListScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         UpdateTopRefresh(sender as ScrollViewer);
         if (sender is not ScrollViewer sv) return;
+        // ★ 先把布局变化那一类挡掉: 卡片墙补锚点的程序化滚动也带 VerticalChange,
+        //   不能拿它给连续补页"充值"(见 AutoFillGuard)。
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = MaybeAutoLoadAsync(sv))) return;
+        if (Math.Abs(e.VerticalChange) > 0.5) _autoFillGuard.Reset();
         _ = MaybeAutoLoadAsync(sv);
     }
 
@@ -119,7 +126,8 @@ public partial class RegionPage : UserControl
         if (sv == null) return;
         if (DataContext is not RegionViewModel vm) return;
         if (!vm.HasMore || vm.Loading || vm.LoadingMore) return;
-        if (_autoFillCount > 5) return;
+        // ★ 连续补页上限(见 AutoFillGuard)。
+        if (!_autoFillGuard.CanFill) return;
         // 分帧填充进行中: 每补一批 ScrollableHeight 都在长, 这时判"内容不够一屏"是错的,
         // 会带着空列表去拉下一页; 等填充完(补帧引发的 ScrollChanged 会再来)再判。
         if (_fill is { IsActive: true }) return;
@@ -132,15 +140,17 @@ public partial class RegionPage : UserControl
 
         if (!_autoLoadThrottle.TryEnter()) return;
 
-        _autoFillCount++;
-        try { await vm.LoadMoreAsync(); }
-        finally { _autoFillCount--; }
+        // ★ 只累加、不在 finally 里回退 —— 回退就等于没有上限。
+        _autoFillGuard.OnFilled();
+        await vm.LoadMoreAsync();
     }
 
     /// <summary>屏蔽条件落地后, 等布局量完再补内容</summary>
     private void OnFilterApplied()
     {
         if (!IsLoaded || !IsVisible) return;
+        // ★ 屏蔽刚筛掉一批内容: 这是"内容变短"的新前提, 连续补页额度重开一次。
+        _autoFillGuard.Reset();
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(async () =>
         {
             if (IsLoaded && IsVisible) await MaybeAutoLoadAsync(ListScroll);
@@ -167,6 +177,8 @@ public partial class RegionPage : UserControl
         }
 
         if (DataContext is not RegionViewModel vm) return;
+        // ★ 刷新 = 整批换内容: 连续补页额度重开。
+        _autoFillGuard.Reset();
         ListScroll.ScrollToTop();
         _ = vm.RefreshAsync();
     }

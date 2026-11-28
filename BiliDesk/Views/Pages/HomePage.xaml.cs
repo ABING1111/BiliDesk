@@ -36,8 +36,15 @@ public partial class HomePage : UserControl, IRefreshable
     /// <summary>预取阈值 = max(下限, 2 × 视口高)。视口量不出来时退回下限。</summary>
     private static double AutoLoadThresholdFor(ScrollViewer sv)
         => Math.Max(AutoLoadThresholdMin, sv.ViewportHeight * 2.0);
-    // 防止连续自动填充死循环
-    private int _autoFillCount;
+
+    /// <summary>
+    /// 连续自动补页的闸门(见 <see cref="AutoFillGuard"/>)。
+    ///
+    /// ★★★ 2026-11-28: 原来这里是 `_autoFillCount++ / finally { _autoFillCount--; }` ——
+    ///   await 一结束就减回去, 计数器只等于"在飞请求数", **永远到不了上限 5**, 连续补页
+    ///   没有刹车。改成只增不减, 由用户滚动 / 切 tab 来重置(与搜索页同一套)。
+    /// </summary>
+    private readonly AutoFillGuard _autoFillGuard = new();
 
     /// <summary>自动加载的公共闸门: 缩放/布局变化时不立即翻页(见 <see cref="AutoLoadThrottle"/>)。</summary>
     private readonly AutoLoadThrottle _autoLoadThrottle = new();
@@ -608,6 +615,9 @@ public partial class HomePage : UserControl, IRefreshable
     private void ShowTab(HomeTabKind tab)
     {
         EnsureFill(tab);
+        // ★ 换 tab = 换了一整批内容: 连续补页额度重开, 否则在 A tab 上补满 5 次后,
+        //   切到 B tab 就再也补不动了(两个 tab 的滚动事件共用一个闸门)。
+        _autoFillGuard.Reset();
         // 切 tab 后「刷新 / 回到顶部」要跟着新列表的滚动位置走(那个 tab 可能本来就停在顶部)
         UpdateTopRefresh(ScrollOf(tab));
         // 分段标签的下划线跟着选中项走
@@ -773,7 +783,8 @@ public partial class HomePage : UserControl, IRefreshable
     /// <summary>通用: 滚动到底部 / 内容不够一屏时, 自动加载更多</summary>
     private async Task TriggerAutoLoad(ScrollViewer sv, HomeViewModel vm)
     {
-        if (_autoFillCount > 5) return; // 防止死循环
+        // ★ 连续补页上限(见 AutoFillGuard): 补了还是不满一屏时不能无限自补。
+        if (!_autoFillGuard.CanFill) return;
         if (vm.LoadingMore || vm.Loading) return;
 
         // ★ 防"延迟检查跑到别的 tab 上"(2026-11-09): AutoLoadThrottle 会把布局变化的判断
@@ -794,9 +805,9 @@ public partial class HomePage : UserControl, IRefreshable
         //   没有它的话一次拖窗口能触发好几页(见 AutoLoadThrottle)。
         if (!_autoLoadThrottle.TryEnter()) return;
 
-        _autoFillCount++;
-        try { await vm.LoadMoreAsync(); }
-        finally { _autoFillCount--; }
+        // ★ 只累加、不在 finally 里回退 —— 回退就等于没有上限(见 AutoFillGuard)。
+        _autoFillGuard.OnFilled();
+        await vm.LoadMoreAsync();
     }
 
     private void PopularScroll_OnScrollChanged(object sender, ScrollChangedEventArgs e)
@@ -804,7 +815,10 @@ public partial class HomePage : UserControl, IRefreshable
         UpdateTopRefresh((ScrollViewer)sender);
         if (DataContext is not HomeViewModel vm) return;
         var sv = (ScrollViewer)sender;
+        // ★ 必须先把布局变化那一类挡掉: 卡片墙补锚点自己调的 ScrollToVerticalOffset 也带
+        //   VerticalChange, 那是程序化滚动, 不能拿它给连续补页"充值"(见 AutoFillGuard)。
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = TriggerAutoLoad(sv, vm))) return;
+        if (Math.Abs(e.VerticalChange) > 0.5) _autoFillGuard.Reset();
         _ = TriggerAutoLoad(sv, vm);
     }
 
@@ -814,6 +828,7 @@ public partial class HomePage : UserControl, IRefreshable
         if (DataContext is not HomeViewModel vm) return;
         var sv = (ScrollViewer)sender;
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = TriggerAutoLoad(sv, vm))) return;
+        if (Math.Abs(e.VerticalChange) > 0.5) _autoFillGuard.Reset();
         _ = TriggerAutoLoad(sv, vm);
     }
 
@@ -823,6 +838,7 @@ public partial class HomePage : UserControl, IRefreshable
         if (DataContext is not HomeViewModel vm) return;
         var sv = (ScrollViewer)sender;
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = TriggerAutoLoad(sv, vm))) return;
+        if (Math.Abs(e.VerticalChange) > 0.5) _autoFillGuard.Reset();
         _ = TriggerAutoLoad(sv, vm);
     }
 
@@ -855,6 +871,7 @@ public partial class HomePage : UserControl, IRefreshable
         var sv = (ScrollViewer)sender;
         SyncBangumiActiveSection(sv, vm);
         if (_autoLoadThrottle.ShouldSkipLayoutChange(e, () => _ = TriggerAutoLoad(sv, vm))) return;
+        if (Math.Abs(e.VerticalChange) > 0.5) _autoFillGuard.Reset();
         _ = TriggerAutoLoad(sv, vm);
     }
 
