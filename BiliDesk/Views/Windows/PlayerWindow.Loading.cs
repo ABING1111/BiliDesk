@@ -1352,6 +1352,9 @@ public partial class PlayerWindow : FluentWindow
         // 加载链代次与闸门: 换片时**故意不清** —— 新一次加载会自己 ++_loadGen 让旧的作废;
         //   清成 0 反而可能让旧任务的代次与新任务撞上。闸门由 LoadVideoAsync 的 finally 收敛。
         nameof(_loadGen), nameof(_loadRunning),
+        // 本地文件章节的读取代次(2026-11-28): 同 _loadGen —— 窗口级单调计数, 换片不清;
+        //   每次打开本地文件自己 ++, 后台读盘回来时用它判断"用户是不是已经换片了"。
+        nameof(_localChapterGen),
         // Media input 代次(2026-11-19): 窗口级**单调**计数, 换片不清 —— 它的语义正是
         // "换片要作废旧事件", 清回同一个值反而会让旧事件重新撞上。
         nameof(_mediaEpoch),
@@ -1501,8 +1504,10 @@ public partial class PlayerWindow : FluentWindow
             _lastPlayUrl = path;
             // 本地缓存可能由下载器写入了 chpl 章节: 直接读文件, 不请求接口。
             // 老缓存没有章节时返回 false, _chapters 保持空, 行为与以前一致。
-            if (Mp4ChapterReader.TryRead(path, out var localChapters, out _))
-                ApplyChapters(localChapters);
+            // ★ 读盘放后台线程: moov 上限 64MB, 在 UI 线程同步读会卡住界面并推迟起播。
+            //   读完再回 UI 线程落地, 用 _localChapterGen 作废"用户已经换片"的结果。
+            var chapterGen = ++_localChapterGen;
+            _ = LoadLocalChaptersAsync(path, chapterGen);
             // 本地文件是单文件源, seek 一次到位(与 durl 合流单流同性质)
             _isReliableSeekSource = true;
             PlayMedia(media);
@@ -1510,6 +1515,35 @@ public partial class PlayerWindow : FluentWindow
         catch (Exception ex)
         {
             if (!_closing) ShowFail("打开本地文件失败: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 后台读本地文件的 chpl 章节, 读完回 UI 线程落地。
+    ///
+    /// ★ 为什么不在 <see cref="LoadLocalFile"/> 里同步读: 那是 UI 线程, moov 上限 64MB,
+    ///   同步读既卡界面又推迟起播(本地文件是"打开就能看"的场景)。
+    /// ★ 为什么用代次而不是"文件还在不在": 用户在这几十毫秒里可能已经换了片或关了窗口 ——
+    ///   老章节盖到新片上就是串台(与字幕/在线章节同款防串闸)。
+    /// </summary>
+    private async Task LoadLocalChaptersAsync(string path, int gen)
+    {
+        try
+        {
+            // Task.Run 里读盘; await 之后回到 UI 线程(捕获了 UI 同步上下文)。
+            var read = await Task.Run(() =>
+            {
+                var ok = Mp4ChapterReader.TryRead(path, out var list, out _);
+                return (ok, list);
+            });
+            if (!read.ok || read.list.Count == 0) return;
+
+            if (_closing || gen != _localChapterGen || !_isLocalPlayback) return;
+            ApplyChapters(read.list);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine("[Player] 读取本地章节失败: " + ex.Message + "\n");
         }
     }
 

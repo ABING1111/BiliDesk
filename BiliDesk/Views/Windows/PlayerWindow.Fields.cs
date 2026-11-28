@@ -70,6 +70,14 @@ public partial class PlayerWindow : FluentWindow
     private bool _isLocalPlayback;
 
     /// <summary>
+    /// 本地文件章节的**读取代次**(2026-11-28): 本地文件的章节是读文件拿的, 读盘在后台
+    /// 线程做, 读完才回 UI 线程落地 —— 这中间用户可能已经换了片或关了窗口,
+    /// 用它把过期结果作废(与字幕的 gen 防串同款)。
+    /// ★ 窗口级**单调**计数(同 <c>_loadGen</c>): 换片**不清**, 每次打开本地文件自己 ++。
+    /// </summary>
+    private int _localChapterGen;
+
+    /// <summary>
     /// 当前播的是**直播间**。和本地文件一样没有 aid/cid, 所以互动/评论/进度上报都不做;
     /// 单独留一个标志只是为了把提示文案和进度条形态区分开(直播没有总时长, 进度条要禁用)。
     /// </summary>

@@ -131,8 +131,6 @@ public static class VideoDownloader
             }
 
             // 全部写完才改成正式名字(保证"看得见的文件一定是完整的")
-            // ★ 章节必须在改名之前写入: 失败只影响章节, 不影响已经下载好的媒体。
-            await TryAttachChaptersAsync(req, part);
             if (File.Exists(path)) File.Delete(path);
             File.Move(part, path);
 
@@ -146,6 +144,11 @@ public static class VideoDownloader
             TrayService.Instance.Notify("视频下载完成", "已保存到 " + folder);
 
             if (req.OpenFolderWhenDone) RevealInExplorer(path);
+
+            // ★ 章节是**增强项**: 放在改名与"已保存"之后 —— 接口慢(上限 15s)或失败都
+            //   不该拖住用户拿到文件。写器自身是"临时文件 + 原子替换", 对正式文件写入
+            //   同样安全(失败只删临时文件, 正式文件一个字节不动)。
+            await TryAttachChaptersAsync(req, path);
             return path;
         }
         catch (Exception ex)
@@ -160,25 +163,37 @@ public static class VideoDownloader
     /// 下载完成后把 B 站章节写进 MP4 的 `moov/udta/chpl`。
     ///
     /// ★ 章节只是增强: 接口失败/视频本来没有章节/写入失败都不影响下载结果,
-    ///   所以这里全部静默处理, 只记诊断日志。
+    ///   所以这里不抛异常, 只把失败原因写进 errors.txt(App.ReportError)。
+    /// ★ 走的是 WBI 接口: 项目在 ApiClient.Core.cs 里记录过风控(同一 IP 连打 12 次
+    ///   出现过 code=0 与 -412 交替), 所以这里是**每条视频一次**的额外请求 ——
+    ///   它排在用户可见的"已保存"之后, 慢也不影响拿文件。
     /// </summary>
-    private static async Task TryAttachChaptersAsync(VideoDownloadRequest req, string part)
+    private static async Task TryAttachChaptersAsync(VideoDownloadRequest req, string path)
     {
-        if (req.Cid <= 0 || string.IsNullOrEmpty(req.Bvid) || !File.Exists(part)) return;
+        if (req.Cid <= 0 || string.IsNullOrEmpty(req.Bvid) || !File.Exists(path)) return;
         try
         {
             var (ok, _, _, _, chapters) = await Svc.Api.GetPlayerInfoAsync(req.Bvid, req.Cid);
             if (!ok || chapters == null || chapters.Count < 2) return;
 
-            if (Mp4ChapterWriter.TryAdd(part, chapters, out var err))
+            if (Mp4ChapterWriter.TryAdd(path, chapters, out var err))
+            {
                 System.Diagnostics.Debug.WriteLine(
                     $"[Download] 章节已写入 {chapters.Count} 条 bvid={req.Bvid} cid={req.Cid}\n");
+            }
             else if (!string.IsNullOrEmpty(err))
-                System.Diagnostics.Debug.WriteLine($"[Download] 章节写入失败: {err}\n");
+            {
+                // ★ 用 App.ReportError 而不是 Debug.WriteLine: 后者带 [Conditional("DEBUG")],
+                //   发布版(Release)里会被编译掉 —— 用户反馈"下载的视频没有章节"时,
+                //   errors.txt 里一个字都没有, 没法排查。同文件的合流失败就是走 ReportError。
+                App.ReportError(new InvalidOperationException(
+                    $"章节写入失败 bvid={req.Bvid} cid={req.Cid}: {err}"));
+            }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[Download] 获取/写入章节异常: {ex.Message}\n");
+            App.ReportError(new InvalidOperationException(
+                $"章节获取/写入异常 bvid={req.Bvid} cid={req.Cid}: {ex.Message}"));
         }
     }
 

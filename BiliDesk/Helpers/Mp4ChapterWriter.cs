@@ -42,7 +42,9 @@ public static class Mp4ChapterWriter
             return false;
         }
 
-        var tmp = path + ".chpl.tmp";
+        // ★ 临时名带唯一后缀: 两个线程同时写同一个目标(如同名视频并发下载)用固定的
+        //   ".chpl.tmp" 会互相覆盖 —— 项目 AtomicFile / SessionManager 的同款约定。
+        var tmp = path + ".chpl-" + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             var boxes = ReadTopLevel(path);
@@ -57,17 +59,27 @@ public static class Mp4ChapterWriter
                 error = "moov 过大, 放弃写章节";
                 return false;
             }
+            // ★ moov 在 2GB 之外时读不进 int 寻址的内存: 显式放弃, 而不是让
+            //   checked((int)moov.Offset) 抛溢出异常(读端 Mp4ChapterReader 同款处理)。
+            if (moov.Offset > int.MaxValue)
+            {
+                error = "moov 偏移过大, 放弃写章节";
+                return false;
+            }
 
             var moovBytes = ReadAt(path, checked((int)moov.Offset), checked((int)moov.Size));
             var newMoov = AddChpl(moovBytes, list, out error);
             if (newMoov == null) return false;
 
             var delta = newMoov.Length - moov.Size;
-            // 只有 mdat 在 moov 之后时, 块偏移才会因为 moov 变长而整体后移。
-            var shiftMedia = boxes.Any(b => b.Type == "mdat" && b.Offset > moov.Offset);
-            if (shiftMedia && delta != 0)
+            // ★ 只有 moov **之后**的数据才会因为 moov 变长而整体后移; moov 之前的数据一动不动。
+            //   所以判据是"偏移是否 >= moov 的结束位置", 而不是"文件里有没有排在 moov 后面的 mdat"
+            //   —— 双 mdat 的文件(mdat1|moov|mdat2)里, 指向 mdat1 的 chunk 绝对不能加增量,
+            //   否则它会被指到错位置, 解出来是错位数据。
+            if (delta != 0)
             {
-                if (!PatchChunkOffsets(newMoov, delta, out error)) return false;
+                if (!PatchChunkOffsets(newMoov, delta, moov.Offset + moov.Size, out error))
+                    return false;
             }
 
             using (var src = new FileStream(path, FileMode.Open, FileAccess.Read,
@@ -142,8 +154,19 @@ public static class Mp4ChapterWriter
     {
         error = null;
         var chpl = MakeBox("chpl", BuildPayload(chapters));
-        var children = ParseBoxes(moov, 0, moov.Length);
-        var udta = children.FirstOrDefault(b => b.Type == "udta");
+        // ★ 从 8 开始: moov 这块 buffer 的 [0..8) 是 **moov 自己的头**(size + "moov")。
+        //   从 0 解析的话第一个"子盒"就是 moov 自己, udta 永远找不到 ⇒ "替换已有 chpl"
+        //   那条分支成了死代码, 每次写入都在 moov 末尾追加一个新 udta。
+        //   读端 Mp4ChapterReader.FindChpl 用的就是 ParseBoxes(moov, 8, moov.Length - 8),
+        //   写读两端必须一致(2026-11-28 review 实测: 写端写成了 0, 应用读到旧章节、
+        //   ffprobe 读到新章节 —— 同一份文件两套章节)。
+        var children = ParseBoxes(moov, 8, moov.Length - 8);
+        // 一个 MP4 可以有多个 udta(实测: 一个放 meta, 一个放 chpl)。
+        // ★ 优先用**已经含 chpl 的那个**(替换语义), 其次用第一个, 再没有才新建 ——
+        //   绝不能新建第二个 udta: 应用读端取第一个含 chpl 的 udta, 外部播放器(mp4 规范)
+        //   取最后一个, 两个 udta ⇒ 应用和播放器显示两套章节。
+        var udtas = children.FindAll(b => b.Type == "udta");
+        var udta = udtas.FirstOrDefault(u => FindChplIn(moov, u) != null) ?? udtas.FirstOrDefault();
 
         byte[] newUdta;
         if (udta == null)
@@ -157,9 +180,7 @@ public static class Mp4ChapterWriter
             return result;
         }
 
-        var existing = ReadAt(moov, checked((int)udta.Offset + 8), checked((int)udta.Size - 8));
-        var inner = ParseBoxes(moov, checked((int)udta.Offset + 8), checked((int)udta.Size - 8));
-        var oldChpl = inner.FirstOrDefault(b => b.Type == "chpl");
+        var oldChpl = FindChplIn(moov, udta);
         byte[] udtaPayload;
         if (oldChpl != null)
         {
@@ -173,6 +194,9 @@ public static class Mp4ChapterWriter
         }
         else
         {
+            // udta 里还没有 chpl: 追加进去, 保留它原有的其它元数据。
+            var existing = ReadAt(moov, checked((int)udta.Offset + 8),
+                checked((int)udta.Size - 8));
             udtaPayload = Concat(existing, chpl);
         }
 
@@ -187,12 +211,28 @@ public static class Mp4ChapterWriter
         return result2;
     }
 
-    private static bool PatchChunkOffsets(byte[] moov, long delta, out string? error)
+    /// <summary>这个 udta 里有没有 chpl(只看直接子盒)。</summary>
+    private static BoxInfo? FindChplIn(byte[] moov, BoxInfo udta)
+    {
+        var inner = ParseBoxes(moov, checked((int)udta.Offset + 8),
+            checked((int)udta.Size - 8));
+        return inner.Find(b => b.Type == "chpl");
+    }
+
+    /// <summary>
+    /// 修正 moov 里的块偏移。
+    ///
+    /// ★ <paramref name="moovEnd"/> 是 moov 在**文件里**的结束位置(绝对偏移):
+    ///   只有指向它之后的数据的 chunk 才会因为 moov 变长而整体后移, 需要加 delta;
+    ///   指向它之前的数据(moov 前面的 mdat)一动不动, 加了 delta 就指错位置了。
+    /// </summary>
+    private static bool PatchChunkOffsets(byte[] moov, long delta, long moovEnd,
+        out string? error)
     {
         error = null;
         try
         {
-            PatchBoxes(moov, 8, moov.Length, delta);
+            PatchBoxes(moov, 8, moov.Length, delta, moovEnd);
             return true;
         }
         catch (Exception ex)
@@ -202,18 +242,19 @@ public static class Mp4ChapterWriter
         }
     }
 
-    private static void PatchBoxes(byte[] data, int start, int end, long delta)
+    private static void PatchBoxes(byte[] data, int start, int end, long delta, long moovEnd)
     {
         foreach (var b in ParseBoxes(data, start, end - start))
         {
-            if (b.Type == "stco") PatchStco(data, b, delta);
-            else if (b.Type == "co64") PatchCo64(data, b, delta);
+            if (b.Type == "stco") PatchStco(data, b, delta, moovEnd);
+            else if (b.Type == "co64") PatchCo64(data, b, delta, moovEnd);
             else if (IsContainer(b.Type))
-                PatchBoxes(data, checked((int)(b.Offset + 8)), checked((int)(b.Offset + b.Size)), delta);
+                PatchBoxes(data, checked((int)(b.Offset + 8)),
+                    checked((int)(b.Offset + b.Size)), delta, moovEnd);
         }
     }
 
-    private static void PatchStco(byte[] data, BoxInfo box, long delta)
+    private static void PatchStco(byte[] data, BoxInfo box, long delta, long moovEnd)
     {
         var p = checked((int)(box.Offset + 8));
         var count = checked((int)ReadU32(data, p + 4));
@@ -222,6 +263,8 @@ public static class Mp4ChapterWriter
         for (var i = 0; i < count; i++)
         {
             var old = ReadU32(data, checked((int)(p + i * 4)));
+            // ★ 指向 moov 之前的数据: 绝对偏移没有变(moov 变长只把**后面**的东西推后)。
+            if (old < moovEnd) continue;
             var value = old + delta;
             if (value < 0 || value > uint.MaxValue)
                 throw new InvalidDataException("stco 偏移超界");
@@ -229,7 +272,7 @@ public static class Mp4ChapterWriter
         }
     }
 
-    private static void PatchCo64(byte[] data, BoxInfo box, long delta)
+    private static void PatchCo64(byte[] data, BoxInfo box, long delta, long moovEnd)
     {
         var p = checked((int)(box.Offset + 8));
         var count = checked((int)ReadU32(data, p + 4));
@@ -238,6 +281,8 @@ public static class Mp4ChapterWriter
         for (var i = 0; i < count; i++)
         {
             var old = checked((long)ReadU64(data, checked((int)(p + i * 8))));
+            // 同 stco: moov 之前的数据不动。
+            if (old < moovEnd) continue;
             var value = old + delta;
             if (value < 0) throw new InvalidDataException("co64 偏移为负");
             WriteU64(data, checked((int)(p + i * 8)), (ulong)value);

@@ -13,6 +13,9 @@ namespace BiliDesk.Helpers;
 /// 下载器把 B 站章节写进 `<see cref="Mp4ChapterWriter"/>` 的同一位置;
 /// 离线播放本地缓存时直接读文件, 不再请求接口(本地文件也没有 bvid/cid)。
 /// 没有 chpl 的老缓存返回空列表, 行为与以前一致。
+//
+/// ★ chpl 格式本身**不带封面图**: 从本地文件读出来的章节没有缩略图(ImageUrl 为空),
+///   章节弹层里封面那一列是空白 —— 这是格式的限制, 不是 bug。接口返回的章节才有封面。
 /// </summary>
 public static class Mp4ChapterReader
 {
@@ -29,6 +32,15 @@ public static class Mp4ChapterReader
             var moov = boxes.Find(b => b.Type == "moov");
             if (moov == null) return false;
             if (moov.Size > 64 * 1024 * 1024) return false;
+            // ★ moov 在 2GB 之外时读不进 int 寻址的内存: 显式跳过, 而不是让
+            //   checked((int)moov.Offset) 抛溢出异常(写端 Mp4ChapterWriter 同款处理)。
+            //   项目本身支持 >4GB 产出(DashRemuxer.NeedsLargeMdat / NeedsCo64),
+            //   所以这个边界会真的碰到 —— 不能靠 checked 崩。
+            if (moov.Offset > int.MaxValue)
+            {
+                error = "moov 偏移过大, 无法读取章节";
+                return false;
+            }
 
             var moovBytes = ReadAt(path, checked((int)moov.Offset), checked((int)moov.Size));
             var chpl = FindChpl(moovBytes);
@@ -41,7 +53,9 @@ public static class Mp4ChapterReader
             for (var i = 0; i < list.Count; i++)
             {
                 var end = i + 1 < list.Count ? list[i + 1].FromMs : durationMs;
-                list[i].ToMs = end > list[i].FromMs ? end : list[i].FromMs;
+                // ★ 结束时间未知时保留 0(= "不知道"), 不要写成 FromMs ——
+                //   那样看起来像"时长为 0 的一章", 和真实情况(只是没拿到总时长)混淆。
+                list[i].ToMs = end > list[i].FromMs ? end : 0;
             }
             chapters = list;
             return true;
@@ -68,6 +82,8 @@ public static class Mp4ChapterReader
             p += 4; // reserved
         }
         if (p >= payload.Length) { error = "chpl 缺 count"; return list; }
+        // ★ count 一律按 **u8** 读(v0 也是): Bento4 那种"v0 + u32 count"的变体解析不出来,
+        //   但实测 ffprobe 同样读不出来, 所以不算兼容性缺口 —— 别以为是漏看了 u32 分支。
         var count = payload[p++];
         for (var i = 0; i < count; i++)
         {

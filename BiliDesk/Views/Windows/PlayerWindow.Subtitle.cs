@@ -113,7 +113,10 @@ public partial class PlayerWindow : FluentWindow
             _subtitleTracks.AddRange(tracks);
             // ★ 章节先落地(在"有没有字幕轨"的判断之前): 它们是两件独立的事,
             //   没字幕的视频照样可能有章节(课程/纪录片都是这种)。
-            ApplyChapters(chapters);
+            // ★★ 本地文件**不**应用在线章节: 用户可能在这个请求还在途时切到本地文件,
+            //   而本地加载不改 _loadGen ⇒ 上面那道 gen 闸拦不住它 ⇒ 在线的章节会盖到
+            //   本地文件上(本地文件自己的章节是读文件拿的, 两者会打架)。
+            if (!_isLocalPlayback) ApplyChapters(chapters);
 
             if (_subtitleTracks.Count == 0)
             {
