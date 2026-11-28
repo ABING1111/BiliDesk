@@ -3697,11 +3697,15 @@
                                 <Setter Property="TextTrimming" Value="CharacterEllipsis" />
                                 <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
                             </Style>
-                            <Style x:Key="SeasonSectionHeaderStyle" TargetType="TextBlock">
-                                <Setter Property="FontSize" Value="12.5" />
-                                <Setter Property="FontWeight" Value="SemiBold" />
-                                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+                            <!-- 分组标题胶囊(2026-11-28 用户要求): 原来是一行 12.5px 次级灰字,
+                                 压在 96×54 的封面上几乎读不清 —— 改成设置页那种"淡强调色底 +
+                                 强调色字"的小胶囊并适当放大(13.5)。字号/内边距直接覆盖通用样式
+                                 (GroupHeaderPillStyle), 不复制模板, 两处观感永远一致。 -->
+                            <Style x:Key="SeasonSectionHeaderStyle" TargetType="ContentControl"
+                                   BasedOn="{StaticResource GroupHeaderPillStyle}">
+                                <Setter Property="FontSize" Value="13.5" />
+                                <Setter Property="Padding" Value="10,3,10,4" />
+                                <Setter Property="Margin" Value="7,2,7,9" />
                             </Style>
                         </ListBox.Resources>
 
@@ -3740,6 +3744,15 @@
                                         </ControlTemplate>
                                     </Setter.Value>
                                 </Setter>
+                                <!-- 组间留白(2026-11-28): 有分组标题的那一行(每个组的第一集)上边距加大,
+                                     让"每个组别隔开一点点距离"。
+                                     ★ 留白放在**容器**上而不是标题自己的 Margin 里: 容器的外边距不进悬停底色,
+                                       标题的 Margin 会把那块底色一起拉高, 看着像多选了一行。 -->
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ShowSectionHeader}" Value="True">
+                                        <Setter Property="Margin" Value="0,16,0,3" />
+                                    </DataTrigger>
+                                </Style.Triggers>
                             </Style>
                         </ListBox.ItemContainerStyle>
 
@@ -3751,11 +3764,10 @@
                                            数据源里"分组"是**有序且可重复**的(section title 会重复出现),
                                            套 GroupStyle 得先构造 CollectionView + 改数据源类型, 而这里
                                            每条只需要知道自己是不是分组第一集 —— 一个 bool 就够, 少一层结构。 -->
-                                    <TextBlock x:Name="SectionHeader"
-                                               Style="{StaticResource SeasonSectionHeaderStyle}"
-                                               Text="{Binding SectionTitle}"
-                                               Margin="7,12,7,6"
-                                               Visibility="{Binding ShowSectionHeader, Converter={StaticResource BoolToVis}}" />
+                                    <ContentControl x:Name="SectionHeader"
+                                                   Style="{StaticResource SeasonSectionHeaderStyle}"
+                                                   Content="{Binding SectionTitle}"
+                                                   Visibility="{Binding ShowSectionHeader, Converter={StaticResource BoolToVis}}" />
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
