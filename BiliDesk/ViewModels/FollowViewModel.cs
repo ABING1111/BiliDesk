@@ -124,16 +124,32 @@ public class FollowViewModel : ObservableObject
         private set
         {
             if (_selectedUp == value) return;
-            var old = _selectedUp;
             _selectedUp = value;
             // 选中态是左栏列表项的高亮依据: **必须真正赋值**(IsSelected 的 setter 自带通知)。
             // 之前只调 RaiseSelectedChanged() 发通知但不改字段值 —— WPF 收到通知回头一读
             // 还是 false, 触发器永远不亮, 这就是"选中没有粉色"的根因。
-            if (old != null) old.IsSelected = false;
-            if (value != null) value.IsSelected = true;
+            SyncSelectionHighlight();
             OnPropertyChanged(nameof(IsAllSelected));
             OnPropertyChanged(nameof(SelectionTitle));
         }
+    }
+
+    /// <summary>
+    /// 把选中高亮按 mid 刷到**两套列表的每一行**。
+    ///
+    /// ★★★ 左栏的关注列表(Users)与搜索结果(FollowingSearchResults)里的同一个 UP 是
+    ///   各自独立 new 出来的 FollowUser 实例。选中态挂在实例上, 只给 SelectedUp 那一份
+    ///   赋值, 正在显示的另一份不会亮 —— 用户看到"点了 UP, 但左栏没有高亮提示"。
+    ///   而且这个现象只在"点到的 UP 已经被分页加载进 Users"时出现(否则 SelectUpAsync
+    ///   的 target 恰好就是搜索结果那一行), 表现为"有时亮、有时不亮"。
+    /// ★ 只按 mid 刷显示标记, 不改 SelectedUp 的身份: 占位行替换、排序与右栏标题
+    ///   仍然围绕 Users 里的那个实例。
+    /// </summary>
+    private void SyncSelectionHighlight()
+    {
+        var mid = _selectedUp?.Mid ?? 0;
+        foreach (var u in Users) u.IsSelected = mid > 0 && u.Mid == mid;
+        foreach (var u in FollowingSearchResults) u.IsSelected = mid > 0 && u.Mid == mid;
     }
 
     /// <summary>是否选中了「全部动态」(左栏入口的高亮依据)</summary>
@@ -687,6 +703,8 @@ public class FollowViewModel : ObservableObject
                 // 新翻出来的 UP 也要立刻应用未读状态(红点数字), 但**不重排** ——
                 // 位置只在进入动态页/点刷新时刷新(2026-11-06 用户要求)。
                 ApplyNotifyStates();
+                // 选中的 UP 可能正好在这一页里: 新行得带上选中高亮(见 SyncSelectionHighlight)。
+                if (_selectedUp != null) SyncSelectionHighlight();
             });
         }
         catch (Exception ex)
@@ -1434,6 +1452,8 @@ public class FollowViewModel : ObservableObject
             foreach (var u in list)
                 if (u.Mid > 0 && seen.Add(u.Mid)) FollowingSearchResults.Add(u);
             ApplyNotifyStates();
+            // 搜索结果每次都是新实例: 选中某人的状态下再搜一次, 命中他的行也要直接带高亮。
+            SyncSelectionHighlight();
         }
         catch (OperationCanceledException)
         {
