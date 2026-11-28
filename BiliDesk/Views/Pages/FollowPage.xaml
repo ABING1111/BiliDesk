@@ -1,4 +1,4 @@
-<UserControl x:Class="BiliDesk.Views.Pages.FollowPage"
+﻿<UserControl x:Class="BiliDesk.Views.Pages.FollowPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:controls="clr-namespace:BiliDesk.Views.Controls"
@@ -7,45 +7,17 @@
     <UserControl.Resources>
         <!--
             右栏排版切换的两枚小 chip(动态卡 / 卡片墙)。
-            写法与播放页评论区的「热门 / 时间」一致: 常态浅灰底, 选中态由 Tag="on" 触发粉底粉字。
+            ★ 2026-11-28(用户要求"胶囊改成圆角矩形, 动态页也同理"): 不再自己抄一份模板,
+              改成 BasedOn 全局 SortChipStyle —— 圆角由 helpers:ChipShape.Radius 驱动,
+              调用处设 8 就是圆角矩形。原来这里写死 CornerRadius=6 且不认 ChipShape,
+              结果 UP 主页改了、动态页还是老样子(探针 ⑤ 直接抓到)。
             ★ 选中态**只由 code-behind 写 Tag 驱动** —— 两个按钮的亮/灭在一个地方决定,
               分散着改必然出现"两边都亮"或"两边都不亮"(沿用播放页那条经验)。
             ★ 绑定必须写 RelativeSource Self: ControlTemplate 的触发器里不写解析不到,
               改用 TemplatedParent 也会静默失效(2026-10-03 探针实测)。
         -->
-        <Style x:Key="FeedLayoutChipStyle" TargetType="Button">
-            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="Padding" Value="9,3" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" CornerRadius="6"
-                                Background="{DynamicResource ControlFillDefaultBrush}"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Center"
-                                              TextElement.Foreground="{TemplateBinding Foreground}" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background"
-                                        Value="{DynamicResource ControlFillHoverBrush}" />
-                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-                            </Trigger>
-                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="on">
-                                <Setter TargetName="Bd" Property="Background"
-                                        Value="{DynamicResource AccentSoftFillBrush}" />
-                                <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
-                                <Setter Property="FontWeight" Value="SemiBold" />
-                            </DataTrigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <Style x:Key="FeedLayoutChipStyle" TargetType="Button"
+               BasedOn="{StaticResource SortChipStyle}" />
 
         <!-- 关注 UP 行模板(2026-11-06): 普通列表与搜索结果共用。
              ★ 行本身仍是 Border + 现有选中/红点/角标样式, ListBox 只负责虚拟化;
@@ -322,11 +294,17 @@
                     </Grid.RowDefinitions>
 
                     <!-- 搜索已关注的 UP(2026-11-06): 服务端搜索, 不要求先把 2790 人全部加载下来。
-                         ★ 2026-11-20: 换成统一的 SearchBox 胶囊(与历史/收藏同一个控件),
+                         ★ 2026-11-20: 换成统一的 SearchBox(与历史/收藏同一个控件),
                            并且**宽度与下方 UP 行对齐** —— 由 code-behind 量出行底衬宽度后设置
-                           (见 SyncAllDynamicEntry)。胶囊底座、放大镜、占位符、清除按钮都在控件里,
-                           这里不再拼 TextBox + 两层 TextBlock + 清除按钮。 -->
+                           (见 SyncAllDynamicEntry)。底衬、放大镜、占位符、清除按钮都在控件里,
+                           这里不再拼 TextBox + 两层 TextBlock + 清除按钮。
+                         ★ 2026-11-28(用户要求"搜索关注的 UP 的按钮也改成矩形圆角"):
+                           ShapeRadius=8 —— 与右栏页内搜索、排版 chip、UP 主页排序 chip
+                           同一个圆角基准(设置页输入类控件也是 8)。
+                           ★ 它是**常驻**输入框(没有 Collapsible), 所以只改底衬圆角,
+                             宽度仍由 SyncAllDynamicEntry 精确对齐, 不受影响。 -->
                     <controls:SearchBox x:Name="UserSearchBox" Grid.Row="0" Margin="8,2,0,6"
+                                        ShapeRadius="8"
                                         PlaceholderText="搜索已关注的 UP"
                                         Text="{Binding UserSearchText, Mode=TwoWay}" />
 
@@ -468,20 +446,30 @@
                         <!-- 页内搜索(2026-11-25, issue #127): 在**本页已加载的动态**里按关键词筛选
                              (标题 / 正文 / UP 名, 转发的连原动态一起看), 不跳搜索页、不请求服务端。
                              与左栏「搜索已关注的 UP」是两件事: 那个搜人, 这个筛内容。
-                             ★ 与左栏同一个 SearchBox(高 34 / 圆角 17 / 浅灰底), 只是打开 Collapsible:
-                               收起态是一颗 34×34 的浅灰圆, 与左侧输入框同一套底/字色, 不再另起样式。 -->
+                             ★ 与左栏同一个 SearchBox(高 34 / 浅灰底), 只是打开 Collapsible:
+                               收起态是一颗 34×34 的浅灰方块, 与左侧输入框同一套底/字色, 不再另起样式。
+                             ★ 2026-11-28(用户要求"胶囊改成圆角矩形"): ShapeRadius=8 ——
+                               与右侧排版 chip、UP 主页排序 chip 同一个圆角基准。 -->
                         <controls:SearchBox x:Name="FeedSearchBox" Grid.Column="1"
                                             Collapsible="True" Margin="0,0,8,0"
                                             VerticalAlignment="Center"
+                                            ShapeRadius="8"
                                             PlaceholderText="搜索动态里的视频"
                                             Text="{Binding FeedSearchText, Mode=TwoWay}" />
+                        <!-- 排版切换 chip: 与搜索框**同一视觉**(2026-11-28 用户要求)。
+                             ★ 高度 34 / 圆角 8 由 ChipShape.Radius 继承到两枚按钮 ——
+                               与 UP 主页排序 chip 完全同款(同一份 SortChipStyle 模板)。
+                             ★ 不设 Radius 的地方(播放器评论区「热门/时间」)仍是行内小矩形。 -->
                         <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right"
-                                    VerticalAlignment="Center">
+                                    VerticalAlignment="Center"
+                                    helpers:ChipShape.Radius="8">
                             <Button x:Name="BtnLayoutCards" Style="{StaticResource FeedLayoutChipStyle}"
                                     Content="动态卡" Click="OnLayoutCardsClick"
+                                    Height="34" Padding="14,0"
                                     ToolTip="单列综合动态卡: 视频 + 图文 + 文字 + 转发" />
                             <Button x:Name="BtnLayoutWall" Style="{StaticResource FeedLayoutChipStyle}"
                                     Content="卡片墙" Margin="6,0,0,0" Click="OnLayoutWallClick"
+                                    Height="34" Padding="14,0"
                                     ToolTip="多列卡片墙(一屏铺更多, 但没有头像与发布时间)" />
                         </StackPanel>
                     </Grid>

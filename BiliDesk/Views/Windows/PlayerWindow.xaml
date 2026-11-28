@@ -935,55 +935,13 @@
             ★ 2026-10-06 第二次改: 第一版是**纯文字**(只有颜色变化), 用户反馈
               "热门和时间的可读性比较差, 加入美观的矩形底色" ——
               纯文字在"共 N 条评论"那行 12px 灰字旁边太弱, 用户看不出那俩词是可点的。
-              现在改成**带矩形底的小胶囊**:
-                · 未选中: 极淡的中性底(ControlFillDefaultBrush) + 次要文字色 ——
-                  "淡淡的底"本身就在说"这是一个可点的东西", 但又不抢选中项的视线;
-                · 选中: 强调色浅底(AccentSoftFillBrush) + 强调色文字 + SemiBold,
-                  与全应用其它"选中态"共用同一套观感(见记忆里的 AccentSoftFill 基准);
-                · 悬停: 比未选中再深一档(ControlFillHoverBrush)。
-              ★ 圆角用 6(不是胶囊的 100): 用户明确说"矩形底色", 且这里字号只有 12,
-                全圆角会显得像个按钮而不像"行内的一个可点词"。
-              ★ 为什么 Tag 驱动选中态而不是 IsChecked: 这里没有互斥组的需求(只有两个), 用
-                Tag="on" + DataTrigger 与 ContentActionTabStyle 同一套写法, 代码里一行就能切。
-                ★★ 绑定必须写 RelativeSource Self —— 2026-10-03 探针实测过, 在 ControlTemplate
-                   的触发器里写 TemplatedParent 或不写 RelativeSource 都**静默失效**。
+              现在改成**带矩形底的小胶囊**(样式详见 Themes/Styles.xaml 的 SortChipStyle)。
+            ★ 2026-11-28(issue #131): 视觉定义已提到全局 SortChipStyle ——
+              UP 主页的投稿排序用的是同一种 chip。这里只保留一个**别名**,
+              免得玩家页面里几十处 StaticResource 引用全部改一遍。
         -->
-        <Style x:Key="CommentSortLinkStyle" TargetType="Button">
-            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="FontSize" Value="12" />
-            <!-- 左右 9 / 上下 3: 矩形底不能太胖, 否则会把这行文字的行高撑开 -->
-            <Setter Property="Padding" Value="9,3" />
-            <Setter Property="Margin" Value="0" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" CornerRadius="6"
-                                Background="{DynamicResource ControlFillDefaultBrush}"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter VerticalAlignment="Center"
-                                              HorizontalAlignment="Center"
-                                              TextElement.Foreground="{TemplateBinding Foreground}" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background"
-                                        Value="{DynamicResource ControlFillHoverBrush}" />
-                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-                            </Trigger>
-                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="on">
-                                <Setter TargetName="Bd" Property="Background"
-                                        Value="{DynamicResource AccentSoftFillBrush}" />
-                                <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
-                                <Setter Property="FontWeight" Value="SemiBold" />
-                            </DataTrigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <Style x:Key="CommentSortLinkStyle" TargetType="Button"
+               BasedOn="{StaticResource SortChipStyle}" />
 
         <!--
             ============ 播放器的「简介 / 评论」tab(2026-11-21 加底部横条滑动动画) ============
@@ -1689,6 +1647,9 @@
                                            手势本身已经够直觉, 文字只会让浮层更吵(用户明确要求去掉)。
                                          ★ 档位顺序固定 1.5x → 2x → 3x; 切换是**循环**的
                                            (3x 再往上回到 1.5x), 见 FastForwardSpeedPolicy。
+                                         ★ 2026-11-28(issue #131): 高亮的那一档会被记住 ——
+                                           长按起步用的是上次选过的档位(SettingsStore.FastForwardRate),
+                                           不再是每次固定 2x。首次使用仍是 2x。
                                          ★ 2026-11-21 第二次调整(用户: "高度太高 / 未选中的倍速要有
                                            淡入淡出"): 去掉胶囊底与固定宽 52 的外框, 改成三行纯文本 ——
                                            当前档 14px 粗体全亮, 上下两档 10px、透明度 0.35, 并且

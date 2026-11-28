@@ -237,14 +237,14 @@
              ★ 2026-11-28: 下划线改成一条共享的 TabIndicator, 切 Tab 时滑过去
                (见 code-behind 的 MoveTabIndicator)。静止时它与原来各按钮自带的
                2px 下划线完全同款: 左右各内缩 6px、贴齐 Tab 行底部。
-             ★ 2026-11-28: 右侧加「搜索当前 Tab」的常驻搜索框(投稿 = 服务端关键词搜索,
-               图文 = 对已加载动态本地筛选, 合集不参与 ⇒ 整块收起)。
-               它单独占一列, 展开时从右往左长, 不会压住左边的 Tab; 下划线仍在第 0 列,
-               位置算法不受影响。 -->
+             ★★ 2026-11-28(用户要求): 「搜索当前 Tab」的输入框**从这一行移走**了 ——
+               它现在跟着各自 Tab 的内容标题走, 位置在排序 chip 左边(投稿) / 标题右边(图文),
+               默认收成一枚圆形放大镜。所以 Tab 行重新只占一列, 下划线的位置算法不受影响。
+               移走的理由: 搜索与排序都是"对眼前这份列表的操作", 放在一起才顺;
+               留在 Tab 行上会让人误以为它搜的是 Tab 名。 -->
         <Grid Margin="36,6,36,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
             <StackPanel x:Name="TabRow" Grid.Column="0" Orientation="Horizontal"
@@ -257,23 +257,6 @@
                 <Button x:Name="TabCollections" Content="合集和系列" Style="{StaticResource SpaceTabStyle}"
                         Margin="18,0,0,0" Click="OnCollectionsTabClick" />
             </StackPanel>
-
-            <!-- 搜索当前 Tab 的内容(常驻展开, 不收起)。
-                 ★ 2026-11-28 用户要求「常驻展开」: 不再用折叠胶囊, 直接给固定宽度
-                   (与折叠态展开后的 240 一致), 放 Auto 列里 Tab 行由 * 列吸收。
-                 ★ 文字清空不清框; Esc 先清词。 -->
-            <controls:SearchBox x:Name="SpaceSearchBox" Grid.Column="1"
-                                Width="240" VerticalAlignment="Center"
-                                Margin="12,0,0,0"
-                                PlaceholderText="{Binding SearchPlaceholder}"
-                                Text="{Binding SearchText, Mode=TwoWay}"
-                                Visibility="{Binding ShowSearchBox, Converter={StaticResource BoolToVis}}">
-                <!-- 视觉上比 Tab 行中心略高 2px(用户要求): 用 TranslateTransform 而不是
-                     Margin —— 只挪画面, 不参与布局, 不会把 Tab 行/下划线一起顶动。 -->
-                <controls:SearchBox.RenderTransform>
-                    <TranslateTransform Y="-2" />
-                </controls:SearchBox.RenderTransform>
-            </controls:SearchBox>
 
             <!-- 共享下划线: 宽度/位置全由代码按标签实测几何写入。
                  IsHitTestVisible=False —— 它只是指示器, 不能挡住标签的点击。 -->
@@ -315,9 +298,68 @@
             <ScrollViewer x:Name="ListScroll" VerticalScrollBarVisibility="Auto"
                           ScrollChanged="OnListScrollChanged">
                 <StackPanel Margin="36,16,36,24">
-                    <!-- 投稿区标题: 让页码栏的"共 N 页"有对照 -->
-                    <TextBlock Text="{Binding PageSummary}" FontSize="15" FontWeight="SemiBold"
-                               Margin="8,0,0,2" />
+                    <!-- 投稿区标题 + 页内搜索 + 排序入口(2026-11-28, issue #131)
+                         ★ 排序必须走服务端(order=pubdate/click/stow): 投稿是分页的,
+                           本地排序只能排到当前这一页的 30 条, 翻页顺序就崩了。
+                           风控降级时(接口没有 order 参数)才对当前页本地兜底, 并显示下面的提示。
+                         ★ 三枚 chip 的选中态由 code-behind 按 VM.SortOrder 写 Tag="on"/"off"
+                           (与播放页评论排序、关注页排版切换同一套约定)。
+                         ★ 2026-11-28(用户要求): 搜索框从 Tab 行移到**排序 chip 左边**,
+                           默认收成一枚圆形放大镜, 点击展开成 240 的胶囊 ——
+                           与动态页右栏「搜索动态里的视频」同一套控件与收纳规则(SearchBox.Collapsible)。
+                           展开只改自己的 Width, 由左侧 * 列(标题)让位: 右缘被三枚 chip 锚定,
+                           所以视觉上是**向左生长**, 排序 chip 不会被推走。
+                         ★ 左边一列是 * 而不是 Auto: 标题会随"共 N 个视频 / 搜索命中"变长,
+                           用 Auto 会把右侧的搜索框与 chip 推着左右跳。 -->
+                    <Grid Margin="8,0,0,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{Binding PageSummary}"
+                                   FontSize="15" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                        <!-- 页内搜索: 投稿走服务端 keyword(支持翻页, page.count 是命中数)。
+                             ★ 2026-11-28(用户要求"胶囊改成圆角矩形"): ShapeRadius=8 ——
+                               与右侧排序 chip 及设置页输入类控件同一个圆角基准。
+                               收起态因此是"34×34 的圆角方块", 不再是正圆。 -->
+                        <controls:SearchBox x:Name="SpaceSearchBox" Grid.Column="1"
+                                            Collapsible="True" Margin="0,0,10,0"
+                                            VerticalAlignment="Center"
+                                            ShapeRadius="8"
+                                            PlaceholderText="{Binding SearchPlaceholder}"
+                                            Text="{Binding SearchText, Mode=TwoWay}" />
+                        <!-- 排序 chip 行: 与左边的搜索框**同一视觉**(2026-11-28 用户要求)。
+                             ★ 高度 34 = 搜索框高度(SearchBox 的 Height), 圆角 8 = 圆角矩形
+                               (与搜索框、设置页下拉框同一基准), 左右内边距加到 14 让文字不显局促。
+                             ★ ChipShape.Radius 是 Inherits 的附加属性: 设在 StackPanel 上,
+                               里面三枚 chip 自动继承到, 不必逐个设(见 Helpers/ChipShape.cs)。
+                               不设时默认 6 —— 播放器评论区 / 动态页那两处仍是原来的行内小词观感。 -->
+                        <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                    VerticalAlignment="Center"
+                                    helpers:ChipShape.Radius="8">
+                            <Button x:Name="BtnSortLatest" Content="最新发布"
+                                    Style="{StaticResource SortChipStyle}"
+                                    Height="34" Padding="14,0"
+                                    Click="OnSortLatestClick" ToolTip="按发布时间排序" />
+                            <Button x:Name="BtnSortPlayed" Content="最多播放"
+                                    Style="{StaticResource SortChipStyle}" Margin="8,0,0,0"
+                                    Height="34" Padding="14,0"
+                                    Click="OnSortPlayedClick" ToolTip="按播放量排序" />
+                            <Button x:Name="BtnSortFavorited" Content="最多收藏"
+                                    Style="{StaticResource SortChipStyle}" Margin="8,0,0,0"
+                                    Height="34" Padding="14,0"
+                                    Click="OnSortFavoritedClick" ToolTip="按收藏数排序" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- 降级排序提示: 只在风控降级时出现(详见 SpaceVideoSort 的说明) -->
+                    <TextBlock x:Name="SortFallbackNoticeText"
+                               Text="{Binding SortFallbackNotice}" FontSize="11.5"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="8,2,0,6"
+                               Visibility="{Binding ShowSortFallbackNotice, Converter={StaticResource BoolToVis}}" />
 
                     <!-- 视频网格 -->
                     <ItemsControl ItemsSource="{Binding Videos}">
@@ -350,8 +392,26 @@
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <TextBlock Grid.Row="0" Text="{Binding ImageSummary}" FontSize="15" FontWeight="SemiBold"
-                       Margin="36,16,36,8" />
+            <!-- 图文 Tab 的标题行 + 页内搜索(2026-11-28)
+                 ★ 搜索框原本挂在 Tab 行上, 现在跟着投稿那边的改动一起挪到内容区,
+                   否则切到图文 Tab 就找不到入口了。
+                 ★ 图文的搜索是**本地筛选**(动态接口不支持关键词): 只筛已加载的图文,
+                   筛空时页面会继续往后加载(见 VM 的 ShowImageSearchEmpty / 「继续查找」)。
+                 ★ 同样用 Collapsible: 默认一枚圆, 点击向左展开, 标题由 * 列让位。 -->
+            <Grid Grid.Row="0" Margin="36,16,36,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding ImageSummary}" FontSize="15" FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                <controls:SearchBox x:Name="ImageSearchBox" Grid.Column="1"
+                                    Collapsible="True" Margin="12,0,0,0"
+                                    VerticalAlignment="Center"
+                                    ShapeRadius="8"
+                                    PlaceholderText="{Binding SearchPlaceholder}"
+                                    Text="{Binding SearchText, Mode=TwoWay}" />
+            </Grid>
 
             <Grid Grid.Row="1">
                 <ListBox x:Name="ImageList" Style="{StaticResource SpaceDynamicListStyle}"

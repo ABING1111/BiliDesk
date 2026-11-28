@@ -21,13 +21,17 @@ namespace BiliDesk.Views.Controls;
 ///   删除、粘贴、代码赋值都会走的确定性事件, 不依赖转换器/DataContext。
 ///
 /// ★ Collapsible(2026-11-28 用户要求"动态页搜索默认收缩、点击展开"):
-///   默认 false 保持原来的常驻输入框; 打开后收起态 = 与高度等宽的圆(放大镜按钮),
-///   点击后宽度动画展开成 240 的胶囊。收纳规则与 TabSearchBox 一致:
+///   默认 false 保持原来的常驻输入框; 打开后收起态 = 与高度等宽的方块(放大镜按钮),
+///   点击后宽度动画展开成 240 的输入框。收纳规则与 TabSearchBox 一致:
 ///     · 只有内容为空时才自动收回(失焦 / Esc / 点页面其它地方);
 ///     · 有内容时按 Esc 只清空, 再按一次才收回;
 ///     · 程序把 Text 设成非空时自动展开, 避免"看不到输入框、列表却还在过滤"。
 ///   收缩/展开只改自己的 Width: 宿主把它放在 Grid 的 Auto 列里时, 宽度变化会由
 ///   左侧的 * 列吸收 —— 动态页因此表现为"向右锚定、向左生长", 右侧的排版 chip 不动。
+///
+/// ★ ShapeRadius(2026-11-28 用户要求"胶囊改成圆角矩形"):
+///   收起态是"高×高"的方块, 圆角由它决定 —— 17(默认)= 正圆, 8 = 圆角方块。
+///   8 与设置页输入类控件同一个基准; 动态页右栏与 UP 主页用它, 历史/收藏保持圆。
 /// </summary>
 public partial class SearchBox : UserControl
 {
@@ -42,6 +46,25 @@ public partial class SearchBox : UserControl
 
     /// <summary>展开期间挂上去的窗口级"点外面就收起"监听(收起/卸载时必须退掉)。</summary>
     private Window? _hookedWindow;
+
+    /// <summary>
+    /// 底衬/悬停底的圆角(2026-11-28, 用户要求"胶囊改成圆角矩形")。
+    ///
+    /// ★ 默认 17 = 高 34 的一半 ⇒ 胶囊。历史 / 收藏 / 动态左栏那些老调用方不设它,
+    ///   观感与改动前完全一致。
+    /// ★ 设 8 得到圆角矩形 —— 8 是本项目输入类控件的既有基准(见 Themes/Styles.xaml 的
+    ///   SettingsComboStyle / 下拉框底衬)。UP 主页与动态页右栏的页内搜索用它。
+    /// ★ 收起态(仅 Collapsible)是"34×34 + 本圆角": 半径 17 是正圆, 半径 8 是圆角方块。
+    /// </summary>
+    public static readonly DependencyProperty ShapeRadiusProperty = DependencyProperty.Register(
+        nameof(ShapeRadius), typeof(CornerRadius), typeof(SearchBox),
+        new FrameworkPropertyMetadata(new CornerRadius(17)));
+
+    public CornerRadius ShapeRadius
+    {
+        get => (CornerRadius)GetValue(ShapeRadiusProperty);
+        set => SetValue(ShapeRadiusProperty, value);
+    }
 
     /// <summary>搜索文本(双向)。</summary>
     public static readonly DependencyProperty TextProperty = DependencyProperty.Register(
@@ -79,6 +102,20 @@ public partial class SearchBox : UserControl
 
     /// <summary>当前是否展开(只读, 给探针/调试看)。</summary>
     public bool IsExpanded => _expanded;
+
+    /// <summary>
+    /// 内容为空时收起(2026-11-28)。
+    ///
+    /// ★ 为什么需要这个公开入口: UP 主页的「投稿」与「图文」两个 Tab 各有一个搜索框,
+    ///   但**共用同一个 SearchText**。在投稿框里输入会把图文档一起带成"有内容"从而自动展开,
+    ///   清空后它却不会自己收回去(只有失焦/Esc/点外面才收) —— 用户切到图文 Tab 会看到一个
+    ///   展开的空框。切 Tab 时对两个框都调一次这个方法, 空的收起、有词的保持展开。
+    /// </summary>
+    public void CollapseIfEmpty()
+    {
+        if (!Collapsible || !_expanded) return;
+        if (Box.Text.Trim().Length == 0) Collapse();
+    }
 
     public SearchBox()
     {

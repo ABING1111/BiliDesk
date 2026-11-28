@@ -643,6 +643,10 @@ public partial class PlayerWindow : FluentWindow
         if (Math.Abs(next - _fastForwardTarget) > 0.001f)
         {
             _fastForwardTarget = next;
+            // ★ 2026-11-28(issue #131): 切档**当场**写回配置(内存 + 异步落盘)。
+            //   不放在 StopFastForward 收尾里写: 关窗/换片/失焦这些路径可能根本不走完整收尾,
+            //   用户"切到 3x 然后 Alt+Tab"就会白切一次。Save 是异步合并写, 滚轮连切三档也只落一次。
+            Svc.Settings.SetFastForwardRate(next);
             // 与 StartFastForward 同序: 先让弹幕时钟按新倍速落定, 再真正 SetRate
             SyncDanmakuClockRate(next);
             try { _mp.SetRate(next); } catch { /* 播放器可能刚好失效 */ }

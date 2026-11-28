@@ -192,9 +192,18 @@ public partial class ApiClient
     ///   `page.count` 是**命中条数**而不是总投稿数, 所以调用方可以沿用同一套页码逻辑。
     ///   降级接口 recArchivesByKeywords 的 `keywords` 本来就是关键词, 顺带把它传进去,
     ///   风控时搜索也还能用(只是 total 依旧拿不到, 页码退回启发式)。
+    ///
+    /// ★★ 2026-11-28(issue #131) 新增 <paramref name="order"/> 与第 5 个返回值
+    ///   <c>usedFallback</c>:
+    ///   · `order` 直接透传给接口(实测 pubdate / click / stow 都有效, keyword+order 可共存)。
+    ///     ★ 接口对不认识的 order 值**不报错**, 静默按 pubdate 返回 —— 映射错误只能靠单测拦。
+    ///   · `usedFallback` 告诉调用方"这一页是降级接口给的, 排序没生效": 降级接口
+    ///     (`recArchivesByKeywords`)**没有 order 参数**, 顺序完全由它自己按推荐给。
+    ///     调用方据此对当前页做本地兜底排序, 并在界面上说明"仅当前页"。
     /// </summary>
-    public async Task<(bool ok, string? err, List<VideoItem>? items, int total)>
-        GetSpaceVideosAsync(long mid, int pn = 1, int ps = 30, string? keyword = null)
+    public async Task<(bool ok, string? err, List<VideoItem>? items, int total, bool usedFallback)>
+        GetSpaceVideosAsync(long mid, int pn = 1, int ps = 30, string? keyword = null,
+                            Helpers.SpaceVideoOrder order = Helpers.SpaceVideoOrder.Latest)
     {
         keyword ??= "";
         try
@@ -207,7 +216,7 @@ public partial class ApiClient
                 ["ps"] = Math.Min(ps, 50).ToString(),
                 // 空闲时也照发空串: 与 B 站网页的请求保持一致, 少一份"有没有这个参数"的分支
                 ["keyword"] = keyword,
-                ["order"] = "pubdate",
+                ["order"] = Helpers.SpaceVideoSort.ToApiOrder(order),
                 ["platform"] = "web",
                 ["web_location"] = "1550101"
             };
@@ -218,7 +227,7 @@ public partial class ApiClient
             {
                 // 风控降级: 公开的合集推荐接口, 不需要签名, 返回完整 archive 对象
                 var fb = await GetSpaceVideosFallbackAsync(mid, pn, ps, keyword);
-                return (fb.ok, fb.err, fb.items, 0);
+                return (fb.ok, fb.err, fb.items, 0, true);
             }
 
             var items = new List<VideoItem>();
@@ -247,18 +256,18 @@ public partial class ApiClient
                     var fb = await GetSpaceVideosFallbackAsync(mid, pn, ps, keyword);
                     // 降级也一条没拿到时不要报 total(否则页码栏会显示"共 N 条"却空空如也)
                     var fbTotal = fb.items is { Count: > 0 } ? knownTotal : 0;
-                    return (fb.ok, fb.err, fb.items, fbTotal);
+                    return (fb.ok, fb.err, fb.items, fbTotal, true);
                 }
-                return (true, null, items, knownTotal);
+                return (true, null, items, knownTotal, false);
             }
 
             // page.count = 该 UP 的总投稿数 / 搜索命中数(权威的"到底"判据)
             var total = 0;
             if (data.Value.TryGetProperty("page", out var page) && page.ValueKind == JsonValueKind.Object)
                 total = GetInt(page, "count");
-            return (true, null, items, total);
+            return (true, null, items, total, false);
         }
-        catch (Exception ex) { return (false, ex.Message, null, 0); }
+        catch (Exception ex) { return (false, ex.Message, null, 0, false); }
     }
 
     /// <summary>空间视频列表降级接口(series/recArchivesByKeywords, 公开无签名)。

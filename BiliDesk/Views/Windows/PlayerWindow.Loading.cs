@@ -1222,7 +1222,10 @@ public partial class PlayerWindow : FluentWindow
         // ★ _rateBeforeFastForward 也登记在这里 —— 它决定"松手恢复到几倍速",
         //   不跟着换片复位的话, 新片子的第一次长按会恢复到上一片记下的速率。
         nameof(_isFastForwarding), nameof(_rateBeforeFastForward),
-        // 长按快进的目标倍速(2026-11-03): 同属"这一次长按"的瞬时态, 换片必须复位。
+        // 长按快进的目标倍速(2026-11-03): 属于"这一次长按"的瞬时态。
+        // ★ 2026-11-28(issue #131): 它现在**已经不是**唯一的档位来源 —— 用户选的档位落盘在
+        //   SettingsStore.FastForwardRate, 每次长按开始时由 StartFastForward 现读。
+        //   所以这里清不清都不会丢用户的记忆; 保留登记是因为它仍然只描述"本次手势"。
         nameof(_fastForwardTarget),
         // 键盘长按"快进"键的倍速标记(2026-11-12; 2026-11-28 快捷键可配置后改名):
         // 属于"这一次按键", 换片必须复位。

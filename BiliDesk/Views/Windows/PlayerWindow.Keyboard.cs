@@ -222,13 +222,6 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>长按"快进"键的判定阈值(ms): 超过就进入倍速播放, 而不是连续快进。</summary>
     private const int ForwardKeyLongPressMs = 250;
 
-    /// <summary>
-    /// 长按快进键进入倍速播放时的默认倍速(2026-11-21 由 3x 改为 2x, 用户指定)。
-    /// ★ 长按期间 ↑/↓ 在 1.5x / 2x / 3x 之间切换(见 FastForwardSpeedPolicy),
-    ///   默认值同时也是 OSD 里高亮的那一档。
-    /// </summary>
-    private const float ForwardKeyFastRate = FastForwardSpeedPolicy.Default;
-
     private DispatcherTimer? _forwardKeyTimer;
 
     /// <summary>当前是否处于"键盘长按快进"触发的加速态 —— KeyUp 只停自己这一条, 不动鼠标长按的快进。</summary>
@@ -247,8 +240,10 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 快进键按下(非自动重复):
     ///   短按(不到 <see cref="ForwardKeyLongPressMs"/> 毫秒) = 松开时跳 5 秒(Shift 30 秒), 保持原来的即时手感;
-    ///   继续按住超过阈值 = 进入倍速播放(默认 2x), 松开恢复按下前的倍速。
+    ///   继续按住超过阈值 = 进入倍速播放, 松开恢复按下前的倍速。
     ///   长按期间 ↑/↓ 在 1.5x / 2x / 3x 之间切换(<see cref="TryStepFastForwardSpeed"/>)。
+    /// ★ 2026-11-28(issue #131): 起步档不再是写死的 2x, 而是上次长按记住的档位
+    ///   (见 StartFastForward 与 SettingsStore.FastForwardRate)。鼠标长按与键盘长按共用同一个记忆值。
     /// </summary>
     private void OnForwardKeyPressed()
     {
@@ -271,7 +266,8 @@ public partial class PlayerWindow : FluentWindow
         if (_isFastForwarding) return;   // 鼠标长按快进中, 不叠加
 
         _forwardKeyFast = true;
-        StartFastForward(ForwardKeyFastRate);
+        // ★ 不传 rate: 用记住的档位(见 StartFastForward)。键盘长按与鼠标长按必须是同一个入口。
+        StartFastForward();
         ShowSpeedHint("倍速播放中", hold: true);
     }
 

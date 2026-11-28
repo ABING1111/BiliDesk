@@ -355,6 +355,16 @@ public class SettingsStore
     public int PlayerVolume { get; set; } = 80;
 
     /// <summary>
+    /// 上次长按倍速(鼠标长按视频区 / 长按快进键)用到的档位(2026-11-28, issue #131)。
+    ///
+    /// ★ 与 <see cref="Models.AppSettings.FastForwardRate"/> 是读写契约, 两处必须一致。
+    /// ★ 只可能是 1.5 / 2 / 3 三档之一: 写入走 <see cref="SetFastForwardRate"/>
+    ///   (先 Normalize 再存), 读取由 ApplySanitized 过 FastForwardSpeedPolicy.Normalize。
+    ///   手改配置写成 2.5 也不会流进播放器, 否则 OSD 的三个档位胶囊会一个都不亮。
+    /// </summary>
+    public float FastForwardRate { get; set; } = Helpers.FastForwardSpeedPolicy.Default;
+
+    /// <summary>
     /// 优先高音质音轨(默认开)。开启后取流请求带 fnval=4048,
     /// 有 Hi-Res 无损 / 杜比音轨时优先选它们; 普通视频仍回落到 192K AAC。
     /// 与 <see cref="Models.AppSettings.PreferHighQualityAudio"/> 是读写契约。
@@ -621,6 +631,23 @@ public class SettingsStore
         var v = Math.Clamp(volume, 0, 100);
         if (PlayerVolume == v) return;
         PlayerVolume = v;
+        Save();
+    }
+
+    /// <summary>
+    /// 记住长按倍速的档位并落盘(2026-11-28, issue #131)。
+    ///
+    /// ★ 先过 <see cref="Helpers.FastForwardSpeedPolicy.Normalize"/>: 调用方只应该传三档之一,
+    ///   但这里再收一次, 保证落盘的值**永远**是 OSD 能高亮的档位(配置被手改也不会出现
+    ///   "三档全暗"或"标着 1.0x 却在 2x 播")。
+    /// ★ 长按期间每切一次档就写一次: 写在长按开始/结束那个点都会漏 ——
+    ///   结束点可能因为关窗/换片/失焦而走不到(Save 是异步合并写, 频繁调用也只落最后一次)。
+    /// </summary>
+    public void SetFastForwardRate(float rate)
+    {
+        var r = Helpers.FastForwardSpeedPolicy.Normalize(rate);
+        if (Math.Abs(FastForwardRate - r) < 0.001f) return;
+        FastForwardRate = r;
         Save();
     }
 
@@ -966,6 +993,11 @@ public class SettingsStore
         // 音量继承: 老配置没这个字段 ⇒ 保持默认 80。越界值夹回 0~100。
         PlayerVolume = Math.Clamp(s.PlayerVolume, 0, 100);
 
+        // 长按倍速的记忆档位(2026-11-28, issue #131): 老配置没这个字段 ⇒ AppSettings 的
+        // 初始化值 2.0(与改动前"固定 2x 起步"一致)。非法值一律回落默认 —— 见
+        // FastForwardSpeedPolicy.Normalize 的说明(否则 OSD 三档一个都不高亮)。
+        FastForwardRate = Helpers.FastForwardSpeedPolicy.Normalize(s.FastForwardRate);
+
         // 高音质音轨 / 自动续播: 老配置缺字段 ⇒ AppSettings 的初始化值 true(与设计默认一致)。
         PreferHighQualityAudio = s.PreferHighQualityAudio;
         AutoResume = s.AutoResume;
@@ -1227,6 +1259,7 @@ public class SettingsStore
         DisclaimerAccepted = DisclaimerAccepted,
         DisclaimerVersion = AcceptedDisclaimerVersion,
         PlayerVolume = PlayerVolume,
+        FastForwardRate = FastForwardRate,
         PreferHighQualityAudio = PreferHighQualityAudio,
         PreferredAudioTier = PreferredAudioTier,
         AudioResamplerMode = AudioResamplerMode,

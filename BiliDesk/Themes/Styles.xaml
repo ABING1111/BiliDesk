@@ -1151,6 +1151,60 @@
         </Setter>
     </Style>
 
+    <!-- ============ 行内排序 chip(播放器评论区 / UP 主页投稿) ============
+         2026-11-28 从 PlayerWindow.xaml 提到全局: UP 主页的投稿排序要用同一套观感,
+         两边各抄一份必然漂移(改了一处另一处忘)。
+         ★ 选中态由调用方写 Tag="on"/"off" 驱动 —— 见下面 DataTrigger,
+           别改成 IsChecked: 这些 chip 不是互斥 RadioButton, 用 Tag 一行就能切。
+         ★★ DataTrigger 的绑定必须写 RelativeSource Self —— 2026-10-03 探针实测过,
+           在 ControlTemplate 触发器里写 TemplatedParent 或不写 RelativeSource 都静默失效。
+         ★ 三个视觉档位:
+             · 未选中: 极淡中性底(ControlFillDefaultBrush) + 次要文字色,
+               "淡淡的底"暗示可点, 又不抢选中项;
+             · 选中: 强调色浅底(AccentSoftFillBrush) + 强调色文字 + SemiBold;
+             · 悬停: 比未选中再深一档(ControlFillHoverBrush)。
+           圆角默认 6(行内小词): 字号只有 12, 全圆角会显得像个按钮而不是行内可点词。
+         ★★ 2026-11-28: 圆角改由附加属性 helpers:ChipShape.Radius 驱动, 默认 6。
+           需要"胶囊"观感的地方(UP 主页投稿排序, 要与旁边 34×34 的搜索圆并排)
+           在容器上设 Radius=17 即可 —— 同一份模板, 不必复制。见 Helpers/ChipShape.cs。 -->
+    <Style x:Key="SortChipStyle" TargetType="Button">
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="FontSize" Value="12" />
+        <!-- 左右 9 / 上下 3: 矩形底不能太胖, 否则会把这行文字的行高撑开 -->
+        <Setter Property="Padding" Value="9,3" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd"
+                            CornerRadius="{Binding (helpers:ChipShape.Radius), RelativeSource={RelativeSource TemplatedParent}}"
+                            Background="{DynamicResource ControlFillDefaultBrush}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter VerticalAlignment="Center"
+                                          HorizontalAlignment="Center"
+                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background"
+                                    Value="{DynamicResource ControlFillHoverBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                        </Trigger>
+                        <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="on">
+                            <Setter TargetName="Bd" Property="Background"
+                                    Value="{DynamicResource AccentSoftFillBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource AccentTextStrongBrush}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                        </DataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- 播放器底部工具栏按钮 -->
     <Style x:Key="CompactButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="{DynamicResource ControlFillDefaultBrush}" />

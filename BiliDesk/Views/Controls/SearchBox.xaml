@@ -4,11 +4,10 @@
              Height="34" Focusable="False"
              Background="Transparent">
     <!--
-        ============ 统一的搜索小胶囊(2026-11-20) ============
+        ============ 统一的搜索框(2026-11-20; 2026-11-28 起形状可配) ============
 
-        用在: 历史记录 / 收藏夹 / 动态左栏「搜索已关注的 UP」/ 动态右栏「搜索动态里的视频」。
-        要求是"与下方列表等宽"(见 FollowPage.SyncAllDynamicEntry) —— 控件本身只负责高度,
-        宽度由宿主给, 所以这里不吃 Stretch, 也不写死宽度。
+        用在: 历史记录 / 收藏夹 / 动态左栏「搜索已关注的 UP」/ 动态右栏「搜索动态里的视频」
+              / UP 主页「搜索 TA 的视频·图文」。
 
         ★ 为什么是自绘底 + 透明 TextBox, 而不是套 FluentTextBoxStyle:
           搜索框要放放大镜、占位符、清除按钮三层覆盖, 而 TextBox 的模板自带 Padding / 内容宿主;
@@ -17,14 +16,20 @@
           与首页 / 动态页那两处踩过坑的做法一致(绑定时会静默失效, 尤其是 IME 组字期间)。
         ★ 悬停/聚焦的底色、描边在 code-behind 里用 SetResourceReference 切换,
           这样切换深浅色主题时仍然跟着 DynamicResource 走(不会把颜色钉死)。
+
+        ★★ 2026-11-28(用户要求"胶囊改成圆角矩形"): 圆角改由 ShapeRadius 驱动。
+           默认 17 = 高 34 的一半 = 胶囊(历史/收藏页保持原样);
+           设 8 = 与设置页输入类控件(SettingsComboStyle)同一个圆角基准, 得到圆角矩形。
+           收起态(仅 Collapsible)是"34×34 的圆", 半径一改就变成"34×34 的圆角方块"。
     -->
     <Grid x:Name="Host">
-        <Border x:Name="Bd" CornerRadius="17"
+        <Border x:Name="Bd"
+                CornerRadius="{Binding ShapeRadius, RelativeSource={RelativeSource AncestorType=UserControl}}"
                 Background="{DynamicResource ControlFillDefaultBrush}"
                 BorderBrush="Transparent" BorderThickness="1" />
 
         <!-- 放大镜: 纯装饰, 不参与命中测试。
-             收起态水平居中(圆里), 展开时由 code-behind 切到左端(输入框图标位)。 -->
+             收起态水平居中(方块里), 展开时由 code-behind 切到左端(输入框图标位)。 -->
         <TextBlock x:Name="SearchGlyph" Text="&#xE721;"
                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                    FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Left"
@@ -62,8 +67,8 @@
                     Visibility="Collapsed" />
         </Grid>
 
-        <!-- 收起态的点击区(仅 Collapsible=true 时启用): 透明按钮盖住整个圆,
-             展开后让位给输入框。悬停底用**圆形**(CornerRadius=17), 与输入框同高。 -->
+        <!-- 收起态的点击区(仅 Collapsible=true 时启用): 透明按钮盖住整个收起态方块,
+             展开后让位给输入框。悬停底的圆角跟着 ShapeRadius 走(见文件头说明)。 -->
         <Button x:Name="OpenButton" Padding="0"
                 HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                 Cursor="Hand" FocusVisualStyle="{x:Null}"
@@ -72,7 +77,8 @@
                 Visibility="Collapsed">
             <Button.Template>
                 <ControlTemplate TargetType="Button">
-                    <Border x:Name="Bd" CornerRadius="17" Background="Transparent" />
+                    <Border x:Name="Bd" Background="Transparent"
+                            CornerRadius="{Binding ShapeRadius, RelativeSource={RelativeSource AncestorType=UserControl}}" />
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Bd" Property="Background"

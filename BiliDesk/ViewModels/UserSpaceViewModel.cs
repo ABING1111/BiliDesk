@@ -172,6 +172,64 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         }
     }
 
+    // ---------------- 排序(2026-11-28, issue #131) ----------------
+    // 用户要求「UP 主主页能按播放量排序」。实现在于把 order 参数透传给
+    // /x/space/wbi/arc/search(实测 click/stow 都有效), 见 ApiClient.Space.cs 的说明。
+    //
+    // ★ 为什么必须走服务端而不是本地排: 投稿是**分页**的(一次 30 条), 本地排序只能排到
+    //   当前页, 翻到第 2 页顺序就崩了 —— 卡片墙也是零虚拟化的, 没法"全量拉下来再排"。
+    // ★ ★ 降级路径是个例外: /x/series/recArchivesByKeywords 没有 order 参数, 只能对
+    //   当前页做本地兜底排序(见 Helpers/SpaceVideoSort.LocalSort), 并在界面上说明
+    //   "仅当前页"。降级时"最多收藏"会退化成按播放量排 —— 那个接口不下发收藏数。
+
+    private Helpers.SpaceVideoOrder _sortOrder = Helpers.SpaceVideoOrder.Latest;
+
+    /// <summary>当前排序方式。切换后回到第 1 页重查(服务端排序必须重拉)。</summary>
+    public Helpers.SpaceVideoOrder SortOrder
+    {
+        get => _sortOrder;
+        private set
+        {
+            if (_sortOrder == value) return;
+            _sortOrder = value;
+            OnPropertyChanged(nameof(SortOrder));
+        }
+    }
+
+    /// <summary>
+    /// 这一页是不是**降级排序**(服务端没按 order 返回, 只对当前页本地排了)。
+    /// 空串 = 不提示; 非空 = 界面上显示这行小字。
+    /// </summary>
+    private string _sortFallbackNotice = "";
+
+    public string SortFallbackNotice
+    {
+        get => _sortFallbackNotice;
+        private set
+        {
+            if (!SetProperty(ref _sortFallbackNotice, value)) return;
+            OnPropertyChanged(nameof(ShowSortFallbackNotice));
+        }
+    }
+
+    public bool ShowSortFallbackNotice => _sortFallbackNotice.Length > 0;
+
+    /// <summary>
+    /// 切换投稿排序(2026-11-28, issue #131)。
+    /// ★ 必须回第 1 页重查: 服务端排序是"整库"语义, 停在第 3 页只换 order 拿到的
+    ///   是"新顺序的第 3 页", 用户会觉得"点了没反应"(眼前还是同一批)。
+    /// ★ 排序值本身**不持久化**: 它是"这次看这个 UP 时想怎么看"的临时选择,
+    ///   不像倍速档位那样是跨视频的长期偏好; 重新进页面回到默认的「最新发布」。
+    /// </summary>
+    public async Task SetSortAsync(Helpers.SpaceVideoOrder order)
+    {
+        if (_sortOrder == order) return;
+        SortOrder = order;
+        CurrentPage = 1;
+        await LoadPageAsync(1);
+        ScrollToTopRequested?.Invoke();
+    }
+
     // ---------------- Tab 切换 ----------------
     public SpaceTab CurrentTab => _tab;
 
@@ -179,16 +237,16 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
     public bool IsImagesTab => _tab == SpaceTab.Images;
     public bool IsCollectionsTab => _tab == SpaceTab.Collections;
 
-    /// <summary>搜索框占位文案(跟着当前 Tab 走)。</summary>
+    /// <summary>
+    /// 搜索框占位文案(跟着当前 Tab 走)。
+    /// ★ 2026-11-28: 搜索框从 Tab 行移到各 Tab 的内容标题旁, 投稿与图文各有一个实例,
+    ///   但**共用同一个 SearchText**, 所以文案仍按当前 Tab 切换。
+    /// </summary>
     public string SearchPlaceholder => _tab switch
     {
         SpaceTab.Images => "搜索 TA 的图文",
-        SpaceTab.Collections => "",
         _ => "搜索 TA 的视频"
     };
-
-    /// <summary>合集和系列没有搜索(也不该给用户一个搜不动的框), 搜索框整块收起。</summary>
-    public bool ShowSearchBox => _tab != SpaceTab.Collections;
 
     /// <summary>切 Tab: 三个派生布尔量一起通知, 界面不会出现"两个 Tab 同时亮"的中间态。</summary>
     private void SetTab(SpaceTab tab)
@@ -200,7 +258,6 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         OnPropertyChanged(nameof(IsImagesTab));
         OnPropertyChanged(nameof(IsCollectionsTab));
         OnPropertyChanged(nameof(SearchPlaceholder));
-        OnPropertyChanged(nameof(ShowSearchBox));
     }
 
     public bool ImagesLoading
@@ -865,6 +922,7 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
 
         var gen = ++_loadGen;
         var keyword = _appliedKeyword;
+        var order = _sortOrder;
         _loadingPage = true;
         OnPropertyChanged(nameof(CanGoPrev));
         OnPropertyChanged(nameof(CanGoNext));
@@ -872,7 +930,8 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
         OnPropertyChanged(nameof(CanChangePage));
         try
         {
-            var (ok, err, items, total) = await Svc.Api.GetSpaceVideosAsync(_mid, page, PageSize, keyword);
+            var (ok, err, items, total, usedFallback) =
+                await Svc.Api.GetSpaceVideosAsync(_mid, page, PageSize, keyword, order);
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 if (gen != _loadGen) return;
@@ -881,6 +940,22 @@ public class UserSpaceViewModel : ObservableObject, IPagedViewModel
                     Error = err ?? "加载失败";
                     return;
                 }
+
+                // ★ 2026-11-28(issue #131): 降级接口没有 order 参数, 服务端顺序不可信 ——
+                //   对**当前页**本地兜底排序, 并如实告诉用户"只排了这一页"。
+                //   主路径(usedFallback=false)绝不本地排: 那会把服务端的整库顺序打乱成页内顺序。
+                // ★ 默认的「最新发布」不弹提示: 用户没主动选排序, 却冒出一句"接口受限"
+                //   只会让人以为哪里坏了。降级接口自己的顺序本来也接近发布时间。
+                if (usedFallback)
+                {
+                    Helpers.SpaceVideoSort.LocalSort(items, order);
+                    SortFallbackNotice = order == Helpers.SpaceVideoOrder.Latest
+                        ? ""
+                        : Helpers.SpaceVideoSort.IsApproximateInFallback(order)
+                            ? "接口受限: 仅对当前页排序(收藏数不可用, 暂按播放量排列)"
+                            : "接口受限: 仅对当前页排序";
+                }
+                else SortFallbackNotice = "";
 
                 Videos.Clear();
                 foreach (var it in items) Videos.Add(it);

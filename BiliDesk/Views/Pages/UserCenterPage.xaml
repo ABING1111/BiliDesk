@@ -160,8 +160,11 @@
                 </Grid.RowDefinitions>
 
                 <!-- 搜索已关注的 UP(issue #110): 只在自己的关注列表显示。
-                     服务端搜索, 不必先把几千人全部加载下来; 搜索时用结果列表替换普通列表。 -->
+                     服务端搜索, 不必先把几千人全部加载下来; 搜索时用结果列表替换普通列表。
+                     ★ 2026-11-28(用户要求"搜索关注的 UP 的按钮也改成矩形圆角"):
+                       ShapeRadius=8 —— 与动态页两处搜索框、排版 chip 同一个圆角基准。 -->
                 <controls:SearchBox Grid.Row="0" Margin="8,0,12,8"
+                                    ShapeRadius="8"
                                     PlaceholderText="搜索已关注的 UP"
                                     Text="{Binding FollowingsSearchText, Mode=TwoWay}"
                                     Visibility="{Binding IsSelf, Converter={StaticResource BoolToVis}}" />

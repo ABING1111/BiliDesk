@@ -63,17 +63,57 @@ public partial class UserSpacePage : UserControl
         {
             _vm.ScrollToTopRequested -= OnScrollToTopRequested;
             _vm.ImageSearchChanged -= OnImageSearchChanged;
+            _vm.PropertyChanged -= OnVmPropertyChanged;
         }
         _vm = vm;
         if (vm == null) return;
         vm.ScrollToTopRequested += OnScrollToTopRequested;
         vm.ImageSearchChanged += OnImageSearchChanged;
+        vm.PropertyChanged += OnVmPropertyChanged;
         FilterService.Instance.Attach(vm.Videos, isActive: () => IsVisible);
         // 图文的搜索是页内筛选: 与全局屏蔽取"与", 谓词读的是 VM 里实时的词条
         FilterService.Instance.Attach(vm.ImageDynamics, extra: vm.MatchesImageSearch,
             isActive: () => IsVisible);
         UpdateTabs(vm);
+        UpdateSortChips(vm);
         ResetHeaderState();
+    }
+
+    /// <summary>
+    /// 排序方式变化时同步三枚 chip 的选中态。
+    /// ★ 只听 <c>SortOrder</c> 一个属性: 它是唯一的排序真源, 页面不该自己再存一份。
+    /// </summary>
+    private void OnVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(UserSpaceViewModel.SortOrder) && _vm != null)
+            UpdateSortChips(_vm);
+    }
+
+    /// <summary>
+    /// 同步三枚排序 chip 的选中态。
+    /// ★ 只在这里写 Tag(与播放页评论排序、关注页排版切换同一套约定: 字符串 "on"/"off")。
+    /// </summary>
+    private void UpdateSortChips(UserSpaceViewModel vm)
+    {
+        BtnSortLatest.Tag = vm.SortOrder == SpaceVideoOrder.Latest ? "on" : "off";
+        BtnSortPlayed.Tag = vm.SortOrder == SpaceVideoOrder.MostPlayed ? "on" : "off";
+        BtnSortFavorited.Tag = vm.SortOrder == SpaceVideoOrder.MostFavorited ? "on" : "off";
+    }
+
+    private void OnSortLatestClick(object sender, RoutedEventArgs e) => _ = ApplySortAsync(SpaceVideoOrder.Latest);
+    private void OnSortPlayedClick(object sender, RoutedEventArgs e) => _ = ApplySortAsync(SpaceVideoOrder.MostPlayed);
+    private void OnSortFavoritedClick(object sender, RoutedEventArgs e) => _ = ApplySortAsync(SpaceVideoOrder.MostFavorited);
+
+    /// <summary>
+    /// 切排序: 回第 1 页重拉(服务端排序必须重查, 见 UserSpaceViewModel.SetSortAsync)。
+    /// ★ 先把高亮切过去再请求 —— 与翻页同一套手感(用户点下去要立刻看到"点到了"),
+    ///   SetSortAsync 内部就是这么做的, 这里不重复。
+    /// </summary>
+    private async System.Threading.Tasks.Task ApplySortAsync(SpaceVideoOrder order)
+    {
+        if (_vm == null) return;
+        await _vm.SetSortAsync(order);
+        UpdateSortChips(_vm);
     }
 
     private void UpdateTabs(UserSpaceViewModel vm)
@@ -81,6 +121,10 @@ public partial class UserSpacePage : UserControl
         TabVideos.Tag = vm.IsVideosTab ? "on" : "off";
         TabImages.Tag = vm.IsImagesTab ? "on" : "off";
         TabCollections.Tag = vm.IsCollectionsTab ? "on" : "off";
+        // ★ 投稿与图文两个搜索框共用同一个 SearchText: 在一边输入会把另一边也带成展开态,
+        //   清空后它又不会自己收回。切 Tab 时统一收敛 —— 空的收起, 有词的留着展开。
+        SpaceSearchBox?.CollapseIfEmpty();
+        ImageSearchBox?.CollapseIfEmpty();
         QueueTabIndicatorUpdate(animate: true);
     }
 

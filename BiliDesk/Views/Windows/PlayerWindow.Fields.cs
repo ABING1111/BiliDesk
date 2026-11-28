@@ -707,14 +707,29 @@ public partial class PlayerWindow : FluentWindow
     // ★ 2026-11-21 修"长按倍速时控制栏倍速与实际不同步": 长按期间控制栏的倍速文字
     //   **跟着临时倍速走**(StartFastForward / TryStepFastForwardSpeed 会改它), 松手再由
     //   StopFastForward 改回原值。旧版故意不碰 SpeedText, 结果长按 3x 时控制栏还写着 1.0x。
-    /// <summary>长按快进的倍速</summary>
-    private const float FastForwardRate = 2.0f;
+    /// <summary>
+    /// 长按快进的**默认**倍速。仅在 settings.json 里没有记忆值时用到
+    /// (见 <see cref="RememberedFastForwardRate"/>)。★★★ 2026-11-28(issue #131) 之前
+    /// 这是唯一来源 —— 每次长按都从 2x 起步、松手再抹回 2x, 用户切到 3x 的档位留不下来。
+    /// </summary>
+    private const float FastForwardRate = Helpers.FastForwardSpeedPolicy.Default;
+
+    /// <summary>
+    /// 长按快进**记住的**档位(2026-11-28, issue #131)。
+    ///
+    /// ★ 来源是 settings.json(SettingsStore.FastForwardRate), 每次长按开始时现读 ——
+    ///   不缓存在窗口字段里, 免得出现"设置页改了但已经开着的播放器还用旧值"这种分裂。
+    /// ★ 读到的值已经由 SettingsStore 在 Load 时 Normalize 过, 这里再收一次是防
+    ///   "运行期被别处直接赋了脏值"(该属性是 public set, 与 PlayerVolume 同一口径)。
+    /// </summary>
+    private static float RememberedFastForwardRate
+        => Helpers.FastForwardSpeedPolicy.Normalize(Svc.Settings.FastForwardRate);
 
     /// <summary>当前是否处于"长按快进"中(速率已被切成 <see cref="_fastForwardTarget"/>)。</summary>
     private bool _isFastForwarding;
 
     /// <summary>
-    /// 长按快进开始: 切到 <see cref="_fastForwardTarget"/>(默认 <see cref="FastForwardRate"/>, 即 2x)。
+    /// 长按快进开始: 切到 <see cref="_fastForwardTarget"/>(默认取记住的档位, 首次是 2x)。
     ///
     /// ★ 2026-11-21: 长按期间 ↑/↓ 可以在 1.5x / 2x / 3x 间改这个目标
     ///   (见 TryStepFastForwardSpeed), 但**不影响**松手恢复值。
@@ -728,8 +743,13 @@ public partial class PlayerWindow : FluentWindow
     /// <summary>
     /// 本次长按实际要切到的倍速。
     ///
-    /// ★ 2026-11-21(用户指定): **固定从 2x 起步, 且不记忆上次选择** ——
-    ///   每次长按都重置成 2x, 与"正片当前倍速"无关, 与上一次长按里按过 ↑/↓ 也无关。
+    /// ★ 2026-11-28(issue #131): 改为**记住上一次选的档位**。旧行为(2026-11-21)是
+    ///   "固定从 2x 起步且不记忆", 用户实测后明确要求改成记忆 —— 常用 3x 的人每次长按
+    ///   都要重新滚一格, 反而更麻烦。
+    ///   记忆值存在 settings.json(SettingsStore.FastForwardRate), 跨视频、跨重启都保留;
+    ///   切档时立刻写回(见 TryStepFastForwardSpeed), 不依赖松手那一下 ——
+    ///   松手路径可能走不到(关窗/换片/失焦)。
+    /// ★ 与"正片当前倍速"仍然无关: 长按永远切成三档之一, 松手再恢复正片原速率。
     ///   (旧实现取 max(2.0, 当前倍速), 长按开始时的档位会随正片倍速漂移, 与"固定三档"矛盾。)
     /// ★ 浮层与控制栏都读这个值, 保证"看到的倍速 = 实际切到的倍速"。
     /// </summary>
@@ -737,10 +757,10 @@ public partial class PlayerWindow : FluentWindow
 
     /// <summary>
     /// 开始长按快进(改倍速)。见上方那段说明为什么用 SetRate 而不是 seek。
-    /// <paramref name="rate"/> 固定为 2x(<see cref="FastForwardRate"/>): 鼠标长按与键盘长按
-    /// 共用同一个默认档, 不再按"当前倍速"抬高。
+    /// ★ 起步档位取记住的档位(<see cref="RememberedFastForwardRate"/>), 两个入口
+    ///   (鼠标长按视频区 / 长按快进键)共用这一个入口, 不再各自持有写死的默认值。
     /// </summary>
-    private void StartFastForward(float rate = FastForwardRate)
+    private void StartFastForward()
     {
         if (_closing || _mp == null) return;
         // 直播没有"加速往前放"这回事(本来就一直在最新处); 播完了也没有
@@ -750,10 +770,10 @@ public partial class PlayerWindow : FluentWindow
         catch { _rateBeforeFastForward = 1.0f; }
         if (_rateBeforeFastForward <= 0) _rateBeforeFastForward = 1.0f;
 
-        // ★ 2026-11-21(用户指定): 固定 2x 起步, 不记忆上一次长按里选过的档位。
-        //   注意这意味着正片本身已经 >2x 时, 长按会先"降"到 2x(松手恢复原速) ——
-        //   用户明确要的是"固定三档 + 默认 2x", 而不是旧版的 max(2.0, 当前)。
-        _fastForwardTarget = rate;
+        // ★ 2026-11-28(issue #131): 起步档位 = 记住的档位(第一次是 2x)。
+        //   正片本身已经 >3x 时, 长按仍会切到记住的这一档(松手恢复原速) ——
+        //   与旧版 max(2.0, 当前) 的区别是: 这里的档位来自**用户上次的选择**, 不随片源漂移。
+        _fastForwardTarget = RememberedFastForwardRate;
 
         // ★ 2026-11-21: 清掉滚轮累计余量 —— 长按期间滚轮改为切档(见 OnVideoAreaMouseWheel),
         //   把上一次调音量攒下的零头带进来, 会让"刚滚一下"立刻跳一档, 手感像误触。
@@ -783,8 +803,10 @@ public partial class PlayerWindow : FluentWindow
         // 同 StartFastForward: 先落定弹幕时钟, 再改速率
         SyncDanmakuClockRate(back);
         try { _mp.SetRate(back); } catch { /* 播放器已失效 */ }
-        // "不记忆"的另一半: 收尾把档位复位成默认 2x, 下次长按一定从 2x 起步
-        _fastForwardTarget = FastForwardRate;
+        // ★ 2026-11-28(issue #131): 收尾**不再**把档位抹回 2x, 而是重新同步成记住的档位 ——
+        //   它此刻应该就是刚才切到的那个值(切档时已写回配置)。这样既保持了"这个字段只描述
+        //   本次长按"的语义, 又不会把用户的偏好覆盖掉。
+        _fastForwardTarget = RememberedFastForwardRate;
         // 控制栏倍速指示跟着回到原值(与 StartFastForward 的临时提速对称)。
         // ★ 不传参数: 读播放器**实际**速率, 万一上面 SetRate 失败(片源切换中)也不会显示成
         //   "已经恢复了"而实际还在临时倍速上。

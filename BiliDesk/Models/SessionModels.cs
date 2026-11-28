@@ -221,6 +221,16 @@ public class AppSettings
     public int LastSearchKind { get; set; }
 
     /// <summary>
+    /// 上次长按倍速(鼠标长按视频区 / 长按快进键)用到的档位(2026-11-28, issue #131)。
+    ///
+    /// ★ 只可能是 1.5 / 2 / 3 三档之一(见 Helpers/FastForwardSpeedPolicy.Steps)。
+    ///   老配置没有这个字段 ⇒ 反序列化保留初始化值 2.0 ⇒ 与改动前"固定 2x 起步"一致;
+    ///   手改坏的越界值由 SettingsStore 读取时过 FastForwardSpeedPolicy.Normalize 收敛。
+    /// ★ 与 Services/SettingsStore.cs 的同名属性是**读写契约**, 两处必须一致。
+    /// </summary>
+    public float FastForwardRate { get; set; } = Helpers.FastForwardSpeedPolicy.Default;
+
+    /// <summary>
     /// 旧字段(仅用于**读取**老配置, 兼容用)。
     ///
     /// ★★★ 2026-10-06 起"窗口背景材质"合并成了**一个**选择器(无/亚克力/云母/云母Alt),
