@@ -178,8 +178,26 @@ public class MsgItem : System.ComponentModel.INotifyPropertyChanged
     /// 正文里出现的表情: 短代码 → 表情。
     /// 私信的表情表来自 fetch_session_msgs 的 data.e_infos(整段会话一次性给出),
     /// 解析时把**这条消息真的用到**的那些挑出来挂在消息上, 渲染时就不用再查全局表。
+    ///
+    /// ★★ 这是个**可变字典**, 而且是 get-only 属性 —— 往里加东西**不会**让 WPF 重新求值绑定
+    ///   (绑定读到的一直是同一个实例, 依赖属性也不会因为"内容变了"而触发变更回调)。
+    ///   所以补表情之后必须显式调 <see cref="RaiseEmotesChanged"/>, 否则界面不会重建
+    ///   (表现是"数据里明明有图, 气泡里还是短代码")。见 MessageText 里对 DataContext 的监听。
     /// </summary>
     public Dictionary<string, MsgEmote> Emotes { get; } = new();
+
+    /// <summary>
+    /// 通知界面"表情表内容变了, 请重建排版"。
+    ///
+    /// ★★★ 为什么需要它(2026-11-28 修"切页面回来表情变文字"的最后一公里):
+    ///   本地表情面板是**懒加载**的 —— 私信历史先回来、面板后到。面板到位后
+    ///   <see cref="ViewModels.MessagesViewModel"/> 会把缺的表情补进这个字典,
+    ///   但字典是同一个实例, 绑定层看不出任何变化 ⇒ 气泡不会重排。
+    ///   这里补一次 PropertyChanged, MessageText 收到后自己 Rebuild。
+    /// </summary>
+    public void RaiseEmotesChanged()
+        => PropertyChanged?.Invoke(this,
+            new System.ComponentModel.PropertyChangedEventArgs(nameof(Emotes)));
 
     private bool _showHeader = true;
 

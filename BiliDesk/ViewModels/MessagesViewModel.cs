@@ -47,9 +47,6 @@ public class MessagesViewModel : ObservableObject
     private MsgTab _tab = MsgTab.Chat;
     private MsgUnread _unread = new();
     private bool _emojiPanelOpen;
-    private bool _emojiLoading;
-    private string _emojiError = "";
-    private bool _emojiLoaded;
 
     private string _myName = "";
     private string _myFace = "";
@@ -61,6 +58,13 @@ public class MessagesViewModel : ObservableObject
         SendCommand = new RelayCommand(() => _ = SendAsync());
         LoadMoreCommand = new RelayCommand(() => _ = LoadOlderAsync());
         ToggleEmojiPanelCommand = new RelayCommand(() => EmojiPanelOpen = !EmojiPanelOpen);
+
+        // ★★ 表情面板共用 Svc.CommentEmotes 单例(2026-11-28): 面板三态(加载中/错误/有没有)
+        //   都由它驱动。Changed 在**任意线程**触发(网络回调), 这里统一切回 UI 线程再推属性 ——
+        //   否则"从线程池改绑在界面上的属性"会抛跨线程异常。
+        // ★ 用弱引用风格的显式 Detach 收尾: 服务是**单例**, 若 VM 被重建(探针/将来换实现)
+        //   而订阅不退, 服务会一直握着旧 VM(它又握着整份 Messages), 等于把整段会话钉在内存里。
+        Svc.CommentEmotes.Changed += OnEmoteServiceChanged;
 
         // ★ 集合本身的变化也要推一次派生属性:
         //   HasMessages / HasMoreHistory 是算出来的(看 Messages.Count), 而消息集合在
@@ -258,18 +262,23 @@ public class MessagesViewModel : ObservableObject
         set
         {
             if (!SetProperty(ref _emojiPanelOpen, value)) return;
-            if (value) _ = EnsureEmotesAsync();
+            // ★ 2026-11-28: 面板数据改用 Svc.CommentEmotes 单例缓存(与评论区共用一份)。
+            //   同一个接口(business=reply)、同一份解析, 以前私信自己再拉一遍纯属重复。
+            if (value) _ = Svc.CommentEmotes.EnsureLoadedAsync();
         }
     }
 
-    public bool EmojiLoading { get => _emojiLoading; private set => SetProperty(ref _emojiLoading, value); }
-    public string EmojiError { get => _emojiError; private set => SetProperty(ref _emojiError, value); }
+    public bool EmojiLoading => Svc.CommentEmotes.IsLoading;
+    public string EmojiError => Svc.CommentEmotes.Error;
 
-    /// <summary>表情包分组(面板按包横向分组显示)</summary>
-    public ObservableCollection<MsgEmotePackage> EmotePackages { get; } = new();
+    /// <summary>
+    /// 表情包分组(面板按包横向分组显示)。
+    /// ★ 直接暴露单例服务里的那个集合实例: 绑一次 ItemsSource 就够, 之后增删由集合通知驱动。
+    /// </summary>
+    public ObservableCollection<MsgEmotePackage> EmotePackages => Svc.CommentEmotes.Packages;
 
     /// <summary>面板里是否真的有表情可点(决定错误提示要不要占位)</summary>
-    public bool HasEmotes => EmotePackages.Count > 0;
+    public bool HasEmotes => Svc.CommentEmotes.HasEmotes;
 
     // ---------------------------------------------------------------- 命令
 
@@ -297,6 +306,10 @@ public class MessagesViewModel : ObservableObject
         var sessionsTask = Svc.Api.GetMsgSessionsAsync();
         var unreadTask = Svc.Api.GetMsgUnreadAsync();
         var profileTask = LoadMyProfileAsync();
+        // ★ 顺带把表情面板预热一次(2026-11-28): 私信历史里的表情图, 服务端 e_infos 会漏掉
+        //   "我自己发的"那些, 要靠这份本地面板兜底(见 AttachEmotes)。面板是跨页面单例,
+        //   拉过一次就一直有; 不 await —— 它是兜底数据, 不该拖慢首屏。
+        _ = Svc.CommentEmotes.EnsureLoadedAsync();
         try
         {
             var (ok, err, sessions) = await sessionsTask;
@@ -474,6 +487,8 @@ public class MessagesViewModel : ObservableObject
             }
             foreach (var m in items) Messages.Add(m);
             MarkGroups();
+            // ★ 服务端 e_infos 会漏掉"我自己发的"表情 —— 用本地面板补上(见 AttachEmotes)
+            FillMissingEmotes();
             if (Messages.Count == 0) ThreadError = "还没有聊过, 发条消息打个招呼吧";
 
             // 首屏一次就拿全了(没有更早的) ⇒ 不必显示"查看更早的消息"
@@ -695,47 +710,70 @@ public class MessagesViewModel : ObservableObject
         Draft = (_draft ?? "") + emote.Text;
     }
 
-    /// <summary>表情面板的数据(首次展开时才拉)</summary>
-    private async Task EnsureEmotesAsync()
-    {
-        // ★ 已经有表情包就别再拉一次: 每次展开都重拉的话, 面板会先清空再填回,
-        //   用户看到的是"闪一下"(探针里表现为错误提示和表情同时出现)。
-        if (_emojiLoaded || EmojiLoading || EmotePackages.Count > 0) return;
-
-        EmojiLoading = true;
-        EmojiError = "";
-        try
-        {
-            var (ok, err, packages) = await Svc.Api.GetMsgEmotePanelAsync();
-            if (!ok || packages == null)
-            {
-                EmojiError = err ?? "表情加载失败";
-                return;
-            }
-
-            EmotePackages.Clear();
-            foreach (var p in packages) EmotePackages.Add(p);
-            _emojiLoaded = EmotePackages.Count > 0;
-            OnPropertyChanged(nameof(HasEmotes));
-            if (!_emojiLoaded) EmojiError = "没有可用的表情";
-        }
-        catch (Exception ex)
-        {
-            EmojiError = ex.Message;
-        }
-        finally
-        {
-            EmojiLoading = false;
-        }
-    }
-
-    /// <summary>给一条消息挂上它用到的表情(乐观追加时用)</summary>
+    /// <summary>
+    /// 给一条消息挂上它用到的表情(乐观追加时用; 加载完历史后也用它补全)。
+    ///
+    /// ★★★ 2026-11-28 修"切页面回来表情变文字": 服务端 `data.e_infos` **经常漏掉
+    ///   "我自己发的"表情**(拉 50 个会话核对: 对方发的表情基本都在, 我发的经常整条 e_infos
+    ///   都是 null)。漏掉的那些这里用**本地表情面板**补 —— 面板覆盖 362 个常用短代码,
+    ///   与私信是同一个接口, 图地址完全一致。
+    /// ★ 只从真实表里查(面板), **不凭"正文里有方括号"造表情**: 用户可能真在写 `[0]`、`[待办]`。
+    /// </summary>
     private void AttachEmotes(MsgItem item)
     {
-        if (item.Text.Length == 0 || EmotePackages.Count == 0) return;
-        foreach (var pkg in EmotePackages)
-            foreach (var e in pkg.Emotes)
-                if (item.Text.Contains(e.Text, StringComparison.Ordinal))
-                    item.Emotes[e.Text] = e;
+        if (item.Text.Length == 0) return;
+
+        var added = false;
+        foreach (var code in MsgContentParser.Shortcodes(item.Text))
+        {
+            if (item.Emotes.ContainsKey(code)) continue;          // 服务端 e_infos 已给, 优先
+            var emote = Svc.CommentEmotes.FindByCode(code);
+            if (emote == null) continue;                          // 两张表都没有 ⇒ 按文字显示
+            item.Emotes[code] = emote;
+            added = true;
+        }
+
+        if (added) item.RaiseEmotesChanged();
     }
+
+    /// <summary>
+    /// 面板到位后, 把当前会话里"缺表情"的消息补一遍。
+    ///
+    /// ★ 面板是懒加载的: 私信历史往往先回来、面板后到。没这一步的话,
+    ///   "先打开私信页、再点表情按钮"这条路上, 已经显示成短代码的那些消息永远不会变成图。
+    /// </summary>
+    private void FillMissingEmotes()
+    {
+        if (Svc.CommentEmotes.Packages.Count == 0) return;
+        foreach (var item in Messages)
+        {
+            if (item.IsSystem || item.Text.Length == 0) continue;
+            AttachEmotes(item);
+        }
+    }
+
+    /// <summary>表情面板数据变化(加载完成 / 退出登录清空)时刷新面板三态, 并补全缺失的表情。</summary>
+    private void OnEmoteServiceChanged()
+    {
+        // Changed 可能来自网络回调(线程池): 碰界面绑定必须回 UI 线程
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher != null && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(new Action(OnEmoteServiceChanged));
+            return;
+        }
+
+        OnPropertyChanged(nameof(EmojiLoading));
+        OnPropertyChanged(nameof(EmojiError));
+        OnPropertyChanged(nameof(HasEmotes));
+        FillMissingEmotes();
+    }
+
+    /// <summary>
+    /// 解除对单例服务的订阅(页面/VM 被真正丢弃时调)。
+    /// ★ 主窗口的页面实例是长期缓存的, 正常不会走到这里; 但探针、以及将来"重建 VM"的改动
+    ///   一旦忘了退订, 单例就会把旧 VM(连同整份消息列表)永久钉在内存里。
+    /// </summary>
+    public void Detach()
+        => Svc.CommentEmotes.Changed -= OnEmoteServiceChanged;
 }

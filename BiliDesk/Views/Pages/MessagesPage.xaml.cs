@@ -53,6 +53,9 @@ public partial class MessagesPage : UserControl, IRefreshable
         {
             old.Messages.CollectionChanged -= OnMessagesChanged;
             old.PropertyChanged -= OnVmPropertyChanged;
+            // ★ 旧 VM 退订单例服务(2026-11-28): 表情面板改成 Svc.CommentEmotes 之后,
+            //   不退订的话单例会一直握着旧 VM(连同整份消息列表)。
+            old.Detach();
         }
         if (e.NewValue is MessagesViewModel vm)
         {

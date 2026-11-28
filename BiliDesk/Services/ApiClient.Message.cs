@@ -249,11 +249,18 @@ public partial class ApiClient
                         }
 
                         // 把这条消息**真的用到**的表情挑出来挂上(没用到就不占内存)
+                        //
+                        // ★ 用 Shortcodes 扫而不是遍历整张表做 Contains(2026-11-28):
+                        //   一张 e_infos 可能几十条、一页 30 条消息 —— 逐条 × 逐表情的
+                        //   Contains 是纯浪费; 而且正文里的短代码本来就只有零到几个。
+                        // ★ 这里**只**用服务端 e_infos。它漏掉的表情由 MessagesViewModel
+                        //   拿本地表情面板补(见 AttachEmotes / FillMissingEmotes) ——
+                        //   ApiClient 不该反向依赖界面侧的表情缓存。
                         if (emotes.Count > 0 && item.Text.Length > 0)
                         {
-                            foreach (var kv in emotes)
-                                if (item.Text.Contains(kv.Key, StringComparison.Ordinal))
-                                    item.Emotes[kv.Key] = kv.Value;
+                            foreach (var sc in MsgContentParser.Shortcodes(item.Text))
+                                if (emotes.TryGetValue(sc, out var found))
+                                    item.Emotes[sc] = found;
                         }
 
                         list.Add(item);

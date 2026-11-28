@@ -29,6 +29,11 @@ public sealed class CommentEmoteService
         {
             if (!Svc.Session.HasLogin) Clear();
         };
+
+        // ★ 摊平索引跟着集合走: 任何一处往 Packages 里加/删(拉取完成、清空、探针塞假数据),
+        //   索引都必须失效。靠调用点手动 InvalidateIndex 迟早漏一处 —— 漏了的表现是
+        //   "面板里明明有表情, 私信气泡还是显示成短代码"。
+        Packages.CollectionChanged += (_, _) => InvalidateIndex();
     }
 
     private bool _loaded;
@@ -148,4 +153,48 @@ public sealed class CommentEmoteService
     /// <summary>把表情包摊平成一张表(按短代码找图片用)。</summary>
     public IEnumerable<MsgEmote> AllEmotes()
         => Packages.SelectMany(p => p.Emotes);
+
+    /// <summary>
+    /// 短代码 → 表情的摊平索引(**只读**), 供私信气泡兜底查图。
+    ///
+    /// ★★★ 为什么私信要用它(2026-11-28 修"切页面回来表情变文字"):
+    ///   私信表情图的权威来源是服务端的 `data.e_infos`, 而它**经常漏掉"我自己发的"表情**。
+    ///   漏了就只能拿这份面板表补 —— 同一个接口(`business=reply`)、同一份解析,
+    ///   本来就没有理由再让私信自己拉一遍。
+    /// ★ 懒建 + 每次 Packages 变化就作废: 面板只拉一次, 但退出登录会 Clear,
+    ///   那时索引必须跟着失效(否则下一个账号会看到别人的大会员表情)。
+    /// </summary>
+    public IReadOnlyDictionary<string, MsgEmote> ByCode
+    {
+        get
+        {
+            // Packages 只在 UI 线程被改(EnsureLoadedAsync/Clear 都切了线程), 这里不必加锁
+            var cached = _byCode;
+            if (cached != null) return cached;
+
+            var map = new Dictionary<string, MsgEmote>(StringComparer.Ordinal);
+            foreach (var pkg in Packages)
+                foreach (var e in pkg.Emotes)
+                    if (e.Text.Length > 0) map.TryAdd(e.Text, e);
+
+            _byCode = map;
+            return map;
+        }
+    }
+
+    /// <summary>按短代码查一个表情; 面板还没加载/没有这个短代码时返回 null(调用方按文字显示)。</summary>
+    public MsgEmote? FindByCode(string? code)
+    {
+        if (string.IsNullOrEmpty(code)) return null;
+        return ByCode.TryGetValue(code, out var e) ? e : null;
+    }
+
+    /// <summary>
+    /// 让摊平索引作废(下次访问 ByCode 时重建)。
+    /// ★ 必须在**每一处**改动 Packages 之后调用: 拉取完成、退出登录清空。
+    ///   用"集合条数"当版本号是不行的 —— Clear 之后重新灌同一批包, 条数一样但内容已经换了账号。
+    /// </summary>
+    private void InvalidateIndex() => _byCode = null;
+
+    private IReadOnlyDictionary<string, MsgEmote>? _byCode;
 }

@@ -360,8 +360,8 @@ public class CommentText : RichTextBox
     private InlineUIContainer BuildEmote(CommentEmote emote, CommentItem owner)
     {
         // 尺寸跟着字号走: 小表情比文字略高一点, 大表情(meta.size=2, 游戏联动那类)再大一档
-        var scale = emote.Size > 1 ? 2.4 : 1.55;
-        var side = Math.Round((FontSize > 0 ? FontSize : 12) * scale);
+        // ★ 与私信气泡(MessageText)共用同一份计算, 别各写一遍 —— 见 MsgContentParser.EmoteSide
+        var side = MsgContentParser.EmoteSide(FontSize, emote.Size);
 
         var image = new Image
         {
